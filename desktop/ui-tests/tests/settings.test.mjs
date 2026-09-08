@@ -158,7 +158,11 @@ function eventFixture() {
     clearSnapshotUnavailable() {}, fillConfiguration() {}, render() {}, requestSnapshot() {}, scheduleSnapshotRetry() {},
     setSectionError(page, message) { page.error = message; },
   });
-  load(context, 'function handleLocaldEvent(', '\nconfigureInteractionHandlers();');
+  // From the shape guard, not from the handler: the handler now refuses an
+  // event that does not carry what its branch dereferences, and that check
+  // and its table live just above it.
+  load(context, '// What each event has to carry', '\nconfigureInteractionHandlers();');
+  Object.assign(context, { showSnapshotUnavailable() {} });
   return fixtureState;
 }
 
@@ -189,7 +193,10 @@ test('reconnecting recovers a save whose completion event was lost', () => {
   pages[0].classList.add('dirty');
   let completed;
   context.pendingSaves.set('save', { page: pages[0], button: {}, original: 'Save', version: 0, complete: (value) => { completed = value; } });
-  vm.runInContext('handleLocaldEvent({ event: "control.snapshot", operator: {config: {revision: 2}}, config_operations: {save: {status: "succeeded", operator: {config: {revision: 2}}}} })', context);
+  // `state` because the daemon always sends it and the page now requires it:
+  // a snapshot without one cannot be rendered, and rendering the previous one
+  // as though it were current is worse than saying so.
+  vm.runInContext('handleLocaldEvent({ event: "control.snapshot", state: {ready: true}, operator: {config: {revision: 2}}, config_operations: {save: {status: "succeeded", operator: {config: {revision: 2}}}} })', context);
   assert.equal(pages[0].classList.contains('dirty'), false);
   assert.equal(completed, true);
 });

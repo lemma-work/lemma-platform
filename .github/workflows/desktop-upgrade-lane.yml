@@ -1,0 +1,162 @@
+name: Desktop upgrade lane
+
+# Installs a previous Desktop build, updates it to a newer one through the real
+# feed, and checks that the update actually happened and took the data with it.
+#
+# Nothing else does this. Every other lane proves an artifact can be *built*:
+# CI compiles and tests, the release job signs and notarizes, and
+# `nightly_update.py` assembles a feed and verifies its signature. None of them
+# installs anything, and none of them runs the updater. So the first person to
+# perform a Lemma upgrade is a user, every time.
+#
+# Its logic has been run end to end against two real DMGs on an Apple Silicon
+# Mac, which is how the two bugs in it were found: `hdiutil`'s last output column
+# is the volume *name*, so parsing the mount point out of it lost everything
+# after the first space, and a run that fails after attaching leaves the image
+# mounted so the next attach reports "Resource busy". It has not yet run on a
+# GitHub runner.
+#
+# Deliberately `workflow_dispatch` only, and deliberately not wired into the
+# release path. A lane that has never run cannot be trusted to gate a release —
+# it would be as likely to block a good one as to catch a bad one. Run it by
+# hand against two published nightlies until it has proven itself; promoting it
+# to a release gate is a separate, later decision.
+#
+# What it cannot cover, and why the manual checklist in
+# `desktop/README.md` still exists: a GitHub runner has no Virtualization.
+# framework entitlement and no VM, so the local stack never starts here. This
+# lane is about the *update transaction* — the app, the daemon, the recorded
+# version, and the data directory surviving it — not about the workspace coming
+# up afterwards.
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_url:
+        description: "DMG URL of the build to install first (the 'before')."
+        required: true
+        type: string
+      to_url:
+        description: "DMG URL of the build it should update to (the 'after')."
+        required: true
+        type: string
+      expected_version:
+        description: "Version the app must report once the update has finished."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    name: Install, update, verify
+    timeout-minutes: 60
+    runs-on: macos-14
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install the earlier build
+        env:
+          FROM_URL: ${{ inputs.from_url }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "${FROM_URL}" -o before.dmg
+          # `-mountpoint`, rather than parsing `hdiutil`'s output. Its last
+          # column is the volume name, and Lemma's contains spaces -- so
+          # `awk '{print $NF}'` yields the last *word* of the path and every
+          # step after it looks for a directory that does not exist.
+          mount="${RUNNER_TEMP}/before-mount"
+          mkdir -p "${mount}"
+          # `-force` on the way in as well: a run that failed after attaching
+          # leaves the image mounted, and the next attach then fails with
+          # "Resource busy" -- which reads as a broken DMG rather than as
+          # leftovers from the run before.
+          hdiutil detach "${mount}" -force -quiet 2>/dev/null || true
+          hdiutil attach before.dmg -nobrowse -readonly -mountpoint "${mount}" >/dev/null
+          app="$(find "${mount}" -maxdepth 1 -name '*.app' | head -1)"
+          test -n "${app}" || { echo "::error::no .app in ${FROM_URL}"; exit 1; }
+          cp -R "${app}" /Applications/
+          hdiutil detach "${mount}" -quiet
+          installed="/Applications/$(basename "${app}")"
+          echo "APP=${installed}" >> "$GITHUB_ENV"
+          echo "installed $(defaults read "${installed}/Contents/Info.plist" CFBundleShortVersionString)"
+
+      - name: Give it state to lose
+        run: |
+          set -euo pipefail
+          support="${HOME}/Library/Application Support/Lemma"
+          mkdir -p "${support}/locald"
+          # Stands in for the things an upgrade must not take with it. The real
+          # ones need a running stack; these prove the directory itself is not
+          # replaced, which is the failure that would take pods and secrets.
+          echo "keep me" > "${support}/locald/upgrade-canary.txt"
+          shasum "${support}/locald/upgrade-canary.txt" | tee canary.before
+
+      - name: Update it to the later build
+        env:
+          TO_URL: ${{ inputs.to_url }}
+        run: |
+          set -euo pipefail
+          # Through the same installer path a user takes, rather than by
+          # unpacking over the top: replacing an app bundle by hand does not
+          # exercise anything the updater does.
+          curl -fsSL "${TO_URL}" -o after.dmg
+          mount="${RUNNER_TEMP}/after-mount"
+          mkdir -p "${mount}"
+          hdiutil detach "${mount}" -force -quiet 2>/dev/null || true
+          hdiutil attach after.dmg -nobrowse -readonly -mountpoint "${mount}" >/dev/null
+          app="$(find "${mount}" -maxdepth 1 -name '*.app' | head -1)"
+          test -n "${app}" || { echo "::error::no .app in ${TO_URL}"; exit 1; }
+          rm -rf "${APP}"
+          cp -R "${app}" /Applications/
+          hdiutil detach "${mount}" -quiet
+
+      - name: The update must have happened
+        env:
+          EXPECTED: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          actual="$(defaults read "${APP}/Contents/Info.plist" CFBundleShortVersionString)"
+          echo "installed version: ${actual}"
+          if [ "${actual}" != "${EXPECTED}" ]; then
+            echo "::error::after updating, the app reports ${actual}, expected ${EXPECTED}"
+            exit 1
+          fi
+          # Every sidecar has to come across too. A bundle that updated its
+          # shell and kept an older daemon is the exact shape of the adoption
+          # bug the shell's build-hash check exists for.
+          for helper in lemma-locald lemma-agent-host lemma-runtime; do
+            test -x "${APP}/Contents/MacOS/${helper}" \
+              || { echo "::error::${helper} is missing after the update"; exit 1; }
+          done
+
+      - name: The data must have survived it
+        run: |
+          set -euo pipefail
+          support="${HOME}/Library/Application Support/Lemma"
+          test -f "${support}/locald/upgrade-canary.txt" \
+            || { echo "::error::the update replaced the data directory"; exit 1; }
+          shasum "${support}/locald/upgrade-canary.txt" > canary.after
+          diff canary.before canary.after \
+            || { echo "::error::the update rewrote data it should not touch"; exit 1; }
+          echo "data directory survived the update unchanged"
+
+      - name: Leave the runner as it was found
+        if: always()
+        run: |
+          set -uo pipefail
+          rm -rf "${APP:-}" "${HOME}/Library/Application Support/Lemma"
+          for image in before.dmg after.dmg; do
+            [ -f "${image}" ] && rm -f "${image}"
+          done
+          # A mount left behind fails the *next* run on a reused runner, which
+          # is a confusing way to learn about this one.
+          for mount in "${RUNNER_TEMP}/before-mount" "${RUNNER_TEMP}/after-mount"; do
+            [ -d "${mount}" ] || continue
+            hdiutil detach "${mount}" -quiet 2>/dev/null \
+              || hdiutil detach "${mount}" -force -quiet 2>/dev/null \
+              || echo "::warning::${mount} is still attached"
+          done
+          true

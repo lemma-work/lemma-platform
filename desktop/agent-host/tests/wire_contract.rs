@@ -174,3 +174,27 @@ fn chunk_text_matches_the_contract() {
         );
     }
 }
+
+/// Bounds the backend enforces, which this host must not exceed.
+///
+/// Exceeding one is not a graceful degradation. An `object_id` over the column
+/// length gets its whole batch refused, which the host reads as the run's fault
+/// and answers by discarding the transcript; a `max_runs` over the cap makes
+/// every poll 422, so the host reports itself offline indefinitely. Both were
+/// unbounded here, and neither limit was written down anywhere both sides read.
+#[test]
+fn the_host_respects_the_bounds_the_backend_enforces() {
+    let contract = contract();
+    let limits = &contract["limits"];
+
+    assert_eq!(
+        limits["max_runs"].as_u64(),
+        Some(u64::from(lemma_agent_host::config::MAX_SUPPORTED_RUNS)),
+        "the configured capacity ceiling must match what the backend accepts"
+    );
+    assert_eq!(
+        limits["object_id_max_length"].as_u64(),
+        Some(255),
+        "object_id is truncated to this in acp.rs; both sides read it here"
+    );
+}

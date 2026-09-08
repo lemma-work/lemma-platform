@@ -63,6 +63,20 @@ impl Lifecycle {
     }
 }
 
+/// Run something that touches running services, but only while holding the
+/// lifecycle. Returns `None` when another operation already owns it.
+///
+/// The caller decides what to do instead; there is no waiting here, because
+/// every caller so far is on an exit path where waiting is the wrong answer.
+pub(crate) fn guarded<T>(lifecycle: &Lifecycle, work: impl FnOnce() -> T) -> Option<T> {
+    if lifecycle.begin().is_err() {
+        return None;
+    }
+    let result = work();
+    lifecycle.finish();
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +108,38 @@ mod tests {
             lifecycle.begin().is_err(),
             "completion must not reopen admission"
         );
+    }
+
+    /// Quitting while a start is in flight must not kill that start.
+    ///
+    /// Closing a public exposure restarts the backend and frontend to put
+    /// their origins back, and `stop_all` runs whether or not a startup is in
+    /// progress -- so the quit path did exactly that to the processes a start
+    /// was still health-gating, and reported "process exited" to the user who
+    /// had asked to quit. The caller now gets `None` and closes the tunnel on
+    /// its own instead, which is the half that must not outlive the app.
+    #[test]
+    fn work_that_restarts_services_stands_aside_for_an_operation_in_flight() {
+        let lifecycle = Lifecycle::default();
+
+        let ran = std::cell::Cell::new(false);
+        assert_eq!(guarded(&lifecycle, || ran.set(true)), Some(()));
+        assert!(ran.get(), "an idle lifecycle admits the work");
+        assert!(
+            !lifecycle.busy(),
+            "the guard must be released however the work ended"
+        );
+
+        lifecycle.begin().expect("a start takes the lifecycle");
+        let ran_during = std::cell::Cell::new(false);
+        assert_eq!(guarded(&lifecycle, || ran_during.set(true)), None);
+        assert!(
+            !ran_during.get(),
+            "a restart must not run underneath a start that is still gating"
+        );
+
+        lifecycle.finish();
+        assert_eq!(guarded(&lifecycle, || 7), Some(7), "and it recovers after");
     }
 
     #[test]

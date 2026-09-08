@@ -128,6 +128,7 @@ impl ManagedRuntimeBootstrap {
             runtime,
             spec,
             forwarders: Mutex::new(Vec::new()),
+            probes: Mutex::new(ProbeTracker::default()),
             status: Mutex::new(None),
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
@@ -230,11 +231,84 @@ struct ClockKeeper {
     handle: JoinHandle<()>,
 }
 
+/// Consecutive transient probe failures tolerated before the runtime is
+/// declared lost.
+///
+/// The status monitor probes every five seconds, so this is a fifteen second
+/// window. It exists because `health` shares one control channel with every
+/// other guest request: see [`ManagedRuntimeController::probe`].
+const PROBE_FAILURE_TOLERANCE: u32 = 3;
+
+/// What a health probe established about the runtime.
+#[derive(Debug)]
+pub enum ProbeOutcome {
+    Healthy(ManagedRuntimeStatus),
+    /// The probe failed without establishing that the guest is gone, and not
+    /// yet often enough to matter. Forwarders and the last known status are
+    /// deliberately retained.
+    Transient(io::Error),
+    /// The runtime is gone. Forwarders and cached status have been cleared.
+    Lost(io::Error),
+}
+
+impl ProbeOutcome {
+    pub fn is_healthy(&self) -> bool {
+        matches!(self, ProbeOutcome::Healthy(_))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeVerdict {
+    Transient,
+    Lost,
+}
+
+/// Decide what a failed probe means.
+///
+/// A timeout says the guest did not answer within the budget, which is what a
+/// busy control channel looks like from here -- not that the guest is gone.
+/// Every other failure (the helper process exited, the kernel faulted, the
+/// connection was refused) does carry that meaning and is acted on at once,
+/// preserving the fast detection of a runtime that really has died.
+fn classify_probe_failure(error: &io::Error, consecutive_failures: u32) -> ProbeVerdict {
+    let starved = matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+    );
+    if starved && consecutive_failures < PROBE_FAILURE_TOLERANCE {
+        ProbeVerdict::Transient
+    } else {
+        ProbeVerdict::Lost
+    }
+}
+
+/// Consecutive failed probes, and what the next one means.
+///
+/// Split out from the controller so the sequence that matters -- slow, slow,
+/// answered, slow -- can be driven without a guest to be slow.
+#[derive(Debug, Default)]
+struct ProbeTracker {
+    consecutive_failures: u32,
+}
+
+impl ProbeTracker {
+    fn succeeded(&mut self) {
+        self.consecutive_failures = 0;
+    }
+
+    fn failed(&mut self, error: &io::Error) -> ProbeVerdict {
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        classify_probe_failure(error, self.consecutive_failures)
+    }
+}
+
 pub struct ManagedRuntimeController {
     runtime: ManagedRuntime,
     spec: ManagedRuntimeSpec,
     forwarders: Mutex<Vec<TcpForwarder>>,
     status: Mutex<Option<ManagedRuntimeStatus>>,
+    /// Failed probes since the last healthy one. See [`Self::probe`].
+    probes: Mutex<ProbeTracker>,
     clock_keeper: Mutex<Option<ClockKeeper>>,
     /// The last clock-sync failure written to the log, so a standing one is
     /// said once rather than twice a minute for as long as the stack runs.
@@ -547,16 +621,42 @@ impl ManagedRuntimeController {
             .clone()
     }
 
-    pub fn probe(&self) -> io::Result<ManagedRuntimeStatus> {
+    /// Ask the guest whether it is alive, and say what the answer means.
+    ///
+    /// A failed probe is not by itself evidence that the runtime is gone. The
+    /// guest control channel carries one request at a time and `health` has a
+    /// five second budget, so a sandbox image pull or a callback wait can time
+    /// a probe out while the VM is perfectly healthy. This used to tear down
+    /// the Postgres and Redis forwarders out from under a running backend and
+    /// then restart the whole stack on top of it.
+    ///
+    /// So only a failure that says something about liveness -- or one that has
+    /// repeated past [`PROBE_FAILURE_TOLERANCE`] -- clears the forwarders and
+    /// the cached status.
+    pub fn probe(&self) -> ProbeOutcome {
         match self.runtime.health() {
             Ok(status) => {
                 *self.status.lock().expect("managed runtime status poisoned") =
                     Some(status.clone());
-                Ok(status)
+                self.probes
+                    .lock()
+                    .expect("probe tracker poisoned")
+                    .succeeded();
+                ProbeOutcome::Healthy(status)
             }
             Err(error) => {
-                self.clear_forwarders();
-                Err(error)
+                let verdict = self
+                    .probes
+                    .lock()
+                    .expect("probe tracker poisoned")
+                    .failed(&error);
+                match verdict {
+                    ProbeVerdict::Transient => ProbeOutcome::Transient(error),
+                    ProbeVerdict::Lost => {
+                        self.clear_forwarders();
+                        ProbeOutcome::Lost(error)
+                    }
+                }
             }
         }
     }
@@ -581,7 +681,19 @@ impl ManagedRuntimeController {
             )
         } else {
             (
-                private_ipv4(&status.endpoint_host, "guest endpoint")?,
+                // This route reaches the guest by address, so unlike macOS it
+                // genuinely needs one. A guest that reports none is healthy
+                // but unreachable this way, and saying so beats a parse error.
+                private_ipv4(
+                    status.endpoint_host.as_deref().ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::AddrNotAvailable,
+                            "the private runtime reported no network address, so host \
+                             services cannot reach its database",
+                        )
+                    })?,
+                    "guest endpoint",
+                )?,
                 5432,
                 6379,
                 3567,
@@ -934,7 +1046,18 @@ impl ManagedRuntimeController {
         }
         #[cfg(not(target_os = "macos"))]
         wait_for_tcp_services(
-            private_ipv4(&_status.endpoint_host, "guest endpoint")?,
+            // Unlike macOS, this route reaches the guest's services by address
+            // rather than over the private socket bridges, so it does need one.
+            private_ipv4(
+                _status.endpoint_host.as_deref().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::AddrNotAvailable,
+                        "the private runtime reported no network address, so its services \
+                         cannot be reached",
+                    )
+                })?,
+                "guest endpoint",
+            )?,
             services,
             timeout,
             checkpoint,
@@ -1777,6 +1900,7 @@ mod tests {
                 },
             },
             forwarders: Mutex::new(Vec::new()),
+            probes: Mutex::new(ProbeTracker::default()),
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
@@ -1784,7 +1908,7 @@ mod tests {
             pending_images: Mutex::new(None),
             cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
-                endpoint_host: "192.168.64.10".into(),
+                endpoint_host: Some("192.168.64.10".into()),
                 host_gateway: "192.168.64.1".into(),
                 engine: "containerd".into(),
                 active_sandboxes: 0,
@@ -1811,6 +1935,112 @@ mod tests {
         assert_eq!(
             controller.sandbox_image_status().state,
             SANDBOX_IMAGES_DOWNLOADING
+        );
+    }
+
+    /// The bug this fixes: the guest control channel carries one request at a
+    /// time, `health` gives it five seconds, and a sandbox image pull or a
+    /// callback wait legitimately holds it for longer. That timeout used to
+    /// count as "the runtime is gone", which dropped the Postgres and Redis
+    /// forwarders the running backend was mid-query on, and then restarted the
+    /// whole stack underneath it.
+    #[test]
+    fn a_starved_control_channel_does_not_look_like_a_dead_runtime() {
+        let timeout = io::Error::new(io::ErrorKind::TimedOut, "guest did not answer in 5s");
+
+        for attempt in 1..PROBE_FAILURE_TOLERANCE {
+            assert_eq!(
+                classify_probe_failure(&timeout, attempt),
+                ProbeVerdict::Transient,
+                "probe {attempt} of {PROBE_FAILURE_TOLERANCE} must not declare the runtime lost"
+            );
+        }
+    }
+
+    /// Tolerance, not blindness: a channel that never comes back is a real
+    /// failure and still has to reach recovery.
+    #[test]
+    fn a_control_channel_that_never_answers_is_eventually_lost() {
+        let timeout = io::Error::new(io::ErrorKind::TimedOut, "guest did not answer in 5s");
+
+        assert_eq!(
+            classify_probe_failure(&timeout, PROBE_FAILURE_TOLERANCE),
+            ProbeVerdict::Lost
+        );
+    }
+
+    /// A helper process that exited, a faulted kernel and a refused connection
+    /// all say something a timeout does not, so none of them waits out the
+    /// tolerance.
+    #[test]
+    fn a_runtime_that_really_died_is_reported_at_once() {
+        for error in [
+            io::Error::other("Lemma's private runtime exited (exit status: 1): kernel panic"),
+            io::Error::new(io::ErrorKind::ConnectionRefused, "guest refused"),
+            io::Error::new(io::ErrorKind::InvalidData, "invalid guest health response"),
+            io::Error::new(io::ErrorKind::BrokenPipe, "control channel closed"),
+        ] {
+            assert_eq!(
+                classify_probe_failure(&error, 1),
+                ProbeVerdict::Lost,
+                "{error} must be acted on immediately"
+            );
+        }
+    }
+
+    /// The count is consecutive, so a guest that answers between two slow
+    /// stretches spends its whole tolerance again rather than accumulating
+    /// across minutes of healthy service toward a teardown it never earned.
+    #[test]
+    fn a_healthy_probe_forgives_the_failures_before_it() {
+        let timeout = || io::Error::new(io::ErrorKind::TimedOut, "guest is busy");
+        let mut probes = ProbeTracker::default();
+
+        for _ in 1..PROBE_FAILURE_TOLERANCE {
+            assert_eq!(probes.failed(&timeout()), ProbeVerdict::Transient);
+        }
+        probes.succeeded();
+
+        // Back to a full budget rather than one probe from recovery.
+        for _ in 1..PROBE_FAILURE_TOLERANCE {
+            assert_eq!(probes.failed(&timeout()), ProbeVerdict::Transient);
+        }
+        assert_eq!(probes.failed(&timeout()), ProbeVerdict::Lost);
+    }
+
+    /// A guest with no DHCP lease is healthy, and must parse as such.
+    ///
+    /// The guest stopped refusing to start without a vmnet lease, because a
+    /// denied macOS Local Network permission is exactly how it loses one -- and
+    /// core services reach the host over the private socket bridges, which need
+    /// no address at all. That fix only holds if the host can read the health
+    /// response: with `endpoint_host` typed as a required string, a null failed
+    /// to deserialise, became "invalid guest health response", and the probe
+    /// read that as a dead runtime.
+    #[test]
+    fn a_guest_reporting_no_network_address_is_not_a_broken_health_response() {
+        let status: ManagedRuntimeStatus = serde_json::from_value(serde_json::json!({
+            "status": "ready",
+            "engine": "containerd",
+            "endpoint_host": null,
+            "network": {"leased": false},
+            "host_gateway": "192.168.64.1",
+            "active_sandboxes": 0,
+        }))
+        .expect("a lease-less guest must still report a readable health status");
+
+        assert_eq!(status.endpoint_host, None);
+        assert_eq!(status.host_gateway, "192.168.64.1");
+    }
+
+    /// A fresh controller starts owing nothing to a previous guest.
+    #[test]
+    fn a_new_controller_starts_with_a_full_probe_budget() {
+        let (_root, controller) = test_controller();
+        assert_eq!(
+            controller.probes.lock().unwrap().consecutive_failures,
+            0,
+            "a controller must not inherit failures"
         );
     }
 
@@ -1967,6 +2197,7 @@ mod tests {
                 },
             },
             forwarders: Mutex::new(Vec::new()),
+            probes: Mutex::new(ProbeTracker::default()),
             clock_keeper: Mutex::new(None),
             last_clock_error: Mutex::new(None),
             sandbox_images: Mutex::new(SandboxImageStatus::default()),
@@ -1974,7 +2205,7 @@ mod tests {
             pending_images: Mutex::new(None),
             cancellation: lemma_desktop_process::Cancellation::default(),
             status: Mutex::new(Some(ManagedRuntimeStatus {
-                endpoint_host: "192.168.64.10".into(),
+                endpoint_host: Some("192.168.64.10".into()),
                 host_gateway: "192.168.64.1".into(),
                 engine: "containerd".into(),
                 active_sandboxes: 0,

@@ -517,6 +517,33 @@ One run feeds both machines. The test app installs its embedded compressed
 runtimes into Application Support on first launch; registry access is still
 required for infrastructure and sandbox images.
 
+### Qualifying on a machine that already runs Lemma
+
+```bash
+make desktop-dmg QA=1
+```
+
+The same DMG, built as a separate application: **Lemma Candidate QA**, bundle
+identifier `work.lemma.candidate-qa`, and its own
+`~/Library/Application Support/Lemma Candidate QA`.
+
+That last part is the point, and it is not tidiness. locald keys its process
+ledger, its runtime tree and its reset command on that directory, so a
+candidate sharing it with the installation already on the machine would stop
+the user's daemon, adopt its runtime, and erase its pods on cleanup. The
+directory name is compiled in (`LEMMA_DESKTOP_DATA_DIR_NAME`), not passed at
+launch, so it holds however the candidate is started -- including from the
+Finder by somebody you handed it to.
+
+A release build must not carry it. `a_release_build_keeps_its_data_where_installed_lemma_already_has_it`
+fails if it does, because moving that directory orphans the data of every
+installation that already exists.
+
+Removing a candidate afterwards is its own application and its own directory:
+quit it, delete `Lemma Candidate QA.app`, delete
+`~/Library/Application Support/Lemma Candidate QA`. Nothing there is shared
+with the real installation.
+
 ## Clean macOS acceptance test
 
 Use a disposable test machine where possible. For an intentionally destructive

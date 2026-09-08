@@ -22,8 +22,9 @@ pub mod service;
 /// -- npm, and the agent CLIs themselves -- are console programs. Each would
 /// otherwise open a console window in the user's face.
 ///
-/// Used by the Windows service installer. Setup commands preserve this flag
-/// through their process ownership wrapper instead.
+/// Used where this crate runs a Windows tool directly: removing a service an
+/// older release installed, and ending an agent's process tree. Setup commands
+/// preserve this flag through their process ownership wrapper instead.
 #[cfg(windows)]
 pub(crate) trait NoConsoleWindow {
     fn no_console_window(&mut self) -> &mut Self;

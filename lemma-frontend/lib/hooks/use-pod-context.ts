@@ -49,7 +49,7 @@ function useMultipleDatastoreTables(podId: string | undefined, datastores: { id:
                                     : [];
 
                                 return {
-                                    name: String(raw.name || raw.name || ''),
+                                    name: String(raw.name || ''),
                                     columns: rawColumns.map((column) => ({
                                         name: String(column.name || ''),
                                         type: String(column.type || 'TEXT'),

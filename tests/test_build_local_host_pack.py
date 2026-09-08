@@ -20,7 +20,9 @@ from pathlib import Path
 import pytest
 
 from scripts.build_local_host_pack import (
+    WINDOWS_PATH_BUDGET,
     _resolve_rpath_libraries,
+    enforce_windows_path_budget,
     copy_browser_assets,
     copy_node_runtime,
     npm_executable,
@@ -249,3 +251,69 @@ def test_a_pack_with_no_server_names_what_it_looked_for(tmp_path: Path) -> None:
     message = str(raised.value)
     for candidate in ("server.js", "app/server.js", "lemma-frontend/server.js"):
         assert candidate in message
+
+
+def _pack_with(root: Path, relative: str, body: bytes = b"x") -> Path:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(body)
+    return path
+
+
+def test_bytecode_windows_cannot_open_is_dropped_rather_than_shipped(tmp_path, capsys):
+    """1,349 files landed past Windows' 260-character limit on a real install.
+
+    They were written -- Rust addresses files with the extended-length prefix
+    and is not bound by
+    the limit -- and then could not be opened by anything that is not, which
+    includes the pack's own Python. The backend failed to import a module that
+    `Get-ChildItem` was listing in the same directory, and the app could not
+    start. Nothing before this noticed, because the pack had never been
+    installed on Windows.
+    """
+    pack = tmp_path / "pack"
+    deep = "backend/python/Lib/site-packages/" + "/".join(["seg"] * 30)
+    over = _pack_with(pack, f"{deep}/__pycache__/module.cpython-314.pyc")
+    within = _pack_with(pack, "backend/python/Lib/site-packages/__pycache__/a.pyc")
+    source = _pack_with(pack, "backend/python/Lib/site-packages/a.py")
+
+    enforce_windows_path_budget(pack)
+
+    assert not over.exists(), "bytecode past the budget cannot be read once installed"
+    assert within.exists(), "the other forty-four thousand keep their cache"
+    assert source.exists()
+    assert "dropped 1 cached bytecode" in capsys.readouterr().out
+
+
+def test_a_source_file_past_the_budget_fails_the_build(tmp_path):
+    """Bytecode can be dropped; source cannot.
+
+    A `.py` that Windows cannot open is a pack that works on one platform and
+    is broken on the other, with nothing to say so until someone installs it.
+    """
+    pack = tmp_path / "pack"
+    _pack_with(pack, "backend/" + "/".join(["segment"] * 30) + "/module.py")
+
+    with pytest.raises(SystemExit) as failure:
+        enforce_windows_path_budget(pack)
+
+    assert "Windows cannot open them" in str(failure.value)
+
+
+def test_the_budget_leaves_room_for_where_the_pack_is_installed():
+    """The arithmetic this number comes from, so it cannot drift silently.
+
+    An installed pack sits under
+    `%LOCALAPPDATA%\\Lemma\\runtime\\releases\\<version>-<8 hex>\\`.
+    """
+    longest_user_name = 20
+    release_directory = (
+        len("C:\\Users\\")
+        + longest_user_name
+        + len("\\AppData\\Local\\Lemma\\runtime\\releases\\")
+        + len("0.7.2-abcdef12")
+    )
+    usable = 259  # MAX_PATH counts the terminating NUL.
+    assert release_directory + 1 + WINDOWS_PATH_BUDGET <= usable, (
+        "the budget has to fit under the directory the pack is installed into"
+    )

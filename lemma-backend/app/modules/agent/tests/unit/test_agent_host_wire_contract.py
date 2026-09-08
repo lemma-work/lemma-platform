@@ -20,7 +20,11 @@ from pathlib import Path
 import pytest
 from uuid import uuid7
 
-from app.modules.agent.domain.agent_host import AgentHostEventType
+from app.modules.agent.domain.agent_host import (
+    AgentHostCapacity,
+    AgentHostEvent,
+    AgentHostEventType,
+)
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.harnesses.agent_host.events import (
     AgentHostEventEnvelope,
@@ -118,3 +122,30 @@ def test_a_tool_call_arrives_with_its_arguments_and_its_result(case: dict) -> No
     assert len(returns) == 1, "one tool use must render as exactly one return"
     assert calls[0].data.tool_args == case["tool_args"]
     assert returns[0].data.tool_result == case["tool_result"]
+
+
+def test_the_declared_limits_are_the_ones_this_side_enforces() -> None:
+    """The bounds the host is asked to respect must be the bounds we apply.
+
+    Neither is a graceful degradation if it drifts. An ``object_id`` longer than
+    the column refuses the whole batch, which the host reads as the run's own
+    fault and answers by discarding the transcript; a ``max_runs`` above the cap
+    makes every poll 422, so a paired computer reports itself offline
+    indefinitely. Both limits used to live only in this file's field
+    definitions, where the host could not see them.
+    """
+    limits = _contract()["limits"]
+
+    object_id = AgentHostEvent.model_fields["object_id"]
+    declared = next(
+        item.max_length
+        for item in object_id.metadata
+        if getattr(item, "max_length", None) is not None
+    )
+    assert declared == limits["object_id_max_length"]
+
+    max_runs = AgentHostCapacity.model_fields["max_runs"]
+    ceiling = next(
+        item.le for item in max_runs.metadata if getattr(item, "le", None) is not None
+    )
+    assert ceiling == limits["max_runs"]

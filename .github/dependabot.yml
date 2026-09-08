@@ -52,6 +52,9 @@ updates:
     directories:
       - /lemma-typescript
       - /lemma-frontend
+      # The desktop UI tests have their own lock. It carried no advisory when it
+      # was added here, which is the only time a directory is cheap to add.
+      - /desktop/ui-tests
     schedule:
       interval: monthly
       time: "04:15"
@@ -95,6 +98,10 @@ updates:
     directories:
       - /lemma-backend
       - /lemma-frontend
+      # The desktop guest image. `FROM ubuntu:24.04`, and nothing was watching
+      # it: the backend image has Trivy in security.yml as a second line, and
+      # this one has no scanner of its own at all.
+      - /desktop/local-runtime/guest-image
     schedule:
       interval: monthly
       time: "04:45"

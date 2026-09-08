@@ -1,6 +1,7 @@
 //! Generic ACP v1 adapter driver.
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,9 +15,10 @@ use agent_client_protocol::schema::v1::{
     SessionConfigOption, SessionConfigOptionValue, SessionNotification,
     SetSessionConfigOptionRequest, TextContent,
 };
-use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ConnectionTo};
+use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ByteStreams, ConnectionTo};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::adapters::ResolvedAdapter;
@@ -126,14 +128,19 @@ impl AgentDriver for AcpDriver {
     ) -> anyhow::Result<AcpProbeOutcome> {
         std::fs::create_dir_all(&scratch_directory)?;
         let agent = build_agent(&adapter);
+        let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
+        let stderr = capture_stderr(stderr);
         let outcome = agent_client_protocol::Client
             .builder()
             .name("lemma-agent-host-probe")
-            .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
-                let initialization = connection
-                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                    .block_task()
-                    .await?;
+            .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
+                let initialization = before_prompt_deadline(
+                    "initialize",
+                    connection
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task(),
+                )
+                .await?;
                 let session = connection
                     .send_request(NewSessionRequest::new(scratch_directory))
                     .block_task()
@@ -154,8 +161,15 @@ impl AgentDriver for AcpDriver {
                     auth_methods,
                 })
             })
-            .await?;
-        Ok(outcome)
+            .await
+            .map_err(anyhow::Error::from);
+        // The protocol is done with the process, so stdout has reached EOF and
+        // everything the agent sent has been dispatched. Only now may the exit
+        // status speak.
+        match outcome {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => Err(supervised.explain(&error, stderr).await),
+        }
     }
 
     async fn run(
@@ -166,6 +180,8 @@ impl AgentDriver for AcpDriver {
         std::fs::create_dir_all(&request.scratch_directory)?;
         let adapter_key = request.adapter.spec.key.clone();
         let agent = build_agent(&request.adapter);
+        let (mut supervised, transport, stderr) = SupervisedAgent::spawn(&agent)?;
+        let stderr = capture_stderr(stderr);
         let notification_callbacks = Arc::clone(&callbacks);
         let permission_callbacks = Arc::clone(&callbacks);
         let permission_gate = request.permissions.clone();
@@ -191,12 +207,31 @@ impl AgentDriver for AcpDriver {
         // opens when this run's own prompt goes out.
         let streaming = Arc::new(AtomicBool::new(false));
         let notification_streaming = Arc::clone(&streaming);
+        // Which session this run's transcript belongs to.
+        //
+        // ACP carries a `sessionId` on every update and nothing here read it,
+        // so an adapter holding more than one session open would have written
+        // another conversation's output into this one's transcript. Set once
+        // the session is established, and only updates naming it are journaled.
+        let turn_session: Arc<std::sync::OnceLock<String>> = Arc::new(std::sync::OnceLock::new());
+        let notification_session = Arc::clone(&turn_session);
         let outcome = agent_client_protocol::Client
             .builder()
             .name("lemma-agent-host")
             .on_receive_notification(
                 async move |notification: SessionNotification, _context| {
                     if !notification_streaming.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    // An update for a session this run does not own belongs to
+                    // somebody else's transcript, not the end of this one.
+                    if let Some(session) = notification_session.get()
+                        && notification.session_id.to_string().as_str() != session.as_str()
+                    {
+                        tracing::warn!(
+                            claimed = %notification.session_id,
+                            "dropped an ACP update for another session"
+                        );
                         return Ok(());
                     }
                     if let Some((event_type, object_id, payload)) =
@@ -301,11 +336,14 @@ impl AgentDriver for AcpDriver {
                 },
                 agent_client_protocol::on_receive_request!(),
             )
-            .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
-                connection
-                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                    .block_task()
-                    .await?;
+            .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
+                before_prompt_deadline(
+                    "initialize",
+                    connection
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task(),
+                )
+                .await?;
                 let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
                 // A Lemma conversation is one provider session: resuming is what
                 // lets the agent answer "what did I just say" instead of meeting
@@ -313,13 +351,16 @@ impl AgentDriver for AcpDriver {
                 let mut established = None;
                 let attempted_resume = resume_session_id.is_some();
                 if let Some(existing) = resume_session_id {
-                    match connection
-                        .send_request(
-                            LoadSessionRequest::new(existing.clone(), scratch_directory.clone())
-                                .mcp_servers(mcp_servers.clone()),
-                        )
-                        .block_task()
-                        .await
+                    match before_prompt_deadline(
+                        "session/load",
+                        connection
+                            .send_request(
+                                LoadSessionRequest::new(existing.clone(), scratch_directory.clone())
+                                    .mcp_servers(mcp_servers.clone()),
+                            )
+                            .block_task(),
+                    )
+                    .await
                     {
                         Ok(loaded) => {
                             established = Some((existing.into(), loaded.config_options));
@@ -349,12 +390,15 @@ impl AgentDriver for AcpDriver {
                 let (session_id, config_options) = if let Some(established) = established {
                     established
                 } else {
-                    let session = connection
-                        .send_request(
-                            NewSessionRequest::new(scratch_directory).mcp_servers(mcp_servers),
-                        )
-                        .block_task()
-                        .await?;
+                    let session = before_prompt_deadline(
+                        "session/new",
+                        connection
+                            .send_request(
+                                NewSessionRequest::new(scratch_directory).mcp_servers(mcp_servers),
+                            )
+                            .block_task(),
+                    )
+                    .await?;
                     (session.session_id, session.config_options)
                 };
                 let session_options = config_options
@@ -486,7 +530,10 @@ impl AgentDriver for AcpDriver {
                         agent_client_protocol::schema::v1::Error::internal_error()
                             .data(error.to_string())
                     })?;
-                // Past this point every session update belongs to this turn.
+                // Past this point every session update belongs to this turn --
+                // as long as it names this session, which is what the handler
+                // now checks.
+                let _ = turn_session.set(session_id.to_string());
                 streaming.store(true, Ordering::SeqCst);
                 let turn = connection
                     .send_request(PromptRequest::new(
@@ -528,8 +575,15 @@ impl AgentDriver for AcpDriver {
                     message,
                 })
             })
-            .await?;
-        Ok(outcome)
+            .await
+            .map_err(anyhow::Error::from);
+        // See `SupervisedAgent`: the protocol has read to stdout EOF, so every
+        // chunk the agent streamed is already journalled. A non-zero exit
+        // explains the failure; it no longer replaces the answer.
+        match outcome {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => Err(supervised.explain(&error, stderr).await),
+        }
     }
 }
 
@@ -644,21 +698,164 @@ fn session_to_resume(run_spec: &RunSpec, can_load_session: bool) -> Option<Strin
         .map(str::to_owned)
 }
 
+/// How long to wait for a finished agent's exit status and stderr tail.
+///
+/// Only reached once the protocol is already over, so nothing the user is
+/// waiting on sits behind it.
+const CHILD_EXIT_GRACE: Duration = Duration::from_secs(5);
+
+/// Bytes of an agent's stderr kept for its failure message.
+const STDERR_TAIL_LIMIT: usize = 8 * 1024;
+
+/// An ACP agent process this host supervises itself, rather than letting the
+/// protocol library own it.
+///
+/// The library's own transport races the protocol future against the child's
+/// exit. When the exit wins -- which a burst of output followed by an immediate
+/// exit reliably produces on a busy machine -- it returns the non-zero status
+/// *without* draining what the agent had already written, and the helper it
+/// skips is named `await_protocol_shutdown_after_successful_child_exit`. A
+/// crash mid-answer therefore discarded the part of the answer the user had
+/// already been shown: measured at 405 bytes delivered of 1080 sent.
+///
+/// Owning the child inverts that order. The protocol reads to stdout EOF, so
+/// every notification the agent sent has been dispatched, and only then does
+/// the exit status get to explain why the turn ended. See
+/// `a_crash_mid_stream_keeps_every_chunk_the_agent_had_already_sent`.
+struct SupervisedAgent {
+    child: async_process::Child,
+}
+
+impl SupervisedAgent {
+    /// Spawn the agent and hand back the transport for its stdio.
+    fn spawn(
+        agent: &AcpAgent,
+    ) -> anyhow::Result<(
+        Self,
+        ByteStreams<async_process::ChildStdin, async_process::ChildStdout>,
+        async_process::ChildStderr,
+    )> {
+        let (stdin, stdout, stderr, child) = agent
+            .spawn_process()
+            .map_err(|error| anyhow::anyhow!("could not start the agent: {error}"))?;
+        // `new(outgoing, incoming)`: we write to the child's stdin and read its
+        // stdout.
+        Ok((Self { child }, ByteStreams::new(stdin, stdout), stderr))
+    }
+
+    /// Explain a protocol failure using what the process did, now that the
+    /// protocol has finished with it.
+    ///
+    /// Keeps the library's own message shape ("Process exited with {status}:
+    /// {stderr}"), because `authentication_hint` and `adapter_failure_message`
+    /// both read the agent's own stderr out of this string to tell a signed-out
+    /// harness from a crashed one.
+    async fn explain(
+        &mut self,
+        error: &anyhow::Error,
+        stderr: tokio::task::JoinHandle<String>,
+    ) -> anyhow::Error {
+        let status = tokio::time::timeout(CHILD_EXIT_GRACE, self.child.status()).await;
+        let Ok(Ok(status)) = status else {
+            // Still running, so the protocol ended for its own reason.
+            return anyhow::anyhow!("{error}");
+        };
+        if status.success() {
+            return anyhow::anyhow!("{error}");
+        }
+        let tail = tokio::time::timeout(CHILD_EXIT_GRACE, stderr)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        if tail.trim().is_empty() {
+            anyhow::anyhow!("Process exited with {status}")
+        } else {
+            anyhow::anyhow!("Process exited with {status}: {}", tail.trim())
+        }
+    }
+}
+
+impl Drop for SupervisedAgent {
+    fn drop(&mut self) {
+        kill_agent_tree(self.child.id());
+        let _ = self.child.kill();
+    }
+}
+
+/// End an agent and everything it started.
+///
+/// Not just the child. Agents ship behind wrapper launchers -- `npx`, `uvx` --
+/// so the process this host holds is usually the wrapper, and the real agent is
+/// its child. Killing only the wrapper leaves that agent running: holding the
+/// workspace open, holding the provider credential, still able to write files,
+/// after the run it belonged to has ended.
+///
+/// On unix the protocol crate spawns the adapter with `process_group(0)`, so
+/// the child leads its own group and one signal reaches all of it.
+///
+/// Windows had nothing. It sets `CREATE_NO_WINDOW` and no more -- no job
+/// object, no new process group -- so `Child::kill` reached exactly one
+/// process and the agent behind the wrapper survived every run. `taskkill /T`
+/// walks the tree the OS itself maintains, which is the same job done by the
+/// tool Windows ships for it. It is best effort, like the signal on unix: a
+/// descendant whose parent has already exited is no longer part of any tree to
+/// walk, and neither platform can reach one of those.
+fn kill_agent_tree(pid: u32) {
+    #[cfg(unix)]
+    if let Some(pid) = rustix::process::Pid::from_raw(pid.cast_signed()) {
+        // ESRCH just means the group is already gone.
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+    #[cfg(windows)]
+    {
+        use crate::NoConsoleWindow as _;
+
+        // Spawned and not waited on: this runs in `Drop`, which may be on a
+        // runtime thread, and the tree does not need to be gone before the
+        // turn is reported. `Child::kill` below still ends the wrapper
+        // immediately either way.
+        let _ = std::process::Command::new("taskkill")
+            .no_console_window()
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+}
+
+/// Read an agent's stderr into a bounded tail, for its failure message.
+fn capture_stderr(stderr: async_process::ChildStderr) -> tokio::task::JoinHandle<String> {
+    tokio::spawn(async move {
+        use futures_util::AsyncReadExt as _;
+        let mut reader = stderr;
+        let mut captured = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        while let Ok(read) = reader.read(&mut buffer).await {
+            if read == 0 {
+                break;
+            }
+            tracing::debug!(target = "agent_stderr", bytes = read, "ACP adapter stderr");
+            captured.extend_from_slice(&buffer[..read]);
+            if captured.len() > STDERR_TAIL_LIMIT {
+                let excess = captured.len() - STDERR_TAIL_LIMIT;
+                captured.drain(..excess);
+            }
+        }
+        String::from_utf8_lossy(&captured).into_owned()
+    })
+}
+
 fn build_agent(adapter: &ResolvedAdapter) -> AcpAgent {
     let config = AcpAgentConfig::new(&adapter.command)
         .args(adapter.args())
         .envs(adapter.environment());
-    AcpAgent::new(config).with_debug(|line, direction| {
-        if matches!(direction, agent_client_protocol::LineDirection::Stderr) {
-            tracing::debug!(
-                target = "agent_stderr",
-                bytes = line.len(),
-                "ACP adapter stderr"
-            );
-        } else if matches!(direction, agent_client_protocol::LineDirection::Stdout) {
-            tracing::debug!(bytes = line.len(), "ACP stdout frame received");
-        }
-    })
+    // No `with_debug`: that callback is only consulted by the library's own
+    // transport, and this host supervises the process itself (`SupervisedAgent`).
+    // Leaving it attached would be dead code that reads as live logging. The
+    // stderr half, which is the useful half, is logged in `capture_stderr`.
+    AcpAgent::new(config)
 }
 
 /// The prompt as ACP content blocks.
@@ -818,7 +1015,8 @@ pub fn normalize_session_update(
             .or_insert_with(|| Value::String("pending".to_owned()));
     }
     flatten_content_text(object);
-    let object_id = find_string(object, &["toolCallId", "tool_call_id", "id", "contentId"]);
+    let object_id = find_string(object, &["toolCallId", "tool_call_id", "id", "contentId"])
+        .map(shorten_object_id);
     Some((
         event_type,
         object_id,
@@ -827,6 +1025,60 @@ pub fn normalize_session_update(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     ))
+}
+
+/// How long each request made before the prompt may take.
+///
+/// `initialize`, `session/new` and `session/load` are the three round trips
+/// between spawning an agent and dispatching the user's prompt, and none of
+/// them had a deadline of its own. An adapter that hangs on one -- Claude Code
+/// waiting on a TTY for onboarding is the shape that has actually been seen --
+/// held its capacity permit for the run's entire deadline, up to an hour, while
+/// the conversation showed nothing at all. Failing here is safe: it is before
+/// `before_prompt`, so nothing has been dispatched and the run is retryable.
+const SETUP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound one of those requests.
+async fn before_prompt_deadline<T>(
+    what: &str,
+    request: impl Future<Output = Result<T, agent_client_protocol::schema::v1::Error>>,
+) -> Result<T, agent_client_protocol::schema::v1::Error> {
+    match tokio::time::timeout(SETUP_REQUEST_TIMEOUT, request).await {
+        Ok(result) => result,
+        Err(_) => Err(
+            agent_client_protocol::schema::v1::Error::internal_error().data(format!(
+                "the agent did not answer {what} within {}s",
+                SETUP_REQUEST_TIMEOUT.as_secs()
+            )),
+        ),
+    }
+}
+
+/// The backend stores an event's `object_id` in a 255-character column, and
+/// nothing stopped an adapter's tool-call id from being longer.
+///
+/// The cost was out of all proportion to the cause: the batch carrying that id
+/// is refused as malformed, the host reads a refusal as the run's own fault,
+/// replays once, and then discards the whole transcript. One verbose id from an
+/// adapter and the user's entire conversation turn disappears.
+///
+/// Truncating alone would collide -- ids that share a long prefix are exactly
+/// the shape adapters generate -- so the tail becomes a hash of the original.
+/// The id only has to be stable and unique within a run, which this is.
+fn shorten_object_id(id: String) -> String {
+    const LIMIT: usize = 255;
+    if id.len() <= LIMIT {
+        return id;
+    }
+    let digest = Sha256::digest(id.as_bytes());
+    let suffix = format!("-{digest:x}");
+    // Cut the kept prefix on a character boundary, so a multi-byte id does not
+    // panic here on its way to being reported.
+    let mut keep = LIMIT - suffix.len();
+    while keep > 0 && !id.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    format!("{}{suffix}", &id[..keep])
 }
 
 fn permission_payload(request: &RequestPermissionRequest) -> JsonMap {
@@ -1335,6 +1587,67 @@ fn session_config_value(key: &str, selection: &Value) -> Result<SessionConfigOpt
 }
 
 #[cfg(test)]
+mod object_id_tests {
+    use super::shorten_object_id;
+
+    /// The backend stores `object_id` in a 255-character column and refuses a
+    /// longer one. The host reads that refusal as the run's own fault, replays
+    /// once, and then discards the transcript -- so a verbose tool-call id from
+    /// an adapter cost the user their whole conversation turn.
+    #[test]
+    fn an_over_long_tool_call_id_cannot_cost_the_user_their_transcript() {
+        let long = "call_".to_owned() + &"a".repeat(400);
+        let shortened = shorten_object_id(long.clone());
+
+        assert!(
+            shortened.len() <= 255,
+            "still {} characters, which the backend refuses",
+            shortened.len()
+        );
+        assert!(
+            shortened.starts_with("call_"),
+            "the id should stay recognisable: {shortened}"
+        );
+    }
+
+    /// Truncation alone would collide, and ids sharing a long prefix are
+    /// exactly what adapters generate. Two different ids must stay different,
+    /// or two tool calls merge into one in the transcript.
+    #[test]
+    fn two_long_ids_that_share_a_prefix_stay_distinct() {
+        let prefix = "call_".to_owned() + &"a".repeat(400);
+        let one = shorten_object_id(format!("{prefix}-one"));
+        let two = shorten_object_id(format!("{prefix}-two"));
+
+        assert_ne!(one, two, "distinct tool calls must not merge");
+        assert!(one.len() <= 255 && two.len() <= 255);
+    }
+
+    /// The same id must shorten the same way every time, or an update stops
+    /// matching the tool call it belongs to.
+    #[test]
+    fn shortening_is_stable_for_the_same_id() {
+        let id = "call_".to_owned() + &"z".repeat(300);
+        assert_eq!(shorten_object_id(id.clone()), shorten_object_id(id));
+    }
+
+    /// An id that is already short is passed through untouched -- the common
+    /// case, and the one where a surprise would be worst.
+    #[test]
+    fn a_normal_id_is_left_exactly_as_it_was() {
+        assert_eq!(shorten_object_id("read-project".into()), "read-project");
+    }
+
+    /// Cutting a multi-byte id must not panic on its way to being reported.
+    #[test]
+    fn a_multibyte_id_is_cut_on_a_character_boundary() {
+        let id = "🧪".repeat(200);
+        let shortened = shorten_object_id(id);
+        assert!(shortened.len() <= 255);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use agent_client_protocol::schema::v1::{
         ContentChunk, ImageContent, SessionUpdate, TextContent,
@@ -1786,6 +2099,84 @@ mod tests {
             &Value::String("agent-full-access".into())
         ));
     }
+
+    /// An agent is usually a wrapper with the real agent underneath it.
+    ///
+    /// `npx` and `uvx` are how these things ship, so the process this host
+    /// holds is the launcher and the agent is its child. Ending only the
+    /// launcher leaves the agent running with the workspace open and the
+    /// provider credential in hand, after the run it belonged to is over.
+    ///
+    /// Driven against `/bin/sh` in exactly that shape: a wrapper that starts
+    /// something and then waits for it. The Windows half of `kill_agent_tree`
+    /// cannot be run from here; this pins the contract it has to meet.
+    #[cfg(unix)]
+    #[test]
+    fn ending_an_agent_ends_the_wrapper_and_what_it_started() {
+        use std::os::unix::process::CommandExt as _;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let recorded = directory.path().join("real-agent.pid");
+        let mut wrapper = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!(
+                "sleep 120 & printf '%s' \"$!\" > {}; wait",
+                recorded.display()
+            ))
+            // What the protocol crate does when it spawns an adapter, and what
+            // makes one signal reach all of it.
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the wrapper starts");
+
+        let agent = wait_for_pid(&recorded);
+        assert!(
+            process_exists(agent),
+            "the agent should be running to begin with"
+        );
+
+        kill_agent_tree(wrapper.id());
+        let _ = wrapper.wait();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while process_exists(agent) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !process_exists(agent),
+            "the agent behind the wrapper is still running; \
+             killing the wrapper alone orphans it"
+        );
+    }
+
+    #[cfg(unix)]
+    fn wait_for_pid(path: &std::path::Path) -> u32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && let Ok(pid) = text.trim().parse::<u32>()
+            {
+                return pid;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the wrapper never recorded what it started");
+    }
+
+    /// `kill -0` rather than rustix, so this crate keeps `unsafe_code` at
+    /// `forbid` and the test does not depend on how the signal is sent.
+    #[cfg(unix)]
+    fn process_exists(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
 }
 
 #[cfg(test)]
@@ -2132,5 +2523,42 @@ mod scoped_mcp_approval_tests {
             &permission_request_named("bash"),
             &empty
         ));
+    }
+}
+
+#[cfg(test)]
+mod setup_deadline_tests {
+    use super::{SETUP_REQUEST_TIMEOUT, before_prompt_deadline};
+
+    /// An agent that never answers `initialize` used to hold its capacity
+    /// permit for the run's whole deadline -- up to an hour -- while the
+    /// conversation showed nothing. Claude Code waiting on a TTY for onboarding
+    /// is the shape this has actually taken.
+    #[tokio::test(start_paused = true)]
+    async fn a_setup_request_that_never_answers_gives_up_rather_than_holding_the_run() {
+        let hangs = std::future::pending::<Result<(), agent_client_protocol::schema::v1::Error>>();
+
+        let outcome = before_prompt_deadline("initialize", hangs).await;
+
+        let error = outcome.expect_err("a request that never answers must not wait for ever");
+        let reported = format!("{error:?}");
+        assert!(
+            reported.contains("initialize"),
+            "the message must name which request hung: {reported}"
+        );
+        assert!(
+            reported.contains(&SETUP_REQUEST_TIMEOUT.as_secs().to_string()),
+            "and how long it was given: {reported}"
+        );
+    }
+
+    /// The deadline must not interfere with an agent that simply answers.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_within_the_deadline_is_passed_straight_through() {
+        let answered = async { Ok::<_, agent_client_protocol::schema::v1::Error>(7) };
+        assert_eq!(
+            before_prompt_deadline("session/new", answered).await.ok(),
+            Some(7)
+        );
     }
 }

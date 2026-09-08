@@ -45,7 +45,12 @@ class StressRunnerTests(unittest.TestCase):
         self.assertIn("No tests executed for filter: fixture", result.stdout)
 
     def test_deadline_terminates_hung_test_and_load(self) -> None:
-        result = self.run_stress("echo HUNG_TEST_STARTED; sleep 60", budget=2)
+        # Four seconds, not two. The budget has to outlast starting bash and
+        # the fixture on a machine that is already busy -- this suite runs
+        # alongside a cargo build -- or the deadline fires before the fixture
+        # has written anything and the assertion below fails on an empty file
+        # for a reason that has nothing to do with what it is testing.
+        result = self.run_stress("echo HUNG_TEST_STARTED; sleep 60", budget=4)
         self.assertEqual(result.returncode, 143, result.stderr)
         path = result.stdout.split("Interrupted test log: ", 1)[1].splitlines()[0]
         self.assertIn("HUNG_TEST_STARTED", Path(path).read_text())

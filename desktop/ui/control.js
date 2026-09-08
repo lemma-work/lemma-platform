@@ -74,7 +74,12 @@ function setPage(page) {
   if (!titles[page]) return;
   if (!LOCAL_MODE && LOCAL_PAGES.has(page)) page = "computer";
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.classList.toggle("active", button.dataset.page === page);
+    const current = button.dataset.page === page;
+    button.classList.toggle("active", current);
+    // Which page you are on was carried by a background colour and nothing
+    // else, so a screen reader read eleven identical navigation buttons.
+    if (current) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   document.querySelectorAll(".page").forEach((section) => {
     section.classList.toggle("active", section.dataset.page === page);
@@ -357,7 +362,16 @@ function configureInteractionHandlers() {
   });
   $("back-to-lemma").addEventListener("click", closeLocalSettings);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !event.defaultPrevented) closeLocalSettings();
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    // Escape inside a field belongs to the field. Typing a password, pressing
+    // Escape to dismiss the browser's own suggestion list, and having the
+    // whole settings window close instead is not a shortcut anybody asked
+    // for. The first Escape leaves the control; a second one closes.
+    if (isEditingControl(event.target)) {
+      event.target.blur();
+      return;
+    }
+    closeLocalSettings();
   });
   document.querySelectorAll(".config-page input, .config-page select").forEach((input) => {
     input.addEventListener("input", () => markDirty(input));
@@ -978,9 +992,27 @@ function serviceHtml(title, copy, status, tone) {
   return `<div class="service-row"><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(copy)}</small></span><span class="status ${tone}">${escapeHtml(status)}</span></div>`;
 }
 
+// What each dot's colour means, in words.
+//
+// The dots were colour and nothing else: green, gold, red and grey, with no
+// text anywhere. Someone who cannot tell those apart -- or who is listening
+// rather than looking -- got eleven navigation items that all read the same,
+// and no way to find the one that needs them.
+const DOT_MEANING = {
+  ok: "healthy",
+  warn: "needs attention",
+  bad: "not working",
+  "": "not configured",
+};
+
 function setDot(id, tone) {
   const dot = $(`dot-${id}`);
-  if (dot) dot.className = `health-dot ${tone}`;
+  if (!dot) return;
+  dot.className = `health-dot ${tone}`;
+  // Inside the nav button, so it joins that button's name: "AI provider,
+  // needs attention".
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", DOT_MEANING[tone] ?? DOT_MEANING[""]);
 }
 
 function modeLabel(mode) {
@@ -1042,7 +1074,19 @@ function renderSharing(sharing = {}) {
   }
   const qrVisible = actualMode === "local_network" && sharing.phase === "ready" && Boolean(sharing.qr_svg);
   $("sharing-qr").hidden = !qrVisible;
-  $("sharing-qr-image").innerHTML = qrVisible ? sharing.qr_svg : "";
+  // Not innerHTML. This window can reinstall Lemma and write credentials, and
+  // its CSP allows inline script, so markup arriving over the daemon's event
+  // stream must not become live DOM here. An SVG loaded through <img> cannot
+  // run script, and img-src already permits data: URIs.
+  const qrImage = $("sharing-qr-image");
+  qrImage.replaceChildren();
+  if (qrVisible) {
+    const img = document.createElement("img");
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sharing.qr_svg)}`;
+    img.alt = "QR code for this computer's Lemma address";
+    img.decoding = "async";
+    qrImage.appendChild(img);
+  }
 
   $("cloudflare-fields").hidden = sharingProvider !== "cloudflare";
   const readiness = sharing.provider_readiness?.[sharingProvider] || {};
@@ -1308,7 +1352,58 @@ function clearSnapshotUnavailable() {
   if (banner) banner.hidden = true;
 }
 
+// Whether an element is a control the user is editing.
+function isEditingControl(target) {
+  if (!target || typeof target.tagName !== "string") return false;
+  if (target.isContentEditable) return true;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+// What each event has to carry before this page will act on it.
+//
+// Only the fields its branch dereferences without guarding, which is where a
+// missing one throws. Everything else is already read with `?.` or `||`.
+const REQUIRED_EVENT_FIELDS = {
+  "control.snapshot": ["state", "operator.config.revision"],
+  "config.applied": ["operator.config.revision"],
+};
+
+function hasPath(value, path) {
+  return path
+    .split(".")
+    .reduce((current, key) => (current == null ? undefined : current[key]), value) !== undefined;
+}
+
+// Events cross the bridge from the daemon and were read here unparsed.
+///
+/// A shape this page did not expect threw partway through a branch, after
+/// some of that branch had already run: a `config.applied` without an
+/// `operator` released the save button and dropped the pending save, then
+/// threw before `fillConfiguration`, leaving stale settings on screen with no
+/// error, no toast, and a save the page believed had succeeded.
+function unusableEventReason(event) {
+  if (!event || typeof event !== "object" || typeof event.event !== "string") {
+    return "the daemon sent something this page cannot read";
+  }
+  const missing = (REQUIRED_EVENT_FIELDS[event.event] || []).filter(
+    (path) => !hasPath(event, path),
+  );
+  return missing.length ? `${event.event} arrived without ${missing.join(", ")}` : null;
+}
+
 function handleLocaldEvent(event) {
+  const unusable = unusableEventReason(event);
+  if (unusable) {
+    // Said, not swallowed. Showing the previous snapshot as though it were
+    // current is the one outcome worse than showing nothing.
+    if (event?.event === "control.snapshot" || !event?.event) {
+      showSnapshotUnavailable(unusable);
+    } else {
+      toast(unusable, true);
+      requestSnapshot();
+    }
+    return;
+  }
   if (event.event === "control.snapshot") {
     snapshot = event;
     state = event.state;

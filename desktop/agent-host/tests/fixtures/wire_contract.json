@@ -208,5 +208,10 @@
       },
       "tool_result": "# Lemma"
     }
-  ]
+  ],
+  "limits": {
+    "_why": "Bounds the backend enforces on the wire. A host that exceeds one of these does not degrade: an over-long object_id gets its batch refused and the transcript discarded, and an over-large max_runs makes every poll 422 so the host reports itself offline for ever.",
+    "object_id_max_length": 255,
+    "max_runs": 128
+  }
 }

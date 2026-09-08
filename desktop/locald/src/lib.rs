@@ -17,6 +17,7 @@ pub mod sharing;
 pub mod state;
 mod tcp_forwarder;
 pub mod telemetry;
+pub mod update_transaction;
 pub mod vault_process;
 
 pub const PROTOCOL_VERSION: u64 = 1;
