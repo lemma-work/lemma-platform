@@ -50,6 +50,13 @@ def bounded_model_name(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
 async def test_limited_request_requires_trusted_rates_before_provider_io(
     db_manager: DatabaseManager, monkeypatch: pytest.MonkeyPatch, model_name: str
 ) -> None:
+    """`refuse` is what a deployment billing for this usage sets.
+
+    Note `claude-sonnet-4-5`: the catalog knows its price, but this profile
+    serves it through a gateway, so the price is the *vendor's* and not what the
+    gateway charges. Nothing about the model makes a rate card enforceable.
+    """
+    monkeypatch.setattr(usage_settings, "usage_unpriced_limit_policy", "refuse")
     monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
     dispatched = False
 
@@ -85,6 +92,71 @@ async def test_limited_request_requires_trusted_rates_before_provider_io(
             )
             is None
         )
+
+
+@pytest.mark.parametrize(
+    ("model_name", "expected_cost"),
+    [
+        # No rate anywhere: the request runs and no money is attributed to it.
+        ("unlisted-test-model", None),
+        # A rate the catalog knows for the *vendor*. `allow` says run it anyway,
+        # and the best number available is better than none -- so the limit does
+        # still bind, approximately, against a price this deployment was not
+        # allowed to *refuse* on.
+        ("claude-sonnet-4-5", Decimal("0.000030000")),
+    ],
+)
+async def test_the_default_policy_runs_the_same_request(
+    db_manager: DatabaseManager,
+    monkeypatch: pytest.MonkeyPatch,
+    model_name: str,
+    expected_cost: Decimal | None,
+) -> None:
+    """The default, and the reason it is the default.
+
+    No model behind an OpenAI-compatible gateway is ever enforceable, so
+    refusing turned a spend cap into a total outage for every deployment that
+    set one and pointed it at vLLM, LiteLLM, OpenRouter or a proxy.
+
+    What `allow` drops is the *refusal*, not the accounting: the request is
+    still metered, and still priced with whatever rate the catalog holds.
+    """
+    assert usage_settings.usage_unpriced_limit_policy == "allow"
+    monkeypatch.setattr(usage_settings, "usage_user_weekly_limit_usd", 1.0)
+    dispatched = False
+
+    async def provider(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal dispatched
+        dispatched = True
+        return ModelResponse(
+            parts=[TextPart("ok")], usage=RequestUsage(input_tokens=10)
+        )
+
+    user_id = uuid4()
+    model = MeteredModel(
+        FunctionModel(provider),
+        {
+            "profile_id": "system:unconfigured-gateway",
+            "scope": "SYSTEM",
+            "model_name": model_name,
+            "config": {"base_url": "https://gateway.example"},
+        },
+    )
+    async with metering_execution(
+        UsageExecutionContext(user_id=user_id, organization_id=None, pod_id=None),
+        factory=SessionUnitOfWorkFactory(db_manager.session_factory),
+    ):
+        await model.request([], None, ModelRequestParameters())
+
+    assert dispatched
+    async with db_manager.session_factory() as session:
+        # Spend nobody could refuse is still spend, and stays in the ledger.
+        receipt = (
+            await session.scalars(
+                select(UsageRecord).where(UsageRecord.user_id == user_id)
+            )
+        ).one()
+        assert receipt.cost_amount == expected_cost
 
 
 async def test_early_stream_exit_records_unconfirmed_usage(

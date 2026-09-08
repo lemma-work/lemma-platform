@@ -73,6 +73,19 @@ def test_liveness_endpoints_return_ok(client):
         assert "loop_lag_seconds" in body
 
 
+def test_liveness_states_the_api_version(client):
+    """The only unauthenticated place a client can learn what the server is.
+
+    `info.version` in `/openapi.json` was the other one, and production serves
+    no OpenAPI document — so `lemma doctor` and the CLI's update check could
+    detect skew against a local server and nothing else.
+    """
+    from app.version import API_VERSION
+
+    for path in ("/health/live", "/livez", "/health"):
+        assert client.get(path).json()["api_version"] == API_VERSION, path
+
+
 def test_liveness_returns_503_when_loop_wedged(client, monkeypatch):
     # Force unhealthy lag above the unhealthy threshold.
     monkeypatch.setattr(loop_watchdog._lag, "seconds", 10.0)
