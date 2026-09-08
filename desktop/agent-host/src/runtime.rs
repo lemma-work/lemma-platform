@@ -266,6 +266,10 @@ impl HostRuntime {
         let global_capacity = Arc::new(Semaphore::new(usize::from(self.config.max_runs)));
         let mut targets =
             HashMap::<Uuid, (watch::Sender<bool>, OwnedTask<anyhow::Result<()>>)>::new();
+        // What the scan falls back to when the file on disk stops parsing, and
+        // whether that has already been said once. See the scan loop below.
+        let mut last_good_config = self.config.clone();
+        let mut config_unreadable = false;
         let mut scan = tokio::time::interval(DISK_SCAN_INTERVAL);
         scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // One sweep for the process, announced to every worker.
@@ -288,12 +292,19 @@ impl HostRuntime {
                 }
                 _ = scan.tick() => {
                     if std::time::Instant::now() >= cleanup_due {
-                        let deleted = self.journal.cleanup_retained(Utc::now())?;
-                        if deleted > 0 {
-                            tracing::info!(
+                        // Retention is housekeeping. Letting a transient
+                        // journal error out of this loop ends `serve`, and
+                        // locald restarts the host straight back into it.
+                        match self.journal.cleanup_retained(Utc::now()) {
+                            Ok(deleted) if deleted > 0 => tracing::info!(
                                 deleted,
                                 "cleaned retained Agent Host journal records"
-                            );
+                            ),
+                            Ok(_) => {}
+                            Err(error) => tracing::warn!(
+                                %error,
+                                "could not clean retained Agent Host journal records"
+                            ),
                         }
                         cleanup_due =
                             std::time::Instant::now() + JOURNAL_CLEANUP_INTERVAL;
@@ -302,8 +313,32 @@ impl HostRuntime {
                         tracing::info!("agents on this computer changed; re-probing");
                         agents_changed.send_modify(|generation| *generation += 1);
                     }
-                    let current = HostConfig::load_or_create(&self.paths)?;
-                    current.validate()?;
+                    // A config this scan cannot read is not a reason to stop
+                    // serving the targets already running. Exiting here ended
+                    // `serve`, and locald restarted the host into the same
+                    // unreadable file -- so one bad edit took the Agent Host
+                    // away until somebody found and fixed it by hand, with the
+                    // reason only in a log.
+                    let current = match HostConfig::load_or_create(&self.paths)
+                        .and_then(|config| config.validate().map(|()| config))
+                    {
+                        Ok(config) => {
+                            config_unreadable = false;
+                            last_good_config = config.clone();
+                            config
+                        }
+                        Err(error) => {
+                            if !config_unreadable {
+                                config_unreadable = true;
+                                tracing::error!(
+                                    %error,
+                                    "the Agent Host configuration could not be read; \
+                                     continuing with the last good one"
+                                );
+                            }
+                            last_good_config.clone()
+                        }
+                    };
                     let enabled = current
                         .targets
                         .iter()

@@ -17,6 +17,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ByteStreams, ConnectionTo};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
 use crate::adapters::ResolvedAdapter;
@@ -945,7 +946,8 @@ pub fn normalize_session_update(
             .or_insert_with(|| Value::String("pending".to_owned()));
     }
     flatten_content_text(object);
-    let object_id = find_string(object, &["toolCallId", "tool_call_id", "id", "contentId"]);
+    let object_id = find_string(object, &["toolCallId", "tool_call_id", "id", "contentId"])
+        .map(shorten_object_id);
     Some((
         event_type,
         object_id,
@@ -954,6 +956,33 @@ pub fn normalize_session_update(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     ))
+}
+
+/// The backend stores an event's `object_id` in a 255-character column, and
+/// nothing stopped an adapter's tool-call id from being longer.
+///
+/// The cost was out of all proportion to the cause: the batch carrying that id
+/// is refused as malformed, the host reads a refusal as the run's own fault,
+/// replays once, and then discards the whole transcript. One verbose id from an
+/// adapter and the user's entire conversation turn disappears.
+///
+/// Truncating alone would collide -- ids that share a long prefix are exactly
+/// the shape adapters generate -- so the tail becomes a hash of the original.
+/// The id only has to be stable and unique within a run, which this is.
+fn shorten_object_id(id: String) -> String {
+    const LIMIT: usize = 255;
+    if id.len() <= LIMIT {
+        return id;
+    }
+    let digest = Sha256::digest(id.as_bytes());
+    let suffix = format!("-{digest:x}");
+    // Cut the kept prefix on a character boundary, so a multi-byte id does not
+    // panic here on its way to being reported.
+    let mut keep = LIMIT - suffix.len();
+    while keep > 0 && !id.is_char_boundary(keep) {
+        keep -= 1;
+    }
+    format!("{}{suffix}", &id[..keep])
 }
 
 fn permission_payload(request: &RequestPermissionRequest) -> JsonMap {
@@ -1458,6 +1487,67 @@ fn session_config_value(key: &str, selection: &Value) -> Result<SessionConfigOpt
         other => Err(format!(
             "unsupported configuration value for {key}: {other}"
         )),
+    }
+}
+
+#[cfg(test)]
+mod object_id_tests {
+    use super::shorten_object_id;
+
+    /// The backend stores `object_id` in a 255-character column and refuses a
+    /// longer one. The host reads that refusal as the run's own fault, replays
+    /// once, and then discards the transcript -- so a verbose tool-call id from
+    /// an adapter cost the user their whole conversation turn.
+    #[test]
+    fn an_over_long_tool_call_id_cannot_cost_the_user_their_transcript() {
+        let long = "call_".to_owned() + &"a".repeat(400);
+        let shortened = shorten_object_id(long.clone());
+
+        assert!(
+            shortened.len() <= 255,
+            "still {} characters, which the backend refuses",
+            shortened.len()
+        );
+        assert!(
+            shortened.starts_with("call_"),
+            "the id should stay recognisable: {shortened}"
+        );
+    }
+
+    /// Truncation alone would collide, and ids sharing a long prefix are
+    /// exactly what adapters generate. Two different ids must stay different,
+    /// or two tool calls merge into one in the transcript.
+    #[test]
+    fn two_long_ids_that_share_a_prefix_stay_distinct() {
+        let prefix = "call_".to_owned() + &"a".repeat(400);
+        let one = shorten_object_id(format!("{prefix}-one"));
+        let two = shorten_object_id(format!("{prefix}-two"));
+
+        assert_ne!(one, two, "distinct tool calls must not merge");
+        assert!(one.len() <= 255 && two.len() <= 255);
+    }
+
+    /// The same id must shorten the same way every time, or an update stops
+    /// matching the tool call it belongs to.
+    #[test]
+    fn shortening_is_stable_for_the_same_id() {
+        let id = "call_".to_owned() + &"z".repeat(300);
+        assert_eq!(shorten_object_id(id.clone()), shorten_object_id(id));
+    }
+
+    /// An id that is already short is passed through untouched -- the common
+    /// case, and the one where a surprise would be worst.
+    #[test]
+    fn a_normal_id_is_left_exactly_as_it_was() {
+        assert_eq!(shorten_object_id("read-project".into()), "read-project");
+    }
+
+    /// Cutting a multi-byte id must not panic on its way to being reported.
+    #[test]
+    fn a_multibyte_id_is_cut_on_a_character_boundary() {
+        let id = "🧪".repeat(200);
+        let shortened = shorten_object_id(id);
+        assert!(shortened.len() <= 255);
     }
 }
 
