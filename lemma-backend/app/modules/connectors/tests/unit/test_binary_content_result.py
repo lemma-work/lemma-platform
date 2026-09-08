@@ -56,18 +56,46 @@ def test_a_response_carries_its_headers_into_the_result():
     assert result.size_bytes == 8
 
 
-def test_an_rfc_5987_filename_is_percent_decoded():
-    """`filename*=UTF-8''report%20Q1.pdf` is an encoded value, not a literal one.
+@pytest.mark.parametrize(
+    ("disposition", "expected"),
+    [
+        # The plain form, quoted and bare.
+        ('attachment; filename="report.pdf"', "report.pdf"),
+        ("inline; filename=report.pdf", "report.pdf"),
+        # RFC 5987: a charset and a percent-encoded value. Returned verbatim,
+        # the saved file would be called `report%20Q1.pdf`.
+        ("attachment; filename*=UTF-8''report%20Q1.pdf", "report Q1.pdf"),
+        ("attachment; filename*=UTF-8'en'%C2%A3%20rates.pdf", "\u00a3 rates.pdf"),
+        # Parameter names are case-insensitive and whitespace is allowed.
+        ('attachment; FILENAME = "report.pdf"', "report.pdf"),
+        # A quoted value may contain the parameter separator.
+        ('attachment; filename="with;semi.pdf"', "with;semi.pdf"),
+        # Both forms, which senders do so a client understanding only one still
+        # gets a name. RFC 6266 4.3 says take the extended one -- in either
+        # order, because `Message.get_filename` takes whichever came first.
+        (
+            "attachment; filename=\"plain.pdf\"; filename*=UTF-8''fancy%20name.pdf",
+            "fancy name.pdf",
+        ),
+        (
+            "attachment; filename*=UTF-8''fancy%20name.pdf; filename=\"plain.pdf\"",
+            "fancy name.pdf",
+        ),
+        # Nothing to take a name from.
+        ("attachment", None),
+        ('attachment; filename="   "', None),
+    ],
+)
+def test_the_filename_is_read_out_of_the_header_grammar(disposition, expected):
+    """`Content-Disposition` is a structured header, not a string to match.
 
-    Handing it back verbatim names the saved file `report%20Q1.pdf`.
+    Every case here is one a regex over `filename=` gets wrong or drops.
     """
     response = httpx.Response(
-        200,
-        content=b"x",
-        headers={"content-disposition": "attachment; filename*=UTF-8''report%20Q1.pdf"},
+        200, content=b"x", headers={"content-disposition": disposition}
     )
 
-    assert BinaryContentResult.from_http_response(response).file_name == "report Q1.pdf"
+    assert BinaryContentResult.from_http_response(response).file_name == expected
 
 
 @pytest.mark.parametrize(

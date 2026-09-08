@@ -17,18 +17,12 @@ clients stopped being the thing that produced it.
 from __future__ import annotations
 
 import base64
-import re
 from collections.abc import Mapping
+from email.message import Message
+from email.utils import collapse_rfc2231_value
 from typing import Literal, Protocol
-from urllib.parse import unquote
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-# Two forms, and they mean different things. `filename="report.pdf"` is a plain
-# value; `filename*=UTF-8''report%20Q1.pdf` (RFC 5987) is percent-encoded, and
-# handing that one back verbatim names the file `report%20Q1.pdf`.
-_FILENAME_RE = re.compile(r'filename(?P<extended>\*)?=(?:UTF-8\'\')?"?([^";]+)"?')
 
 
 class _HttpResponseLike(Protocol):
@@ -129,10 +123,31 @@ def _header_get(headers: Mapping[str, str], name: str) -> str | None:
 
 
 def _file_name_from_disposition(disposition: str | None) -> str | None:
+    """The filename a `Content-Disposition` header names, if it names one.
+
+    Parsed rather than pattern-matched. `Content-Disposition` is a structured
+    header and its grammar has more in it than a regex over
+    ``filename=`` catches: parameter names are case-insensitive, whitespace is
+    allowed around the ``=``, a quoted value may contain a semicolon, and the
+    RFC 5987 ``filename*`` form carries a charset and percent-encoding that has
+    to be decoded or the saved file is called ``report%20Q1.pdf``.
+
+    When a header carries both forms -- which senders do precisely so that a
+    client understanding only one still gets a name -- RFC 6266 §4.3 says to
+    take ``filename*``. `Message.get_filename` returns whichever came first
+    instead, so the preference is applied here.
+    """
     if not disposition:
         return None
-    match = _FILENAME_RE.search(disposition)
-    if not match:
-        return None
-    name = match.group(2).strip()
-    return unquote(name) if match.group("extended") else name
+    parsed = Message()
+    parsed["content-disposition"] = disposition
+    plain: str | None = None
+    for name, value in parsed.get_params(header="content-disposition") or ():
+        if name.lower() != "filename":
+            continue
+        if isinstance(value, tuple):
+            # The extended form: (charset, language, percent-encoded value).
+            return collapse_rfc2231_value(value).strip() or None
+        if plain is None:
+            plain = value
+    return (plain or "").strip() or None
