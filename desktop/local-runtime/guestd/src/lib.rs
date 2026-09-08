@@ -5570,6 +5570,105 @@ mod tests {
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
     }
 
+    /// A missing data disk must stop the guest, not be waved through.
+    ///
+    /// `ConditionPathExists=/dev/nvme0n1` reads like a safety check and is the
+    /// opposite of one. A failed `Condition*` makes systemd skip the unit and
+    /// record it as *started successfully*, so `Requires=lemma-data.service`
+    /// in containerd and lemma-guestd was satisfied by a data disk nobody had
+    /// mounted. Both started, and every workspace, database and volume went to
+    /// the root filesystem -- which this image is immutable over and discards
+    /// on the next boot. Each run reported healthy.
+    ///
+    /// `Assert*` fails the unit instead, and that failure propagates through
+    /// those `Requires` and stops the services that would have written to the
+    /// wrong disk.
+    #[test]
+    fn a_missing_data_disk_fails_the_guest_rather_than_being_skipped() {
+        let unit = include_str!(
+            "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service"
+        );
+        let directives: Vec<&str> = unit
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#'))
+            .collect();
+
+        assert!(
+            directives.contains(&"AssertPathExists=/dev/nvme0n1"),
+            "the data disk's absence has to fail the unit: {unit}"
+        );
+        assert!(
+            !directives.iter().any(|line| line.starts_with("Condition")),
+            "a Condition on this unit is recorded as success and silently              routes user data to the throwaway root filesystem: {unit}"
+        );
+
+        for (name, consumer) in [
+            (
+                "containerd",
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/containerd.service"
+                ),
+            ),
+            (
+                "lemma-guestd",
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-guestd.service"
+                ),
+            ),
+        ] {
+            assert!(
+                consumer
+                    .lines()
+                    .any(|line| line.starts_with("Requires=")
+                        && line.contains("lemma-data.service")),
+                "{name} writes to the data disk, so it must require the unit                  that mounts it -- ordering alone lets it start without one"
+            );
+        }
+    }
+
+    /// Mounting can appear to succeed and still leave the data on the root.
+    ///
+    /// Each bind is guarded by `mountpoint -q`, so a target that is already a
+    /// mountpoint is accepted and skipped. If that mountpoint belongs to the
+    /// root filesystem the paths all look right and the work is thrown away on
+    /// the next boot. The script checks the four of them before it exits.
+    ///
+    /// Pinned as text, like the format guard above: a shell script inside a
+    /// disk image cannot be unit-tested from here, and the alternative is
+    /// booting a VM without a data disk, which only the qualification lane can
+    /// do.
+    #[test]
+    fn the_guest_refuses_to_finish_mounting_with_the_binds_missing() {
+        let mount_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        let verification = mount_data
+            .rfind("for required in")
+            .expect("the mount script must verify its bind mounts before exiting");
+        let last_bind = mount_data
+            .rfind("mount --bind")
+            .expect("the mount script binds the data disk into place");
+        assert!(
+            last_bind < verification,
+            "the check has to run after the binds it is checking"
+        );
+        for required in [
+            "/var/lib/lemma",
+            "/var/lib/containerd",
+            "/var/lib/nerdctl",
+            "/etc/cni/net.d",
+        ] {
+            assert!(
+                mount_data[verification..].contains(required),
+                "{required} holds user data and must be confirmed to be on the                  data disk before the guest is allowed to come up"
+            );
+        }
+        assert!(
+            mount_data[verification..].contains("exit 1"),
+            "reporting is not enough; a guest whose data is on the root              filesystem must not start"
+        );
+    }
+
     /// The guest must never force a filesystem onto a disk that has one.
     ///
     /// `mkfs.ext4 -F` on `/dev/vdb` destroys every database, volume and
