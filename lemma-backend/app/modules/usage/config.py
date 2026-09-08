@@ -56,19 +56,23 @@ class UsageSettings(BaseSettings):
         default=None,
         description="Deployment-wide monthly system-spend limit per user, in USD.",
     )
-    usage_unpriced_limit_policy: Literal["refuse", "allow"] = Field(
-        default="refuse",
+    usage_unpriced_limit_policy: Literal["allow", "refuse"] = Field(
+        default="allow",
         description=(
             "What to do when a monetary limit applies to a request whose cost "
-            "cannot be established. `refuse` rejects it, which is right for a "
-            "deployment billing somebody else for the usage: a limit it cannot "
-            "measure is not a limit. `allow` runs it and records it unpriced, "
-            "which is right for a deployment capping its own provider spend -- "
-            "refusing there protects nobody's money and only stops the product "
-            "working. A model served through an OpenAI-compatible gateway is "
-            "the common case: the catalog resolves the vendor's list price, "
-            "not what the gateway charges, so it is never enforceable. State "
-            "prices in LEMMA_SYSTEM_MODEL_METADATA_JSON to keep enforcing."
+            "cannot be established. `allow` runs it and records it unpriced: "
+            "the limit does not bind that request. `refuse` rejects it, which "
+            "a deployment billing somebody else for the usage should set, "
+            "because a limit it cannot measure is not a limit. "
+            "The default is `allow` because refusing is almost always the "
+            "wrong answer for the deployment that hits this: a model served "
+            "through an OpenAI-compatible gateway is never enforceable -- the "
+            "catalog resolves the vendor's list price, not what the gateway "
+            "charges -- so `refuse` turned a spend cap into a total outage for "
+            "anyone self-hosting behind vLLM, LiteLLM, OpenRouter or a proxy. "
+            "Either way the deployment is told at startup which models cannot "
+            "back a limit; state prices in LEMMA_SYSTEM_MODEL_METADATA_JSON to "
+            "make the limit bind again."
         ),
     )
 

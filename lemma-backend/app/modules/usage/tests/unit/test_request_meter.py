@@ -178,10 +178,17 @@ class TestUnpricedLimitPolicy:
     that named neither the model nor a fix.
     """
 
-    def test_refuse_is_the_default(self) -> None:
+    def test_allow_is_the_default(self) -> None:
+        """Refusing is the wrong answer for the deployment that hits this.
+
+        A model behind an OpenAI-compatible gateway is never enforceable, so
+        `refuse` turned a spend cap into a total outage for anyone self-hosting
+        behind one. A deployment billing somebody else for the usage sets
+        `refuse` deliberately, and is told at startup if it has not.
+        """
         from app.modules.usage.config import UsageSettings
 
-        assert UsageSettings().usage_unpriced_limit_policy == "refuse"
+        assert UsageSettings().usage_unpriced_limit_policy == "allow"
 
     def test_the_policy_decides_whether_an_unpriced_request_is_refused(
         self, monkeypatch: pytest.MonkeyPatch

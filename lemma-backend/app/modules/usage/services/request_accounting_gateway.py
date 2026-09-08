@@ -70,12 +70,17 @@ class PostgresRequestAccountingGateway:
         that cannot be measured is not a limit. `allow` is right where the
         deployment is capping its own provider spend -- it is billed directly
         by the provider, so refusing protects nobody's money and only stops the
-        product working. Which one is a deployment's decision, and until it was
-        one, every self-hosted deployment that pointed at an OpenAI-compatible
-        gateway and set any USD limit had every request refused: the catalog
-        resolves a price for the *vendor* of the model, not for the gateway
-        serving it, so `enforceable` is false for `gpt-4o` there as surely as
-        for anything else.
+        product working.
+
+        `allow` is the default because refusing is almost always the wrong
+        answer for whoever actually reaches this line. The catalog resolves a
+        price for the *vendor* of a model, not for the gateway serving it, so
+        `enforceable` is false behind vLLM, LiteLLM, OpenRouter or a corporate
+        proxy -- for `gpt-4o` as surely as for anything else. Defaulting to
+        `refuse` turned a spend cap into a total outage for every one of them.
+
+        A deployment that bills for this usage sets `refuse`, and is told at
+        startup which models cannot back its limits if it has not.
         """
         return usage_settings.usage_unpriced_limit_policy == "refuse"
 
