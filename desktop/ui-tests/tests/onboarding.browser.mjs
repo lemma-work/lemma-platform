@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
+import { launchSplash } from '../drivers/splash.mjs';
 
 let browser;
 before(async () => {
@@ -9,57 +9,10 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null, deferState = false, intent = '', colorScheme = 'light' } = {}) {
-  const context = await browser.newContext({
-    viewport,
-    reducedMotion: 'reduce',
-    colorScheme,
-    userAgent: windows ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-  });
-  t.after(() => context.close());
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  t.after(() => assert.deepEqual(errors, []));
-  const assets = new URL('../../ui/', import.meta.url);
-  await page.route('https://desktop.test/**', async route => {
-    const name = new URL(route.request().url()).pathname.slice(1);
-    const file = new URL(name, assets);
-    if (!file.href.startsWith(assets.href)) return route.abort();
-    const contentType = name.endsWith('.html') ? 'text/html'
-      : name.endsWith('.js') ? 'text/javascript'
-        : name.endsWith('.json') ? 'application/json' : 'application/octet-stream';
-    try {
-      await route.fulfill({ body: await readFile(file), contentType });
-    } catch {
-      await route.abort();
-    }
-  });
-  await page.addInitScript(({ initialState, deferState }) => {
-    window.__fixture = { calls: [], rejectInstall: false };
-    window.__TAURI__ = {
-      event: { listen: async (name, listener) => {
-        if (name === 'lemma:state') window.__fixture.renderState = state => listener({ payload: state });
-      } },
-      core: { async invoke(command, args) {
-        window.__fixture.calls.push({ command, args });
-        if (command === 'get_state' && deferState) return new Promise(() => {});
-        if (command === 'get_state') return initialState || {
-          mode: 'undecided', phaseKey: 'boot', status: 'waiting',
-          running: false, ready: false, error: false, setup: true,
-        };
-        if (command === 'diagnostic_logs') return { entries: '', sources: [] };
-        if (command === 'local_recovery_options') return {};
-        if (command === 'set_connection_mode' && window.__fixture.rejectInstall) {
-          throw new Error('Not enough disk space for the local runtime. Free space and retry.');
-        }
-      } },
-    };
-  }, { initialState, deferState });
-  await page.goto(`https://desktop.test/index.html?intent=${encodeURIComponent(intent)}`);
-  if (!initialState) await page.locator('#choose').waitFor({ state: 'visible' });
-  return page;
+// The fixture moved to drivers/splash.mjs when the startup suite needed the
+// same one. This keeps the local name, so nothing below had to change.
+async function onboarding(t, options = {}) {
+  return launchSplash(browser, t, options);
 }
 
 async function deploymentCalls(page) {
