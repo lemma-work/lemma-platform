@@ -74,7 +74,12 @@ function setPage(page) {
   if (!titles[page]) return;
   if (!LOCAL_MODE && LOCAL_PAGES.has(page)) page = "computer";
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.classList.toggle("active", button.dataset.page === page);
+    const current = button.dataset.page === page;
+    button.classList.toggle("active", current);
+    // Which page you are on was carried by a background colour and nothing
+    // else, so a screen reader read eleven identical navigation buttons.
+    if (current) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   document.querySelectorAll(".page").forEach((section) => {
     section.classList.toggle("active", section.dataset.page === page);
@@ -987,9 +992,27 @@ function serviceHtml(title, copy, status, tone) {
   return `<div class="service-row"><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(copy)}</small></span><span class="status ${tone}">${escapeHtml(status)}</span></div>`;
 }
 
+// What each dot's colour means, in words.
+//
+// The dots were colour and nothing else: green, gold, red and grey, with no
+// text anywhere. Someone who cannot tell those apart -- or who is listening
+// rather than looking -- got eleven navigation items that all read the same,
+// and no way to find the one that needs them.
+const DOT_MEANING = {
+  ok: "healthy",
+  warn: "needs attention",
+  bad: "not working",
+  "": "not configured",
+};
+
 function setDot(id, tone) {
   const dot = $(`dot-${id}`);
-  if (dot) dot.className = `health-dot ${tone}`;
+  if (!dot) return;
+  dot.className = `health-dot ${tone}`;
+  // Inside the nav button, so it joins that button's name: "AI provider,
+  // needs attention".
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", DOT_MEANING[tone] ?? DOT_MEANING[""]);
 }
 
 function modeLabel(mode) {

@@ -27,8 +27,11 @@
         <button class="nav-item" data-page="runtime"><span>Runtime</span><i class="health-dot" id="dot-runtime"></i></button>
         <div class="nav-group">Desktop</div>
         <button class="nav-item" data-page="updates"><span>Updates</span><i class="health-dot" id="dot-updates"></i></button>
-        <button class="nav-item" data-page="recovery"><span>Recovery</span><i class="health-dot"></i></button>
-        <button class="nav-item" data-page="diagnostics"><span>Diagnostics</span><i class="health-dot"></i></button>
+        <!-- No state to report, so nothing sets these: they are spacers that
+             keep the two rows aligned with the ones above. Hidden from the
+             accessibility tree rather than left as an unexplained dot. -->
+        <button class="nav-item" data-page="recovery"><span>Recovery</span><i class="health-dot" aria-hidden="true"></i></button>
+        <button class="nav-item" data-page="diagnostics"><span>Diagnostics</span><i class="health-dot" aria-hidden="true"></i></button>
       </nav>
 
       <div class="sidebar-foot">

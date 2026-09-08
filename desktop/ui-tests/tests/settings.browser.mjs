@@ -118,7 +118,9 @@ test('settings content remains readable when an embedded webview suspends animat
   const page = await settings(t, 'cloud');
   await page.addStyleTag({ content: '* { animation-play-state: paused !important; }' });
   for (const name of ['Updates', 'This computer', 'Recovery']) {
-    await page.getByRole('button', { name, exact: true }).click();
+    // Prefix, not exact: a nav item's accessible name now carries its health
+    // as well, which is what stops it being colour alone.
+    await page.getByRole('button', { name: new RegExp(`^${name}`) }).click();
     const content = await page.locator('.page.active').evaluate(element => ({
       opacity: getComputedStyle(element).opacity,
       height: element.getBoundingClientRect().height,
@@ -131,7 +133,7 @@ test('settings content remains readable when an embedded webview suspends animat
 
 test('real settings DOM preserves drafts across health refresh, navigation, and closing', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-base').fill('https://draft.example/v1');
   await page.locator('#ai-key').fill('draft-key');
   await page.evaluate(() => window.__fixture.refresh());
@@ -142,8 +144,8 @@ test('real settings DOM preserves drafts across health refresh, navigation, and 
   assert.equal(await page.locator('#ai-key').inputValue(), 'draft-key');
   await page.evaluate(() => window.__fixture.refresh());
   assert.equal(await page.locator('#snapshot-unavailable').isVisible(), false);
-  await page.getByRole('button', { name: 'This computer', exact: true }).click();
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^This computer/ }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   assert.equal(await page.locator('#ai-key').inputValue(), 'draft-key');
   await page.getByRole('button', { name: 'Back to Lemma' }).click();
   await settingsDecision(page, 'cancel');
@@ -155,7 +157,7 @@ test('real settings DOM preserves drafts across health refresh, navigation, and 
 
 test('a single native decision owns close and Cancel restores the draft and focus', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-base').fill('https://draft.example/v1');
   await page.getByRole('button', { name: 'Back to Lemma' }).click();
   await page.getByRole('button', { name: 'Back to Lemma' }).click();
@@ -168,7 +170,7 @@ test('a single native decision owns close and Cancel restores the draft and focu
 
 test('a save submits one section and does not erase typing during activation', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-key').fill('first-key');
   await page.locator('.config-page.active [data-save]').click();
   const payload = await page.evaluate(() => window.__fixture.calls.find((call) => call.command === 'apply_operator_config').args.payload);
@@ -186,7 +188,7 @@ test('cloud mode opens this computer without provisioning a local stack', async 
   const page = await settings(t, 'hosted');
   assert.equal(await page.locator('#page-title').textContent(), 'This computer');
   assert.equal(await page.locator('#attention-banner').isVisible(), false, 'cloud mode has no local application stack to repair');
-  assert.equal(await page.getByRole('button', { name: 'AI provider', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: /^AI provider/ }).isDisabled(), true);
   await page.getByRole('button', { name: 'Open agent setup in Lemma' }).click();
   const commands = await page.evaluate(() => window.__fixture.calls.map((call) => call.command));
   assert.equal(commands.includes('open_app'), true);
@@ -197,7 +199,7 @@ test('cloud mode opens this computer without provisioning a local stack', async 
 
 test('a failed apply keeps credentials and its inline error through refresh', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-key').fill('replacement-canary');
   await page.locator('.config-page.active [data-save]').click();
   await page.evaluate(() => window.__fixture.failSave());
@@ -213,7 +215,7 @@ test('a failed apply keeps credentials and its inline error through refresh', as
 
 test('reconnect consumes a durable save outcome when the completion event was lost', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-key').fill('save-canary');
   await page.locator('.config-page.active [data-save]').click();
   await page.evaluate(() => {
@@ -230,7 +232,7 @@ test('reconnect consumes a durable save outcome when the completion event was lo
 
 test('model discovery reuses the saved credential and rejects an answer for an old endpoint', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.evaluate(() => { window.__fixture.delayDiscovery = true; });
   await page.locator('#ai-discover').click();
   const payload = await page.evaluate(() => window.__fixture.calls.findLast((call) => call.command === 'discover_provider_models').args.payload);
@@ -244,9 +246,9 @@ test('model discovery reuses the saved credential and rejects an answer for an o
 
 test('closing with two dirty sections saves them sequentially before leaving', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-key').fill('provider-canary');
-  await page.getByRole('button', { name: 'Integrations', exact: true }).click();
+  await page.getByRole('button', { name: /^Integrations/ }).click();
   await page.locator('summary').filter({ hasText: 'Gmail, Calendar, and Drive OAuth app' }).click();
   await page.locator('#google-id').fill('integration-canary');
   await page.getByRole('button', { name: 'Back to Lemma' }).click();
@@ -265,7 +267,7 @@ test('closing with two dirty sections saves them sequentially before leaving', a
 
 test('discard cannot close settings while an admitted save is unfinished', async (t) => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-key').fill('pending-canary');
   await page.locator('.config-page.active [data-save]').click();
   await page.getByRole('button', { name: 'Back to Lemma' }).click();
@@ -280,7 +282,7 @@ test('discard cannot close settings while an admitted save is unfinished', async
 
 test('force cleanup is reachable without a daemon and cancellation never reports erased data', async (t) => {
   const page = await settings(t, 'hosted', true);
-  await page.getByRole('button', { name: 'Recovery', exact: true }).click();
+  await page.getByRole('button', { name: /^Recovery/ }).click();
   await page.getByRole('button', { name: 'Force cleanup and reinstall', exact: true }).click();
   const calls = await page.evaluate(() => window.__fixture.calls);
   assert.equal(calls.filter((call) => call.command === 'reset_full_reinstall').length, 1);
@@ -291,7 +293,7 @@ test('force cleanup is reachable without a daemon and cancellation never reports
 
 test('a failed native decision preserves the draft and reports an inline error', async t => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-key').fill('unsaved-canary');
   await page.evaluate(() => { window.__fixture.failDecision = true; });
   await page.getByRole('button', { name: 'Back to Lemma' }).click();
@@ -308,7 +310,7 @@ test('public sharing requires an affirmative app-owned confirmation on every act
     window.__fixture.snapshot.sharing.provider_readiness = { ngrok: { installed: true, authenticated: true } };
     window.__fixture.refresh();
   });
-  await page.getByRole('button', { name: 'Sharing', exact: true }).click();
+  await page.getByRole('button', { name: /^Sharing/ }).click();
   await page.getByRole('radio', { name: /Public link/ }).check();
   await page.getByRole('button', { name: 'Create public link', exact: true }).click();
   assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'sharing_action' && call.args.action === 'enable')), false);
@@ -338,7 +340,7 @@ test('a QR code from the event stream is rendered as an image, never as live mar
     };
     window.__fixture.refresh();
   });
-  await page.getByRole('button', { name: 'Sharing', exact: true }).click();
+  await page.getByRole('button', { name: /^Sharing/ }).click();
   await page.waitForFunction(() => document.querySelector('#sharing-qr-image img'));
 
   assert.equal(
@@ -364,7 +366,7 @@ test('a QR code from the event stream is rendered as an image, never as live mar
 test('native Save keeps the page open after a failed apply or a newer draft', async t => {
   for (const fail of [true, false]) {
     const page = await settings(t);
-    await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+    await page.getByRole('button', { name: /^AI provider/ }).click();
     await page.locator('#ai-key').fill('first-canary');
     await page.getByRole('button', { name: 'Back to Lemma' }).click();
     await settingsDecision(page, 'confirm');
@@ -385,7 +387,7 @@ test('native Save keeps the page open after a failed apply or a newer draft', as
 // list while filling in a key should not throw the page away.
 test('Escape leaves the field before it leaves settings', async t => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-base').focus();
 
   await page.keyboard.press('Escape');
@@ -411,7 +413,7 @@ test('Escape leaves the field before it leaves settings', async t => {
 // settings on screen, no error, and a save the page believed had succeeded.
 test('an event missing what it needs is reported, not half-applied', async t => {
   const page = await settings(t);
-  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.getByRole('button', { name: /^AI provider/ }).click();
   await page.locator('#ai-key').fill('a-key');
   await page.locator('.config-page.active [data-save]').click();
 
@@ -448,4 +450,57 @@ test('an event that is not an object at all is ignored without throwing', async 
   await page.waitForFunction(() => !document.getElementById('snapshot-unavailable').hidden);
   // The `pageerror` assertion in `settings` is the other half of this: an
   // uncaught TypeError in the listener is what used to happen here.
+});
+
+// Which page you are on was a background colour, and each item's health was a
+// coloured dot with no text anywhere. Listening to this nav gave you eleven
+// buttons that read identically, and no way to find the one that wants you.
+test('the settings nav says where you are and what needs you', async t => {
+  const page = await settings(t);
+
+  const overview = page.getByRole('button', { name: /^Overview/ });
+  assert.equal(await overview.getAttribute('aria-current'), 'page');
+
+  await page.getByRole('button', { name: /^AI provider/ }).click();
+  assert.equal(await overview.getAttribute('aria-current'), null,
+    'only one page is the current one');
+  assert.equal(
+    await page.getByRole('button', { name: /^AI provider/ }).getAttribute('aria-current'),
+    'page',
+  );
+
+  // The dots carry their meaning in words, so the nav item's own name does.
+  // The two that report nothing are hidden rather than left as an
+  // unexplained dot; every dot that is exposed says what its colour means.
+  const meanings = await page.locator('#nav .health-dot:not([aria-hidden])').evaluateAll(
+    nodes => nodes.map(node => node.getAttribute('aria-label')),
+  );
+  assert.equal(await page.locator('#nav .health-dot[aria-hidden="true"]').count(), 2);
+  assert.ok(
+    meanings.every(label => label && label.length),
+    `every dot has to say what its colour means: ${JSON.stringify(meanings)}`,
+  );
+  assert.ok(
+    meanings.some(label => label === 'healthy'),
+    'a ready installation has at least one healthy item',
+  );
+});
+
+// The settings window can be resized, and a person who does that should not
+// lose the controls off the side of it.
+test('settings stay reachable in a narrow window', async t => {
+  const page = await settings(t);
+  await page.setViewportSize({ width: 400, height: 700 });
+
+  assert.equal(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    true,
+    'the page must not scroll sideways',
+  );
+  for (const name of ['Overview', 'Recovery']) {
+    const item = page.getByRole('button', { name: new RegExp(`^${name}`) });
+    await item.scrollIntoViewIfNeeded();
+    const box = await item.boundingBox();
+    assert.ok(box && box.x >= 0 && box.x + box.width <= 400, `${name} is off screen: ${JSON.stringify(box)}`);
+  }
 });
