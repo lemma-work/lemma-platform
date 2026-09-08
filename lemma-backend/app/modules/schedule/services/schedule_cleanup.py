@@ -21,43 +21,64 @@ the time the delete returns.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from typing import List, Protocol
 from uuid import UUID
 
 from app.core.log.log import get_logger
 from app.modules.schedule.domain.schedule import ScheduleEntity
 from app.modules.schedule.domain.errors import ScheduleInfrastructureError
 
-if TYPE_CHECKING:  # pragma: no cover - import cycle at runtime, types only
-    from app.modules.schedule.services.schedule_service import ScheduleService
-
 logger = get_logger(__name__)
 
 
-async def delete_all_for_pod(service: "ScheduleService", pod_id: UUID) -> int:
+class _Schedules(Protocol):
+    """The three lookups and one delete this file needs from the repository."""
+
+    async def list_all_by_pod(self, pod_id: UUID) -> List[ScheduleEntity]: ...
+
+    async def list_all_by_workflow(self, workflow_id: UUID) -> List[ScheduleEntity]: ...
+
+    async def list_all_by_agent(self, agent_id: UUID) -> List[ScheduleEntity]: ...
+
+    async def delete(self, schedule_id: UUID) -> bool: ...
+
+
+class Cleaner(Protocol):
+    """What these functions need of a `ScheduleService`, stated structurally.
+
+    Naming the class instead would import it, and it imports this module back to
+    publish `delete_all_for_pod` — a cycle, which CodeQL is right to object to
+    even when both ends are guarded. Two members is also the honest size of what
+    this file uses.
+    """
+
+    schedule_repository: _Schedules
+
+    async def delete_schedule(self, schedule_id: UUID) -> bool: ...
+
+
+async def delete_all_for_pod(service: Cleaner, pod_id: UUID) -> int:
     """Every schedule in a pod. System-level: no RBAC, includes internal rows."""
     return await _delete_each(
         service, await service.schedule_repository.list_all_by_pod(pod_id)
     )
 
 
-async def delete_all_for_workflow(service: "ScheduleService", workflow_id: UUID) -> int:
+async def delete_all_for_workflow(service: Cleaner, workflow_id: UUID) -> int:
     """Every schedule pointing at a workflow, for workflow deletion."""
     return await _delete_each(
         service, await service.schedule_repository.list_all_by_workflow(workflow_id)
     )
 
 
-async def delete_all_for_agent(service: "ScheduleService", agent_id: UUID) -> int:
+async def delete_all_for_agent(service: Cleaner, agent_id: UUID) -> int:
     """Every schedule pointing at an agent, for agent deletion."""
     return await _delete_each(
         service, await service.schedule_repository.list_all_by_agent(agent_id)
     )
 
 
-async def _delete_each(
-    service: "ScheduleService", schedules: List[ScheduleEntity]
-) -> int:
+async def _delete_each(service: Cleaner, schedules: List[ScheduleEntity]) -> int:
     """Delete each schedule, keeping going when its external teardown fails.
 
     Best-effort in one specific respect: an *external* teardown failure

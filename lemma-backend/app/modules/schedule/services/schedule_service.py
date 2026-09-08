@@ -10,6 +10,7 @@ from app.core.authorization.context import (
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_resource_name
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.schedule.services import schedule_cleanup
 from app.modules.schedule.domain.errors import (
     ScheduleInfrastructureError,
     ScheduleValidationError,
@@ -510,9 +511,7 @@ class ScheduleService:
         the size the architecture ratchet allows, so the family moved out
         together rather than growing it. The published name stays here.
         """
-        from app.modules.schedule.services.schedule_cleanup import delete_all_for_pod
-
-        return await delete_all_for_pod(self, pod_id)
+        return await schedule_cleanup.delete_all_for_pod(self, pod_id)
 
     async def list_schedules(
         self,
