@@ -5585,9 +5585,8 @@ mod tests {
     /// wrong disk.
     #[test]
     fn a_missing_data_disk_fails_the_guest_rather_than_being_skipped() {
-        let unit = include_str!(
-            "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service"
-        );
+        let unit =
+            include_str!("../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service");
         let directives: Vec<&str> = unit
             .lines()
             .map(str::trim)

@@ -778,16 +778,50 @@ impl SupervisedAgent {
 
 impl Drop for SupervisedAgent {
     fn drop(&mut self) {
-        // The whole group, not just the child: agents ship behind wrapper
-        // launchers (`npx`, `uvx`), and killing only the immediate child
-        // orphans the real agent, which re-parents to pid 1 and does not
-        // reliably exit on stdin EOF.
-        #[cfg(unix)]
-        if let Some(pid) = rustix::process::Pid::from_raw(self.child.id().cast_signed()) {
-            // ESRCH just means the group is already gone.
-            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-        }
+        kill_agent_tree(self.child.id());
         let _ = self.child.kill();
+    }
+}
+
+/// End an agent and everything it started.
+///
+/// Not just the child. Agents ship behind wrapper launchers -- `npx`, `uvx` --
+/// so the process this host holds is usually the wrapper, and the real agent is
+/// its child. Killing only the wrapper leaves that agent running: holding the
+/// workspace open, holding the provider credential, still able to write files,
+/// after the run it belonged to has ended.
+///
+/// On unix the protocol crate spawns the adapter with `process_group(0)`, so
+/// the child leads its own group and one signal reaches all of it.
+///
+/// Windows had nothing. It sets `CREATE_NO_WINDOW` and no more -- no job
+/// object, no new process group -- so `Child::kill` reached exactly one
+/// process and the agent behind the wrapper survived every run. `taskkill /T`
+/// walks the tree the OS itself maintains, which is the same job done by the
+/// tool Windows ships for it. It is best effort, like the signal on unix: a
+/// descendant whose parent has already exited is no longer part of any tree to
+/// walk, and neither platform can reach one of those.
+fn kill_agent_tree(pid: u32) {
+    #[cfg(unix)]
+    if let Some(pid) = rustix::process::Pid::from_raw(pid.cast_signed()) {
+        // ESRCH just means the group is already gone.
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+    #[cfg(windows)]
+    {
+        use crate::NoConsoleWindow as _;
+
+        // Spawned and not waited on: this runs in `Drop`, which may be on a
+        // runtime thread, and the tree does not need to be gone before the
+        // turn is reported. `Child::kill` below still ends the wrapper
+        // immediately either way.
+        let _ = std::process::Command::new("taskkill")
+            .no_console_window()
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
     }
 }
 
@@ -2064,6 +2098,84 @@ mod tests {
             &converted,
             &Value::String("agent-full-access".into())
         ));
+    }
+
+    /// An agent is usually a wrapper with the real agent underneath it.
+    ///
+    /// `npx` and `uvx` are how these things ship, so the process this host
+    /// holds is the launcher and the agent is its child. Ending only the
+    /// launcher leaves the agent running with the workspace open and the
+    /// provider credential in hand, after the run it belonged to is over.
+    ///
+    /// Driven against `/bin/sh` in exactly that shape: a wrapper that starts
+    /// something and then waits for it. The Windows half of `kill_agent_tree`
+    /// cannot be run from here; this pins the contract it has to meet.
+    #[cfg(unix)]
+    #[test]
+    fn ending_an_agent_ends_the_wrapper_and_what_it_started() {
+        use std::os::unix::process::CommandExt as _;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let recorded = directory.path().join("real-agent.pid");
+        let mut wrapper = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!(
+                "sleep 120 & printf '%s' \"$!\" > {}; wait",
+                recorded.display()
+            ))
+            // What the protocol crate does when it spawns an adapter, and what
+            // makes one signal reach all of it.
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the wrapper starts");
+
+        let agent = wait_for_pid(&recorded);
+        assert!(
+            process_exists(agent),
+            "the agent should be running to begin with"
+        );
+
+        kill_agent_tree(wrapper.id());
+        let _ = wrapper.wait();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while process_exists(agent) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            !process_exists(agent),
+            "the agent behind the wrapper is still running; \
+             killing the wrapper alone orphans it"
+        );
+    }
+
+    #[cfg(unix)]
+    fn wait_for_pid(path: &std::path::Path) -> u32 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && let Ok(pid) = text.trim().parse::<u32>()
+            {
+                return pid;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the wrapper never recorded what it started");
+    }
+
+    /// `kill -0` rather than rustix, so this crate keeps `unsafe_code` at
+    /// `forbid` and the test does not depend on how the signal is sent.
+    #[cfg(unix)]
+    fn process_exists(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }
 
