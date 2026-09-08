@@ -47,6 +47,8 @@ async function settings(t, mode = 'local', daemonOffline = false) {
         },
       },
       refresh() { emit(structuredClone(this.snapshot)); },
+      // The daemon's channel, with whatever a test wants to put on it.
+      emit(event) { emit(event); },
       disconnect() { listeners['lemma:locald-disconnected']?.({ payload: null }); },
       failSave(message = 'Settings changed elsewhere. Review and retry.') {
         const { args } = this.calls.findLast((call) => call.command === 'apply_operator_config');
@@ -376,4 +378,74 @@ test('native Save keeps the page open after a failed apply or a newer draft', as
     assert.equal(await page.locator('#ai-key').inputValue(), fail ? 'first-canary' : 'newer-canary');
     assert.equal(await page.evaluate(() => window.__fixture.calls.some(call => call.command === 'close_local_settings')), false);
   }
+});
+
+// Escape closed the whole settings window from anywhere, including from
+// inside a field being typed into. Dismissing the browser's own suggestion
+// list while filling in a key should not throw the page away.
+test('Escape leaves the field before it leaves settings', async t => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.locator('#ai-base').focus();
+
+  await page.keyboard.press('Escape');
+  assert.deepEqual(
+    await page.evaluate(() => window.__fixture.calls
+      .filter(call => ['close_local_settings', 'confirm_settings_changes'].includes(call.command))),
+    [],
+    'the first Escape belongs to the field',
+  );
+  assert.notEqual(
+    await page.evaluate(() => document.activeElement?.id), 'ai-base',
+    'and it should have left the field',
+  );
+
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => window.__fixture.calls
+    .some(call => call.command === 'close_local_settings'));
+});
+
+// Events cross the bridge from the daemon and were read here unparsed. A
+// `config.applied` without an `operator` released the save button and dropped
+// the pending save, *then* threw before refilling the page -- leaving stale
+// settings on screen, no error, and a save the page believed had succeeded.
+test('an event missing what it needs is reported, not half-applied', async t => {
+  const page = await settings(t);
+  await page.getByRole('button', { name: 'AI provider', exact: true }).click();
+  await page.locator('#ai-key').fill('a-key');
+  await page.locator('.config-page.active [data-save]').click();
+
+  const id = await page.waitForFunction(() => window.__fixture.calls
+    .findLast(call => call.command === 'apply_operator_config')?.args.id)
+    .then(handle => handle.jsonValue());
+
+  await page.evaluate(saveId => window.__fixture.emit({ event: 'config.applied', id: saveId }), id);
+
+  await page.getByText('config.applied arrived without operator.config.revision', { exact: false })
+    .waitFor();
+  assert.equal(
+    await page.locator('#ai-key').inputValue(), 'a-key',
+    'the draft has to survive an event the page could not use',
+  );
+});
+
+// A snapshot the page cannot read must not leave the previous one on screen
+// looking current. Showing nothing is the honest outcome; showing stale
+// numbers as live ones is the one worse than that.
+test('a snapshot the page cannot read reports the daemon as unreachable', async t => {
+  const page = await settings(t);
+  await page.evaluate(() => window.__fixture.emit({ event: 'control.snapshot' }));
+
+  await page.waitForFunction(() => !document.getElementById('snapshot-unavailable').hidden);
+  assert.equal(await page.locator('#state-pill').textContent(), 'Disconnected');
+});
+
+test('an event that is not an object at all is ignored without throwing', async t => {
+  const page = await settings(t);
+  for (const payload of [null, 'ready', 42, []]) {
+    await page.evaluate(value => window.__fixture.emit(value), payload);
+  }
+  await page.waitForFunction(() => !document.getElementById('snapshot-unavailable').hidden);
+  // The `pageerror` assertion in `settings` is the other half of this: an
+  // uncaught TypeError in the listener is what used to happen here.
 });

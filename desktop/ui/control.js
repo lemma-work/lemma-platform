@@ -357,7 +357,16 @@ function configureInteractionHandlers() {
   });
   $("back-to-lemma").addEventListener("click", closeLocalSettings);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !event.defaultPrevented) closeLocalSettings();
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    // Escape inside a field belongs to the field. Typing a password, pressing
+    // Escape to dismiss the browser's own suggestion list, and having the
+    // whole settings window close instead is not a shortcut anybody asked
+    // for. The first Escape leaves the control; a second one closes.
+    if (isEditingControl(event.target)) {
+      event.target.blur();
+      return;
+    }
+    closeLocalSettings();
   });
   document.querySelectorAll(".config-page input, .config-page select").forEach((input) => {
     input.addEventListener("input", () => markDirty(input));
@@ -1320,7 +1329,58 @@ function clearSnapshotUnavailable() {
   if (banner) banner.hidden = true;
 }
 
+// Whether an element is a control the user is editing.
+function isEditingControl(target) {
+  if (!target || typeof target.tagName !== "string") return false;
+  if (target.isContentEditable) return true;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+// What each event has to carry before this page will act on it.
+//
+// Only the fields its branch dereferences without guarding, which is where a
+// missing one throws. Everything else is already read with `?.` or `||`.
+const REQUIRED_EVENT_FIELDS = {
+  "control.snapshot": ["state", "operator.config.revision"],
+  "config.applied": ["operator.config.revision"],
+};
+
+function hasPath(value, path) {
+  return path
+    .split(".")
+    .reduce((current, key) => (current == null ? undefined : current[key]), value) !== undefined;
+}
+
+// Events cross the bridge from the daemon and were read here unparsed.
+///
+/// A shape this page did not expect threw partway through a branch, after
+/// some of that branch had already run: a `config.applied` without an
+/// `operator` released the save button and dropped the pending save, then
+/// threw before `fillConfiguration`, leaving stale settings on screen with no
+/// error, no toast, and a save the page believed had succeeded.
+function unusableEventReason(event) {
+  if (!event || typeof event !== "object" || typeof event.event !== "string") {
+    return "the daemon sent something this page cannot read";
+  }
+  const missing = (REQUIRED_EVENT_FIELDS[event.event] || []).filter(
+    (path) => !hasPath(event, path),
+  );
+  return missing.length ? `${event.event} arrived without ${missing.join(", ")}` : null;
+}
+
 function handleLocaldEvent(event) {
+  const unusable = unusableEventReason(event);
+  if (unusable) {
+    // Said, not swallowed. Showing the previous snapshot as though it were
+    // current is the one outcome worse than showing nothing.
+    if (event?.event === "control.snapshot" || !event?.event) {
+      showSnapshotUnavailable(unusable);
+    } else {
+      toast(unusable, true);
+      requestSnapshot();
+    }
+    return;
+  }
   if (event.event === "control.snapshot") {
     snapshot = event;
     state = event.state;
