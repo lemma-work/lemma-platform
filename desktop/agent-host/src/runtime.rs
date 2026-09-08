@@ -2854,11 +2854,20 @@ fn authentication_hint(harness: &str, error: &str) -> Option<String> {
 ///
 /// Returns `None` for anything that is not an adapter's internal error, so
 /// ordinary messages ("run deadline elapsed") stay exactly as they are.
+///
+/// An agent that simply dies is the same thing to a person: it went wrong on
+/// their computer and the place to find out why is a terminal. It did not read
+/// as one here, because it does not report itself -- there is no JSON-RPC
+/// error to forward, only an exit status. Since this host took ownership of the
+/// child process, that arrives as "Process exited with ...", and a crash
+/// mid-answer was framed as a bare failure with nothing to act on. The browser
+/// journey that drives a crashing adapter is what noticed.
 fn adapter_failure_message(harness: &str, error: &str) -> Option<String> {
     let normalized = error.to_ascii_lowercase();
     let is_adapter_internal = normalized.contains("internal error")
         || normalized.contains("service failure")
-        || normalized.contains("\"service\"");
+        || normalized.contains("\"service\"")
+        || normalized.starts_with("process exited with");
     if !is_adapter_internal {
         return None;
     }
@@ -4744,6 +4753,39 @@ mod capability_tests {
 #[cfg(test)]
 mod adapter_failure_message_tests {
     use super::authentication_hint;
+
+    /// An agent that just dies went wrong on this computer too.
+    ///
+    /// It does not report itself: there is no JSON-RPC error to forward, only
+    /// an exit status, which since this host took ownership of the child
+    /// process arrives as "Process exited with ...". That matched none of the
+    /// adapter-internal shapes, so a crash mid-answer was framed as a bare
+    /// failure with nothing in it to act on -- while the person watching had
+    /// just seen half an answer appear and stop.
+    #[test]
+    fn an_agent_that_exits_non_zero_is_framed_like_any_other_adapter_failure() {
+        let framed = super::adapter_failure_message("Codex", "Process exited with exit status: 23")
+            .expect("a crashed adapter has to say whose crash it was");
+        assert!(
+            framed.starts_with("Codex encountered an error on this computer"),
+            "{framed}"
+        );
+        assert!(framed.contains("exit status: 23"), "{framed}");
+
+        // With its own last words, when it managed any.
+        let with_stderr = super::adapter_failure_message(
+            "Codex",
+            "Process exited with exit status: 1: panicked at src/main.rs",
+        )
+        .expect("framed");
+        assert!(
+            with_stderr.contains("panicked at src/main.rs"),
+            "{with_stderr}"
+        );
+
+        // Still not everything: an ordinary message is left alone.
+        assert!(super::adapter_failure_message("Codex", "run deadline elapsed").is_none());
+    }
 
     #[test]
     fn a_signed_out_agent_is_told_to_sign_in_rather_than_reported_as_internal() {
