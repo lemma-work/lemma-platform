@@ -23,7 +23,8 @@ class PublishStartRequest:
             covered by the Lemma app's installation -- publishing does not create repositories, because a GitHub App cannot.
         ai_readme (bool | Unset): Polish the generated README with the system model. Default: False.
         mode (PublishMode | Unset):
-        private (bool | Unset): Create the repo as private. Default: False.
+        private (bool | Unset): Recorded on the job and reported back, but not acted on: the repository already exists,
+            so its visibility is whatever it was created with. Default: False.
     """
 
     account_id: UUID

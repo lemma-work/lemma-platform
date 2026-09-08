@@ -32,8 +32,10 @@ from app.modules.pod_bundle.infrastructure.ai_readme import (
     build_system_polish_fn,
     polish_readme,
 )
-from app.modules.pod_bundle.infrastructure.github_publisher import (
+from app.modules.pod_bundle.infrastructure.github_ops import (
     NativeGithubOps,
+)
+from app.modules.pod_bundle.infrastructure.github_publisher import (
     GithubPublisher,
     RepoCreateResult,
 )

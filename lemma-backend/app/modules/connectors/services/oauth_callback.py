@@ -313,9 +313,22 @@ def _enforce_followup_identity(
     connect passes straight through -- there is nobody to expect yet. See
     `followup_attributes` for why this stands in for PKCE on that leg.
     """
+    if followup_account_id(pending_request) is None:
+        # Not a follow-up: there is nobody to expect yet.
+        return
     expected = followup_identity(pending_request)
     if expected is None:
-        return
+        # A follow-up with no expected identity has no protection at all, since
+        # this check is what stands in for the PKCE that leg cannot have. That
+        # can happen when the first leg's profile lookup failed and the account
+        # was stored without a `provider_account_id`. Refuse rather than wave it
+        # through -- `initiate_followup_request` also declines to mint one now,
+        # so this is the second of two closed doors.
+        logger.warning(
+            "connectors.oauth_callback.followup_identity_absent.denied",
+            connector_id=pending_request.connector_id,
+        )
+        raise ConnectRequestIdentityMismatchError()
     if str(identity.provider_account_id or "") != expected:
         logger.warning(
             "connectors.oauth_callback.followup_identity_mismatch.denied",
@@ -349,6 +362,13 @@ async def _record_installation(
     """
     account_id = followup_account_id(pending_request)
     account = await service.account_repository.get(UUID(str(account_id)))
+    if account is not None and account.user_id != pending_request.user_id:
+        # The request names an account; it does not get to name somebody else's.
+        logger.warning(
+            "connectors.oauth_callback.followup_account_foreign.denied",
+            connector_id=pending_request.connector_id,
+        )
+        raise ConnectRequestIdentityMismatchError()
     if account is None:
         # The account was deleted while its install leg was in flight. Nothing
         # to record it on, and inventing one here would sidestep every check

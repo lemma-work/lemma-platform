@@ -443,6 +443,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.mcp_oauth.registered': EventSpec('info', frozenset({'issuer'})),
     'connectors.mcp_oauth.registration_refused_unsafe_url': EventSpec('warning', frozenset({'issuer'})),
     'connectors.mcp_oauth.registration_skipped': EventSpec('info', frozenset({'error_type'})),
+    'connectors.oauth_callback.followup_account_foreign.denied': EventSpec('warning', frozenset({'connector_id'})),
+    'connectors.oauth_callback.followup_identity_absent.denied': EventSpec('warning', frozenset({'connector_id'})),
     'connectors.oauth_callback.followup_identity_mismatch.denied': EventSpec('warning', frozenset({'connector_id'})),
     'connectors.oauth_callback.installation_recorded.diagnostic': EventSpec('info', frozenset({'connector_id'})),
     'connectors.openapi_http_executor.calling_http_operation.observed': EventSpec('debug', frozenset({'connector_id', 'http_method', 'mode', 'operation_name'})),

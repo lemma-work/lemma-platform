@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.modules.connectors.domain.account import AccountEntity
+from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.connect_request import (
     ConnectRequestEntity,
     ConnectRequestStatus,
@@ -59,6 +60,17 @@ async def initiate_followup_request(
     there is no challenge to carry. `followup_attributes` says what stands in
     its place, and why that is not merely a weaker check.
     """
+    if not account.provider_account_id:
+        # Nothing to bind the second leg to. That leg cannot carry PKCE -- the
+        # provider builds its authorize step itself -- so the expected identity
+        # is its only protection, and a request without one would accept a code
+        # exchanged for anybody. Reconnecting resolves the identity and is the
+        # way forward.
+        raise ConnectorValidationError(
+            "This account has no provider identity recorded, so the "
+            "installation step cannot be started safely. Reconnect the account "
+            "and try again."
+        )
     state = secrets.token_urlsafe(32)
     url = link(state)
     if url is None:

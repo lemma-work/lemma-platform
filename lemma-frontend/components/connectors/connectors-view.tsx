@@ -180,6 +180,28 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
      * full navigation (popup blocked, or somebody following the link directly)
      * arrives with the same values in the query string.
      */
+    /**
+     * Ask GitHub about every account that has nothing recorded yet.
+     *
+     * Used when an installation arrived without naming an account -- installed
+     * from GitHub's own page rather than through a link this app minted.
+     */
+    const reconcileUnboundAccounts = useCallback(async () => {
+        const current = ((await refetchAccounts()).data ?? []) as Account[];
+        const unbound = current.filter(
+            (account) =>
+                account.connector_id === 'github'
+                && account.install_state !== INSTALL_STATE.READY,
+        );
+        await Promise.all(
+            unbound.map((account) =>
+                refreshInstallations
+                    .mutateAsync({ accountId: account.id, refresh: true })
+                    .catch(() => undefined),
+            ),
+        );
+    }, [refetchAccounts, refreshInstallations]);
+
     const reportConnectOutcome = useCallback(
         (outcome: string | null, accountId?: string | null, reason?: string | null) => {
             // The round trip is over however it ended, so the row stops saying
@@ -202,9 +224,13 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                     break;
                 case 'install_received':
                     // An install started from GitHub's own page, so there was no
-                    // request here to complete. Nothing is wrong; the account
-                    // just has to be asked what it can now see.
+                    // request here to complete and no account named on the way
+                    // back. Nothing is wrong -- but nothing has been recorded
+                    // either, and `install_state` is derived locally, so a plain
+                    // refetch would leave the row still saying "Install
+                    // required". Ask GitHub, for whichever accounts are unbound.
                     toast.success('Installation received');
+                    void reconcileUnboundAccounts();
                     break;
                 case 'error':
                     toast.error(reason || 'The account was not connected.');
@@ -214,7 +240,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             }
             void refetchAccounts();
         },
-        [refetchAccounts, refreshInstallations],
+        [reconcileUnboundAccounts, refetchAccounts, refreshInstallations],
     );
 
     /**

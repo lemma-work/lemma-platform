@@ -12991,10 +12991,12 @@ var LemmaClient = (() => {
     }
     /**
      * OAuth Callback
-     * Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security. It redirects back into the app unless JSON is explicitly requested.
+     * Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security.
+     *
+     * A browser is redirected back into the app (303) carrying the outcome as query parameters: `connect` is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the account as JSON instead.
      * @param error
-     * @param format
-     * @returns string Successful Response
+     * @param format Set to `json` to receive the account instead of a redirect.
+     * @returns any The connected account, when JSON was requested.
      * @throws ApiError
      */
     static connectorOauthCallback(error, format) {
@@ -13006,6 +13008,9 @@ var LemmaClient = (() => {
           "format": format
         },
         errors: {
+          303: `Redirect back into the app with the outcome.`,
+          307: `Successful Response`,
+          400: `The provider rejected the authorization, or the callback carried no usable state.`,
           422: `Validation Error`
         }
       });

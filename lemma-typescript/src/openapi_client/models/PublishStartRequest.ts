@@ -16,11 +16,11 @@ export type PublishStartRequest = {
      */
     ai_readme?: boolean;
     /**
-     * CREATE refuses an existing repository. UPDATE requires an existing repository and replaces only Lemma-managed files.
+     * Both modes require the repository to exist -- publishing does not create one. CREATE refuses a repository Lemma has already published to (one carrying a publish manifest), so it is what you use for a repository you just made. UPDATE requires that manifest and replaces only Lemma-managed files.
      */
     mode?: PublishMode;
     /**
-     * Create the repo as private.
+     * Recorded on the job and reported back, but not acted on: the repository already exists, so its visibility is whatever it was created with.
      */
     private?: boolean;
     /**

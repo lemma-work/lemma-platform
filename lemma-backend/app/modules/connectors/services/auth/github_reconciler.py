@@ -111,8 +111,17 @@ class GithubInstallationReconciler:
         Called by the webhook path: a delivery does not carry the answer in a
         form this trusts, but it does say reliably that the answer moved.
         """
-        async with connection_released(self._session):
-            await self._cache.delete(str(account_id))
+        try:
+            async with connection_released(self._session):
+                await self._cache.delete(str(account_id))
+        except Exception:
+            # Best effort, like the read and write above. `bind_account_installation`
+            # commits `external_ref` before it gets here, so letting Redis fail the
+            # call would report an error for work that already succeeded -- and the
+            # only cost of a stale entry is one short TTL of staleness.
+            logger.warning(
+                "connectors.github_reconciler.cache_unavailable.degraded", exc_info=True
+            )
 
     async def _ask(self, account: Any) -> InstallationOutcome:
         credentials = await fresh_credentials(

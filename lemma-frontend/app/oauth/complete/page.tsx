@@ -15,6 +15,23 @@ import { useEffect, useState } from 'react';
  * `window.location.origin` rather than `'*'`, so the message cannot be read by
  * a window on another origin that happens to be listening.
  */
+/**
+ * A path inside this app, resolved and origin-checked, or `/`.
+ *
+ * Returns the path (not the absolute URL) so the caller navigates relative to
+ * the current origin and nothing can smuggle a host in.
+ */
+function sameOriginPath(value: string | null): string {
+    if (!value) return '/';
+    try {
+        const candidate = new URL(value, window.location.origin);
+        if (candidate.origin !== window.location.origin) return '/';
+        return `${candidate.pathname}${candidate.search}`;
+    } catch {
+        return '/';
+    }
+}
+
 export default function OAuthCompletePage() {
     const [stranded, setStranded] = useState(false);
 
@@ -38,12 +55,17 @@ export default function OAuthCompletePage() {
             // Falling through to the redirect below is the recovery.
         }
 
-        // No opener: the popup was blocked and this became a normal navigation.
+        // No opener: the tab was blocked and this became a normal navigation.
         // The flow still has to end somewhere sensible, so go where the person
-        // started — `from` is set when the request is made, and is a rooted
-        // path by construction (the server refuses anything else).
-        const from = params.get('from');
-        const destination = from && from.startsWith('/') && !from.startsWith('//') ? from : '/';
+        // started.
+        //
+        // Checked here rather than trusted from the server, because this value
+        // reaches `location.replace` and that is what makes it an open-redirect
+        // sink. A prefix test is not enough: `/%5Cevil.example` decodes to
+        // `/\evil.example`, which passes "starts with a single slash" and which
+        // URL parsing then reads as a host. So the candidate is resolved and its
+        // origin compared, which is the only check that cannot be spelled around.
+        const destination = sameOriginPath(params.get('from'));
         const query = new URLSearchParams();
         for (const [key, value] of Object.entries(outcome)) {
             if (key !== 'source' && value) query.set(key, value);

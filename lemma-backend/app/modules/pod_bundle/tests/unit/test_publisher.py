@@ -18,9 +18,11 @@ from app.modules.pod_bundle.domain.errors import (
 )
 from app.modules.pod_bundle.domain.state import PublishMode
 from app.modules.pod_bundle.infrastructure.ai_readme import polish_readme
+from app.modules.pod_bundle.infrastructure.github_ops import (
+    NativeGithubOps,
+)
 from app.modules.pod_bundle.infrastructure.github_publisher import (
     GithubPublisher,
-    NativeGithubOps,
     RepoCreateResult,
 )
 from app.modules.pod_bundle.infrastructure.publish_manifest import (
@@ -71,6 +73,9 @@ class FakeOps:
 
     async def get_head(self, *, owner, repo, branch):
         del owner, repo, branch
+        # None is a repository with no commits yet -- "New repository" without
+        # "Add a README", which is the normal starting point now that Lemma
+        # does not create one.
         return self.head
 
     async def get_file(self, *, owner, repo, path, ref=None):
@@ -91,7 +96,13 @@ class FakeOps:
         del owner, repo, branch, message
         if self.race or expected_head != self.head:
             raise GithubBranchRaceError()
-        self.commits.append({"upserts": dict(upserts), "deletes": set(deletes)})
+        self.commits.append(
+            {
+                "upserts": dict(upserts),
+                "deletes": set(deletes),
+                "expected_head": expected_head,
+            }
+        )
         self.content.update(upserts)
         for path in deletes:
             self.content.pop(path, None)
@@ -562,3 +573,86 @@ async def test_polish_accepts_fenced_output_preserving_every_invariant():
 
     out = await polish_readme(original, polish_fn=fenced)
     assert out.endswith("Polished copy.")
+
+
+class TestAnEmptyRepository:
+    """A repository made without a README has no branch and no ref.
+
+    Lemma no longer creates the repository, so this is the ordinary starting
+    point rather than an edge case -- and publishing into it has to be the
+    initial commit: no parent, no base tree, and a ref that is *created* rather
+    than updated, because PATCH on a missing ref is a 422.
+    """
+
+    async def test_create_publishes_into_a_repository_with_no_commits(self):
+        ops = FakeOps()
+        repo = ops.exists()
+        ops.head = None
+        ops.content.clear()
+
+        await _publish(ops, already_created=repo)
+
+        assert len(ops.commits) == 1
+        commit = ops.commits[0]
+        assert commit["expected_head"] is None
+        assert PUBLISH_MANIFEST_PATH in commit["upserts"]
+
+    async def test_the_native_ops_write_an_initial_commit_and_create_the_ref(self):
+        """What actually reaches GitHub for a repository with no commits.
+
+        The fake above proves the publisher's decision; this proves the request
+        shapes, which is where an empty repository actually failed: a commit
+        carrying a parent that does not exist, a tree based on nothing, and a
+        PATCH to a ref that is not there yet.
+        """
+        calls: list[tuple[str, dict]] = []
+
+        async def runner(op, payload):
+            calls.append((op, payload))
+            if op == "git_get_ref":
+                raise OperationExecutionNotFoundError("no ref yet")
+            if op == "git_create_blob":
+                return {"result": {"sha": "blob-1"}}
+            if op == "git_create_tree":
+                return {"result": {"sha": "tree-1"}}
+            if op == "git_create_commit":
+                return {"result": {"sha": "commit-1"}}
+            return {"result": {}}
+
+        ops = NativeGithubOps(runner)
+        assert await ops.get_head(owner="acme", repo="crm", branch="main") is None
+
+        sha = await ops.commit_files(
+            owner="acme",
+            repo="crm",
+            branch="main",
+            upserts={"pod.json": b"{}"},
+            deletes=set(),
+            message="init",
+            expected_head=None,
+        )
+
+        assert sha == "commit-1"
+        by_op = dict(calls)
+        assert "git_get_commit" not in by_op, "asked for a commit that does not exist"
+        assert "base_tree" not in by_op["git_create_tree"]["body"]
+        assert by_op["git_create_commit"]["body"]["parents"] == []
+        assert "git_update_ref" not in by_op, "PATCHed a ref that is not there yet"
+        assert by_op["git_create_ref"]["body"] == {
+            "ref": "refs/heads/main",
+            "sha": "commit-1",
+        }
+
+    async def test_an_empty_repository_is_not_one_lemma_published_to(self):
+        """`CREATE` refuses a repository carrying a manifest. An empty one
+        carries nothing, so it must not be refused."""
+        ops = FakeOps()
+        ops.exists()
+        ops.head = None
+        ops.content.clear()
+
+        resolved = await GithubPublisher(ops).resolve_target(
+            repo_name="crm", private=False, description=None, mode=PublishMode.CREATE
+        )
+
+        assert resolved is ops.repo

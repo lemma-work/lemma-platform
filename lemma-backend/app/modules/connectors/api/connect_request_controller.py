@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.core.api.callback_page import (
     safe_provider_error,
@@ -13,7 +13,10 @@ from app.core.api.callback_page import (
 )
 from app.core.api.dependencies import CurrentUser
 from app.core.config import settings
-from app.modules.connectors.contracts.github import github_install_url
+from app.modules.connectors.contracts.github import (
+    github_install_url,
+    install_state_for,
+)
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AccountResponseSchema,
@@ -226,17 +229,38 @@ async def initiate_install_request(
     summary="OAuth Callback",
     description=(
         "Handle OAuth callback and complete account connection. This endpoint "
-        "is public and uses the state parameter for security. It redirects "
-        "back into the app unless JSON is explicitly requested."
+        "is public and uses the state parameter for security.\n\n"
+        "A browser is redirected back into the app (303) carrying the outcome "
+        "as query parameters: `connect` is one of `connected`, "
+        "`install_required`, `pending_approval`, `install_received` or "
+        "`error`. Pass `format=json` (or an `Accept` header of "
+        "`application/json` without `text/html`) to receive the account as "
+        "JSON instead."
     ),
-    response_class=HTMLResponse,
+    response_class=RedirectResponse,
     response_model=None,
+    responses={
+        303: {"description": "Redirect back into the app with the outcome."},
+        200: {
+            "description": "The connected account, when JSON was requested.",
+            "content": {"application/json": {}},
+        },
+        400: {
+            "description": "The provider rejected the authorization, or the "
+            "callback carried no usable state.",
+            "content": {"application/json": {}},
+        },
+    },
 )
 async def oauth_callback(
     request: Request,
     connector_service: ConnectorServiceDep,
     error: Optional[str] = Query(default=None),
-    response_format: Optional[str] = Query(default=None, alias="format"),
+    response_format: Optional[str] = Query(
+        default=None,
+        alias="format",
+        description="Set to `json` to receive the account instead of a redirect.",
+    ),
 ) -> Response:
     wants_json = _wants_json(request, response_format)
 
@@ -304,6 +328,12 @@ async def oauth_callback(
 
     account_response = AccountResponseSchema.model_validate(account)
     account_response.kind = await connector_service.get_account_kind(account)
+    # Same derivation the accounts API does. Without it this path keeps the
+    # schema default and tells a JSON client READY for an account that can
+    # reach nothing -- the exact claim this change exists to stop making.
+    account_response.install_state = install_state_for(
+        account.connector_id, account.external_ref
+    ).value
     if wants_json:
         return JSONResponse(content=account_response.model_dump(mode="json"))
 
