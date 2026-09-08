@@ -3739,10 +3739,23 @@ fn installed_postgres_major() -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
+/// Where each platform keeps the disk holding this installation's databases.
+///
+/// macOS has a sparse `data.raw`; Windows has the WSL distribution's
+/// `ext4.vhdx` under `runtime/wsl`. The Windows path was written as
+/// `runtime/windows`, which nothing creates -- so on Windows this answered "no
+/// data" for a real installation, and only the config check kept the update
+/// guard honest.
+fn managed_data_disk() -> std::path::PathBuf {
+    if cfg!(windows) {
+        locald_root().join("runtime/wsl/ext4.vhdx")
+    } else {
+        locald_root().join("runtime/macos/data.raw")
+    }
+}
+
 fn has_local_runtime_data() -> bool {
-    configured_runtime(&read_config(), "installedRuntime").is_some()
-        || locald_root().join("runtime/macos/data.raw").exists()
-        || locald_root().join("runtime/windows").exists()
+    configured_runtime(&read_config(), "installedRuntime").is_some() || managed_data_disk().exists()
 }
 
 fn ensure_update_preserves_data(
@@ -3863,7 +3876,7 @@ fn local_recovery_options(window: Webview) -> Result<RecoveryOptions, String> {
     require_local_native_window(&window)?;
     let config = read_config();
     let installed = configured_runtime(&config, "installedRuntime");
-    let data_disk = locald_root().join("runtime/macos/data.raw");
+    let data_disk = managed_data_disk();
     Ok(RecoveryOptions {
         // Tier 1 needs a daemon to drive it; Tier 2 exists precisely for when
         // there is not one, so it is offered whenever any state survives.
@@ -9910,6 +9923,35 @@ mod tests {
                 ui.url
             );
         }
+    }
+
+    /// Each platform's data disk, spelled the way that platform spells it.
+    ///
+    /// The Windows branch pointed at `runtime/windows`, which nothing creates.
+    /// So on Windows `has_local_runtime_data` answered "no data" for a real
+    /// installation — the guard that refuses to reset a user's data during an
+    /// update was leaning entirely on the config check — and Recovery reported
+    /// the disk as zero bytes.
+    #[test]
+    fn the_managed_data_disk_is_the_one_this_platform_actually_writes() {
+        let disk = managed_data_disk();
+        let tail: Vec<_> = disk
+            .components()
+            .rev()
+            .take(2)
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect();
+
+        if cfg!(windows) {
+            assert_eq!(tail, vec!["ext4.vhdx", "wsl"], "{}", disk.display());
+        } else {
+            assert_eq!(tail, vec!["data.raw", "macos"], "{}", disk.display());
+        }
+        assert!(
+            disk.starts_with(locald_root()),
+            "the disk belongs to this installation: {}",
+            disk.display()
+        );
     }
 
     /// A build keeps its data where its own name says, not where "Lemma" does.
