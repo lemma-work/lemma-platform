@@ -1390,6 +1390,7 @@ impl TargetWorker {
                 lease_epoch,
                 host_cwd: Some(host_cwd),
                 provider_seen: AtomicBool::new(false),
+                dispatched: AtomicBool::new(false),
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
                 events_ready: Arc::clone(&events_ready),
             });
@@ -1681,6 +1682,7 @@ impl TargetWorker {
                 lease_epoch: run.lease_epoch,
                 host_cwd: None,
                 provider_seen: AtomicBool::new(true),
+                dispatched: AtomicBool::new(true),
                 stream_segments: std::sync::Mutex::new(segments),
                 events_ready: Arc::clone(&self.events_ready),
             }
@@ -2288,6 +2290,8 @@ struct JournalCallbacks {
     lease_epoch: u32,
     host_cwd: Option<String>,
     provider_seen: AtomicBool,
+    /// Whether the prompt has actually gone out. See `event`.
+    dispatched: AtomicBool,
     stream_segments: std::sync::Mutex<StreamSegments>,
     /// Raised whenever this run journals an event, so the poll loop stops
     /// waiting and flushes. Without it a run's output sits in the journal until
@@ -2390,6 +2394,7 @@ impl JournalCallbacks {
 
 impl AcpCallbacks for JournalCallbacks {
     fn before_prompt(&self, provider_session_id: &str) -> anyhow::Result<()> {
+        self.dispatched.store(true, Ordering::SeqCst);
         self.journal.mark_dispatch_intent(
             self.target_id,
             self.run_id,
@@ -2427,7 +2432,18 @@ impl AcpCallbacks for JournalCallbacks {
         object_id: Option<String>,
         payload: JsonMap,
     ) -> anyhow::Result<()> {
-        if !self.provider_seen.swap(true, Ordering::SeqCst) {
+        // Only once the prompt is actually on its way.
+        //
+        // Lemma reads a RUNNING checkpoint as proof the prompt landed, and
+        // promotes the conversation's pending instructions to delivered on the
+        // strength of it. Not every event comes after dispatch: a model the
+        // harness will not take is reported as a config update *before*
+        // `before_prompt`, and letting that write RUNNING marked the
+        // instructions delivered before a prompt existed. A run that then died
+        // before dispatch left them skipped for the rest of the conversation.
+        if self.dispatched.load(Ordering::SeqCst)
+            && !self.provider_seen.swap(true, Ordering::SeqCst)
+        {
             self.journal.checkpoint(
                 self.target_id,
                 self.run_id,
@@ -4252,6 +4268,44 @@ mod stream_upsert_tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    /// A run whose model the harness will not take reports that as a config
+    /// update *before* the prompt goes out. Lemma treats a RUNNING checkpoint
+    /// as proof the prompt landed and promotes the conversation's pending
+    /// instructions to delivered on it -- so that pre-dispatch event marked
+    /// them delivered before a prompt existed, and a run that then died before
+    /// dispatch left them skipped for the rest of the conversation.
+    #[test]
+    fn an_event_before_dispatch_does_not_claim_the_prompt_landed() {
+        let (_directory, callbacks, run_id) = fixture();
+        // The fixture stands in for a run already under way; this one has not
+        // dispatched yet.
+        callbacks
+            .dispatched
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        callbacks
+            .provider_seen
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        callbacks
+            .event(EventType::ConfigUpdate, None, payload("model_unavailable"))
+            .unwrap();
+
+        let run = callbacks
+            .journal
+            .get_run(callbacks.target_id, run_id)
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            run.state,
+            crate::protocol::RunState::Running,
+            "a config update before the prompt must not report the run as running"
+        );
+        assert!(
+            !run.prompt_dispatched,
+            "and must not look like a prompt that landed"
+        );
+    }
+
     fn payload(text: &str) -> JsonMap {
         let mut payload = JsonMap::new();
         payload.insert("text".to_owned(), Value::String(text.to_owned()));
@@ -4298,6 +4352,7 @@ mod stream_upsert_tests {
             lease_epoch: 1,
             host_cwd: Some("/test/Projects/Δ workspace".to_owned()),
             provider_seen: AtomicBool::new(true),
+            dispatched: AtomicBool::new(true),
             stream_segments: std::sync::Mutex::new(StreamSegments::default()),
             events_ready: Arc::new(tokio::sync::Notify::new()),
         };
