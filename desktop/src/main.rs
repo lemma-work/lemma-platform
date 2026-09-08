@@ -7738,6 +7738,64 @@ mod tests {
         );
     }
 
+    /// Uninstalling asked to delete Lemma's data and deleted nothing.
+    ///
+    /// Tauri's uninstaller offers a "delete application data" checkbox, and
+    /// what it removes is `%APPDATA%\<identifier>` and
+    /// `%LOCALAPPDATA%\<identifier>` -- work.lemma.desktop. Lemma's data is in
+    /// `%LOCALAPPDATA%\Lemma`, and most of it is not files at all: it is a
+    /// registered WSL distribution whose ext4.vhdx holds every workspace,
+    /// database and image. So the box removed nothing anybody had, and an
+    /// uninstall left several gigabytes and a registered distribution that
+    /// only `wsl --unregister` could clear.
+    ///
+    /// The hook is what closes that, and these are the three things about it
+    /// that have to stay true. It cannot be executed from here -- NSIS runs
+    /// only on Windows, and only during a real uninstall -- so CI's Windows
+    /// job building the installer is what proves it parses.
+    #[test]
+    fn the_windows_uninstaller_removes_the_data_the_checkbox_promises() {
+        let config = include_str!("../tauri.windows.conf.json");
+        let hooks = include_str!("../installer/hooks.nsh");
+
+        assert!(
+            config.contains(r#""installerHooks": "installer/hooks.nsh""#),
+            "the uninstaller's data checkbox does nothing without this hook"
+        );
+        // Pinned rather than left to Tauri's default, which decides whether
+        // the app lands in Program Files and needs Administrator.
+        assert!(
+            config.contains(r#""installMode": "currentUser""#),
+            "the install mode has to be a decision here, not a default \
+             elsewhere that can change under us"
+        );
+
+        assert!(
+            hooks.contains("!macro NSIS_HOOK_PREUNINSTALL"),
+            "PRE, not POST: by POSTUNINSTALL lemma-locald.exe has already been \
+             deleted, and it is the thing that knows how to unregister the guest"
+        );
+        assert!(
+            !hooks.contains("NSIS_HOOK_POSTUNINSTALL"),
+            "nothing can run from $INSTDIR after the files are gone"
+        );
+        assert!(
+            hooks.contains("$DeleteAppDataCheckboxState = 1") && hooks.contains("$UpdateMode <> 1"),
+            "erasing local data must happen only when it was asked for, and \
+             never during an update"
+        );
+        let purge = hooks
+            .find("reset --confirm=erase-local-lemma")
+            .expect("the hook runs locald's own reset rather than reimplementing it");
+        let stop = hooks
+            .find("taskkill /F /T /IM lemma-locald.exe")
+            .expect("reset refuses while the daemon is answering, so it stops first");
+        assert!(
+            stop < purge,
+            "the daemon has to be stopped before the reset, or the reset refuses"
+        );
+    }
+
     #[test]
     fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
         // Every `set_*` on a menu item blocks until the main thread is free, and
