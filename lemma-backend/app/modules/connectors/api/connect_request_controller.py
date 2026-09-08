@@ -57,8 +57,15 @@ async def initiate_connect_request(
     return ConnectRequestResponseSchema.model_validate(connect_request)
 
 
-def _outstanding_install_url(account: AccountEntity) -> str | None:
-    """Where an account still has to be installed before it can see anything.
+def _outstanding_install(account: AccountEntity) -> tuple[bool, str | None]:
+    """Whether the account still has to be installed, and where if we can say.
+
+    Two questions, and collapsing them into one nullable URL answered neither:
+    `github_install_url` returns None when the deployment has not configured
+    `CONNECTOR_GITHUB_APP_SLUG`, so an account that needed an installation and
+    a deployment that could not name one were indistinguishable -- and both fell
+    through to the page saying the connection was finished, which is the exact
+    thing this page exists not to say.
 
     Only GitHub has this shape today, and the check is deliberately asked of the
     connectors module rather than written here as `if connector.id == "github"`:
@@ -70,8 +77,8 @@ def _outstanding_install_url(account: AccountEntity) -> str | None:
     )
 
     if not installation_still_needed(account.connector_id, account.external_ref):
-        return None
-    return github_install_url()
+        return False, None
+    return True, github_install_url()
 
 
 def _wants_json(request: Request, response_format: str | None) -> bool:
@@ -161,21 +168,31 @@ async def oauth_callback(
     app_label = (
         connector.title or connector.id.replace("_", " ").replace("-", " ").title()
     )
-    install_url = _outstanding_install_url(account)
-    if install_url is not None:
+    needs_install, install_url = _outstanding_install(account)
+    if needs_install:
+        explanation = (
+            "Authorizing signed you in, but it does not grant access to any "
+            "repository. Install it on the account or organization whose "
+            "repositories it should see, then connect again from Lemma so "
+            "the installation is recorded"
+        )
         return render_callback_page(
             succeeded=True,
             app_label=app_label,
             icon=connector.icon,
             title=f"{app_label} needs one more step",
             body_html=identity_html(account.display_name, account.email)
-            + next_step_html(
-                "Authorizing signed you in, but it does not grant access to any "
-                "repository. Install it on the account or organization whose "
-                "repositories it should see, then connect again from Lemma so "
-                "the installation is recorded:",
-                href=install_url,
-                label=f"Install {app_label}",
+            + (
+                next_step_html(
+                    f"{explanation}:",
+                    href=install_url,
+                    label=f"Install {app_label}",
+                )
+                if install_url is not None
+                # No slug configured, so there is no link to offer. The step is
+                # still outstanding and saying so without one beats reporting a
+                # connection that can read nothing as finished.
+                else message_html(f"{explanation}.")
             ),
         )
     return render_callback_page(
