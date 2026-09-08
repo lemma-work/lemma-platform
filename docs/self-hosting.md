@@ -235,10 +235,15 @@ the dump is encrypted against the key in it:
 
 ```bash
 cp lemma-env-<date>.backup .env
-docker compose up -d db
+docker compose up -d --wait db
 gunzip -c lemma-<date>.sql.gz | docker compose exec -T db psql -U postgres -d postgres
 docker compose up -d
 ```
+
+`--wait` is load-bearing: without it `up -d` returns when the container is
+created, not when Postgres is accepting connections, and the restore fails on a
+database that is still starting. The service's healthcheck is `pg_isready`, so
+`--wait` blocks on exactly the right condition.
 
 `pg_dumpall` output carries its own `\connect` lines, so this restores all three
 databases. Nothing needs `psql` on the host — it runs inside the container that

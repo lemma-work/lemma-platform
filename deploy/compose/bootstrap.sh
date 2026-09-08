@@ -210,20 +210,43 @@ pin_to_digest() {
 	printf '%s@%s' "${reference%%@*}" "$digest"
 }
 
+# Neither of these is allowed through as a tag. .env.example promises both are
+# digest-pinned, and writing a moving tag into a field documented that way is
+# the worst of both: unpinned in fact, pinned in the reader's head.
+#
+# Failure here means the registry could not be reached at all -- `pin_to_digest`
+# falls back to pulling before it gives up -- and a machine that cannot reach
+# the registry cannot `docker compose up` either. So there is nothing to lose by
+# stopping, and a silent downgrade to a mutable tag to avoid.
+require_digest() {
+	reference="$1"
+	variable="$2"
+	why="$3"
+	case "$reference" in
+	*@sha256:*)
+		printf '%s' "$reference"
+		return 0
+		;;
+	esac
+	die "could not resolve a digest for $reference.
+
+$why
+
+Check this machine can reach the registry, or set $variable to a
+digest-pinned reference (name@sha256:...) yourself."
+}
+
 echo "→ pinning the proxy and Docker CLI images…"
-caddy_image="$(pin_to_digest "${LEMMA_CADDY_IMAGE:-caddy:2-alpine}")" ||
-	echo "  warning: could not resolve a digest for Caddy; leaving the tag"
-docker_cli_image="$(pin_to_digest "${LEMMA_DOCKER_CLI_IMAGE:-docker:29-cli}")" ||
-	echo "  warning: could not resolve a digest for the Docker CLI; leaving the tag"
-case "$docker_cli_image" in
-*@sha256:*) ;;
-*)
-	die "could not resolve a digest for $docker_cli_image, and this one is not
-optional: the sandbox-images service runs it with the host Docker socket
-mounted. Check the machine can reach the registry, or set
-LEMMA_DOCKER_CLI_IMAGE to a digest-pinned reference yourself."
-	;;
-esac
+caddy_image="$(require_digest \
+	"$(pin_to_digest "${LEMMA_CADDY_IMAGE:-caddy:2-alpine}" || true)" \
+	LEMMA_CADDY_IMAGE \
+	"Caddy terminates TLS for this whole deployment: it holds the certificate
+keys and sees every request in plaintext.")"
+docker_cli_image="$(require_digest \
+	"$(pin_to_digest "${LEMMA_DOCKER_CLI_IMAGE:-docker:29-cli}" || true)" \
+	LEMMA_DOCKER_CLI_IMAGE \
+	"The sandbox-images service runs this one with the host Docker socket
+mounted, so whoever can move the tag can drive the daemon.")"
 
 # `production` is refused at startup without a valid release identity, and
 # rightly: a deployment that cannot say which commit it is running cannot be
