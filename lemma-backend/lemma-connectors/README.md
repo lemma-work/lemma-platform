@@ -29,8 +29,9 @@ Slack admin endpoints are intentionally excluded from the generated package surf
 ## Package shape
 
 ```text
+lemma-backend/
+  openapi_specs/          # provider specs, shared with the http-kind generators
 lemma-connectors/
-  openapi_specs/
   scripts/
     generate_openapi_metadata.py
     generate_tool_types.py
@@ -137,7 +138,7 @@ operation = resource.build_operations()["messages_get"]
 
 The package generation flow is:
 
-1. Read the provider OpenAPI spec from `openapi_specs/`.
+1. Read the provider OpenAPI spec from `lemma-backend/openapi_specs/`.
 2. Sanitize content types and app-specific exclusions.
 3. Generate a typed OpenAPI client into `generated/client/`.
 4. Generate canonical Pydantic schema models into `generated/pydantic_models.py`.
