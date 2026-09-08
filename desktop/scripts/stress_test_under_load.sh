@@ -74,8 +74,17 @@ for _ in $(seq 1 "$cpu_hogs"); do
 done
 echo "Load pids: ${load_pids[*]}"
 
+# Let the load generators get going before anything is timed against them.
+sleep 1
+
 # Hard backstop: if the test loop below hangs, this still tears everything down
 # after max_runtime_seconds rather than running forever.
+#
+# Started *after* the ramp-up above, not before it. Counting a fixed second of
+# setup against the caller's budget makes `max_runtime_seconds` mean something
+# other than what it says, and at small budgets it is most of them: a two
+# second ceiling left under a second for the test to produce any output at all,
+# so on a loaded machine the deadline fired while cargo was still starting.
 #
 # It signals the *load*, not `$$`. `$$` is the original shell's pid even inside
 # a subshell, so in the one scenario no trap can cover -- this script dying
@@ -89,8 +98,6 @@ echo "Load pids: ${load_pids[*]}"
     kill -TERM $$ 2>/dev/null || true
 ) &
 watchdog_pid=$!
-
-sleep 1
 
 fail=0
 test_log="$(mktemp "${TMPDIR:-/tmp}/lemma-desktop-stress.XXXXXX")"

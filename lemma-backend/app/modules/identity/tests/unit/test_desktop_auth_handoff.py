@@ -11,6 +11,8 @@ from app.modules.identity.services.desktop_auth_handoff import (
     DesktopAuthHandoffStore,
     DesktopAuthRateLimitExceeded,
     DesktopAuthRequestNotFound,
+    DesktopAuthRequestPending,
+    DesktopAuthVerifierRejected,
     challenge_for_verifier,
 )
 
@@ -63,6 +65,94 @@ async def test_create_rate_limit_bounds_redis_handoffs():
     await store.create("d" * 43, client_key="client-b")
 
 
+@pytest.mark.asyncio
+async def test_a_wrong_verifier_is_refused_without_burning_the_request():
+    """The half of the exchange that proves the caller is the app that began it.
+
+    Only the desktop app holds the verifier; the browser carries the challenge,
+    which is its hash. Anyone who obtains the request id but not the verifier
+    must get nothing -- and must not be able to destroy the login either, or
+    knowing an id would be enough to lock the real app out of its own handoff.
+    """
+    redis = _FakeRedis()
+    store = _store(redis, create_limit=5)
+    verifier = "v" * 43
+    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+    user = uuid4()
+    await store.complete(request.request_id, user)
+
+    with pytest.raises(DesktopAuthVerifierRejected):
+        await store.consume(request.request_id, "w" * 43)
+
+    # Still there, and still the right user's.
+    assert await store.consume(request.request_id, verifier) == user
+
+
+@pytest.mark.asyncio
+async def test_consuming_before_the_browser_finishes_reveals_nothing():
+    """Pending is its own answer, and it is not a user id.
+
+    A request that has been created but not completed must not resolve to
+    anybody. Returning the empty or default user here is how a handoff becomes
+    a way to be signed in as someone else.
+    """
+    redis = _FakeRedis()
+    store = _store(redis, create_limit=5)
+    verifier = "v" * 43
+    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+
+    with pytest.raises(DesktopAuthRequestPending):
+        await store.consume(request.request_id, verifier)
+
+
+@pytest.mark.asyncio
+async def test_a_consumed_handoff_cannot_be_replayed_by_anybody():
+    """One exchange, one session.
+
+    The verifier does not expire on its own and a desktop log, a crash report
+    or a shared screen can carry it. What stops it being reused is that
+    consuming destroys the record -- so a replay has to be indistinguishable
+    from a request that never existed.
+    """
+    redis = _FakeRedis()
+    store = _store(redis, create_limit=5)
+    verifier = "v" * 43
+    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+    await store.complete(request.request_id, uuid4())
+    await store.consume(request.request_id, verifier)
+
+    with pytest.raises(DesktopAuthRequestNotFound):
+        await store.consume(request.request_id, verifier)
+    # And the record itself is gone, not merely marked.
+    assert redis.hashes == {}
+
+
+@pytest.mark.asyncio
+async def test_an_expired_handoff_is_indistinguishable_from_one_that_never_existed():
+    """The window is the whole of the protection once an id is out.
+
+    Nothing rate-limits `consume`, so the request's expiry is what bounds how
+    long a leaked id is worth anything. Both verbs have to treat an expired
+    record the way they treat an unknown one -- including `complete`, which the
+    browser reaches after the user has signed in and which must not resurrect a
+    request whose window has closed.
+    """
+    redis = _FakeRedis()
+    store = _store(redis, create_limit=5, ttl_seconds=45)
+    verifier = "v" * 43
+    request = await store.create(challenge_for_verifier(verifier), client_key="127.0.0.1")
+
+    key = next(iter(redis.hashes))
+    assert redis.expires[key] == 45, "the record must not outlive the configured window"
+
+    redis.expire_now(key)
+
+    with pytest.raises(DesktopAuthRequestNotFound):
+        await store.complete(request.request_id, uuid4())
+    with pytest.raises(DesktopAuthRequestNotFound):
+        await store.consume(request.request_id, verifier)
+
+
 def _store(redis, **kwargs) -> DesktopAuthHandoffStore:
     store = DesktopAuthHandoffStore(**kwargs)
     store._redis = redis
@@ -99,6 +189,11 @@ class _FakeRedis:
         self.hashes = {}
         self.counts = {}
         self.expires = {}
+
+    def expire_now(self, key):
+        """What Redis does when the TTL runs out: the key is simply gone."""
+        self.hashes.pop(key, None)
+        self.expires.pop(key, None)
 
     def pipeline(self, *, transaction):
         assert transaction is True

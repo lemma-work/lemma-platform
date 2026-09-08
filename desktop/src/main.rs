@@ -7967,24 +7967,31 @@ mod tests {
         assert_eq!(classify_update_attempt(None, "0.7.2"), UpdateAttempt::None);
     }
 
-    /// The record lives where the installer cannot reach it.
+    /// The record lives where an install cannot take it.
     ///
-    /// On Windows the installer replaces the whole application directory, so a
-    /// marker written beside the app is gone exactly when it is needed.
+    /// Measured on Windows rather than assumed: the NSIS installer puts Lemma
+    /// in `%LOCALAPPDATA%\Lemma`, which is also where `locald` keeps its
+    /// state, so "beside the app" and "in the state root" are the same
+    /// directory there. What separates them is that the uninstaller removes
+    /// only the files it installed -- verified by leaving a file in
+    /// `locald\` across an `uninstall.exe /S` and finding it still there --
+    /// so anything under `locald` survives an install, an update and an
+    /// uninstall alike, and the shipped executables do not.
+    ///
+    /// Which makes the state root the only correct home for a record whose
+    /// whole job is to outlive the installer.
     #[test]
-    fn the_update_record_is_not_kept_inside_the_application_directory() {
+    fn the_update_record_is_kept_where_an_install_cannot_take_it() {
         let path = update_attempt_path();
-        assert!(path.starts_with(locald_root()), "{}", path.display());
-        let beside_the_app = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
-        if let Some(beside_the_app) = beside_the_app {
-            assert!(
-                !path.starts_with(&beside_the_app),
-                "the installer replaces this directory: {}",
-                path.display()
-            );
-        }
+        assert!(
+            path.starts_with(locald_root()),
+            "the record has to live in the state root, not beside the app: {}",
+            path.display()
+        );
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("shell-update.json"),
+        );
     }
 
     #[test]
