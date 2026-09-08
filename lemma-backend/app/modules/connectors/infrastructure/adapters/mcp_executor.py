@@ -25,7 +25,7 @@ import httpx
 import httpx2
 from fastmcp.exceptions import FastMCPError, McpError, ToolError
 
-from lemma_connectors.core.results import BinaryContentResult
+from app.modules.connectors.domain.results import BinaryContentResult
 
 from app.core.log.log import get_logger
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
