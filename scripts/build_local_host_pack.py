@@ -24,12 +24,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_WHEEL_PROJECTS = (
     "lemma-pod-bundle",
-    "lemma-backend/lemma-connectors",
     "lemma-backend",
 )
 LOCAL_WHEEL_PACKAGES = (
     "lemma-pod-bundle",
-    "lemma-connectors",
     "lemma-backend",
 )
 
@@ -277,7 +275,7 @@ def prune_python_runtime(python_root: Path) -> None:
         for name in ("test", "idlelib", "turtledemo", "ensurepip"):
             shutil.rmtree(standard_library / name, ignore_errors=True)
         site_packages = standard_library / "site-packages"
-        for package in ("app", "lemma_connectors"):
+        for package in ("app",):
             root = site_packages / package
             if not root.is_dir():
                 continue

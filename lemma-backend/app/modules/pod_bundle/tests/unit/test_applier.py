@@ -1037,7 +1037,7 @@ class _FakeConnectorService:
     """Stand-in for the connectors service the applier consults to confirm a
     supplied account matches the connector the bundle declared."""
 
-    def __init__(self, account, kind: str = "package"):
+    def __init__(self, account, kind: str = "http"):
         from types import SimpleNamespace
 
         self.account_repository = SimpleNamespace(get=self._get_account)
@@ -1085,7 +1085,7 @@ async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkey
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1118,7 +1118,7 @@ async def test_surface_apply_rejects_wrong_connector_account(tmp_path, monkeypat
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1145,7 +1145,7 @@ async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1179,7 +1179,7 @@ async def test_surface_apply_rejects_an_account_of_the_wrong_kind(
             "platform": "SLACK",
             "account_id": "${slack_account}",
             "connector_id": "slack",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1223,6 +1223,41 @@ async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch
     )
     _patch_surface_deps(
         monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="mcp")
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(account)})
+    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+    assert surface_fake.created is not None
+
+
+async def test_surface_apply_accepts_a_bundle_exported_under_the_package_kind(
+    tmp_path, monkeypatch
+):
+    """Every bundle exported before the `package` kind was removed says
+    `package`, and every connector that was installable as `package` is
+    installable as `http` now. Holding an old bundle to a kind that no longer
+    exists would make it unimportable for a rename."""
+    from types import SimpleNamespace
+
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "connector_kind": "package",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    connector_account = SimpleNamespace(
+        connector_id="microsoft_teams", auth_config_id=uuid4()
+    )
+    _patch_surface_deps(
+        monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="http")
     )
 
     applier = _applier(root, replacements={"teams_account": str(account)})

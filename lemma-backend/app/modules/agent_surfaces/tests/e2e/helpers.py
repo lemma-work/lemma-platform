@@ -49,7 +49,7 @@ from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
 from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.connectors.domain.connector import AuthProvider, provider_to_kind
+from app.modules.connectors.domain.connector import AuthProvider, ConnectorKind
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
@@ -318,9 +318,14 @@ async def _ensure_connector(
     provider: AuthProvider = AuthProvider.LEMMA,
 ) -> Connector:
     connector = await db_session.get(Connector, connector_id)
-    # The install axis is `kinds` (post-#265); callers still speak AuthProvider,
-    # so map it here rather than at every call site.
-    kind = provider_to_kind(provider).value
+    # The install axis is `kinds`; callers still speak AuthProvider, so map it
+    # here rather than at every call site. Everything non-Composio is a native
+    # connector, and `http` is the one native kind.
+    kind = (
+        ConnectorKind.COMPOSIO.value
+        if provider == AuthProvider.COMPOSIO
+        else ConnectorKind.HTTP.value
+    )
     spec: dict[str, object] = {"kind": kind, "auth_scheme": "OAUTH2"}
     if provider == AuthProvider.COMPOSIO:
         spec["toolkit_slug"] = connector_id
@@ -356,7 +361,11 @@ async def _ensure_connector_account(
         raw_response.setdefault("app_id", E2E_SLACK_APP_ID)
         credentials["raw_response"] = raw_response
     await _ensure_connector(db_session, connector_id, provider=provider)
-    kind = provider_to_kind(provider).value
+    kind = (
+        ConnectorKind.COMPOSIO.value
+        if provider == AuthProvider.COMPOSIO
+        else ConnectorKind.HTTP.value
+    )
     organization_id = await db_session.scalar(
         select(OrganizationMember.organization_id)
         .where(OrganizationMember.user_id == UUID(user_id))

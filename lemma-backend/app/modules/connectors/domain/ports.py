@@ -314,11 +314,12 @@ class OperationDetailsPort(Protocol):
 
 
 class AppOperationGatewayPort(Protocol):
-    async def list_operations(self, connector_id: str) -> Sequence[str]: ...
+    """Executing one operation against a broker. Nothing else.
 
-    async def get_operation_details(
-        self, connector_id: str, operation_name: str
-    ) -> OperationDetailsPort: ...
+    It also declared `list_operations` and `get_operation_details`, which no
+    caller ever reached: the service reads both from the database through
+    `operation_visibility`, and has since operations were persisted.
+    """
 
     async def execute_operation(
         self,

@@ -59,8 +59,6 @@ class ConnectorKindResponseSchema(BaseModel):
     supports_org_custom_oauth: bool = False
     system_default_available: bool = False
     discovery: str = "none"
-    # `package` only.
-    package_name: Optional[str] = None
     # `composio` only.
     toolkit_slug: Optional[str] = None
 

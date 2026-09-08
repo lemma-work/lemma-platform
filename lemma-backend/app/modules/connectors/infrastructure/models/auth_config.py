@@ -40,7 +40,7 @@ class AuthConfig(UUIDAuditBase):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(
-        String(50), default=ConnectorKind.PACKAGE.value, nullable=False
+        String(50), default=ConnectorKind.HTTP.value, nullable=False
     )
     config_source: Mapped[str] = mapped_column(
         String(50), default=AuthConfigSource.SYSTEM_DEFAULT.value

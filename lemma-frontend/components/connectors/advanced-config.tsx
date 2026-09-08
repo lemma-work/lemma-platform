@@ -106,7 +106,7 @@ export function AdvancedConfigDialog({
      * option is not what they are here to read. */
     initialMode?: AuthConfigMode;
 }) {
-    const [kind, setKind] = useState<string>('package');
+    const [kind, setKind] = useState<string>('http');
     const [mode, setMode] = useState<AuthConfigMode>('MANAGED');
     const [showCustomForm, setShowCustomForm] = useState(false);
     const [values, setValues] = useState<SchemaValues>({});

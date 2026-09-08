@@ -169,7 +169,7 @@ async def _seed_connector_trigger(
             Connector(
                 id=connector_id,
                 title=connector_id.replace("_", " ").title(),
-                kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
+                kinds=[{"kind": "http", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )
