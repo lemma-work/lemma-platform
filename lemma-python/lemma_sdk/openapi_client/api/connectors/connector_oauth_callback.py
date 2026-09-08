@@ -79,8 +79,8 @@ def sync_detailed(
 ) -> Response[ErrorResponse | str]:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
-    parameter for security.
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
+    parameter for security. It redirects back into the app unless JSON is explicitly requested.
 
     Args:
         error (None | str | Unset):
@@ -114,8 +114,8 @@ def sync(
 ) -> ErrorResponse | str | None:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
-    parameter for security.
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
+    parameter for security. It redirects back into the app unless JSON is explicitly requested.
 
     Args:
         error (None | str | Unset):
@@ -144,8 +144,8 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | str]:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
-    parameter for security.
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
+    parameter for security. It redirects back into the app unless JSON is explicitly requested.
 
     Args:
         error (None | str | Unset):
@@ -177,8 +177,8 @@ async def asyncio(
 ) -> ErrorResponse | str | None:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
-    parameter for security.
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
+    parameter for security. It redirects back into the app unless JSON is explicitly requested.
 
     Args:
         error (None | str | Unset):

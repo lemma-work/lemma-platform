@@ -47,12 +47,18 @@ class FakeOps:
         self.race = False
         self.ambiguous_commit = False
 
-    async def resolve_repo(self, *, name):
+    async def resolve_repo(self, *, name, owner=None):
+        del owner
+        del name
         return self.repo
 
-    async def create_repo(self, *, name, private, description):
-        del description
-        self.create_calls += 1
+    def exists(self, name: str = "crm", *, private: bool = False) -> RepoCreateResult:
+        """The repository the person made on GitHub before publishing.
+
+        Lemma no longer creates one: `POST /user/repos` needs the OAuth `repo`
+        scope, App user tokens carry none, and GitHub refuses the endpoint to
+        installations outright -- so neither identity the App has can call it.
+        """
         self.repo = RepoCreateResult(
             owner="acme",
             repo=name,
@@ -97,13 +103,7 @@ class FakeOps:
 
 
 def _repo(ops: FakeOps, name: str = "crm") -> RepoCreateResult:
-    ops.repo = RepoCreateResult(
-        owner="acme",
-        repo=name,
-        html_url=f"https://github.com/acme/{name}",
-        default_branch="main",
-    )
-    return ops.repo
+    return ops.exists(name)
 
 
 async def _publish(
@@ -114,6 +114,11 @@ async def _publish(
     files: dict[str, bytes] | None = None,
     already_created: RepoCreateResult | None = None,
 ):
+    # The repository exists before a publish now, always: the person makes it
+    # on GitHub and Lemma publishes into it, because a GitHub App cannot create
+    # one on their behalf.
+    if already_created is None and ops.repo is None:
+        ops.exists()
     return await GithubPublisher(ops).publish(
         publish_id=publish_id,
         mode=mode,
@@ -185,7 +190,6 @@ async def test_create_publishes_all_managed_files_in_one_atomic_commit():
         files={"pod.json": b"{}", "tables/leads/leads.json": b"{}"},
     )
     assert repo.html_url.endswith("/acme/crm")
-    assert ops.create_calls == 1
     assert len(ops.commits) == 1
     commit = ops.commits[0]
     assert {
@@ -198,25 +202,66 @@ async def test_create_publishes_all_managed_files_in_one_atomic_commit():
     assert manifest["publish_id"] == "pub-1"
 
 
-async def test_create_conflicts_on_existing_repo_and_update_requires_one():
+async def test_create_refuses_a_repository_lemma_has_already_published_to():
+    """`CREATE` still means "not over the top of an existing pod". What it
+    refuses is now the manifest rather than the repository: an empty repository
+    the person just made is the normal starting point."""
     ops = FakeOps()
-    _repo(ops)
+    await _publish(ops, already_created=ops.exists())
+
     with pytest.raises(GithubRepositoryExistsError):
-        await GithubPublisher(ops).create_repo(
+        await GithubPublisher(ops).resolve_target(
             repo_name="crm",
             private=False,
             description=None,
             mode=PublishMode.CREATE,
         )
 
+
+async def test_an_empty_repository_is_what_create_is_for():
+    ops = FakeOps()
+    repo = ops.exists()
+
+    resolved = await GithubPublisher(ops).resolve_target(
+        repo_name="crm", private=False, description=None, mode=PublishMode.CREATE
+    )
+
+    assert resolved is repo
+
+
+async def test_a_repository_we_cannot_reach_says_what_to_do_about_it():
+    """Absent and not-installed are the same 404 from GitHub, so the message
+    names both rather than guessing which one happened."""
     missing = FakeOps()
-    with pytest.raises(GithubRepositoryNotFoundError):
-        await GithubPublisher(missing).create_repo(
-            repo_name="crm",
-            private=False,
-            description=None,
-            mode=PublishMode.UPDATE,
-        )
+    for mode in (PublishMode.CREATE, PublishMode.UPDATE):
+        with pytest.raises(GithubRepositoryNotFoundError) as raised:
+            await GithubPublisher(missing).resolve_target(
+                repo_name="crm",
+                private=False,
+                description=None,
+                mode=mode,
+            )
+        assert "github.com/new" in str(raised.value)
+
+
+async def test_an_organisation_repository_is_resolved_under_its_owner():
+    """Publishing used to resolve the connected user's own login and nothing
+    else, so a pod could only ever land in a personal namespace."""
+    seen: dict[str, object] = {}
+
+    class OwnerAwareOps(FakeOps):
+        async def resolve_repo(self, *, name, owner=None):
+            seen["name"] = name
+            seen["owner"] = owner
+            return self.repo
+
+    ops = OwnerAwareOps()
+    ops.exists()
+    await GithubPublisher(ops).resolve_target(
+        repo_name="acme-corp/crm", private=False, description=None
+    )
+
+    assert seen == {"name": "crm", "owner": "acme-corp"}
 
 
 async def test_update_preserves_unrelated_files_and_deletes_only_stale_managed_paths():
@@ -291,11 +336,7 @@ async def test_update_rejects_branch_race():
 async def test_response_lost_retry_uses_manifest_checkpoint():
     ops = FakeOps()
     ops.ambiguous_commit = True
-    repo = await GithubPublisher(ops).create_repo(
-        repo_name="crm",
-        private=False,
-        description=None,
-    )
+    repo = ops.exists()
     with pytest.raises(ConnectionError):
         await _publish(ops, already_created=repo)
     assert len(ops.commits) == 1
@@ -304,33 +345,16 @@ async def test_response_lost_retry_uses_manifest_checkpoint():
     assert len(ops.commits) == 1
 
 
-async def test_provider_error_after_create_resolves_accepted_repository():
-    class AmbiguousCreateOps(FakeOps):
-        async def create_repo(self, *, name, private, description):
-            await super().create_repo(
-                name=name,
-                private=private,
-                description=description,
-            )
-            raise OperationExecutionInfrastructureError("response lost")
-
-    ops = AmbiguousCreateOps()
-    repo = await GithubPublisher(ops).create_repo(
-        repo_name="crm",
-        private=False,
-        description=None,
-    )
-    assert repo.repo == "crm"
-    assert ops.create_calls == 1
-
-
 async def test_native_ops_reads_github_repository_and_content_shapes():
     calls = []
 
     async def runner(op, payload):
         calls.append((op, payload))
-        if op == "repos_create_for_authenticated_user":
+        if op == "users_get_authenticated":
+            result = {"login": "acme"}
+        elif op == "repos_get":
             result = {
+                "id": 1,
                 "full_name": "acme/crm",
                 "html_url": "https://github.com/acme/crm",
                 "default_branch": "main",
@@ -349,7 +373,7 @@ async def test_native_ops_reads_github_repository_and_content_shapes():
         return {"result": result}
 
     ops = NativeGithubOps(runner)
-    repo = await ops.create_repo(name="crm", private=False, description="d")
+    repo = await ops.resolve_repo(name="crm")
     content = await ops.get_file(
         owner="acme",
         repo="crm",
@@ -357,16 +381,10 @@ async def test_native_ops_reads_github_repository_and_content_shapes():
     )
     assert repo.owner == "acme" and repo.default_branch == "main"
     assert content == b"manifest"
-    # Create parameters travel in the request body, as the curated operation
-    # declares them -- a flat payload would create a repository named nothing.
-    assert calls[0][1] == {
-        "body": {
-            "name": "crm",
-            "private": False,
-            "description": "d",
-            "auto_init": True,
-        }
-    }
+    # The owner comes from the connected account when the caller names none, so
+    # a bare repository name still resolves.
+    assert calls[0][0] == "users_get_authenticated"
+    assert calls[1] == ("repos_get", {"owner": "acme", "repo": "crm"})
 
 
 async def test_native_ops_resolves_repo_through_the_authenticated_user():

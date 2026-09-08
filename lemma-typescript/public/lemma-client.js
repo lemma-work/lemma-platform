@@ -12991,7 +12991,7 @@ var LemmaClient = (() => {
     }
     /**
      * OAuth Callback
-     * Handle OAuth callback and complete account connection. This endpoint is public and uses state parameter for security.
+     * Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security. It redirects back into the app unless JSON is explicitly requested.
      * @param error
      * @param format
      * @returns string Successful Response
@@ -13193,6 +13193,55 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Account Installations
+     * Which GitHub App installations this account can reach, resolving and recording one when it is unambiguous.
+     * @param organizationId
+     * @param accountId
+     * @param refresh Ask the provider again rather than trusting what is recorded. Editing an installation's repositories sends no callback and no reliable event, so this is how a change made on GitHub is seen.
+     * @returns AccountInstallationsSchema Successful Response
+     * @throws ApiError
+     */
+    static connectorAccountInstallations(organizationId, accountId, refresh = false) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations",
+        path: {
+          "organization_id": organizationId,
+          "account_id": accountId
+        },
+        query: {
+          "refresh": refresh
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Bind Account Installation
+     * Bind an account to one of the installations it can reach.
+     * @param organizationId
+     * @param accountId
+     * @param requestBody
+     * @returns AccountResponseSchema Successful Response
+     * @throws ApiError
+     */
+    static connectorAccountBindInstallation(organizationId, accountId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations",
+        path: {
+          "organization_id": organizationId,
+          "account_id": accountId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Auth Configs
      * @param organizationId
      * @param limit
@@ -13334,6 +13383,28 @@ var LemmaClient = (() => {
       return request(OpenAPI, {
         method: "POST",
         url: "/organizations/{organization_id}/connectors/connect-requests",
+        path: {
+          "organization_id": organizationId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Install Step
+     * Start the installation leg for an account that is authorized but not yet installed, returning the URL to send the person to.
+     * @param organizationId
+     * @param requestBody
+     * @returns InstallRequestResponseSchema Successful Response
+     * @throws ApiError
+     */
+    static connectorConnectRequestInstall(organizationId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/organizations/{organization_id}/connectors/connect-requests/install",
         path: {
           "organization_id": organizationId
         },
@@ -13722,6 +13793,42 @@ var LemmaClient = (() => {
     createConnectRequest(organizationId, input) {
       const payload = typeof input === "string" ? { connector_id: input } : input;
       return this.client.request(() => ConnectorsService.connectorConnectRequestCreate(organizationId, payload));
+    }
+    /**
+     * Where to send somebody who authorized but has not installed.
+     *
+     * A GitHub App's user token reaches only repositories the App is installed
+     * on, so authorizing alone produces a working token that can read nothing.
+     * The returned URL carries a single-use state that expires in thirty
+     * minutes, so ask for it when the person is about to follow it.
+     */
+    createInstallRequest(organizationId, accountId, returnTo) {
+      return this.client.request(() => ConnectorsService.connectorConnectRequestInstall(
+        organizationId,
+        { account_id: accountId, return_to: returnTo }
+      ));
+    }
+    /**
+     * Which GitHub App installations an account can reach.
+     *
+     * `refresh` asks the provider again rather than trusting what is recorded:
+     * editing an installation's repositories sends no callback and no reliable
+     * event, so this is how a change made on GitHub is seen.
+     */
+    accountInstallations(organizationId, accountId, refresh = false) {
+      return this.client.request(() => ConnectorsService.connectorAccountInstallations(
+        organizationId,
+        accountId,
+        refresh
+      ));
+    }
+    /** Settle which installation an account speaks for, when it can reach several. */
+    bindAccountInstallation(organizationId, accountId, installationId) {
+      return this.client.request(() => ConnectorsService.connectorAccountBindInstallation(
+        organizationId,
+        accountId,
+        { installation_id: installationId }
+      ));
     }
   };
 

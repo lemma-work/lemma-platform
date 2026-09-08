@@ -24,7 +24,7 @@ export type PublishStartRequest = {
      */
     private?: boolean;
     /**
-     * GitHub repository name (letters, numbers, dot, dash, underscore).
+     * GitHub repository to publish into, as `name` or `owner/name`. It must already exist and be covered by the Lemma app's installation -- publishing does not create repositories, because a GitHub App cannot.
      */
     repo_name: string;
 };

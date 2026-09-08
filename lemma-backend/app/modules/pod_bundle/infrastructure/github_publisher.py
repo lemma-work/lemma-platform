@@ -37,6 +37,17 @@ from app.modules.pod_bundle.infrastructure.publish_manifest import (
 _BLOB_CONCURRENCY = 8
 
 
+def _install_url() -> str | None:
+    """Where the app's repository access is granted, if this deployment knows.
+
+    Asked at the moment of failure rather than held as configuration, because
+    it only ever appears in one sentence and only when that sentence is needed.
+    """
+    from app.modules.connectors.contracts.github import github_install_url
+
+    return github_install_url()
+
+
 class RepoCreateResult:
     def __init__(
         self,
@@ -55,11 +66,9 @@ class RepoCreateResult:
 
 
 class GithubOps(Protocol):
-    async def resolve_repo(self, *, name: str) -> RepoCreateResult | None: ...
-
-    async def create_repo(
-        self, *, name: str, private: bool, description: str | None
-    ) -> RepoCreateResult: ...
+    async def resolve_repo(
+        self, *, name: str, owner: str | None = None
+    ) -> RepoCreateResult | None: ...
 
     async def get_head(self, *, owner: str, repo: str, branch: str) -> str: ...
 
@@ -92,7 +101,7 @@ class GithubPublisher:
     def __init__(self, ops: GithubOps):
         self._ops = ops
 
-    async def create_repo(
+    async def resolve_target(
         self,
         *,
         repo_name: str,
@@ -100,46 +109,60 @@ class GithubPublisher:
         description: str | None,
         mode: PublishMode = PublishMode.CREATE,
     ) -> RepoCreateResult:
-        """Resolve the requested create/update policy before writing anything."""
-        existing = await self._ops.resolve_repo(name=repo_name)
-        if mode is PublishMode.UPDATE:
-            if existing is None:
-                raise GithubRepositoryNotFoundError(repo_name)
-            return existing
-        if existing is not None:
-            raise GithubRepositoryExistsError(repo_name)
+        """The repository to publish into, which has to exist already.
 
+        Lemma used to create it, and that never worked under the GitHub App:
+        `POST /user/repos` needs the OAuth `repo` scope and an App user token
+        carries no scopes, while an installation token is refused outright --
+        GitHub marks the endpoint as not available to Apps. So the call was
+        made, refused, and the publish failed with whatever GitHub said.
+
+        Asking the person to make the repository is not a workaround for that;
+        it is the only thing either identity can do. It also removes a limit
+        nobody chose: creation only ever targeted the authenticated user's own
+        namespace, so a pod could not be published to an organisation at all.
+
+        `private` and `description` are kept in the signature and unused: they
+        describe a repository we no longer make, and the caller still records
+        them on the job.
+        """
+        del private, description
+        owner, _, bare = repo_name.rpartition("/")
+        existing = await self._ops.resolve_repo(name=bare, owner=owner or None)
+        if existing is None:
+            # Unreachable and absent are the same 404 from GitHub when the App
+            # is not installed on the owner, so the error names both.
+            raise GithubRepositoryNotFoundError(repo_name, install_url=_install_url())
+        if mode is PublishMode.CREATE and await self._has_been_published(existing):
+            raise GithubRepositoryExistsError(repo_name)
+        return existing
+
+    async def _has_been_published(self, repo: RepoCreateResult) -> bool:
+        """Whether Lemma has published into this repository before.
+
+        What `CREATE` refuses, now that an empty repository is the normal
+        starting point rather than one we made a moment ago. The manifest is
+        the only honest marker: a repository can hold anything else and still
+        never have been a pod.
+        """
         try:
-            return await self._ops.create_repo(
-                name=repo_name,
-                private=private,
-                description=description,
+            head = await self._ops.get_head(
+                owner=repo.owner, repo=repo.repo, branch=repo.default_branch
             )
-        except DomainError as exc:
-            status_code = getattr(exc, "status_code", None)
-            retryable = status_code in {408, 429} or (
-                isinstance(status_code, int) and status_code >= 500
-            )
-            if not retryable:
-                raise
-            # Connector timeouts/provider failures are DomainErrors too. The
-            # create may nevertheless have reached GitHub, so resolve before a
-            # worker retry can incorrectly turn our repository into a CREATE
-            # conflict.
-            try:
-                resolved = await self._ops.resolve_repo(name=repo_name)
-            except Exception:
-                raise exc
-            if resolved is not None:
-                return resolved
-            raise
-        except Exception:
-            # A timeout after GitHub accepted the create is ambiguous. Resolve it
-            # once; this is safe because we established non-existence above.
-            resolved = await self._ops.resolve_repo(name=repo_name)
-            if resolved is not None:
-                return resolved
-            raise
+        except BundleInvalidError, OperationExecutionNotFoundError:
+            # Named rather than caught broadly, because "no branch" and "the
+            # call failed" must not look the same here: reading a failure as an
+            # empty repository would let CREATE publish over an existing pod.
+            # These two are what an empty repository actually raises -- no ref
+            # to resolve, and no default branch to ask about.
+            return False
+        manifest = await self._ops.get_file(
+            owner=repo.owner,
+            repo=repo.repo,
+            path=PUBLISH_MANIFEST_PATH,
+            ref=head,
+        )
+        return manifest is not None
 
     async def publish(
         self,
@@ -156,7 +179,7 @@ class GithubPublisher:
         completed_paths: set[str] | None = None,
     ) -> RepoCreateResult:
         del completed_paths  # Atomic commits checkpoint as one unit.
-        repo = already_created or await self.create_repo(
+        repo = already_created or await self.resolve_target(
             repo_name=repo_name,
             private=private,
             description=description,
@@ -244,7 +267,6 @@ class NativeGithubOps:
     and a request body goes under ``body``.
     """
 
-    _OP_CREATE_REPO = "repos_create_for_authenticated_user"
     _OP_GET_USER = "users_get_authenticated"
     _OP_GET_REPO = "repos_get"
     _OP_GET_CONTENT = "repos_get_content"
@@ -264,9 +286,19 @@ class NativeGithubOps:
         except OperationNotFoundError as exc:
             raise GithubPublishCapabilityUnavailableError(operation_name) from exc
 
-    async def resolve_repo(self, *, name: str) -> RepoCreateResult | None:
-        user_result = await self._capability(self._OP_GET_USER, {})
-        owner = str(user_result.get("login") or "")
+    async def resolve_repo(
+        self, *, name: str, owner: str | None = None
+    ) -> RepoCreateResult | None:
+        """Find the repository, under the owner named or the person connected.
+
+        An explicit owner is what makes publishing to an organisation possible:
+        this used to resolve the authenticated user's login and nothing else, so
+        every publish targeted a personal namespace whether or not that was
+        where the pod belonged.
+        """
+        if not owner:
+            user_result = await self._capability(self._OP_GET_USER, {})
+            owner = str(user_result.get("login") or "")
         if not owner:
             return None
         try:
@@ -279,24 +311,6 @@ class NativeGithubOps:
         if not result or result.get("id") is None:
             return None
         return _repo_result(result, fallback_owner=owner, fallback_repo=name)
-
-    async def create_repo(
-        self, *, name: str, private: bool, description: str | None
-    ) -> RepoCreateResult:
-        result = await self._capability(
-            self._OP_CREATE_REPO,
-            {
-                "body": {
-                    "name": name,
-                    "private": private,
-                    "description": description or "",
-                    # Seed the default branch. All Lemma-managed files still
-                    # land in the following single atomic commit.
-                    "auto_init": True,
-                }
-            },
-        )
-        return _repo_result(result, fallback_owner="", fallback_repo=name)
 
     async def get_head(self, *, owner: str, repo: str, branch: str) -> str:
         result = await self._capability(

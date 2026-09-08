@@ -21,7 +21,6 @@ from app.modules.connectors.domain.connector import (
     kind_to_provider,
 )
 from app.modules.connectors.domain.errors import (
-    AccountResolutionError,
     ConnectorNotFoundError,
     OperationNotFoundError,
 )
@@ -53,7 +52,9 @@ from app.modules.connectors.services.execution.plumbing import (
     execution_request,
 )
 from app.modules.connectors.services.credential_freshness import (
+    is_oauth_account,
     resolve_execution_credentials,
+    serialize_credentials,
 )
 
 
@@ -145,38 +146,10 @@ class ConnectorOperationService:
         )
 
     def _serialize_credentials(self, credentials: Any) -> dict[str, Any]:
-        if credentials is None:
-            raise AccountResolutionError("Resolved account has no credentials.")
-        if isinstance(credentials, dict):
-            return credentials
-        model_dump = getattr(credentials, "model_dump", None)
-        if callable(model_dump):
-            return model_dump(exclude_none=True)
-        raise AccountResolutionError(
-            "Resolved account credentials are in unsupported format."
-        )
+        return serialize_credentials(credentials)
 
     def _is_oauth_account(self, account: Any) -> bool:
-        """Whether this account holds something a refresh could renew.
-
-        Decided from the credential's own shape, because that is the only
-        authority available here: an auth scheme is a property of the install's
-        `KindSpec`, not of the connector, and this is handed an account. A
-        branch above used to read `account.connector.auth_method` first, as
-        though scheme detection were authoritative -- `ConnectorEntity` has no
-        such field, so the `getattr` always answered None and the sniff below
-        decided every case anyway.
-        """
-        creds = getattr(account, "credentials", None)
-        if isinstance(creds, dict):
-            return any(
-                key in creds
-                for key in ("access_token", "refresh_token", "connection_id")
-            )
-        return any(
-            hasattr(creds, key)
-            for key in ("access_token", "refresh_token", "connection_id")
-        )
+        return is_oauth_account(account)
 
     def _normalize_execution_result(self, value: Any) -> Any:
         model_dump = getattr(value, "model_dump", None)

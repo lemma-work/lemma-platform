@@ -353,7 +353,12 @@ class PublishStartRequest(BaseModel):
         ...,
         min_length=1,
         max_length=100,
-        description="GitHub repository name (letters, numbers, dot, dash, underscore).",
+        description=(
+            "GitHub repository to publish into, as `name` or `owner/name`. It "
+            "must already exist and be covered by the Lemma app's installation "
+            "-- publishing does not create repositories, because a GitHub App "
+            "cannot."
+        ),
     )
     mode: PublishMode = Field(
         default=PublishMode.CREATE,
@@ -371,9 +376,21 @@ class PublishStartRequest(BaseModel):
     @field_validator("repo_name")
     @classmethod
     def validate_repo_name(cls, value: str) -> str:
+        """`name`, or `owner/name` to publish into an organisation.
+
+        The owner half is new and is what makes an organisation reachable at
+        all: publishing used to resolve the connected user's own login and
+        nothing else, so a pod could only ever land in a personal namespace.
+        """
         import re
 
-        if value in {".", ".."} or re.fullmatch(r"[A-Za-z0-9_.-]+", value) is None:
+        owner, slash, bare = value.rpartition("/")
+        if slash and re.fullmatch(r"[A-Za-z0-9_.-]+", owner) is None:
+            raise ValueError(
+                "Repository owners may contain only letters, numbers, dot, "
+                "dash, and underscore."
+            )
+        if bare in {".", ".."} or re.fullmatch(r"[A-Za-z0-9_.-]+", bare) is None:
             raise ValueError(
                 "Repository names may contain only letters, numbers, dot, dash, "
                 "and underscore."

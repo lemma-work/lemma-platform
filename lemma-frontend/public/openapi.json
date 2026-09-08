@@ -102,6 +102,38 @@
         "title": "AccountCredentialsUpdateSchema",
         "type": "object"
       },
+      "AccountInstallationsSchema": {
+        "description": "What an account can actually reach, asked of the provider.",
+        "properties": {
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/InstallationChoiceSchema"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "install_state": {
+            "title": "Install State",
+            "type": "string"
+          },
+          "installation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installation Id"
+          }
+        },
+        "required": [
+          "install_state"
+        ],
+        "title": "AccountInstallationsSchema",
+        "type": "object"
+      },
       "AccountListResponseSchema": {
         "description": "Schema for account list response.",
         "properties": {
@@ -201,6 +233,12 @@
           "id": {
             "format": "uuid",
             "title": "Id",
+            "type": "string"
+          },
+          "install_state": {
+            "default": "READY",
+            "description": "READY, INSTALL_REQUIRED, CHOOSE_INSTALL or PENDING_APPROVAL. Anything but READY means the connection cannot reach resources yet.",
+            "title": "Install State",
             "type": "string"
           },
           "is_default": {
@@ -3751,6 +3789,18 @@
             ],
             "description": "Connector ID to connect",
             "title": "Connector Id"
+          },
+          "return_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Path inside the app to come back to when the flow finishes. Only a rooted path is accepted; anything else is ignored.",
+            "title": "Return To"
           }
         },
         "title": "ConnectRequestInitiateSchema",
@@ -8782,6 +8832,118 @@
         "title": "ImportStatusResponse",
         "type": "object"
       },
+      "InstallRequestInitiateSchema": {
+        "description": "Which account still needs its provider-side installation.",
+        "properties": {
+          "account_id": {
+            "description": "The connected account the installation is for.",
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "return_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Path inside the app to come back to. Only a rooted path is accepted; anything else is ignored rather than followed.",
+            "title": "Return To"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "InstallRequestInitiateSchema",
+        "type": "object"
+      },
+      "InstallRequestResponseSchema": {
+        "description": "Where to send somebody to finish installing.\n\nOnly the URL: like a connect request, the `state` on it is a capability and\ndoes not belong in a response body, browser memory or a HAR capture.",
+        "properties": {
+          "authorization_url": {
+            "description": "Provider URL that completes the installation step.",
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "InstallRequestResponseSchema",
+        "type": "object"
+      },
+      "InstallationBindSchema": {
+        "description": "Which of several installations this account speaks for.",
+        "properties": {
+          "installation_id": {
+            "description": "One of the ids offered by the installations endpoint.",
+            "title": "Installation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id"
+        ],
+        "title": "InstallationBindSchema",
+        "type": "object"
+      },
+      "InstallationChoiceSchema": {
+        "description": "One installation an account could speak for.",
+        "properties": {
+          "account_login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Login"
+          },
+          "account_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Type"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "manage_url": {
+            "description": "Where the person changes this installation's repository access. A link rather than an API call: the endpoints that add or remove a repository accept only classic personal access tokens.",
+            "title": "Manage Url",
+            "type": "string"
+          },
+          "repository_selection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'all' or 'selected'. A selected installation does not pick up newly created repositories, which is the commonest reason a repository is missing.",
+            "title": "Repository Selection"
+          }
+        },
+        "required": [
+          "installation_id",
+          "manage_url"
+        ],
+        "title": "InstallationChoiceSchema",
+        "type": "object"
+      },
       "InstalledAppSummary": {
         "properties": {
           "connector_id": {
@@ -11909,7 +12071,7 @@
             "type": "boolean"
           },
           "repo_name": {
-            "description": "GitHub repository name (letters, numbers, dot, dash, underscore).",
+            "description": "GitHub repository to publish into, as `name` or `owner/name`. It must already exist and be covered by the Lemma app's installation -- publishing does not create repositories, because a GitHub App cannot.",
             "maxLength": 100,
             "minLength": 1,
             "title": "Repo Name",
@@ -18712,7 +18874,7 @@
     },
     "/connectors/connect-requests/oauth/callback": {
       "get": {
-        "description": "Handle OAuth callback and complete account connection. This endpoint is public and uses state parameter for security.",
+        "description": "Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security. It redirects back into the app unless JSON is explicitly requested.",
         "operationId": "connector.oauth.callback",
         "parameters": [
           {
@@ -20577,6 +20739,151 @@
         }
       }
     },
+    "/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations": {
+      "get": {
+        "description": "Which GitHub App installations this account can reach, resolving and recording one when it is unambiguous.",
+        "operationId": "connector.account.installations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ask the provider again rather than trusting what is recorded. Editing an installation's repositories sends no callback and no reliable event, so this is how a change made on GitHub is seen.",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Ask the provider again rather than trusting what is recorded. Editing an installation's repositories sends no callback and no reliable event, so this is how a change made on GitHub is seen.",
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountInstallationsSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Account Installations",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "connector.account",
+          "result": "entity",
+          "verb": "installations"
+        }
+      },
+      "post": {
+        "description": "Bind an account to one of the installations it can reach.",
+        "operationId": "connector.account.bind_installation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallationBindSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponseSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Account Installation",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.account"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.account",
+          "result": "entity",
+          "verb": "bind_installation"
+        }
+      }
+    },
     "/organizations/{organization_id}/connectors/auth-configs": {
       "get": {
         "operationId": "connector.auth_config.list",
@@ -21032,6 +21339,70 @@
           "resource": "connector.connect_request",
           "result": "entity",
           "verb": "create"
+        }
+      }
+    },
+    "/organizations/{organization_id}/connectors/connect-requests/install": {
+      "post": {
+        "description": "Start the installation leg for an account that is authorized but not yet installed, returning the URL to send the person to.",
+        "operationId": "connector.connect_request.install",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallRequestInitiateSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallRequestResponseSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Install Step",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.connect_request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.connect_request",
+          "result": "entity",
+          "verb": "install"
         }
       }
     },

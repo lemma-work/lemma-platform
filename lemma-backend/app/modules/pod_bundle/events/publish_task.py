@@ -210,7 +210,7 @@ async def _ensure_repo(
     publisher: GithubPublisher,
     description: str | None,
 ) -> RepoCreateResult:
-    repo = _persisted_repo(state) or await publisher.create_repo(
+    repo = _persisted_repo(state) or await publisher.resolve_target(
         repo_name=state.repo_name,
         private=state.private,
         description=description,

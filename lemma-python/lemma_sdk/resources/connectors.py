@@ -6,7 +6,10 @@ from ..openapi_client.api.connectors import (
     connector_account_delete,
     connector_account_get,
     connector_account_list,
+    connector_account_bind_installation,
+    connector_account_installations,
     connector_connect_request_create,
+    connector_connect_request_install,
     connector_get,
     connector_list,
     connector_operation_detail,
@@ -56,9 +59,19 @@ from ..openapi_client.models.auth_config_update_response_schema import (
     AuthConfigUpdateResponseSchema,
 )
 from ..openapi_client.models.auth_config_update_schema import AuthConfigUpdateSchema
+from ..openapi_client.models.account_installations_schema import (
+    AccountInstallationsSchema,
+)
 from ..openapi_client.models.connect_request_initiate_schema import (
     ConnectRequestInitiateSchema,
 )
+from ..openapi_client.models.install_request_initiate_schema import (
+    InstallRequestInitiateSchema,
+)
+from ..openapi_client.models.install_request_response_schema import (
+    InstallRequestResponseSchema,
+)
+from ..openapi_client.models.installation_bind_schema import InstallationBindSchema
 from ..openapi_client.models.connect_request_response_schema import (
     ConnectRequestResponseSchema,
 )
@@ -370,6 +383,54 @@ class BoundConnectors(BoundResource):
             self._org_uuid(),
             body=compact({"connector_id": app, "auth_config_id": auth_config_id}),
             body_model=ConnectRequestInitiateSchema,
+        )
+
+    def install_request(self, account_id: str) -> InstallRequestResponseSchema:
+        """Where to send somebody who authorized but has not installed.
+
+        A GitHub App's user token reaches only the repositories the App is
+        *installed* on, so authorizing alone yields a working token that can
+        read nothing. The returned URL carries a single-use state that expires
+        in thirty minutes, so ask for it when it is about to be followed.
+        """
+        return self._call(
+            connector_connect_request_install,
+            self._org_uuid(),
+            body=compact({"account_id": account_id}),
+            body_model=InstallRequestInitiateSchema,
+        )
+
+    def installations(
+        self, account_id: str, *, refresh: bool = False
+    ) -> AccountInstallationsSchema:
+        """Which GitHub App installations an account can reach.
+
+        `refresh` asks GitHub again rather than trusting what is recorded.
+        Editing an installation's repositories sends no callback and no
+        reliable event, so this is how such a change is ever seen.
+        """
+        return self._call(
+            connector_account_installations,
+            self._org_uuid(),
+            account_id,
+            refresh=refresh,
+        )
+
+    def bind_installation(
+        self, account_id: str, installation_id: str
+    ) -> AccountResponseSchema:
+        """Settle which installation an account speaks for.
+
+        Somebody in two organizations that both installed the App has two, and
+        binding to whichever came back first would route the other
+        organization's events at them.
+        """
+        return self._call(
+            connector_account_bind_installation,
+            self._org_uuid(),
+            account_id,
+            body=compact({"installation_id": installation_id}),
+            body_model=InstallationBindSchema,
         )
 
     def status(self) -> dict:

@@ -270,4 +270,43 @@ export class ConnectorsNamespace {
       typeof input === "string" ? { connector_id: input } : input;
     return this.client.request(() => ConnectorsService.connectorConnectRequestCreate(organizationId, payload));
   }
+
+  /**
+   * Where to send somebody who authorized but has not installed.
+   *
+   * A GitHub App's user token reaches only repositories the App is installed
+   * on, so authorizing alone produces a working token that can read nothing.
+   * The returned URL carries a single-use state that expires in thirty
+   * minutes, so ask for it when the person is about to follow it.
+   */
+  createInstallRequest(organizationId: string, accountId: string, returnTo?: string) {
+    return this.client.request(() => ConnectorsService.connectorConnectRequestInstall(
+      organizationId,
+      { account_id: accountId, return_to: returnTo },
+    ));
+  }
+
+  /**
+   * Which GitHub App installations an account can reach.
+   *
+   * `refresh` asks the provider again rather than trusting what is recorded:
+   * editing an installation's repositories sends no callback and no reliable
+   * event, so this is how a change made on GitHub is seen.
+   */
+  accountInstallations(organizationId: string, accountId: string, refresh = false) {
+    return this.client.request(() => ConnectorsService.connectorAccountInstallations(
+      organizationId,
+      accountId,
+      refresh,
+    ));
+  }
+
+  /** Settle which installation an account speaks for, when it can reach several. */
+  bindAccountInstallation(organizationId: string, accountId: string, installationId: string) {
+    return this.client.request(() => ConnectorsService.connectorAccountBindInstallation(
+      organizationId,
+      accountId,
+      { installation_id: installationId },
+    ));
+  }
 }
