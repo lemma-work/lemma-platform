@@ -3152,14 +3152,45 @@ fn valid_ip(value: &str) -> bool {
 }
 
 fn discover_guest_ip() -> Option<String> {
-    command_stdout("ip", &["-4", "-o", "addr", "show", "scope", "global"]).and_then(|output| {
-        output.split_whitespace().find_map(|value| {
-            value
-                .split_once('/')
-                .map(|(address, _)| address)
-                .filter(|address| valid_ip(address))
-                .map(str::to_owned)
-        })
+    command_stdout("ip", &["-4", "-o", "addr", "show", "scope", "global"])
+        .as_deref()
+        .and_then(first_reachable_address)
+}
+
+/// The first address the *host* could actually connect to.
+///
+/// This used to scan the whole of `ip -o addr`'s output for the first token
+/// that looked like an address, which is right exactly as long as the first
+/// line is a real interface. On the VZ guest it is, so this was correct for
+/// years and on one platform.
+///
+/// WSL puts `10.255.255.254/32` on `lo`, with `scope global`, and `ip` lists
+/// `lo` first. So on Windows the guest reported a loopback address as the
+/// place to reach it, the host dialled it, and every connection timed out --
+/// while PostgreSQL and Redis sat listening on `eth0` and on the host's own
+/// `127.0.0.1` the whole time. Measured: during a real start, both
+/// `127.0.0.1:5432` and `172.24.27.216:5432` accepted connections from the
+/// host on every one of 44 polls, and the start still failed with
+/// "PostgreSQL: connection timed out".
+///
+/// Loopback is skipped by interface, not by address range, because that is the
+/// thing that is actually wrong with it: an address on `lo` is not somewhere
+/// another machine can reach, whatever its scope says.
+fn first_reachable_address(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        // `<index>: <interface> inet <address>/<prefix> ...`
+        let _index = fields.next()?;
+        // `eth0@if5` on a veth; the name is the part before the `@`.
+        let interface = fields.next()?.split('@').next()?;
+        if interface == "lo" {
+            return None;
+        }
+        fields
+            .find_map(|value| value.split_once('/'))
+            .map(|(address, _)| address)
+            .filter(|address| valid_ip(address))
+            .map(str::to_owned)
     })
 }
 
@@ -5568,6 +5599,53 @@ mod tests {
         assert!(guest_service.contains("HOME=/var/lib/lemma/home"));
         assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
+    }
+
+    /// WSL reports a loopback address first, and the host cannot reach it.
+    ///
+    /// `ip -4 -o addr show scope global` lists `lo` before `eth0` on WSL,
+    /// because WSL assigns `10.255.255.254/32` to `lo` for its own DNS relay
+    /// and marks it global. Taking the first address in that output therefore
+    /// told the Windows host to connect to the guest's loopback, and every
+    /// connection timed out -- while the services it wanted were listening on
+    /// `eth0` and, through WSL's own forwarding, on the host's `127.0.0.1`.
+    ///
+    /// Both fixtures are verbatim from real machines: the first from the
+    /// Windows guest as it failed, the second from the VZ guest, where the
+    /// old code was right and has to stay right.
+    #[test]
+    fn the_guest_reports_an_address_the_host_can_actually_reach() {
+        let wsl = "\
+1: lo    inet 10.255.255.254/32 brd 10.255.255.254 scope global lo\\       valid_lft forever preferred_lft forever
+2: eth0    inet 172.24.27.216/20 brd 172.24.31.255 scope global eth0\\       valid_lft forever preferred_lft forever
+";
+        assert_eq!(
+            first_reachable_address(wsl).as_deref(),
+            Some("172.24.27.216"),
+            "an address on lo is not somewhere another machine can reach it"
+        );
+
+        let vz = "2: enp0s1    inet 192.168.64.10/24 brd 192.168.64.255 scope global dynamic enp0s1\\       valid_lft 2591990sec preferred_lft 2591990sec\n";
+        assert_eq!(
+            first_reachable_address(vz).as_deref(),
+            Some("192.168.64.10")
+        );
+    }
+
+    /// A veth's name carries its peer index, and the name is the part before it.
+    #[test]
+    fn an_interface_named_after_its_peer_is_still_read_correctly() {
+        let veth = "3: eth0@if12    inet 10.4.0.7/24 brd 10.4.0.255 scope global eth0\n";
+        assert_eq!(first_reachable_address(veth).as_deref(), Some("10.4.0.7"));
+    }
+
+    #[test]
+    fn a_guest_with_only_loopback_reports_no_address_at_all() {
+        // Which is what `endpoint_host: None` is for: a guest with no lease is
+        // still healthy, it just cannot be reached from outside.
+        let only_loopback = "1: lo    inet 10.255.255.254/32 brd 10.255.255.254 scope global lo\n";
+        assert_eq!(first_reachable_address(only_loopback), None);
+        assert_eq!(first_reachable_address(""), None);
     }
 
     /// A missing data disk must stop the guest, not be waved through.
