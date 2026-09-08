@@ -12062,11 +12062,11 @@
           "mode": {
             "$ref": "#/components/schemas/PublishMode",
             "default": "CREATE",
-            "description": "CREATE refuses an existing repository. UPDATE requires an existing repository and replaces only Lemma-managed files."
+            "description": "Both modes require the repository to exist -- publishing does not create one. CREATE refuses a repository Lemma has already published to (one carrying a publish manifest), so it is what you use for a repository you just made. UPDATE requires that manifest and replaces only Lemma-managed files."
           },
           "private": {
             "default": false,
-            "description": "Create the repo as private.",
+            "description": "Recorded on the job and reported back, but not acted on: the repository already exists, so its visibility is whatever it was created with.",
             "title": "Private",
             "type": "boolean"
           },
@@ -18874,7 +18874,7 @@
     },
     "/connectors/connect-requests/oauth/callback": {
       "get": {
-        "description": "Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security. It redirects back into the app unless JSON is explicitly requested.",
+        "description": "Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security.\n\nA browser is redirected back into the app (303) carrying the outcome as query parameters: `connect` is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the account as JSON instead.",
         "operationId": "connector.oauth.callback",
         "parameters": [
           {
@@ -18894,6 +18894,7 @@
             }
           },
           {
+            "description": "Set to `json` to receive the account instead of a redirect.",
             "in": "query",
             "name": "format",
             "required": false,
@@ -18906,6 +18907,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Set to `json` to receive the account instead of a redirect.",
               "title": "Format"
             }
           }
@@ -18913,13 +18915,25 @@
         "responses": {
           "200": {
             "content": {
-              "text/html": {
+              "application/json": {}
+            },
+            "description": "The connected account, when JSON was requested."
+          },
+          "303": {
+            "description": "Redirect back into the app with the outcome."
+          },
+          "307": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "The provider rejected the authorization, or the callback carried no usable state."
           },
           "422": {
             "content": {
