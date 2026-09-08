@@ -131,15 +131,15 @@ jobs:
             ./bootstrap.sh --domain 127.0.0.1.sslip.io
           fi
 
-          # The abuse controls a real deployment wants on, and a test cast of
-          # @example.com addresses cannot get past. Appended here rather than
-          # weakened in .env.example: the shipped defaults are the correct ones.
-          cat >>.env <<'EOF'
-          AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false
-          AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false
-          AUTH_ABUSE_PROTECTION_ENABLED=false
-          AUTH_ALTCHA_ENABLED=false
-          EOF
+          # Nothing is weakened here, and the sign-up scenarios skip as a
+          # result. That is correct rather than unfortunate: `/health/capabilities`
+          # reports a deployment's security posture only in local mode, on the
+          # principle that a deployment on the internet should not answer a
+          # stranger asking which of its abuse controls are off. The suite reads
+          # that endpoint to decide what it can prove, so against a `production`
+          # target it cannot confirm the gates are down and declines to try.
+          # Turning them off in .env would therefore make this deployment less
+          # like a real one and buy no extra coverage.
 
           sed -E 's/^(POSTGRES_PASSWORD|SECRET_ENCRYPTION_KEY|WORKSPACE_RUNTIME_CREDENTIAL_KEY)=.*/\1=<generated>/' .env
 
