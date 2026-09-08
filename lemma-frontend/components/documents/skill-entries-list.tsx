@@ -2,20 +2,34 @@
 
 import type { ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
-import { AlertTriangle, Sparkles } from '@/components/ui/icons';
+import { AlertTriangle, ChevronRight, Zap } from '@/components/ui/icons';
 
+import { ProductIcon } from '@/components/pod/product-icon';
 import { Skeleton } from '@/components/shared/loading';
-import { SKILL_MANIFEST_NAME, readSkillManifest, skillManifestPath } from '@/lib/files/skills';
+import {
+    SKILL_MANIFEST_NAME,
+    readSkillManifest,
+    skillManifestPath,
+    splitSkillDescription,
+} from '@/lib/files/skills';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import type { DatastoreFile } from '@/lib/types';
+import { cn } from '@/lib/utils';
 
 /**
- * A skill row leads with the description, not the filename.
+ * Skills are cards, not file rows.
  *
- * In the folder listing a skill is `weekly-report/`, which says nothing — the
- * description is the whole basis on which an agent decides to load it, so it is
- * the one thing worth reading down the list. That costs one fetch per skill,
- * which is why this renderer is scoped to `/skills` and nothing else.
+ * In the folder listing a skill is `weekly-report/`, which says nothing, so the
+ * row led with the description instead — and a description written for a model
+ * is sixty words long. Twelve of those stacked as rows is a wall of prose in
+ * which every skill looks like every other skill, and the whole shelf reads as
+ * a folder of documents rather than as equipment an agent picks up.
+ *
+ * The card is the index card the rest of the pod already uses for its
+ * resources, filled with the three things the description actually contains:
+ * what the skill does, when it loads, and whether the runtime will take it.
+ * That costs one fetch per skill, which is why this renderer is scoped to
+ * `/skills` and nothing else.
  */
 export function SkillEntriesList({
     podId,
@@ -41,7 +55,7 @@ export function SkillEntriesList({
     });
 
     return (
-        <>
+        <div className="resource-index-grid resource-index-grid-md-2 md:grid-cols-2">
             {folders.map((folder, index) => {
                 const query = manifests[index];
                 const manifest = query?.data
@@ -50,49 +64,94 @@ export function SkillEntriesList({
                 const problem = query?.isError
                     ? `No ${SKILL_MANIFEST_NAME} in this folder — an agent cannot load it`
                     : manifest?.problem ?? null;
+                const { summary, trigger } = splitSkillDescription(manifest?.description || '');
 
                 return (
-                    <div
+                    <article
                         key={folder.id}
-                        className="surface-list-row custom-focus-ring group min-h-[3.25rem] min-w-0 gap-2 px-3 py-2 text-left text-sm"
+                        className="resource-index-card group relative min-h-[9rem] p-4"
+                        title={manifest?.description || undefined}
                     >
+                        {/* One control, the whole card — and therefore spans
+                            rather than paragraphs: a button may only contain
+                            phrasing content, which is what broke the old row's
+                            clamp. `line-clamp` brings its own `display`, so
+                            nothing here adds `block` on top of it. */}
                         <button
                             type="button"
                             onClick={() => onOpenSkill(folder.name)}
-                            className="document-space-entry-button custom-focus-ring flex min-w-0 flex-1 items-start gap-2.5 rounded text-left"
+                            className="custom-focus-ring flex min-w-0 flex-1 flex-col rounded-md text-left"
                         >
-                            <span className="flex h-5 w-5 shrink-0 items-center justify-center">
-                                <Sparkles className="h-4 w-4 text-[var(--text-tertiary)]" aria-hidden />
+                            {/* Glyph and name on one line. A skill card carries
+                                more text than a workflow card and no status of
+                                its own, so the row the other ledgers spend on an
+                                icon is a row this one spends on the description. */}
+                            <span className="flex min-w-0 items-center gap-2 pr-7">
+                                <ProductIcon kind="skills" size="lg" />
+                                <span className="resource-index-card-title truncate font-display text-base font-medium text-[var(--text-primary)]">
+                                    {folder.name}
+                                </span>
                             </span>
-                            <span className="min-w-0 flex-1">
-                                <span className="block truncate text-[var(--text-primary)]">{folder.name}</span>
-                                {query?.isPending ? (
-                                    <Skeleton className="mt-1.5 h-2.5 w-2/5" />
-                                ) : (
-                                    <span className="mt-0.5 line-clamp-1 block text-xs leading-5 text-[var(--text-tertiary)]">
-                                        {manifest?.description || 'No description — agents have nothing to match on'}
-                                    </span>
-                                )}
-                            </span>
-                            {problem ? (
+
+                            {query?.isPending ? (
+                                <span className="mt-2 flex min-h-10 flex-col gap-1.5 pt-1">
+                                    <Skeleton className="h-2.5 w-full" />
+                                    <Skeleton className="h-2.5 w-3/5" />
+                                </span>
+                            ) : (
                                 <span
-                                    className="chip chip-sm chip-pill state-badge-warning mt-0.5 hidden shrink-0 items-center gap-1 sm:inline-flex"
-                                    title={problem}
+                                    className={cn(
+                                        'resource-index-card-summary mt-2 min-h-10 text-[var(--text-secondary)]',
+                                        // Without a trigger clause the card has one
+                                        // block of text; let it use the room.
+                                        trigger ? 'line-clamp-2' : 'line-clamp-3'
+                                    )}
                                 >
-                                    <AlertTriangle className="h-3 w-3" aria-hidden />
-                                    Won&apos;t load
+                                    {summary || 'No description — agents have nothing to match on'}
+                                </span>
+                            )}
+
+                            {/* When it loads. The clause is the skill's whole
+                                interface with the agent, so it gets its own line
+                                rather than a place in the paragraph. */}
+                            {trigger ? (
+                                <span className="mt-2.5 flex gap-1.5 border-t border-[var(--border-subtle)] pt-2.5 text-xs leading-5 text-[var(--text-tertiary)]">
+                                    <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                                    <span className="line-clamp-2">{trigger}</span>
                                 </span>
                             ) : null}
-                            <span className="mt-0.5 hidden w-14 shrink-0 text-right text-xs text-[var(--text-tertiary)] sm:inline">
-                                {folder.updated_at
-                                    ? new Date(folder.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-                                    : ''}
+
+                            <span className="mt-auto flex items-center justify-between gap-2 pt-3 text-xs text-[var(--text-tertiary)]">
+                                {problem ? (
+                                    <span
+                                        className="chip chip-sm chip-pill state-badge-warning inline-flex min-w-0 items-center gap-1"
+                                        title={problem}
+                                    >
+                                        <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+                                        Won&apos;t load
+                                    </span>
+                                ) : (
+                                    <span className="truncate">
+                                        {folder.updated_at
+                                            ? `Updated ${new Date(folder.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+                                            : 'Skill'}
+                                    </span>
+                                )}
+                                <span className="inline-flex shrink-0 items-center gap-1 font-medium text-[var(--text-secondary)] opacity-0 transition-gentle group-hover:translate-x-0.5 group-hover:opacity-100">
+                                    Open
+                                    <ChevronRight className="h-3.5 w-3.5" />
+                                </span>
                             </span>
                         </button>
-                        {renderActions?.(folder)}
-                    </div>
+
+                        {/* Outside the button, over its top-right corner: a menu
+                            nested in a button is neither valid nor clickable. */}
+                        {renderActions ? (
+                            <span className="absolute right-3 top-3 z-10">{renderActions(folder)}</span>
+                        ) : null}
+                    </article>
                 );
             })}
-        </>
+        </div>
     );
 }

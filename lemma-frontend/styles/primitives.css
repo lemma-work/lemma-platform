@@ -818,6 +818,13 @@
   color: var(--collaboration);
 }
 
+/* Skills share the agents' tone deliberately: a skill is not a place of its own
+   in the nav, it is what an agent loads, and a shelf of skills in a third
+   colour would claim a room the product does not have. */
+.lemma-product-icon[data-kind="skills"][data-state] {
+  color: var(--intelligence);
+}
+
 /* Pointer feedback is motion, never weight or fill: every product glyph stays a
    `regular` outline in every state, so a row can answer the cursor without the
    icon changing how much ink it carries. Anchored on the control rather than a

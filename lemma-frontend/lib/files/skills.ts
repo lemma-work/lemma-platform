@@ -135,3 +135,56 @@ Walk through the steps. Be specific about which pod resources to touch — table
 files, connectors — and what a finished result looks like.
 `;
 }
+
+export type SkillDescriptionParts = {
+    /** What the skill does — everything before it starts naming triggers. */
+    summary: string;
+    /** When an agent should load it, verbatim: the `Use when …` clause. */
+    trigger: string;
+};
+
+/**
+ * A skill description is written for a model, and it has a shape: what the
+ * skill does, then when to load it, then which neighbouring skill to use
+ * instead. Rendered as one paragraph it is a wall of text nobody scans — which
+ * is the whole reason a shelf of skills reads as a folder of documents.
+ *
+ * The openers below are anchored to a sentence start, so `DESIGN.md` mid-clause
+ * cannot be mistaken for one. Nothing here is required: a description with no
+ * `Use when` is simply all summary, and the card renders one block.
+ */
+const TRIGGER_OPENER = /(?:^|[.!?;]\s+)(Use\s+(?:it\s+|this\s+)?(?:when|for|to)\b)/i;
+
+/**
+ * Where the trigger clause stops. `Do not use …`, `Route … instead` and
+ * `Pair with …` are routing notes between skills — true, and not what you are
+ * reading a card to find out.
+ */
+const BOUNDARY_OPENER =
+    /(?:^|[.!?;]\s+)((?:Do\s+not|Don'?t|Never)\s+use\b|Route\b|Pair\s+with\b|Skip\b|Use\s+(?:an?|the|[a-z][a-z0-9-]*\s+(?:instead|alongside))\b)/i;
+
+function openerIndex(text: string, opener: RegExp, from = 0): number | null {
+    const match = opener.exec(text.slice(from));
+    if (!match || match.index === undefined) return null;
+    return from + match.index + match[0].length - match[1].length;
+}
+
+export function splitSkillDescription(description: string): SkillDescriptionParts {
+    const text = (description || '').trim();
+    const triggerStart = openerIndex(text, TRIGGER_OPENER);
+
+    // No trigger clause, or the description is one: the whole thing is summary,
+    // minus any routing note hanging off the end.
+    if (triggerStart === null || triggerStart === 0) {
+        const boundary = openerIndex(text, BOUNDARY_OPENER);
+        const end = boundary !== null && boundary > 0 ? boundary : text.length;
+        return { summary: text.slice(0, end).trim(), trigger: '' };
+    }
+
+    const triggerEnd = openerIndex(text, BOUNDARY_OPENER, triggerStart + 1) ?? text.length;
+
+    return {
+        summary: text.slice(0, triggerStart).trim(),
+        trigger: text.slice(triggerStart, triggerEnd).trim(),
+    };
+}

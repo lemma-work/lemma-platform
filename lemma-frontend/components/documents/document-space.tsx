@@ -743,8 +743,10 @@ export function DocumentSpace({ podId }: { podId: string }) {
         const sectionCountLabel = isSkillsSection
             ? `${folderCount} skill${folderCount === 1 ? '' : 's'}`
             : `${folderCount} folders · ${fileCount} docs`;
-        /** Skill rows lead with the description; every other listing is a file list. */
+        /** Skills are index cards; every other listing is a file list. */
         const showsSkillRows = isSkillsFolder && !isSearchMode;
+        const looseSkillFiles = showsSkillRows ? docsEntries.filter((entry) => !isFolder(entry)) : [];
+        const isStockedSkillShelf = showsSkillRows && folderCount > 0;
 
         const indexingNote = 'Documents are indexed for search; data and binary files are stored as-is.';
         const dropTargetHint = isSkillsSection
@@ -1131,9 +1133,13 @@ export function DocumentSpace({ podId }: { podId: string }) {
                             without it the panel refuses to shrink and the rows
                             past the fold are simply cut off. `overflow-x-hidden`
                             keeps the rounded corners clipping rows as before. */}
+                        {/* Skills are cards and cards have their own edges, so the
+                            grid drops the panel — a frame around framed things is
+                            a box inside a box. */}
                         <div
                             className={cn(
-                                'surface-panel-quiet min-h-0 overflow-y-auto overflow-x-hidden',
+                                'min-h-0 overflow-y-auto overflow-x-hidden',
+                                showsSkillRows ? 'pb-0.5' : 'surface-panel-quiet',
                                 isFolderBlank && 'hidden'
                             )}
                         >
@@ -1186,8 +1192,14 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                         renderActions={renderEntryActions}
                                     />
                                     {/* A loose file dropped into `/skills` is not a
-                                        skill and should not pretend to be one. */}
-                                    {docsEntries.filter((entry) => !isFolder(entry)).map(renderDocRow)}
+                                        skill and should not pretend to be one — so
+                                        it stays a file row, in a file row's frame,
+                                        under the cards. */}
+                                    {looseSkillFiles.length > 0 ? (
+                                        <div className="surface-panel-quiet mt-3 overflow-hidden">
+                                            {looseSkillFiles.map(renderDocRow)}
+                                        </div>
+                                    ) : null}
                                 </>
                             ) : (
                                 docsEntries.map(renderDocRow)
@@ -1204,19 +1216,32 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                 onClick={() => docsUploadInputRef.current?.click()}
                                 disabled={isUploadingFile}
                                 className={cn(
-                                    'flex h-auto min-h-[8rem] flex-1 flex-col items-center justify-center gap-1.5 whitespace-normal rounded-lg border border-dashed border-[color:color-mix(in_srgb,var(--border-subtle)_88%,transparent)] px-6 py-8 text-center hover:border-[color:var(--border-strong)] hover:bg-[color:color-mix(in_srgb,var(--surface-2)_42%,transparent)]',
+                                    'flex h-auto flex-col items-center justify-center gap-1.5 whitespace-normal rounded-lg border border-dashed border-[color:color-mix(in_srgb,var(--border-subtle)_88%,transparent)] px-6 text-center hover:border-[color:var(--border-strong)] hover:bg-[color:color-mix(in_srgb,var(--surface-2)_42%,transparent)]',
+                                    // A shelf that already holds skills wants its
+                                    // room back: the target keeps standing, on one
+                                    // line, instead of taking a quarter of the pane
+                                    // to repeat what the cards above already show.
+                                    isStockedSkillShelf
+                                        ? 'min-h-0 shrink-0 py-3'
+                                        : 'min-h-[8rem] flex-1 py-8',
                                     isFolderBlank ? 'mt-0' : 'mt-3'
                                 )}
                             >
-                                <Upload className="h-4 w-4 text-[var(--text-tertiary)]" />
-                                <span className="text-sm text-[var(--text-secondary)]">
-                                    {isFolderBlank
-                                        ? activeSection.emptyLine
-                                        : 'Drop files here, or click to browse'}
+                                <span className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
+                                    <Upload className="h-4 w-4 text-[var(--text-tertiary)]" />
+                                    <span className="text-sm text-[var(--text-secondary)]">
+                                        {isFolderBlank
+                                            ? activeSection.emptyLine
+                                            : isStockedSkillShelf
+                                                ? 'Drop a skill folder here, or click to browse'
+                                                : 'Drop files here, or click to browse'}
+                                    </span>
                                 </span>
-                                <span className="max-w-sm text-xs leading-5 text-[var(--text-tertiary)]">
-                                    {dropTargetHint}
-                                </span>
+                                {isStockedSkillShelf ? null : (
+                                    <span className="max-w-sm text-xs leading-5 text-[var(--text-tertiary)]">
+                                        {dropTargetHint}
+                                    </span>
+                                )}
                             </Button>
                         ) : null}
                     </div>
