@@ -33,7 +33,7 @@
     color-scheme: light dark;
     --ink: #1c1812;
     --ink-soft: rgba(28, 24, 18, 0.62);
-    --ink-faint: rgba(28, 24, 18, 0.38);
+    --ink-faint: rgba(28, 24, 18, 0.66);
     --gold: #5a3fd4;
     --gold-deep: #4630b0;
     --bad: #b3382c;
@@ -61,7 +61,7 @@
     :root {
       --ink: #f2efe9;
       --ink-soft: rgba(242, 239, 233, 0.66);
-      --ink-faint: rgba(242, 239, 233, 0.40);
+      --ink-faint: rgba(242, 239, 233, 0.66);
       --gold: #9583ee;
       --gold-deep: #b3a5f5;
       --bad: #f08a72;
@@ -538,11 +538,10 @@
     font-family: var(--mono);
     font-size: 0.68rem;
     letter-spacing: 0.08em;
-    color: var(--ink-faint);
-    opacity: 0.4;
-    transition: opacity 0.3s ease;
+    color: var(--ink-soft);
+    transition: color 0.3s ease;
   }
-  .corner:hover { opacity: 1; }
+  .corner:hover { color: var(--ink); }
   .corner.left { left: 22px; display: flex; gap: 18px; }
   .corner.right { right: 22px; }
   .corner button {
@@ -551,6 +550,15 @@
     color: inherit;
   }
   .corner button:hover { color: var(--ink); }
+  /* `all: unset` removes the user-agent focus ring too, so these were the only
+     controls on the screen a keyboard user could not see themselves on. */
+  .corner button:focus-visible,
+  .log-header button:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--gold) 45%, transparent);
+    outline-offset: 3px;
+    border-radius: 3px;
+    color: var(--ink);
+  }
 
   button.cta {
     font: inherit;
@@ -697,6 +705,14 @@
       filter: none;
     }
     .progress > div { transition: none; }
+    /* Naming the animations individually left the ones that never stop --
+       `progress-shine` on every install, `button-spin` on every busy button,
+       `bloom` when the stack comes up. control.css already does it this way. */
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
   }
 </style>
 </head>
@@ -761,7 +777,7 @@
         <li>AI models and connected integrations may send data to their providers.</li>
         <li id="local-network-permission">macOS may ask for Local Network access so Lemma can reach its private virtual machine on this Mac. You can manage this in System Settings > Privacy &amp; Security > Local Network.</li>
       </ul>
-      <p class="setup-error" id="local-setup-error" hidden></p>
+      <p class="setup-error" id="local-setup-error" role="alert" hidden></p>
       <div class="confirm-actions">
         <button id="back-to-choices" type="button">Back</button>
         <button class="primary" id="confirm-local" type="button">Install local services</button>
@@ -769,7 +785,12 @@
     </div>
   </section>
 
-  <div class="operation-status" id="operation-status" hidden aria-live="polite">
+  <!-- Not a live region. `showOperationStatus` calls `say()`, so the phase is
+       already announced through the statement above, once per phase. What is
+       left here is the byte counter and the estimate, which change every
+       second or so: announcing those re-read the whole progress line to a
+       screen reader every tick, for the length of a 473 MB download. -->
+  <div class="operation-status" id="operation-status" hidden>
     <span class="operation-detail" id="operation-detail"></span>
     <span class="operation-meta" id="operation-meta"></span>
   </div>
@@ -777,7 +798,7 @@
   <p class="whisper" id="whisper"></p>
 
   <button class="cta" id="open-app" type="button" hidden>Open Lemma</button>
-  <div id="errwrap" hidden>
+  <div id="errwrap" role="alert" hidden>
     <p class="errbox" id="errdetail"></p>
     <div class="err-actions">
       <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
@@ -805,8 +826,8 @@
         <button id="close-log" type="button">Close</button>
       </div>
     </div>
-    <div class="log-tabs" id="log-tabs" role="tablist"></div>
-    <pre class="log" id="log"></pre>
+    <div class="log-tabs" id="log-tabs" role="tablist" aria-label="Log sources"></div>
+    <pre class="log" id="log" role="tabpanel" tabindex="0"></pre>
   </div>
 </div>
 
@@ -915,6 +936,10 @@
   };
   const READY_LINE = "It's ready. Opening Lemma.";
   const openIntent = new URLSearchParams(location.search).get("intent");
+  // This window was opened to watch something stop. The daemon can still emit
+  // a snapshot taken before the stop began, and acting on its `ready` would
+  // navigate the user into a workspace whose services are going away.
+  const isShuttingDown = openIntent === "quit" || openIntent === "stop";
 
   const scene = document.getElementById("scene");
   const lineEl = document.getElementById("line");
@@ -1043,6 +1068,7 @@
     openBtn.removeAttribute("aria-busy");
   }
   function scheduleReadyOpen() {
+    if (isShuttingDown) return;
     clearTimeout(readyOpenTimer);
     readyOpenTimer = setTimeout(async () => {
       if (!lastState?.ready || lastState.error) return;
@@ -1140,6 +1166,20 @@
     showRecoveryButtons(false, false);
 
     const voice = VOICE[s.phaseKey] || VOICE.boot;
+    // A snapshot taken before the stop was admitted still says ready. Saying
+    // so here would offer to open a workspace that is being shut down, and
+    // `scheduleReadyOpen` would then take that offer on the user's behalf.
+    if (s.ready && isShuttingDown) {
+      clearPrimaryBusy();
+      say(VOICE.stopping[0]);
+      truth.textContent = VOICE.stopping[1];
+      openBtn.hidden = true;
+      whisper.classList.remove("on");
+      stopWhispers();
+      progressEl.classList.add("active");
+      bar.style.width = "100%";
+      return;
+    }
     if (s.ready) {
       clearPrimaryBusy();
       hideOperationStatus();
@@ -1260,17 +1300,49 @@
     logEl.textContent = sections.join("\n");
     logEl.scrollTop = logEl.scrollHeight;
   }
+  // A `role="tablist"` whose children are plain buttons is worse than no role
+  // at all: it announces a tab list and then nothing inside it is a tab, the
+  // selected one is distinguishable only by colour, and arrow keys do nothing.
   function renderLogTabs(sources) {
+    // Choosing a source re-reads the log, which re-renders these buttons and
+    // destroys the one that was focused -- dropping keyboard focus to the
+    // document. Arrow-keying through the sources would move focus once and
+    // then lose it.
+    const hadFocus = logTabs.contains(document.activeElement);
     logTabs.innerHTML = "";
     for (const source of sources || []) {
       const button = document.createElement("button");
       button.type = "button";
+      button.id = `log-tab-${source.id}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", "log");
+      const selected = source.id === activeLogSource;
+      button.setAttribute("aria-selected", String(selected));
+      // One stop for the whole set, as the tabs pattern requires: Tab reaches
+      // the list, then Left/Right move within it.
+      button.tabIndex = selected ? 0 : -1;
       button.textContent = source.label;
-      button.classList.toggle("active", source.id === activeLogSource);
+      button.classList.toggle("active", selected);
       button.addEventListener("click", () => selectLogSource(source.id));
       logTabs.appendChild(button);
+      if (selected) {
+        logEl.setAttribute("aria-labelledby", button.id);
+        if (hadFocus) button.focus();
+      }
     }
   }
+
+  logTabs.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    const tabs = [...logTabs.querySelectorAll('[role="tab"]')];
+    const current = tabs.indexOf(document.activeElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const next = tabs[(current + step + tabs.length) % tabs.length];
+    next.focus();
+    next.click();
+  });
   async function refreshDiagnosticLog({ append = false } = {}) {
     try {
       const snapshot = await window.lemmaDesktop.diagnosticLogs(
@@ -1416,7 +1488,13 @@
    */
   let recoveryOffered = false;
   document.getElementById("open-recovery").addEventListener("click", () => {
-    window.lemmaDesktop.openRecovery?.().catch((error) => { errdetail.textContent = String(error); });
+    window.lemmaDesktop.openRecovery?.().catch((error) => {
+      errdetail.textContent = String(error);
+      // The box this writes into is hidden unless a failing state put it on
+      // screen, and a Local settings window that will not open is not a
+      // failing state. So the reason was written somewhere nobody could read.
+      errwrap.hidden = false;
+    });
   });
   async function showRecoveryButtons(offer, dataIsUnreadable) {
     if (!offer) {
@@ -1516,6 +1594,11 @@
     hideOperationStatus();
     say("Set up Lemma on this Mac?");
     truth.textContent = "review before installation";
+    // The button that was focused has just been hidden, which drops focus to
+    // <body>: a keyboard user lands nowhere and a screen reader announces
+    // nothing. `showChooser` already moves focus on the way in; this is the
+    // same courtesy on the way forward.
+    confirmLocalBtn.focus({ preventScroll: true });
   }
   function hideConnectionChoice() {
     scene.classList.remove("choosing", "welcoming");

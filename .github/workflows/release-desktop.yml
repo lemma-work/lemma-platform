@@ -601,6 +601,40 @@ jobs:
           print("update feed verified:", feed["version"])
           '
 
+      # GitHub re-points `latest` the moment a non-prerelease is published, and
+      # this workflow runs *after* that -- so between the publish and the step
+      # above, `releases/latest/download/latest.json` resolves to a release that
+      # does not have one yet. Every installed app polls exactly that URL, so a
+      # release that fails anywhere in between (notarization, the runtime-asset
+      # wait, signing) leaves the whole stable channel unable to check for
+      # updates, and the previous good feed unreachable behind it.
+      #
+      # Marking the release a prerelease hands `latest` back to the last release
+      # that does have a feed. It is reversible in one click once the release is
+      # repaired, and it is the only action here that restores the invariant
+      # without republishing anything.
+      - name: Hand `latest` back to the previous release if this one has no feed
+        if: failure() && github.event.release.prerelease != true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          # No -e: this runs because something already failed, and its own
+          # failure must not replace that one in the log.
+          set -uo pipefail
+          if gh release view "${TAG}" --json assets \
+              --jq '.assets[].name' 2>/dev/null | grep -qx 'latest.json'; then
+            echo "${TAG} already carries a feed; leaving it as the latest release."
+            exit 0
+          fi
+          echo "::warning title=Demoting a release with no update feed::" \
+               "${TAG} failed before publishing latest.json. Marking it a" \
+               "prerelease so installed apps keep seeing the previous feed."
+          gh release edit "${TAG}" --prerelease \
+            || echo "::error title=Could not demote ${TAG}::" \
+                    "The stable update feed may be unreachable until this is fixed by hand."
+
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"

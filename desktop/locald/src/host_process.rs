@@ -1,10 +1,11 @@
+use crate::port_reservation::PortReservation;
 // Only the Windows stop path needs it; elsewhere flags go on directly.
 #[cfg(windows)]
 use crate::NoConsoleWindow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -308,7 +309,7 @@ pub struct HostProcessManager {
     startup_in_progress: AtomicBool,
     dependency_ready: AtomicBool,
     dependency_error: Mutex<Option<String>>,
-    idle_port_reservations: Mutex<HashMap<u16, TcpListener>>,
+    idle_port_reservations: Mutex<HashMap<u16, PortReservation>>,
     runtime_generation: Mutex<String>,
     generation_prepared: AtomicBool,
     process_ledger_path: PathBuf,
@@ -2029,7 +2030,9 @@ fn random_generation() -> io::Result<String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn reserve_managed_app_ports(manifest: &HostPackManifest) -> io::Result<HashMap<u16, TcpListener>> {
+fn reserve_managed_app_ports(
+    manifest: &HostPackManifest,
+) -> io::Result<HashMap<u16, PortReservation>> {
     let Some(runtime) = manifest.managed_runtime.as_ref() else {
         return Ok(HashMap::new());
     };
@@ -2040,8 +2043,22 @@ fn reserve_managed_app_ports(manifest: &HostPackManifest) -> io::Result<HashMap<
     Ok(reservations)
 }
 
-fn bind_idle_port(port: u16) -> io::Result<TcpListener> {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, port)).map_err(|error| {
+/// Hold a workspace port while nothing is serving it.
+///
+/// A `PortReservation`, not a `TcpListener`, and the difference is the whole
+/// of a defect. A listening socket with nobody accepting completes the TCP
+/// handshake and then says nothing, so every caller that asks "is the backend
+/// up yet?" -- locald's own health gate, the app, a browser -- connects
+/// successfully and hangs until it gives up. On a Windows machine where the
+/// backend had failed to start, that turned "the backend is not running" into
+/// "backend failed health gate: connection timed out", which is the same
+/// message a slow machine produces and points at nothing.
+///
+/// `PortReservation` binds without listening, which is exactly the behaviour
+/// an idle port already has: the connection is refused. Its own module comment
+/// says so, and this was the one place holding a port that did not use it.
+fn bind_idle_port(port: u16) -> io::Result<PortReservation> {
+    PortReservation::at_loopback_port(port).map_err(|error| {
         io::Error::new(
             error.kind(),
             format!("could not reserve Lemma's local port {port}: {error}"),
@@ -2590,6 +2607,56 @@ mod tests {
     // Only the unix tests spawn a real supervised process to bind a port.
     #[cfg(unix)]
     use crate::port_reservation::PortReservation;
+
+    /// A port nothing is serving must not accept a connection.
+    ///
+    /// locald holds the workspace ports while the stack is down so nothing
+    /// else takes them. It held them with a *listening* socket, and a
+    /// listening socket with nobody accepting completes the handshake and then
+    /// says nothing at all. Everything that asks "is the backend up yet?" --
+    /// locald's own health gate first among them -- connected successfully and
+    /// then waited until it gave up.
+    ///
+    /// Seen on Windows as `backend failed health gate: connection timed out`,
+    /// which is the same message a slow machine produces and points at
+    /// nothing. `netstat` showed lemma-locald LISTENING on both workspace
+    /// ports with no python or node process alive, and a connection to them
+    /// succeeding in 0 ms.
+    ///
+    /// The test does both halves, so the difference is the assertion rather
+    /// than a claim about it. It asserts only that the held port does not
+    /// *accept*: whether the refusal arrives as a reset or as silence is the
+    /// platform's choice, and macOS drops the SYN where Windows resets.
+    #[test]
+    fn an_idle_workspace_port_does_not_accept_connections() {
+        use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+
+        // A port the OS has just handed back, so nothing else is on it.
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+
+        // What holding it used to do.
+        let listening = TcpListener::bind(address).unwrap();
+        assert!(
+            TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok(),
+            "a listening socket nobody accepts on still completes the handshake, \
+             which is what turned 'the backend is not running' into a timeout"
+        );
+        drop(listening);
+
+        // What it does now.
+        let held = bind_idle_port(port).expect("the port is free to hold");
+        assert!(
+            TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err(),
+            "a held port has to look like an idle one to anything asking \
+             whether the backend is up"
+        );
+        // And it really is held: nothing else could take it meanwhile.
+        assert!(TcpListener::bind(address).is_err());
+        drop(held);
+    }
     use std::net::{Ipv4Addr, TcpListener};
     use tempfile::{tempdir, TempDir};
 

@@ -16,6 +16,22 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const PROTOCOL_VERSION: u64 = 1;
 pub const VSOCK_PORT: u32 = 42_411;
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
+/// Where guestd reaches the guest's own services.
+///
+/// The core containers run with host networking, so they listen on every
+/// address in the guest's namespace and loopback reaches them exactly as the
+/// DHCP-assigned address does -- without needing one. That matters because
+/// the lease comes from vmnet, which macOS Local Network privacy can withhold
+/// from the responsible app: readiness that went through the routable address
+/// turned a denied permission into a guest that never reported ready at all.
+const GUEST_LOOPBACK: &str = "127.0.0.1";
+/// Connections served at once. The host keeps one control connection plus a
+/// probe, so this is generous; it exists so a caller that opens sockets and
+/// never closes them cannot spawn threads without limit.
+///
+/// Only the vsock listener accepts connections, and that is Linux-only.
+#[cfg(target_os = "linux")]
+const MAX_CONCURRENT_CONNECTIONS: usize = 32;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const CONTAINER_PREFIX: &str = "lemma-sandbox-";
 const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
@@ -458,15 +474,29 @@ enum ImageWarmupState {
     Finished(Result<(), GuestError>),
 }
 
+/// Whether an operation only reads guest state.
+///
+/// Observation answers concurrently; everything else is serialised. Anything
+/// not named here is treated as a mutation, so a new operation is safe by
+/// default and only becomes concurrent when someone says it may.
+fn is_observation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "health" | "core.status" | "core.sandbox_images_status" | "sandbox.status" | "sandbox.list"
+    ) || operation.starts_with("diagnostics.")
+}
+
 pub struct GuestService<E: Engine> {
     engine: Arc<E>,
     state_root: PathBuf,
-    endpoint_host: String,
+    endpoint_host: Option<String>,
     dynamic_endpoint_host: bool,
     host_gateway: String,
     capability: Option<String>,
     kernel_taint_path: Option<PathBuf>,
     image_warmups: Arc<Mutex<HashMap<SandboxImageSet, ImageWarmupState>>>,
+    /// Held for the duration of every mutating operation. See `handle`.
+    mutations: Arc<Mutex<()>>,
 }
 
 impl<E: Engine> Clone for GuestService<E> {
@@ -479,6 +509,7 @@ impl<E: Engine> Clone for GuestService<E> {
             host_gateway: self.host_gateway.clone(),
             capability: self.capability.clone(),
             kernel_taint_path: self.kernel_taint_path.clone(),
+            mutations: Arc::clone(&self.mutations),
             image_warmups: Arc::clone(&self.image_warmups),
         }
     }
@@ -493,9 +524,18 @@ impl GuestService<NerdctlEngine> {
             .ok()
             .filter(|value| valid_ip(value));
         let dynamic_endpoint_host = configured_endpoint_host.is_none();
-        let endpoint_host = configured_endpoint_host
-            .or_else(discover_guest_ip)
-            .ok_or_else(|| GuestError::engine("could not discover the guest IPv4 address"))?;
+        // Not fatal when it is absent.
+        //
+        // This address comes from the vmnet DHCP lease, which is exactly what
+        // macOS Local Network privacy can withhold from the responsible app.
+        // Refusing to start without it meant a denied permission put guestd
+        // into a systemd restart loop: the vsock control port never listened,
+        // the host waited out its two minutes and reported "managed guest did
+        // not become ready", and the private service bridges -- which need no
+        // lease at all -- were never given the chance to work. The address is
+        // needed for the host to reach a *sandbox*, so that is what fails
+        // without it, by name, and the rest of the guest serves.
+        let endpoint_host = configured_endpoint_host.or_else(discover_guest_ip);
         let host_gateway = std::env::var("LEMMA_HOST_GATEWAY")
             .ok()
             .filter(|value| valid_ip(value))
@@ -522,11 +562,12 @@ impl<E: Engine + 'static> GuestService<E> {
     pub fn new(
         engine: E,
         state_root: PathBuf,
-        endpoint_host: String,
+        endpoint_host: Option<String>,
         host_gateway: String,
         capability: Option<String>,
     ) -> Result<Self, GuestError> {
-        if !valid_ip(&endpoint_host) || !valid_ip(&host_gateway) {
+        if endpoint_host.as_deref().is_some_and(|host| !valid_ip(host)) || !valid_ip(&host_gateway)
+        {
             return Err(GuestError::invalid(
                 "endpoint_host and host_gateway must be literal IP addresses",
             ));
@@ -544,15 +585,38 @@ impl<E: Engine + 'static> GuestService<E> {
             capability,
             kernel_taint_path: None,
             image_warmups: Arc::new(Mutex::new(HashMap::new())),
+            mutations: Arc::new(Mutex::new(())),
         })
     }
 
-    fn current_endpoint_host(&self) -> String {
+    /// The address the *host* can reach this guest on, if it has one.
+    ///
+    /// `None` means no DHCP lease -- see `discover`. Everything that only needs
+    /// to reach the guest's own services uses `GUEST_LOOPBACK` instead and is
+    /// unaffected.
+    fn current_endpoint_host(&self) -> Option<String> {
         if self.dynamic_endpoint_host {
-            discover_guest_ip().unwrap_or_else(|| self.endpoint_host.clone())
+            discover_guest_ip().or_else(|| self.endpoint_host.clone())
         } else {
             self.endpoint_host.clone()
         }
+    }
+
+    /// The guest address, or a named failure for the callers that need one.
+    ///
+    /// Only reached by operations that hand the host somewhere to connect --
+    /// a sandbox's URL. Core services do not, because the host reaches those
+    /// over the private socket bridges.
+    fn routable_endpoint_host(&self) -> Result<String, GuestError> {
+        self.current_endpoint_host().ok_or_else(|| GuestError {
+            code: "guest_network_unavailable".into(),
+            message: "The private runtime has no network address, so sandboxes \
+                      cannot be reached. On macOS this is what a denied Local \
+                      Network permission looks like."
+                .into(),
+            retryable: true,
+            status_code: 503,
+        })
     }
 
     pub fn handle(&self, request: GuestRequest) -> GuestResponse {
@@ -583,6 +647,23 @@ impl<E: Engine + 'static> GuestService<E> {
         {
             self.check_kernel_health()?;
         }
+        // Everything that changes the guest runs one at a time, exactly as it
+        // did when a single connection carried every request. Observation --
+        // health above all -- deliberately does not take this lock: the host
+        // probes health every five seconds with a five second budget, and a
+        // `sandbox.ensure` waiting on a callback can legitimately hold the
+        // guest for far longer. When one queue served both, that wait timed
+        // the probe out, the host concluded the runtime was gone, and it tore
+        // down the database forwarders under a running backend.
+        let _serialised = if is_observation(&request.operation) {
+            None
+        } else {
+            Some(
+                self.mutations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            )
+        };
         match request.operation.as_str() {
             "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
@@ -928,7 +1009,14 @@ impl<E: Engine + 'static> GuestService<E> {
         let endpoint_host = self.current_endpoint_host();
         Ok(json!({
             "status": "ready", "engine": "containerd",
+            // Null when the guest holds no DHCP lease. The guest is still
+            // serving -- core services reach the host over the private socket
+            // bridges -- but nothing can reach a sandbox, and the host needs
+            // to be able to tell that apart from a guest that is simply gone.
             "endpoint_host": endpoint_host,
+            "network": {
+                "leased": endpoint_host.is_some(),
+            },
             "host_gateway": self.host_gateway,
             "active_sandboxes": active_sandboxes,
             // Reported on every health call so a drifting guest clock is
@@ -1058,7 +1146,9 @@ impl<E: Engine + 'static> GuestService<E> {
                     "running": running,
                     "state": state_name,
                     "exit_code": exit_code,
-                    "endpoint": format!("{endpoint_host}:{port}"),
+                    "endpoint": endpoint_host
+                        .as_ref()
+                        .map(|host| format!("{host}:{port}")),
                 }),
             );
         }
@@ -1671,9 +1761,8 @@ impl<E: Engine + 'static> GuestService<E> {
     fn wait_tcp(&self, port: u16, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            let endpoint_host = self.current_endpoint_host();
             if TcpStream::connect_timeout(
-                &format!("{endpoint_host}:{port}")
+                &format!("{GUEST_LOOPBACK}:{port}")
                     .to_socket_addrs()
                     .map_err(|error| GuestError::engine(error.to_string()))?
                     .next()
@@ -1694,7 +1783,7 @@ impl<E: Engine + 'static> GuestService<E> {
     fn wait_http_port(&self, port: u16, path: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            let url = format!("http://{}:{port}{path}", self.current_endpoint_host());
+            let url = format!("http://{GUEST_LOOPBACK}:{port}{path}");
             if probe_http(&url).is_ok() {
                 return Ok(());
             }
@@ -1708,7 +1797,7 @@ impl<E: Engine + 'static> GuestService<E> {
     fn wait_redis(&self, password: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            if redis_ready(&self.current_endpoint_host(), password).is_ok() {
+            if redis_ready(GUEST_LOOPBACK, password).is_ok() {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(250));
@@ -2045,7 +2134,7 @@ impl<E: Engine + 'static> GuestService<E> {
         Ok(Some(snapshot_from_inspect(
             sandbox_id,
             inspect,
-            &self.current_endpoint_host(),
+            &self.routable_endpoint_host()?,
         )?))
     }
 
@@ -2426,9 +2515,19 @@ impl<E: Engine + 'static> GuestService<E> {
             }
             thread::sleep(Duration::from_millis(250));
         }
-        Err(GuestError::engine(format!(
-            "sandbox cannot reach the Lemma API callback: {}",
-            last_error.unwrap_or_else(|| "probe timed out".into())
+        // Say which way the network is broken, while the evidence is fresh.
+        //
+        // "sandbox cannot reach the Lemma API callback: probe timed out" is
+        // true of a denied Local Network permission, a VPN that took the
+        // default route, a host relay that failed to bind, and a sandbox that
+        // simply has not finished starting -- and it distinguishes none of
+        // them. `diagnostics.network` could answer that, and nothing called
+        // it. Guest egress working while the callback fails points at the
+        // host's relay; egress failing points outside Lemma altogether.
+        let network = network_diagnostics();
+        Err(GuestError::engine(callback_failure_message(
+            last_error.as_deref(),
+            network["dns_ok"] == json!(true),
         )))
     }
 }
@@ -3053,14 +3152,45 @@ fn valid_ip(value: &str) -> bool {
 }
 
 fn discover_guest_ip() -> Option<String> {
-    command_stdout("ip", &["-4", "-o", "addr", "show", "scope", "global"]).and_then(|output| {
-        output.split_whitespace().find_map(|value| {
-            value
-                .split_once('/')
-                .map(|(address, _)| address)
-                .filter(|address| valid_ip(address))
-                .map(str::to_owned)
-        })
+    command_stdout("ip", &["-4", "-o", "addr", "show", "scope", "global"])
+        .as_deref()
+        .and_then(first_reachable_address)
+}
+
+/// The first address the *host* could actually connect to.
+///
+/// This used to scan the whole of `ip -o addr`'s output for the first token
+/// that looked like an address, which is right exactly as long as the first
+/// line is a real interface. On the VZ guest it is, so this was correct for
+/// years and on one platform.
+///
+/// WSL puts `10.255.255.254/32` on `lo`, with `scope global`, and `ip` lists
+/// `lo` first. So on Windows the guest reported a loopback address as the
+/// place to reach it, the host dialled it, and every connection timed out --
+/// while PostgreSQL and Redis sat listening on `eth0` and on the host's own
+/// `127.0.0.1` the whole time. Measured: during a real start, both
+/// `127.0.0.1:5432` and `172.24.27.216:5432` accepted connections from the
+/// host on every one of 44 polls, and the start still failed with
+/// "PostgreSQL: connection timed out".
+///
+/// Loopback is skipped by interface, not by address range, because that is the
+/// thing that is actually wrong with it: an address on `lo` is not somewhere
+/// another machine can reach, whatever its scope says.
+fn first_reachable_address(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        // `<index>: <interface> inet <address>/<prefix> ...`
+        let _index = fields.next()?;
+        // `eth0@if5` on a veth; the name is the part before the `@`.
+        let interface = fields.next()?.split('@').next()?;
+        if interface == "lo" {
+            return None;
+        }
+        fields
+            .find_map(|value| value.split_once('/'))
+            .map(|(address, _)| address)
+            .filter(|address| valid_ip(address))
+            .map(str::to_owned)
     })
 }
 
@@ -3256,6 +3386,9 @@ fn handle_stream<R: Read, W: Write, E: Engine + 'static>(
 pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result<()> {
     use std::mem::{size_of, zeroed};
     use std::os::fd::{FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let connections = Arc::new(AtomicUsize::new(0));
 
     // SAFETY: all libc calls use initialized Linux sockaddr_vm values, checked
     // return codes, and OwnedFd closes each accepted descriptor exactly once.
@@ -3297,7 +3430,35 @@ pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result
             let connection = OwnedFd::from_raw_fd(accepted);
             let reader = std::fs::File::from(connection.try_clone()?);
             let writer = std::fs::File::from(connection);
-            let _ = handle_stream(reader, writer, service);
+            // One thread per connection, rather than serving each to
+            // completion inside the accept loop. The host opens a separate
+            // connection for its health probe, and while this loop answered
+            // one request at a time a long operation -- a callback wait, an
+            // image pull -- left every later connection sitting in the listen
+            // backlog until it finished. The probe timed out and the host
+            // concluded the guest was gone. Mutating operations are still
+            // serialised, inside `handle`.
+            if connections.load(Ordering::Acquire) >= MAX_CONCURRENT_CONNECTIONS {
+                // Closing is the honest answer: the host retries, and an
+                // unbounded thread per connection is a worse failure than a
+                // refused one.
+                drop(reader);
+                drop(writer);
+                continue;
+            }
+            connections.fetch_add(1, Ordering::AcqRel);
+            let service = service.clone();
+            let owned = Arc::clone(&connections);
+            if let Err(error) = thread::Builder::new()
+                .name("guestd-connection".into())
+                .spawn(move || {
+                    let _ = handle_stream(reader, writer, &service);
+                    owned.fetch_sub(1, Ordering::AcqRel);
+                })
+            {
+                connections.fetch_sub(1, Ordering::AcqRel);
+                return Err(error);
+            }
         }
         #[allow(unreachable_code)]
         drop(_listener);
@@ -3349,6 +3510,24 @@ pub fn probe_http(url: &str) -> io::Result<()> {
     } else {
         Err(io::Error::other(format!("health returned {status}")))
     }
+}
+
+/// Explain a failed sandbox callback, including which side of it is broken.
+///
+/// "sandbox cannot reach the Lemma API callback: probe timed out" is equally
+/// true of a denied Local Network permission, a VPN that took the default
+/// route, a host relay that failed to bind, and a sandbox that has not
+/// finished starting -- and it distinguishes none of them. `diagnostics.network`
+/// could answer that, and until now nothing ever called it.
+fn callback_failure_message(last_error: Option<&str>, guest_egress_ok: bool) -> String {
+    let cause = last_error.unwrap_or("probe timed out");
+    let egress = if guest_egress_ok {
+        "the guest's own network is working, so this is the route back to this computer"
+    } else {
+        "the guest cannot resolve names either, so its network is unavailable rather than \
+         just this route"
+    };
+    format!("sandbox cannot reach the Lemma API callback: {cause}. {egress}.")
 }
 
 fn network_diagnostics() -> Value {
@@ -3534,7 +3713,7 @@ mod tests {
                 invalid: Mutex::new(std::collections::HashSet::new()),
             },
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -3590,6 +3769,244 @@ mod tests {
         assert_eq!(response["result"]["ready"], true);
     }
 
+    /// Health must answer while a mutation is still running.
+    ///
+    /// Context: the host probes health every five seconds and gives it five,
+    /// but the guest served one request at a time -- and a `sandbox.ensure`
+    /// waiting on a callback holds it for up to five minutes. Every probe
+    /// behind one of those timed out, the host read that as "the runtime is
+    /// gone", and tore down the Postgres and Redis forwarders under a backend
+    /// that was using them.
+    ///
+    /// What this test covers, precisely: that the mutation lock added with the
+    /// fix does not itself become the queue that was just removed. The other
+    /// half -- serving each connection on its own thread -- lives in
+    /// `serve_vsock` behind a Linux `cfg` and needs a booted guest, so it is
+    /// qualified by `check_guest_lifecycle.py` rather than here. Do not read a
+    /// pass here as proof that the host's probe is safe end to end.
+    #[test]
+    fn health_answers_while_a_mutation_is_still_running() {
+        let root = tempdir().unwrap();
+        let (release, receiver) = std::sync::mpsc::channel();
+        let (started, downloads) = std::sync::mpsc::channel();
+        let service = GuestService::new(
+            GatedPullEngine {
+                release: Mutex::new(receiver),
+                started,
+                present: Mutex::new(std::collections::HashSet::new()),
+                invalid: Mutex::new(std::collections::HashSet::new()),
+            },
+            root.path().into(),
+            Some("192.168.64.2".into()),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let parameters = json!({
+            "images": {"postgres": "pg@sha256:test", "redis": "redis@sha256:test",
+                "supertokens": "auth@sha256:test",
+                "workspace": "ghcr.io/lemma/workspace@sha256:blocked",
+                "function": "ghcr.io/lemma/function@sha256:blocked"},
+            "credentials": {"postgres_password": "a".repeat(64), "redis_password": "b".repeat(64)},
+        });
+
+        // A mutation that will not return until the test releases it.
+        let blocking = service.clone();
+        let blocked = thread::spawn(move || {
+            blocking.handle(GuestRequest {
+                version: 1,
+                operation: "core.images".into(),
+                parameters: parameters.clone(),
+                capability: None,
+            })
+        });
+        // Wait until it is genuinely inside the engine, holding the lock.
+        downloads.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let answered = service.handle(GuestRequest {
+            version: 1,
+            operation: "health".into(),
+            parameters: json!({}),
+            capability: None,
+        });
+        assert!(
+            answered.ok,
+            "health must not queue behind a mutation: {:?}",
+            answered.error
+        );
+
+        release.send(true).unwrap();
+        release.send(true).unwrap();
+        let _ = blocked.join().unwrap();
+    }
+
+    /// A failed callback has to say which side of it is broken.
+    ///
+    /// Both readings end with a sandbox that cannot reach the API, and the
+    /// remedies have nothing in common: one is a permission or a VPN on this
+    /// computer, the other is Lemma's own relay. The guest already knew the
+    /// answer -- `diagnostics.network` -- and nothing asked it.
+    #[test]
+    fn a_failed_callback_distinguishes_the_route_from_the_network() {
+        let relay = callback_failure_message(Some("connection refused"), true);
+        assert!(relay.contains("connection refused"), "{relay}");
+        assert!(
+            relay.contains("route back to this computer"),
+            "guest egress working points at the host's relay: {relay}"
+        );
+
+        let network = callback_failure_message(None, false);
+        assert!(
+            network.contains("probe timed out"),
+            "an absent cause still needs describing: {network}"
+        );
+        assert!(
+            network.contains("network is unavailable"),
+            "no name resolution at all is a different problem: {network}"
+        );
+        assert!(
+            !network.contains("route back to this computer"),
+            "the two readings must not both appear: {network}"
+        );
+    }
+
+    /// A guest with no DHCP lease still serves.
+    ///
+    /// The lease comes from vmnet, which is exactly what macOS Local Network
+    /// privacy withholds from the responsible app. `discover` used to refuse to
+    /// start without one, so a denied permission put guestd into a systemd
+    /// restart loop: the vsock control port never listened, the host waited out
+    /// its two minutes and said "managed guest did not become ready", and the
+    /// private service bridges -- which need no lease at all -- never got the
+    /// chance to work. The app looked dead for a permission that only affects
+    /// reaching sandboxes.
+    #[test]
+    fn a_guest_without_a_network_lease_still_reports_ready() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(vec![output(true, "")]),
+            root.path().into(),
+            None,
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let response = service.handle(GuestRequest {
+            version: 1,
+            operation: "health".into(),
+            parameters: json!({}),
+            capability: None,
+        });
+
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.unwrap();
+        assert_eq!(result["status"], "ready");
+        assert_eq!(
+            result["endpoint_host"],
+            Value::Null,
+            "an address it does not have must not be invented"
+        );
+        assert_eq!(
+            result["network"]["leased"], false,
+            "the host has to be able to tell this apart from a guest that died"
+        );
+    }
+
+    /// What the missing lease actually costs, said by name.
+    #[test]
+    fn without_a_lease_only_sandbox_addresses_are_refused() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(Vec::new()),
+            root.path().into(),
+            None,
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let error = service.routable_endpoint_host().unwrap_err();
+        assert_eq!(error.code, "guest_network_unavailable");
+        assert!(
+            error.retryable,
+            "granting the permission fixes it, so this must not be terminal"
+        );
+        assert!(
+            error.message.contains("Local Network"),
+            "the message has to name the cause somebody can act on: {}",
+            error.message
+        );
+    }
+
+    /// Readiness must not depend on the lease either.
+    ///
+    /// The core containers run with host networking, so they answer on
+    /// loopback in the guest's own namespace. Probing them through the
+    /// routable address is what tied startup to a permission that has nothing
+    /// to do with whether Postgres came up.
+    #[test]
+    fn core_readiness_probes_do_not_need_a_routable_address() {
+        let root = tempdir().unwrap();
+        // A stand-in for a core container: host networking means it answers on
+        // every address in the guest's namespace, loopback included.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let service = GuestService::new(
+            FakeEngine::new(Vec::new()),
+            root.path().into(),
+            None, // No DHCP lease, as when Local Network is denied.
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        service
+            .wait_tcp(port, 5)
+            .expect("readiness must not depend on a lease it may never get");
+    }
+
+    /// The other half: two mutations still may not interleave. Concurrency was
+    /// added for observation, not for `core.postgres` racing itself.
+    #[test]
+    fn mutations_are_still_served_one_at_a_time() {
+        assert!(is_observation("health"));
+        assert!(is_observation("core.status"));
+        assert!(is_observation("core.sandbox_images_status"));
+        assert!(is_observation("sandbox.status"));
+        assert!(is_observation("sandbox.list"));
+        assert!(is_observation("diagnostics.network"));
+        assert!(is_observation("diagnostics.sandbox"));
+
+        for mutation in [
+            "core.ensure",
+            "core.images",
+            "core.sandbox_images",
+            "core.postgres",
+            "core.redis",
+            "core.supertokens",
+            "core.stop",
+            "core.reset_data",
+            "sandbox.ensure",
+            "sandbox.release",
+            "sandbox.delete",
+            "sandbox.purge",
+            "sandbox.purge_storage",
+            "system.shutdown",
+            "system.clock",
+            // Unknown operations are mutations by default, so a new one is
+            // safe until someone deliberately says it only reads.
+            "core.something_added_later",
+        ] {
+            assert!(
+                !is_observation(mutation),
+                "{mutation} must stay serialised against other mutations"
+            );
+        }
+    }
+
     #[test]
     fn image_repair_and_failed_download_retries_leave_health_responsive() {
         for initially_corrupt in [false, true] {
@@ -3610,7 +4027,7 @@ mod tests {
                     invalid: Mutex::new(present),
                 },
                 root.path().into(),
-                "192.168.64.2".into(),
+                Some("192.168.64.2".into()),
                 "192.168.64.1".into(),
                 None,
             )
@@ -3881,7 +4298,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -3924,7 +4341,7 @@ mod tests {
                 output(true, ""),         // volume rm lemma-redis-data
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -3991,7 +4408,7 @@ mod tests {
                 output(true, "18\n"), // postgres_image_major: what does the image ship
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4036,7 +4453,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![inspect, output(true, "18\n")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4061,7 +4478,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![inspect, output(false, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4084,7 +4501,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, ""), warning]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4115,7 +4532,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, ""), output(false, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4221,7 +4638,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![shutting_down, output(true, "1\n")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4253,7 +4670,7 @@ mod tests {
                 output(true, "1\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4500,7 +4917,7 @@ mod tests {
                 output(true, "starting\nfatal: runtime bootstrap failed\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4565,7 +4982,7 @@ mod tests {
                 output(true, "runtime stopped\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4592,7 +5009,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4625,7 +5042,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4660,7 +5077,7 @@ mod tests {
                 output(true, ""),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4696,7 +5113,7 @@ mod tests {
                 output(true, ""),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4858,7 +5275,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4872,7 +5289,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, ""), output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4900,7 +5317,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             Some("a".repeat(32)),
         )
@@ -4931,7 +5348,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, &inspect()), output(true, &inspect())]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4961,7 +5378,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -4987,7 +5404,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(true, ""), output(true, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5014,7 +5431,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5032,7 +5449,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![output(false, "")]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5053,7 +5470,7 @@ mod tests {
         let service = GuestService::new(
             FakeEngine::new(vec![]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5088,7 +5505,7 @@ mod tests {
                 output(true, "aabbccddeeff\n001122334455\n"),
             ]),
             root.path().into(),
-            "192.168.64.2".into(),
+            Some("192.168.64.2".into()),
             "192.168.64.1".into(),
             None,
         )
@@ -5182,6 +5599,192 @@ mod tests {
         assert!(guest_service.contains("HOME=/var/lib/lemma/home"));
         assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
+    }
+
+    /// WSL reports a loopback address first, and the host cannot reach it.
+    ///
+    /// `ip -4 -o addr show scope global` lists `lo` before `eth0` on WSL,
+    /// because WSL assigns `10.255.255.254/32` to `lo` for its own DNS relay
+    /// and marks it global. Taking the first address in that output therefore
+    /// told the Windows host to connect to the guest's loopback, and every
+    /// connection timed out -- while the services it wanted were listening on
+    /// `eth0` and, through WSL's own forwarding, on the host's `127.0.0.1`.
+    ///
+    /// Both fixtures are verbatim from real machines: the first from the
+    /// Windows guest as it failed, the second from the VZ guest, where the
+    /// old code was right and has to stay right.
+    #[test]
+    fn the_guest_reports_an_address_the_host_can_actually_reach() {
+        let wsl = "\
+1: lo    inet 10.255.255.254/32 brd 10.255.255.254 scope global lo\\       valid_lft forever preferred_lft forever
+2: eth0    inet 172.24.27.216/20 brd 172.24.31.255 scope global eth0\\       valid_lft forever preferred_lft forever
+";
+        assert_eq!(
+            first_reachable_address(wsl).as_deref(),
+            Some("172.24.27.216"),
+            "an address on lo is not somewhere another machine can reach it"
+        );
+
+        let vz = "2: enp0s1    inet 192.168.64.10/24 brd 192.168.64.255 scope global dynamic enp0s1\\       valid_lft 2591990sec preferred_lft 2591990sec\n";
+        assert_eq!(
+            first_reachable_address(vz).as_deref(),
+            Some("192.168.64.10")
+        );
+    }
+
+    /// A veth's name carries its peer index, and the name is the part before it.
+    #[test]
+    fn an_interface_named_after_its_peer_is_still_read_correctly() {
+        let veth = "3: eth0@if12    inet 10.4.0.7/24 brd 10.4.0.255 scope global eth0\n";
+        assert_eq!(first_reachable_address(veth).as_deref(), Some("10.4.0.7"));
+    }
+
+    #[test]
+    fn a_guest_with_only_loopback_reports_no_address_at_all() {
+        // Which is what `endpoint_host: None` is for: a guest with no lease is
+        // still healthy, it just cannot be reached from outside.
+        let only_loopback = "1: lo    inet 10.255.255.254/32 brd 10.255.255.254 scope global lo\n";
+        assert_eq!(first_reachable_address(only_loopback), None);
+        assert_eq!(first_reachable_address(""), None);
+    }
+
+    /// Every wsl.exe call ended in an fstab error, in the one log Windows has.
+    ///
+    /// WSL reads `/etc/fstab` on every start, and its first line is a virtiofs
+    /// share only the VZ guest has. It cannot mount there, so WSL appended
+    /// "Processing /etc/fstab with mount -a failed." to the output of every
+    /// single invocation -- including into `logs/wsl.log`, which is one of the
+    /// only diagnostics a Windows installation produces.
+    ///
+    /// Measured on the machine before deciding what to do about it: `mount -a`
+    /// exits 32 and carries on, so `/tmp` was still the expected tmpfs and
+    /// nothing was actually broken. Which is why the fix is to stop WSL
+    /// reading a file written for another hypervisor, and to mount the one
+    /// entry that does apply from the WSL entry point -- not to change what
+    /// the VZ guest does, where the file is correct.
+    #[test]
+    fn wsl_does_not_read_an_fstab_written_for_the_vz_guest() {
+        let conf = include_str!("../../guest-image/rootfs-overlay/etc/wsl.conf");
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+        let fstab = include_str!("../../guest-image/rootfs-overlay/etc/fstab");
+
+        assert!(
+            conf.lines()
+                .any(|line| line.split_whitespace().collect::<String>() == "mountFsTab=false"),
+            "WSL must not process an fstab whose first entry it can never mount: {conf}"
+        );
+        // The entry that does apply on WSL, moved to where WSL will run it.
+        assert!(
+            init.contains("mount -t tmpfs") && init.contains("/tmp"),
+            "with fstab unread, the guest's own entry point owns /tmp"
+        );
+        for option in ["nosuid", "nodev", "noexec", "size=512m"] {
+            assert!(
+                init.contains(option),
+                "/tmp keeps the properties fstab gave it, including {option}"
+            );
+        }
+        // Unchanged, because on the VZ guest it is right.
+        assert!(fstab.contains("virtiofs") && fstab.contains("tmpfs /tmp tmpfs"));
+    }
+
+    /// A missing data disk must stop the guest, not be waved through.
+    ///
+    /// `ConditionPathExists=/dev/nvme0n1` reads like a safety check and is the
+    /// opposite of one. A failed `Condition*` makes systemd skip the unit and
+    /// record it as *started successfully*, so `Requires=lemma-data.service`
+    /// in containerd and lemma-guestd was satisfied by a data disk nobody had
+    /// mounted. Both started, and every workspace, database and volume went to
+    /// the root filesystem -- which this image is immutable over and discards
+    /// on the next boot. Each run reported healthy.
+    ///
+    /// `Assert*` fails the unit instead, and that failure propagates through
+    /// those `Requires` and stops the services that would have written to the
+    /// wrong disk.
+    #[test]
+    fn a_missing_data_disk_fails_the_guest_rather_than_being_skipped() {
+        let unit =
+            include_str!("../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service");
+        let directives: Vec<&str> = unit
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#'))
+            .collect();
+
+        assert!(
+            directives.contains(&"AssertPathExists=/dev/nvme0n1"),
+            "the data disk's absence has to fail the unit: {unit}"
+        );
+        assert!(
+            !directives.iter().any(|line| line.starts_with("Condition")),
+            "a Condition on this unit is recorded as success and silently              routes user data to the throwaway root filesystem: {unit}"
+        );
+
+        for (name, consumer) in [
+            (
+                "containerd",
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/containerd.service"
+                ),
+            ),
+            (
+                "lemma-guestd",
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-guestd.service"
+                ),
+            ),
+        ] {
+            assert!(
+                consumer
+                    .lines()
+                    .any(|line| line.starts_with("Requires=")
+                        && line.contains("lemma-data.service")),
+                "{name} writes to the data disk, so it must require the unit                  that mounts it -- ordering alone lets it start without one"
+            );
+        }
+    }
+
+    /// Mounting can appear to succeed and still leave the data on the root.
+    ///
+    /// Each bind is guarded by `mountpoint -q`, so a target that is already a
+    /// mountpoint is accepted and skipped. If that mountpoint belongs to the
+    /// root filesystem the paths all look right and the work is thrown away on
+    /// the next boot. The script checks the four of them before it exits.
+    ///
+    /// Pinned as text, like the format guard above: a shell script inside a
+    /// disk image cannot be unit-tested from here, and the alternative is
+    /// booting a VM without a data disk, which only the qualification lane can
+    /// do.
+    #[test]
+    fn the_guest_refuses_to_finish_mounting_with_the_binds_missing() {
+        let mount_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        let verification = mount_data
+            .rfind("for required in")
+            .expect("the mount script must verify its bind mounts before exiting");
+        let last_bind = mount_data
+            .rfind("mount --bind")
+            .expect("the mount script binds the data disk into place");
+        assert!(
+            last_bind < verification,
+            "the check has to run after the binds it is checking"
+        );
+        for required in [
+            "/var/lib/lemma",
+            "/var/lib/containerd",
+            "/var/lib/nerdctl",
+            "/etc/cni/net.d",
+        ] {
+            assert!(
+                mount_data[verification..].contains(required),
+                "{required} holds user data and must be confirmed to be on the                  data disk before the guest is allowed to come up"
+            );
+        }
+        assert!(
+            mount_data[verification..].contains("exit 1"),
+            "reporting is not enough; a guest whose data is on the root              filesystem must not start"
+        );
     }
 
     /// The guest must never force a filesystem onto a disk that has one.

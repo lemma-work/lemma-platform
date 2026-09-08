@@ -61,12 +61,6 @@ enum Command {
         #[arg(long)]
         force_local: bool,
     },
-    /// Start the installed per-user headless service.
-    Start,
-    /// Stop the installed per-user headless service.
-    Stop,
-    /// Restart the installed per-user headless service.
-    Restart,
     /// Stop accepting new runs while allowing active turns to finish.
     Drain {
         #[arg(long)]
@@ -89,9 +83,12 @@ enum Command {
         #[arg(short, long)]
         follow: bool,
     },
-    /// Install and start the platform per-user service.
-    InstallService,
-    /// Stop and remove the platform per-user service.
+    /// Remove a per-user service installed by an older release.
+    ///
+    /// Nothing installs one any more -- Desktop owns the Agent Host's
+    /// lifecycle -- but a machine that ran `install-service` before still has
+    /// one, and this is how it goes away. `status` reports whether there is
+    /// one to remove.
     UninstallService,
     /// Discover installed certified agents without contacting Lemma.
     Discover {
@@ -218,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
                     }))
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            let service = ServiceManager::current(paths.clone())?.status()?;
+            let service = ServiceManager::current().status()?;
             print_value(
                 &serde_json::json!({
                     "service": service,
@@ -260,21 +257,6 @@ async fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Start => {
-            ServiceManager::current(paths)?.start()?;
-            println!("Agent Host service started.");
-            Ok(())
-        }
-        Command::Stop => {
-            ServiceManager::current(paths)?.stop()?;
-            println!("Agent Host service stopped.");
-            Ok(())
-        }
-        Command::Restart => {
-            ServiceManager::current(paths)?.restart()?;
-            println!("Agent Host service restarted.");
-            Ok(())
-        }
         Command::Drain { target } => {
             update_targets(&paths, target.as_deref(), |item| item.draining = true)?;
             println!("Agent Host target(s) are draining.");
@@ -293,17 +275,8 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Logs { lines, follow } => show_logs(&paths.log, lines, follow).await,
-        Command::InstallService => {
-            AdapterManifest::builtin()?
-                .with_cache_root(paths.adapters.clone())
-                .install_cache(&paths.adapters, false)?;
-            let manager = ServiceManager::current(paths)?;
-            manager.install()?;
-            println!("Agent Host per-user service installed and started.");
-            Ok(())
-        }
         Command::UninstallService => {
-            ServiceManager::current(paths)?.uninstall()?;
+            ServiceManager::current().uninstall()?;
             println!("Agent Host per-user service removed.");
             Ok(())
         }

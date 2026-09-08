@@ -112,3 +112,17 @@ fi
 if ! /usr/bin/mountpoint -q /etc/cni/net.d; then
   /usr/bin/mount --bind "$data_root/cni/net.d" /etc/cni/net.d
 fi
+
+# Everything above can succeed and still leave the data where it must not be.
+# `mountpoint -q` guards each bind, so a target that is somehow already a
+# mountpoint of the *root* filesystem is accepted and skipped, and the paths
+# then look exactly right while pointing at storage this image throws away.
+#
+# Say so and fail, rather than hand a working-looking guest to a person whose
+# work will not be there tomorrow.
+for required in /var/lib/lemma /var/lib/containerd /var/lib/nerdctl /etc/cni/net.d; do
+  if ! /usr/bin/mountpoint -q "$required"; then
+    printf 'lemma-data: needs-repair: %s is not on the data disk\n' "$required"
+    exit 1
+  fi
+done

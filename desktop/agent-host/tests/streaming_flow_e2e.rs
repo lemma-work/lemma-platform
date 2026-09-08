@@ -214,8 +214,21 @@ async fn a_crashed_agent_keeps_partial_text_and_reports_one_failed_terminal() {
         )
         .await;
     host.shutdown().await;
-    assert_eq!(control.assistant_text(), "前 café 👩🏽‍💻\n");
     let events = control.events();
+    // Diagnostics rather than a bare `assert_eq`, because this has failed once
+    // in a loaded full-suite run and the message -- left "" right the text --
+    // could not distinguish "the chunks were dropped in flight" from "the run
+    // failed before the prompt was ever dispatched". Both produce a terminal
+    // with no text. The next occurrence should say which.
+    assert_eq!(
+        control.assistant_text(),
+        "前 café 👩🏽‍💻\n",
+        "events the control plane received: {:#?}",
+        events
+            .iter()
+            .map(|event| (event.event_type, event.payload.clone()))
+            .collect::<Vec<_>>()
+    );
     let terminals = events
         .iter()
         .filter(|event| event.event_type == EventType::Terminal)
@@ -306,5 +319,81 @@ async fn a_host_restart_preserves_partial_text_without_dispatching_the_prompt_ag
             .filter(|entry| entry["message"]["method"] == "session/prompt")
             .count(),
         1
+    );
+}
+
+/// A crash while output is still in flight must not cost the user the answer.
+///
+/// The SDK races the protocol future against the child's exit. When the exit
+/// wins -- which is what a burst of output followed by an immediate exit makes
+/// likely -- `finish_child_exit` returns `Err` for a non-zero status and the
+/// `?` propagates, so `await_protocol_shutdown_after_successful_child_exit` is
+/// never reached and whatever was still buffered in the pipe is dropped. The
+/// helper's own name says it: the drain only happens after a *successful*
+/// exit.
+///
+/// `crash.json` hid this because two chunks usually arrive before the exit is
+/// observed; it failed one loaded full-suite run in five with empty text. This
+/// scenario sends 120 chunks and then exits 23, which made the loss reliable
+/// and large: 405 bytes delivered of 1080 sent, then 378 on the next run.
+///
+/// Fixed by `SupervisedAgent`, which owns the child so the protocol reaches
+/// stdout EOF before the exit status is looked at. Run it alongside its
+/// siblings rather than alone -- on an idle machine the reader wins the race
+/// and this passed even before the fix.
+#[tokio::test]
+async fn a_crash_mid_stream_keeps_every_chunk_the_agent_had_already_sent() {
+    let (_directory, _shims, control, host) = streaming_run("stream-crash-midstream", false).await;
+    control
+        .wait_for(
+            "failed terminal after agent exit",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+    host.shutdown().await;
+
+    let expected = (0..120).fold(String::new(), |mut text, index| {
+        use std::fmt::Write as _;
+        let _ = write!(text, "chunk{index:03} ");
+        text
+    });
+    let actual = control.assistant_text();
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "the agent sent {} bytes before exiting and the user was shown {}",
+        expected.len(),
+        actual.len()
+    );
+    assert_eq!(actual, expected);
+}
+
+/// An update naming a session this run does not own is not part of its answer.
+///
+/// ACP puts a `sessionId` on every `session/update` and nothing read it, so an
+/// adapter holding a second session open — which the protocol permits — would
+/// have had that session's output spliced into this conversation's transcript,
+/// between two chunks of the real answer and indistinguishable from them.
+#[tokio::test]
+async fn output_belonging_to_another_session_never_reaches_this_transcript() {
+    let (_directory, _shims, control, host) = streaming_run("stream-foreign-session", false).await;
+    control
+        .wait_for(
+            "terminal after the turn",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+    host.shutdown().await;
+
+    let text = control.assistant_text();
+    assert!(
+        !text.contains("STOLEN"),
+        "another session's output reached this transcript: {text:?}"
+    );
+    assert_eq!(
+        text, "mine also mine",
+        "and this run's own chunks must all still be there"
     );
 }

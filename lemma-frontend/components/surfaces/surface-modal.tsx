@@ -67,6 +67,7 @@ import type { AssistantSurface, Account } from '@/lib/types';
 import type { SurfaceBehaviorConfigInput, SurfaceCredentialMode, SurfacePlatform } from 'lemma-sdk';
 import { cn } from '@/lib/utils';
 import { StepLoader } from '@/components/brand/loader';
+import { openExternal } from '@/lib/open-external';
 
 /**
  * Setting up one surface, as a short sequence of states rather than a form.
@@ -365,8 +366,7 @@ export function SurfaceModal({
             setStep('provisioning');
             // Opening it for them saves a hop; the provisioning state still shows
             // the link and a QR, so a blocked popup costs nothing.
-            const opened = window.open(setup.launch_url, '_blank');
-            if (opened) opened.opener = null;
+            openExternal(setup.launch_url);
         } catch (caught) {
             setError(surfaceErrorMessage(caught, 'Couldn’t start Telegram setup.'));
         }

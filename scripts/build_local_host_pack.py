@@ -283,6 +283,66 @@ def prune_python_runtime(python_root: Path) -> None:
                 shutil.rmtree(tests, ignore_errors=True)
 
 
+# How long a path inside the pack may be, measured from the pack's own root.
+#
+# Windows stops at 260 characters, counting the terminating NUL, so 259 is
+# usable. An installed pack sits under
+# `%LOCALAPPDATA%\Lemma\runtime\releases\<version>-<8 hex>\`, which is 81
+# characters for a 20-character user name, plus a separator. That leaves 177,
+# and this is set below it so the arithmetic has somewhere to move.
+#
+# The failure this prevents is not a build error. Rust addresses files as
+# `\\?\` and writes them happily; everything that does not -- Explorer,
+# PowerShell, and the pack's own Python -- then cannot open them. Measured on a
+# real Windows installation: 1,349 files past the limit, and a backend that
+# could not import a module sitting right there in the directory listing.
+WINDOWS_PATH_BUDGET = 170
+
+
+def installed_path(pack_root: Path, path: Path) -> str:
+    """Where a file in the pack lands, relative to the installed release.
+
+    The same name `archive_pack` writes into the zip, so the budget is measured
+    against what is actually on disk rather than against a guess at the prefix.
+    """
+    return str(Path("local-runtime") / path.relative_to(pack_root))
+
+
+def enforce_windows_path_budget(pack_root: Path) -> None:
+    """Drop cached bytecode that Windows would not be able to open.
+
+    Only bytecode. A `.pyc` past the budget costs the compile of one module on
+    first import, which is what `compile_python_runtime` is buying back for the
+    other forty-four thousand; a *source* file past it cannot be dropped and
+    cannot be read, so it fails the build rather than shipping a pack that is
+    broken on one platform and fine on the other.
+    """
+    over_budget = [
+        path
+        for path in sorted(pack_root.rglob("*"))
+        if path.is_file()
+        and len(installed_path(pack_root, path)) > WINDOWS_PATH_BUDGET
+    ]
+    unshippable = [path for path in over_budget if path.suffix != ".pyc"]
+    if unshippable:
+        listing = "\n  ".join(
+            installed_path(pack_root, path) for path in unshippable[:10]
+        )
+        raise SystemExit(
+            f"{len(unshippable)} file(s) sit more than {WINDOWS_PATH_BUDGET} "
+            f"characters below the pack root, so Windows cannot open them once "
+            f"this is installed:\n  {listing}"
+        )
+    for path in over_budget:
+        path.unlink(missing_ok=True)
+    if over_budget:
+        print(
+            f"+ dropped {len(over_budget)} cached bytecode files past the "
+            f"{WINDOWS_PATH_BUDGET}-character Windows path budget",
+            flush=True,
+        )
+
+
 def compile_python_runtime(python_root: Path, executable: Path) -> None:
     """Precompile the pack's bytecode, so the first launch does not.
 
@@ -535,6 +595,10 @@ def build_frontend(output: Path, explicit_node_root: Path | None) -> None:
 
 
 def archive_pack(output: Path, destination: Path) -> None:
+    # Here rather than at any one call site: three of them archive a pack, and
+    # a pack that is archived without this check is one that cannot be
+    # installed on Windows.
+    enforce_windows_path_budget(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(output.rglob("*")):

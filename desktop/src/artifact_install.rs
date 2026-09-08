@@ -163,9 +163,9 @@ fn stage_from_manifest(
     }
     let identity_bytes = serde_json::to_vec(&identity).map_err(io::Error::other)?;
     let destination = releases.join(format!(
-        "{}-{:x}",
+        "{}-{}",
         manifest.version,
-        Sha256::digest(&identity_bytes)
+        short_identity(&identity_bytes)
     ));
     let installed = installed_runtime(&destination, &manifest.version);
     if reuse_existing
@@ -309,6 +309,26 @@ fn stage_from_manifest(
         ));
     }
     Ok(installed)
+}
+
+/// A short, stable name for one exact set of artifacts.
+///
+/// The whole SHA-256 used to go in the directory name, and 64 hex characters
+/// is 56 more than this needs. On Windows those 56 characters are the
+/// difference between an installation that works and one that does not: the
+/// deepest file in the host pack sits 193 characters below this directory, and
+/// `MAX_PATH` is 260. Measured on a real installation, 1,349 files landed past
+/// that limit -- written, because Rust addresses them as `\\?\`, and then
+/// unreadable by everything that does not, including the pack's own Python.
+/// The backend could not import a module that was sitting right there.
+///
+/// Eight hex characters is 2^32 of namespace for a directory that holds at
+/// most a handful of releases, and a collision is not silent anyway: the
+/// caller checks the recorded identity and, on a mismatch, installs beside it
+/// under a suffixed name.
+fn short_identity(identity_bytes: &[u8]) -> String {
+    let digest = Sha256::digest(identity_bytes);
+    hex::encode(&digest[..4])
 }
 
 pub fn installed_runtime(root: &Path, release: &str) -> InstalledRuntime {
@@ -1323,6 +1343,38 @@ fn guest_target() -> &'static str {
 mod tests {
     use super::*;
     use zip::write::SimpleFileOptions;
+
+    /// The release directory's name is what makes Windows work or not.
+    ///
+    /// The whole SHA-256 went in it, and 64 hex characters put the deepest
+    /// file in the host pack 316 characters from the drive root. `MAX_PATH` is
+    /// 260. Measured on a real Windows installation: 1,349 files past the
+    /// limit, written happily because Rust uses the extended-length prefix, and
+    /// then unopenable by everything that does not -- including the pack's own
+    /// Python, which could not import a module sitting right there.
+    ///
+    /// Eight hex characters take the same installation's worst path to 236,
+    /// which leaves 23 characters for a user name longer than the one it was
+    /// measured on.
+    #[test]
+    fn the_release_directory_name_fits_inside_a_windows_path() {
+        let identity = short_identity(b"{\"release\":\"0.7.2\"}");
+        assert_eq!(identity.len(), 8, "{identity}");
+        assert!(identity.chars().all(|c| c.is_ascii_hexdigit()));
+
+        // Still tells one set of artifacts from another, which is its job.
+        assert_ne!(short_identity(b"a"), short_identity(b"b"));
+        assert_eq!(short_identity(b"a"), short_identity(b"a"));
+
+        // The arithmetic, so it cannot drift back: this directory, plus the
+        // longest path the host pack is allowed to contain, has to fit.
+        let directory = "C:\\Users\\a-twenty-char-name\\AppData\\Local\\Lemma\\runtime\\releases\\"
+            .len()
+            + "0.7.2-".len()
+            + identity.len();
+        // `WINDOWS_PATH_BUDGET` in scripts/build_local_host_pack.py.
+        assert!(directory + 1 + 170 <= 259, "{directory}");
+    }
 
     #[test]
     fn runtime_above_previous_limits_reserves_downloads_extraction_and_headroom() {

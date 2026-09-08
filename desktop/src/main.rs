@@ -356,20 +356,35 @@ fn home_dir() -> PathBuf {
         .expect("HOME/USERPROFILE is not set")
 }
 
+/// The directory name this build keeps its data under.
+///
+/// "Lemma" for a real one. A candidate built for qualification sets
+/// `LEMMA_DESKTOP_DATA_DIR_NAME` so it cannot share a data directory with the
+/// installation already on the machine -- which would let it stop that
+/// installation's daemon, adopt its runtime, and reset its pods. Baked in at
+/// compile time, so the isolation travels with the artifact instead of
+/// depending on how it was launched.
+const DATA_DIR_NAME: &str = match option_env!("LEMMA_DESKTOP_DATA_DIR_NAME") {
+    Some(name) => name,
+    None => "Lemma",
+};
+
 fn app_support_dir() -> PathBuf {
     if let Some(path) = std::env::var_os("LEMMA_DESKTOP_APP_SUPPORT_DIR") {
         return PathBuf::from(path);
     }
     #[cfg(target_os = "macos")]
     {
-        home_dir().join("Library/Application Support/Lemma")
+        home_dir()
+            .join("Library/Application Support")
+            .join(DATA_DIR_NAME)
     }
     #[cfg(target_os = "windows")]
     {
         std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(home_dir)
-            .join("Lemma")
+            .join(DATA_DIR_NAME)
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -2234,6 +2249,295 @@ fn event_applies_during_shutdown(event: &Value) -> bool {
     }
 }
 
+/// Fold one daemon event into the shell's view of the world.
+///
+/// Pulled out of `handle_locald_event`, which was 391 lines mixing this with
+/// window navigation, tray refreshes and quit completion — and had no test at
+/// all, on the path that decides what every screen shows. Everything here is a
+/// function of the previous state and the event; what the caller must *do*
+/// comes back as [`EventOutcome`] rather than happening in the middle.
+///
+/// `log` is not handled here: it is the one kind that only forwards, and it
+/// needs no state, so the caller takes it before acquiring the lock.
+fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) -> EventOutcome {
+    let mut outcome = EventOutcome::default();
+    let event_operation_id = locald_event_operation_id(event);
+    let ui = &mut *ui;
+    match kind {
+        "phase" => {
+            ui.phase = event["label"].as_str().unwrap_or_default().into();
+            ui.phase_key = event["key"].as_str().unwrap_or_default().into();
+            ui.progress = event["progress"].as_u64().unwrap_or(0);
+            ui.eta_seconds = event["eta_s"].as_u64();
+            ui.downloaded_bytes = None;
+            ui.total_bytes = None;
+            ui.throughput_bytes_per_second = None;
+            ui.setup = event["setup"].as_bool().unwrap_or(ui.setup);
+            if let Some(component) = event["component"].as_str() {
+                ui.component = component.into();
+            }
+            if let Some(source) = event["log_source"].as_str() {
+                ui.log_source = source.into();
+            }
+            let detail = event["detail"].as_str().unwrap_or_default();
+            ui.status = if detail.is_empty() {
+                ui.phase.clone()
+            } else {
+                format!("{}: {}", ui.phase, detail)
+            };
+            ui.ready = false;
+            ui.error = ui.phase_key == "error";
+            if !ui.error {
+                ui.error_code.clear();
+            }
+        }
+        "state" => {
+            ui.running = event["running"].as_bool().unwrap_or(false);
+            ui.ready = event["ready"].as_bool().unwrap_or(false);
+            let event_status = event["status"].as_str().unwrap_or_default();
+            let event_is_error = event_status == "error";
+            let keep_actionable_error =
+                is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
+            ui.error = event_is_error || keep_actionable_error;
+            if !ui.error {
+                ui.error_code.clear();
+            }
+            if event_status == "stopped" && !ui.error {
+                ui.phase = "Stopped".into();
+                ui.phase_key = "stopped".into();
+                ui.progress = 0;
+                ui.eta_seconds = None;
+                ui.downloaded_bytes = None;
+                ui.total_bytes = None;
+                ui.throughput_bytes_per_second = None;
+                ui.status = "Local services are stopped".into();
+            }
+        }
+        "status" => {
+            ui.running = event["running"].as_bool().unwrap_or(ui.running);
+            ui.ready = event["ready"].as_bool().unwrap_or(ui.ready);
+            let event_status = event["status"].as_str().unwrap_or_default();
+            let preserve_inflight_phase = should_preserve_inflight_phase(
+                &ui.active_operation_id,
+                &ui.phase_key,
+                event_status,
+            );
+            let event_is_error = event_status == "error";
+            let keep_actionable_error =
+                is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
+            let keep_terminal_error =
+                ui.error && !ui.ready && event_status == "stopped" && !event_is_error;
+            ui.error = event_is_error || keep_actionable_error || keep_terminal_error;
+            if !ui.error {
+                ui.error_code.clear();
+            }
+            if let (Some(url), Some(api_url)) = (event["url"].as_str(), event["api_url"].as_str()) {
+                if trusted_workspace_urls(url, api_url) {
+                    ui.url = url.to_string();
+                    ui.api_url = api_url.to_string();
+                }
+            }
+            if !keep_actionable_error && !keep_terminal_error && !preserve_inflight_phase {
+                let phase = event.get("phase").and_then(Value::as_object);
+                if event_status == "stopped" && !ui.error {
+                    // Lifecycle state wins over persisted progress. Older
+                    // daemons may legitimately report stopped while their
+                    // last phase still says ready/100%.
+                    ui.phase = "Stopped".into();
+                    ui.phase_key = "stopped".into();
+                    ui.progress = 0;
+                    ui.eta_seconds = None;
+                    ui.downloaded_bytes = None;
+                    ui.total_bytes = None;
+                    ui.throughput_bytes_per_second = None;
+                    ui.status = "Local services are stopped".into();
+                } else if let Some(phase) = phase {
+                    ui.phase = phase
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&ui.phase)
+                        .to_string();
+                    ui.phase_key = phase
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&ui.phase_key)
+                        .to_string();
+                    ui.progress = phase
+                        .get("progress")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(ui.progress);
+                    ui.downloaded_bytes = None;
+                    ui.total_bytes = None;
+                    ui.throughput_bytes_per_second = None;
+                    let detail = phase.get("detail").and_then(Value::as_str).unwrap_or("");
+                    ui.status = if detail.is_empty() {
+                        ui.phase.clone()
+                    } else {
+                        format!("{}: {detail}", ui.phase)
+                    };
+                }
+            }
+        }
+        "ready" => {
+            if !ui.ready {
+                launch_trace("daemon reported ready");
+            }
+            ui.ready = true;
+            ui.running = true;
+            ui.error = false;
+            ui.error_code.clear();
+            ui.downloaded_bytes = None;
+            ui.total_bytes = None;
+            ui.throughput_bytes_per_second = None;
+            // Main, API, built-app, and workspace-app hosts all live below
+            // the reserved lemma.localhost loopback cookie boundary.
+            if let (Some(url), Some(api_url)) = (event["url"].as_str(), event["api_url"].as_str()) {
+                if trusted_workspace_urls(url, api_url) {
+                    ui.url = url.to_string();
+                    ui.api_url = api_url.to_string();
+                    // Record what is serving, and under which generation,
+                    // so the next launch can skip straight to it.
+                    //
+                    // On a worker, because this writes the config with two
+                    // fsyncs and we are holding `shell.ui` -- a lock the main
+                    // thread takes in `navigation_context` (on every
+                    // navigation, subframes included), `get_state`,
+                    // `current_mode`, `refresh_tray_status` and
+                    // `quit_impact`. Holding it across a disk sync stalled
+                    // WebKit's navigation delegate, worst exactly when the
+                    // disk is busy unpacking a runtime. The resume target is
+                    // advisory, so late is fine and lost is survivable.
+                    let (url, api_url, generation) = (
+                        url.to_string(),
+                        api_url.to_string(),
+                        event["runtime_generation"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    );
+                    std::thread::spawn(move || {
+                        write_resume_target(&url, &api_url, &generation);
+                    });
+                }
+            }
+            // Navigation is not decided here. The tail of this
+            // function owns ready -> workspace, for every event kind
+            // that can carry readiness; deciding it in two places is
+            // how one of them ended up never running.
+        }
+        "sharing.changed" => {
+            if let (Some(url), Some(api_url)) = (event["url"].as_str(), event["api_url"].as_str()) {
+                if trusted_workspace_urls(url, api_url) {
+                    ui.url = url.to_owned();
+                    ui.api_url = api_url.to_owned();
+                }
+            }
+        }
+        "error" => {
+            let code = event["code"].as_str().unwrap_or_default();
+            if code == "busy" {
+                // Every authenticated desktop client already receives the
+                // in-flight operation's broadcast progress. A repeated
+                // Start click is therefore informational, not a failure.
+                ui.error = false;
+                ui.error_code.clear();
+                ui.status = if ui.phase.is_empty() {
+                    "Lemma is already working on that operation…".into()
+                } else {
+                    format!("{} is still in progress…", ui.phase)
+                };
+                if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
+                    ui.active_operation_id.clear();
+                }
+            } else if code.starts_with("sharing-") {
+                // Sharing failures are shown inside Local settings. They
+                // must not replace an otherwise healthy workspace with the
+                // startup error screen.
+                ui.error = false;
+                ui.error_code.clear();
+            } else {
+                ui.error = true;
+                ui.error_code = code.into();
+                ui.status = event["message"].as_str().unwrap_or("startup failed").into();
+                if let Some(component) = event["component"].as_str() {
+                    ui.component = component.into();
+                }
+                if let Some(source) = event["log_source"].as_str() {
+                    ui.log_source = source.into();
+                }
+            }
+        }
+        "sandbox-images" => {
+            // Deliberately touches nothing else. This runs after the
+            // workspace is up, so writing `phase`/`ready` here would send
+            // an app the user is already working in back to the splash to
+            // report a download they never asked about.
+            ui.sandbox_images = event["state"].as_str().unwrap_or_default().into();
+            ui.sandbox_images_detail = event["detail"].as_str().unwrap_or_default().into();
+        }
+        "runtime.prepared" => {
+            let ready = event["ready"].as_bool().unwrap_or(false);
+            let reboot_required = event["reboot_required"].as_bool().unwrap_or(!ready);
+            ui.ready = false;
+            ui.running = false;
+            ui.phase = "Preparing Windows".into();
+            ui.phase_key = "runtime".into();
+            if ready {
+                ui.error = false;
+                ui.error_code.clear();
+                ui.status = "Windows runtime is ready. Starting Lemma…".into();
+                outcome.start_after_prepare = ui.mode == "local";
+            } else if reboot_required {
+                ui.error = true;
+                ui.error_code = "wsl-reboot-required".into();
+                ui.status =
+                        "Restart Windows to finish setup, then reopen Lemma; setup will continue automatically"
+                            .into();
+            }
+        }
+        "done" if event_operation_id.is_some_and(|id| id == ui.active_operation_id) => {
+            let completed_operation_id = ui.active_operation_id.clone();
+            ui.completed_operation_ids.push(completed_operation_id);
+            if ui.completed_operation_ids.len() > 16 {
+                ui.completed_operation_ids.remove(0);
+            }
+            ui.active_operation_id.clear();
+        }
+        _ => {}
+    }
+    if ui.mode == "local" && ui.ready && !trusted_workspace_urls(&ui.url, &ui.api_url) {
+        ui.ready = false;
+        ui.running = false;
+        ui.error = true;
+        ui.error_code = "untrusted-workspace-origin".into();
+        ui.phase = "Local services need attention".into();
+        ui.phase_key = "error".into();
+        ui.progress = 0;
+        ui.status = "locald did not provide an authenticated, isolated workspace origin".into();
+    }
+    if ui.ready || !ui.error {
+        ui.terminal_recovery_pending = false;
+    }
+    let schedule_terminal_recovery = matches!(kind, "state" | "status")
+        && ui.error
+        && !ui.ready
+        && !ui.terminal_recovery_pending;
+    if schedule_terminal_recovery {
+        ui.terminal_recovery_pending = true;
+    }
+    outcome.schedule_terminal_recovery = schedule_terminal_recovery;
+    outcome
+}
+
+/// What the caller must do once the state has been folded.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct EventOutcome {
+    /// A terminal error just appeared, and recovery options should be fetched.
+    schedule_terminal_recovery: bool,
+    /// The runtime finished preparing, so the stack should be started.
+    start_after_prepare: bool,
+}
+
 fn handle_locald_event(app: &AppHandle, event: &Value) {
     if std::env::var("LEMMA_DESKTOP_DEBUG").as_deref() == Ok("1") {
         eprintln!("[locald] {event}");
@@ -2277,284 +2581,17 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         *shell.sharing_mode.lock().unwrap() = Some(mode.to_owned());
     }
 
-    let mut start_after_prepare = false;
-    let (snapshot, schedule_terminal_recovery) = {
+    if kind == "log" {
+        emit_log(app, event["line"].as_str().unwrap_or_default());
+        return;
+    }
+    let (snapshot, outcome) = {
         let mut ui = shell.ui.lock().unwrap();
-        match kind {
-            "log" => {
-                drop(ui);
-                emit_log(app, event["line"].as_str().unwrap_or_default());
-                return;
-            }
-            "phase" => {
-                ui.phase = event["label"].as_str().unwrap_or_default().into();
-                ui.phase_key = event["key"].as_str().unwrap_or_default().into();
-                ui.progress = event["progress"].as_u64().unwrap_or(0);
-                ui.eta_seconds = event["eta_s"].as_u64();
-                ui.downloaded_bytes = None;
-                ui.total_bytes = None;
-                ui.throughput_bytes_per_second = None;
-                ui.setup = event["setup"].as_bool().unwrap_or(ui.setup);
-                if let Some(component) = event["component"].as_str() {
-                    ui.component = component.into();
-                }
-                if let Some(source) = event["log_source"].as_str() {
-                    ui.log_source = source.into();
-                }
-                let detail = event["detail"].as_str().unwrap_or_default();
-                ui.status = if detail.is_empty() {
-                    ui.phase.clone()
-                } else {
-                    format!("{}: {}", ui.phase, detail)
-                };
-                ui.ready = false;
-                ui.error = ui.phase_key == "error";
-                if !ui.error {
-                    ui.error_code.clear();
-                }
-            }
-            "state" => {
-                ui.running = event["running"].as_bool().unwrap_or(false);
-                ui.ready = event["ready"].as_bool().unwrap_or(false);
-                let event_status = event["status"].as_str().unwrap_or_default();
-                let event_is_error = event_status == "error";
-                let keep_actionable_error =
-                    is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
-                ui.error = event_is_error || keep_actionable_error;
-                if !ui.error {
-                    ui.error_code.clear();
-                }
-                if event_status == "stopped" && !ui.error {
-                    ui.phase = "Stopped".into();
-                    ui.phase_key = "stopped".into();
-                    ui.progress = 0;
-                    ui.eta_seconds = None;
-                    ui.downloaded_bytes = None;
-                    ui.total_bytes = None;
-                    ui.throughput_bytes_per_second = None;
-                    ui.status = "Local services are stopped".into();
-                }
-            }
-            "status" => {
-                ui.running = event["running"].as_bool().unwrap_or(ui.running);
-                ui.ready = event["ready"].as_bool().unwrap_or(ui.ready);
-                let event_status = event["status"].as_str().unwrap_or_default();
-                let preserve_inflight_phase = should_preserve_inflight_phase(
-                    &ui.active_operation_id,
-                    &ui.phase_key,
-                    event_status,
-                );
-                let event_is_error = event_status == "error";
-                let keep_actionable_error =
-                    is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
-                let keep_terminal_error =
-                    ui.error && !ui.ready && event_status == "stopped" && !event_is_error;
-                ui.error = event_is_error || keep_actionable_error || keep_terminal_error;
-                if !ui.error {
-                    ui.error_code.clear();
-                }
-                if let (Some(url), Some(api_url)) =
-                    (event["url"].as_str(), event["api_url"].as_str())
-                {
-                    if trusted_workspace_urls(url, api_url) {
-                        ui.url = url.to_string();
-                        ui.api_url = api_url.to_string();
-                    }
-                }
-                if !keep_actionable_error && !keep_terminal_error && !preserve_inflight_phase {
-                    let phase = event.get("phase").and_then(Value::as_object);
-                    if event_status == "stopped" && !ui.error {
-                        // Lifecycle state wins over persisted progress. Older
-                        // daemons may legitimately report stopped while their
-                        // last phase still says ready/100%.
-                        ui.phase = "Stopped".into();
-                        ui.phase_key = "stopped".into();
-                        ui.progress = 0;
-                        ui.eta_seconds = None;
-                        ui.downloaded_bytes = None;
-                        ui.total_bytes = None;
-                        ui.throughput_bytes_per_second = None;
-                        ui.status = "Local services are stopped".into();
-                    } else if let Some(phase) = phase {
-                        ui.phase = phase
-                            .get("label")
-                            .and_then(Value::as_str)
-                            .unwrap_or(&ui.phase)
-                            .to_string();
-                        ui.phase_key = phase
-                            .get("key")
-                            .and_then(Value::as_str)
-                            .unwrap_or(&ui.phase_key)
-                            .to_string();
-                        ui.progress = phase
-                            .get("progress")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(ui.progress);
-                        ui.downloaded_bytes = None;
-                        ui.total_bytes = None;
-                        ui.throughput_bytes_per_second = None;
-                        let detail = phase.get("detail").and_then(Value::as_str).unwrap_or("");
-                        ui.status = if detail.is_empty() {
-                            ui.phase.clone()
-                        } else {
-                            format!("{}: {detail}", ui.phase)
-                        };
-                    }
-                }
-            }
-            "ready" => {
-                if !ui.ready {
-                    launch_trace("daemon reported ready");
-                }
-                ui.ready = true;
-                ui.running = true;
-                ui.error = false;
-                ui.error_code.clear();
-                ui.downloaded_bytes = None;
-                ui.total_bytes = None;
-                ui.throughput_bytes_per_second = None;
-                // Main, API, built-app, and workspace-app hosts all live below
-                // the reserved lemma.localhost loopback cookie boundary.
-                if let (Some(url), Some(api_url)) =
-                    (event["url"].as_str(), event["api_url"].as_str())
-                {
-                    if trusted_workspace_urls(url, api_url) {
-                        ui.url = url.to_string();
-                        ui.api_url = api_url.to_string();
-                        // Record what is serving, and under which generation,
-                        // so the next launch can skip straight to it.
-                        //
-                        // On a worker, because this writes the config with two
-                        // fsyncs and we are holding `shell.ui` -- a lock the main
-                        // thread takes in `navigation_context` (on every
-                        // navigation, subframes included), `get_state`,
-                        // `current_mode`, `refresh_tray_status` and
-                        // `quit_impact`. Holding it across a disk sync stalled
-                        // WebKit's navigation delegate, worst exactly when the
-                        // disk is busy unpacking a runtime. The resume target is
-                        // advisory, so late is fine and lost is survivable.
-                        let (url, api_url, generation) = (
-                            url.to_string(),
-                            api_url.to_string(),
-                            event["runtime_generation"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
-                        );
-                        std::thread::spawn(move || {
-                            write_resume_target(&url, &api_url, &generation);
-                        });
-                    }
-                }
-                // Navigation is not decided here. The tail of this
-                // function owns ready -> workspace, for every event kind
-                // that can carry readiness; deciding it in two places is
-                // how one of them ended up never running.
-            }
-            "sharing.changed" => {
-                if let (Some(url), Some(api_url)) =
-                    (event["url"].as_str(), event["api_url"].as_str())
-                {
-                    if trusted_workspace_urls(url, api_url) {
-                        ui.url = url.to_owned();
-                        ui.api_url = api_url.to_owned();
-                    }
-                }
-            }
-            "error" => {
-                let code = event["code"].as_str().unwrap_or_default();
-                if code == "busy" {
-                    // Every authenticated desktop client already receives the
-                    // in-flight operation's broadcast progress. A repeated
-                    // Start click is therefore informational, not a failure.
-                    ui.error = false;
-                    ui.error_code.clear();
-                    ui.status = if ui.phase.is_empty() {
-                        "Lemma is already working on that operation…".into()
-                    } else {
-                        format!("{} is still in progress…", ui.phase)
-                    };
-                    if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
-                        ui.active_operation_id.clear();
-                    }
-                } else if code.starts_with("sharing-") {
-                    // Sharing failures are shown inside Local settings. They
-                    // must not replace an otherwise healthy workspace with the
-                    // startup error screen.
-                    ui.error = false;
-                    ui.error_code.clear();
-                } else {
-                    ui.error = true;
-                    ui.error_code = code.into();
-                    ui.status = event["message"].as_str().unwrap_or("startup failed").into();
-                    if let Some(component) = event["component"].as_str() {
-                        ui.component = component.into();
-                    }
-                    if let Some(source) = event["log_source"].as_str() {
-                        ui.log_source = source.into();
-                    }
-                }
-            }
-            "sandbox-images" => {
-                // Deliberately touches nothing else. This runs after the
-                // workspace is up, so writing `phase`/`ready` here would send
-                // an app the user is already working in back to the splash to
-                // report a download they never asked about.
-                ui.sandbox_images = event["state"].as_str().unwrap_or_default().into();
-                ui.sandbox_images_detail = event["detail"].as_str().unwrap_or_default().into();
-            }
-            "runtime.prepared" => {
-                let ready = event["ready"].as_bool().unwrap_or(false);
-                let reboot_required = event["reboot_required"].as_bool().unwrap_or(!ready);
-                ui.ready = false;
-                ui.running = false;
-                ui.phase = "Preparing Windows".into();
-                ui.phase_key = "runtime".into();
-                if ready {
-                    ui.error = false;
-                    ui.error_code.clear();
-                    ui.status = "Windows runtime is ready. Starting Lemma…".into();
-                    start_after_prepare = ui.mode == "local";
-                } else if reboot_required {
-                    ui.error = true;
-                    ui.error_code = "wsl-reboot-required".into();
-                    ui.status =
-                        "Restart Windows to finish setup, then reopen Lemma; setup will continue automatically"
-                            .into();
-                }
-            }
-            "done" if event_operation_id.is_some_and(|id| id == ui.active_operation_id) => {
-                let completed_operation_id = ui.active_operation_id.clone();
-                ui.completed_operation_ids.push(completed_operation_id);
-                if ui.completed_operation_ids.len() > 16 {
-                    ui.completed_operation_ids.remove(0);
-                }
-                ui.active_operation_id.clear();
-            }
-            _ => {}
-        }
-        if ui.mode == "local" && ui.ready && !trusted_workspace_urls(&ui.url, &ui.api_url) {
-            ui.ready = false;
-            ui.running = false;
-            ui.error = true;
-            ui.error_code = "untrusted-workspace-origin".into();
-            ui.phase = "Local services need attention".into();
-            ui.phase_key = "error".into();
-            ui.progress = 0;
-            ui.status = "locald did not provide an authenticated, isolated workspace origin".into();
-        }
-        if ui.ready || !ui.error {
-            ui.terminal_recovery_pending = false;
-        }
-        let schedule_terminal_recovery = matches!(kind, "state" | "status")
-            && ui.error
-            && !ui.ready
-            && !ui.terminal_recovery_pending;
-        if schedule_terminal_recovery {
-            ui.terminal_recovery_pending = true;
-        }
-        (ui.clone(), schedule_terminal_recovery)
+        let outcome = apply_locald_event(&mut ui, kind, event);
+        (ui.clone(), outcome)
     };
+    let schedule_terminal_recovery = outcome.schedule_terminal_recovery;
+    let start_after_prepare = outcome.start_after_prepare;
 
     let ready_workspace_url = (matches!(kind, "ready" | "state" | "status")
         && snapshot.mode == "local"
@@ -2912,7 +2949,8 @@ fn control_navigation_allowed(url: &tauri::Url) -> bool {
     trusted_control_url(url)
 }
 
-fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), String> {
+/// Normalise a Local settings page name, or say it is not one.
+fn control_center_page(page: Option<&str>) -> Result<String, String> {
     let page = match page.unwrap_or("overview") {
         "connectors" => "integrations",
         "services" => "runtime",
@@ -2934,6 +2972,16 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
     ) {
         return Err(format!("unknown Local settings page: {page}"));
     }
+    Ok(page.to_owned())
+}
+
+/// Bring Local settings up on `page`, and finish only when it is up.
+///
+/// Blocking on purpose, and never to be called from the main thread: Tauri
+/// documents a Windows deadlock when child webviews are created from
+/// synchronous commands or event handlers. Run from a worker, `add_child`
+/// marshals the build onto the main thread by itself.
+fn open_control_center_blocking(app: &AppHandle, page: &str) -> Result<(), String> {
     if let Some(webview) = app.get_webview("control") {
         if let Some(main) = app.get_window("main") {
             restore_dock_presence(app);
@@ -2944,19 +2992,20 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
         let _ = app.emit_to("control", "lemma:control-page", page);
         return Ok(());
     }
+    create_control_child(app, page)
+}
+
+fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), String> {
+    let page = control_center_page(page)?;
     let handle = app.clone();
-    let page = page.to_owned();
-    // Tauri documents a Windows deadlock when child webviews are created from
-    // synchronous commands/event handlers. Always create the trusted overlay
-    // from a worker and let add_child marshal the build onto the main thread.
-    std::thread::spawn(move || {
-        if let Err(error) = create_control_child(&handle, &page) {
-            eprintln!("[local-settings] {error}");
-            let _ = handle.emit(
-                "lemma:control-error",
-                format!("Could not open Local settings: {error}"),
-            );
-        }
+    // `menu_background`, rather than a bare thread that swallowed the result.
+    // A failure here used to be announced as `lemma:control-error`, an event
+    // with no listener anywhere in the app: choosing Local settings from the
+    // menu and having it fail produced no window, no message, and nothing in
+    // any log a person could reach. This writes the launch log and puts the
+    // reason on screen, like every other menu action that fails.
+    menu_background(app, "Local settings", move || {
+        open_control_center_blocking(&handle, &page)
     });
     Ok(())
 }
@@ -3488,9 +3537,23 @@ fn collect_secret_json_values(value: &Value, sensitive: bool, output: &mut Vec<S
     }
 }
 
+/// Open Local settings, and tell the caller whether it opened.
+///
+/// Awaited rather than fire-and-forget. This used to spawn a thread, return
+/// `Ok` at once, and report failure by emitting `lemma:control-error` -- which
+/// nothing in the app listens for. The splash's recovery button has a `.catch`
+/// that therefore could never run, so a Local settings window that failed to
+/// open left the user pressing a button that did nothing at all.
+///
+/// Async, so it is dispatched off the main thread and can wait for the answer;
+/// that is also what keeps it clear of the Windows child-webview deadlock,
+/// which is a hazard for *synchronous* commands.
 #[tauri::command]
-fn open_control_center(app: AppHandle, page: Option<String>) -> Result<(), String> {
-    show_control_center_page(&app, page.as_deref())
+async fn open_control_center(app: AppHandle, page: Option<String>) -> Result<(), String> {
+    let page = control_center_page(page.as_deref())?;
+    tauri::async_runtime::spawn_blocking(move || open_control_center_blocking(&app, &page))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 fn is_control_window_label(label: &str) -> bool {
@@ -3702,10 +3765,23 @@ fn installed_postgres_major() -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
+/// Where each platform keeps the disk holding this installation's databases.
+///
+/// macOS has a sparse `data.raw`; Windows has the WSL distribution's
+/// `ext4.vhdx` under `runtime/wsl`. The Windows path was written as
+/// `runtime/windows`, which nothing creates -- so on Windows this answered "no
+/// data" for a real installation, and only the config check kept the update
+/// guard honest.
+fn managed_data_disk() -> std::path::PathBuf {
+    if cfg!(windows) {
+        locald_root().join("runtime/wsl/ext4.vhdx")
+    } else {
+        locald_root().join("runtime/macos/data.raw")
+    }
+}
+
 fn has_local_runtime_data() -> bool {
-    configured_runtime(&read_config(), "installedRuntime").is_some()
-        || locald_root().join("runtime/macos/data.raw").exists()
-        || locald_root().join("runtime/windows").exists()
+    configured_runtime(&read_config(), "installedRuntime").is_some() || managed_data_disk().exists()
 }
 
 fn ensure_update_preserves_data(
@@ -3776,9 +3852,33 @@ async fn install_app_update(
         .await
         .map_err(|error| error.to_string())??;
 
-    update
-        .install(bytes)
-        .map_err(|error| format!("could not install the update: {error}"))?;
+    // Written before `install`, because on Windows `install` launches the
+    // NSIS installer and exits this process: there is no line after it in
+    // which to record anything. Without it, an installer the user cancelled,
+    // or one interrupted by a reboot, left the app running the old version
+    // with nothing anywhere saying an update had been attempted at all.
+    if cfg!(windows) {
+        record_update_attempt(&app, &update.version.to_string());
+    }
+
+    if let Err(error) = update.install(bytes) {
+        // The stack is down and the update did not happen. Leaving it there
+        // stranded the user in Local settings over a workspace whose backend
+        // had gone, with nothing offering to bring it back: the reader thread
+        // only re-shows the splash when the settings window is absent, and
+        // this command requires it to be open. Put the previous version --
+        // still the installed one -- back into service before reporting.
+        // The attempt is over and it is being reported here, so the record
+        // has nothing left to explain on the next launch.
+        clear_update_attempt();
+        let handle = app.clone();
+        let restarted = tauri::async_runtime::spawn_blocking(move || {
+            start_after_runtime_maintenance(&handle, "shell-update-recover")
+        })
+        .await
+        .map_err(|join| join.to_string())?;
+        return Err(failed_install_message(&error.to_string(), restarted.err()));
+    }
 
     // The Windows updater exits this process to run the installer. Completion
     // belongs to the next launch, not a dialog after installation.
@@ -3802,6 +3902,125 @@ async fn install_app_update(
     Ok(())
 }
 
+/// Where an in-flight update records what it was aiming at.
+///
+/// In locald's root rather than beside the app: on Windows the installer
+/// replaces the whole application directory, so anything written there is gone
+/// exactly when it is needed.
+fn update_attempt_path() -> PathBuf {
+    locald_root().join("shell-update.json")
+}
+
+fn record_update_attempt(app: &AppHandle, to: &str) {
+    let from = app.package_info().version.to_string();
+    let to = to.to_owned();
+    if let Err(error) = config_store::update(&update_attempt_path(), |record| {
+        *record = json!({"schema_version": 1, "from": from, "to": to});
+    }) {
+        // Not fatal: failing to record an update is no reason to refuse one.
+        append_bounded_log(
+            &launch_log_path(),
+            &format!("could not record the update attempt: {error}"),
+        );
+    }
+}
+
+fn clear_update_attempt() {
+    let _ = std::fs::remove_file(update_attempt_path());
+}
+
+/// What last launch's update attempt turned out to be.
+#[derive(Debug, PartialEq, Eq)]
+enum UpdateAttempt {
+    /// Nothing was attempted.
+    None,
+    /// The version it was aiming at is the one now running.
+    Landed { to: String },
+    /// Still on the version it started from: the installer never replaced the
+    /// app. Cancelled at the UAC prompt, refused, or interrupted.
+    DidNotLand { to: String },
+    /// A record that explains nothing about the version now running -- damaged,
+    /// or left by an install that has since been replaced by a third version.
+    Unexplained,
+}
+
+/// Read an update record against the version actually running.
+///
+/// Pure, and separate from the file handling, because the interesting part is
+/// the three-way comparison and it is the part worth testing.
+fn classify_update_attempt(record: Option<&Value>, running: &str) -> UpdateAttempt {
+    let Some(record) = record else {
+        return UpdateAttempt::None;
+    };
+    let from = record.get("from").and_then(Value::as_str);
+    let to = record.get("to").and_then(Value::as_str);
+    let (Some(from), Some(to)) = (from, to) else {
+        return UpdateAttempt::Unexplained;
+    };
+    if to == running {
+        UpdateAttempt::Landed { to: to.to_owned() }
+    } else if from == running {
+        UpdateAttempt::DidNotLand { to: to.to_owned() }
+    } else {
+        UpdateAttempt::Unexplained
+    }
+}
+
+/// Settle whatever the last launch's update attempt left behind.
+///
+/// The record is cleared either way. Its only job is to let this launch say
+/// what happened, and a record kept past that would explain the wrong launch.
+fn reconcile_update_attempt(app: &AppHandle) {
+    let record = std::fs::read(update_attempt_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let running = app.package_info().version.to_string();
+    let outcome = classify_update_attempt(record.as_ref(), &running);
+    if outcome != UpdateAttempt::None {
+        clear_update_attempt();
+    }
+    match outcome {
+        UpdateAttempt::None => (),
+        UpdateAttempt::Landed { to } => {
+            append_bounded_log(&launch_log_path(), &format!("update to {to} completed"));
+        }
+        UpdateAttempt::Unexplained => {
+            append_bounded_log(
+                &launch_log_path(),
+                &format!("an update record did not describe this version ({running}); discarded"),
+            );
+        }
+        UpdateAttempt::DidNotLand { to } => {
+            let message = format!(
+                "Lemma {to} was downloaded but its installer did not finish, so this is \
+                 still {running}. Nothing was changed. Check for updates again when you \
+                 are ready."
+            );
+            append_bounded_log(
+                &launch_log_path(),
+                &format!("update to {to} did not finish"),
+            );
+            announce_incomplete_update(app, message);
+        }
+    }
+}
+
+/// Tell the user their update did not happen, once there is a window to tell.
+///
+/// On its own thread with a deadline: `setup` runs before the window is built,
+/// and `report_action_failure` needs one. The launch log has the record either
+/// way, so a window that never appears costs the message and not the evidence.
+fn announce_incomplete_update(app: &AppHandle, message: String) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while handle.get_window("main").is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        report_action_failure(&handle, "Update", &message);
+    });
+}
+
 /// What this Mac still has that a reset could remove.
 ///
 /// Read by the splash so it can offer the right tier -- and only offer one at
@@ -3814,7 +4033,7 @@ fn local_recovery_options(window: Webview) -> Result<RecoveryOptions, String> {
     require_local_native_window(&window)?;
     let config = read_config();
     let installed = configured_runtime(&config, "installedRuntime");
-    let data_disk = locald_root().join("runtime/macos/data.raw");
+    let data_disk = managed_data_disk();
     Ok(RecoveryOptions {
         // Tier 1 needs a daemon to drive it; Tier 2 exists precisely for when
         // there is not one, so it is offered whenever any state survives.
@@ -6819,33 +7038,96 @@ fn stop_then_quit(app: &AppHandle) {
     // outcome -- leaves the app running with the user's quit unanswered.
     let handle = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(QUIT_STOP_BUDGET);
-        let shell: State<Shell> = handle.state();
-        if !shell.quit_after_stop.load(Ordering::Acquire) {
+        run_quit_watchdog(
+            || std::thread::sleep(QUIT_STOP_BUDGET),
+            || {
+                handle
+                    .state::<Shell>()
+                    .quit_after_stop
+                    .load(Ordering::Acquire)
+            },
+            || {
+                append_install_log(&format!(
+                    "quit: the stop did not finish within {}s; offering to quit anyway",
+                    QUIT_STOP_BUDGET.as_secs()
+                ));
+                confirm_destructive_action_impl(
+                    handle.clone(),
+                    "Lemma is taking longer than usual to stop.".into(),
+                    "Lemma is waiting for local work to stop safely. Keep waiting while \
+                     a database migration or installation finishes. Quit Anyway may interrupt \
+                     that work and require recovery when Lemma next starts."
+                        .into(),
+                    "Quit Anyway".into(),
+                )
+                .unwrap_or(false)
+            },
+            || {
+                handle
+                    .state::<Shell>()
+                    .quit_after_stop
+                    .store(true, Ordering::Release);
+            },
+            || finish_quit(&handle),
+        );
+    });
+}
+
+/// What to tell someone whose update failed after their stack was stopped.
+///
+/// The install runs with local services deliberately down, so a failure here
+/// leaves the machine in a state the user did not ask for and cannot see the
+/// cause of. Both halves matter: that the version they had is intact, and
+/// whether it is running again. Saying only "could not install the update"
+/// left them looking at a settings window over a dead workspace.
+fn failed_install_message(install_error: &str, restart_error: Option<String>) -> String {
+    match restart_error {
+        None => format!(
+            "could not install the update: {install_error}. Your previous version is \
+             still installed and its services are starting again."
+        ),
+        Some(restart_error) => format!(
+            "could not install the update: {install_error}. Your previous version is \
+             still installed, but its services could not be restarted: {restart_error}. \
+             Use Recovery to start them."
+        ),
+    }
+}
+
+/// Watch a confirmed quit that is waiting on a stop, and keep offering a way out.
+///
+/// `quit_after_stop` is consumed only by a `done` event saying the stop
+/// succeeded, so any other outcome -- including no outcome -- leaves the app
+/// running with the user's quit unanswered. This asks once per budget.
+///
+/// It loops. Asking once and then, on "Keep waiting", re-arming the flag and
+/// returning meant the offer never came back: a stop that never confirmed sat
+/// on "Winding down." for ever, and repeating the shortcut was no escape
+/// either, because `request_quit` returns early once `quit_confirmed` is set
+/// and `ExitRequested` refuses the exit in that state.
+///
+/// Written over its effects so the cycle can be tested without a 45 second
+/// sleep, a window, or a daemon.
+fn run_quit_watchdog(
+    mut wait: impl FnMut(),
+    still_waiting: impl Fn() -> bool,
+    ask: impl Fn() -> bool,
+    rearm: impl Fn(),
+    leave: impl FnOnce(),
+) {
+    loop {
+        wait();
+        if !still_waiting() {
             return; // The stop finished and the app is already gone.
         }
-        append_install_log(&format!(
-            "quit: the stop did not finish within {}s; offering to quit anyway",
-            QUIT_STOP_BUDGET.as_secs()
-        ));
-        let quit_anyway = confirm_destructive_action_impl(
-            handle.clone(),
-            "Lemma is taking longer than usual to stop.".into(),
-            "Lemma is waiting for local work to stop safely. Keep waiting while \
-             a database migration or installation finishes. Quit Anyway may interrupt \
-             that work and require recovery when Lemma next starts."
-                .into(),
-            "Quit Anyway".into(),
-        )
-        .unwrap_or(false);
-        if quit_anyway {
-            finish_quit(&handle);
-        } else {
-            // They chose to wait, so re-arm: a stop that lands later should
-            // still complete the quit they originally asked for.
-            shell.quit_after_stop.store(true, Ordering::Release);
+        if ask() {
+            leave();
+            return;
         }
-    });
+        // They chose to wait, so re-arm: a stop that lands later should still
+        // complete the quit they originally asked for.
+        rearm();
+    }
 }
 
 /// Exit without stopping anything, for the cases where there is nothing to stop.
@@ -7155,6 +7437,10 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            // Before anything else reads a version: an update that did not
+            // finish is the reason this launch is on the version it is on.
+            reconcile_update_attempt(&handle);
 
             if !recovery_launch && mode == "hosted" && agent_host_wants_to_run() {
                 // "Runs while Lemma is open" has to hold for a cloud workspace
@@ -7587,6 +7873,127 @@ mod tests {
         );
     }
 
+    /// Uninstalling asked to delete Lemma's data and deleted nothing.
+    ///
+    /// Tauri's uninstaller offers a "delete application data" checkbox, and
+    /// what it removes is `%APPDATA%\<identifier>` and
+    /// `%LOCALAPPDATA%\<identifier>` -- work.lemma.desktop. Lemma's data is in
+    /// `%LOCALAPPDATA%\Lemma`, and most of it is not files at all: it is a
+    /// registered WSL distribution whose ext4.vhdx holds every workspace,
+    /// database and image. So the box removed nothing anybody had, and an
+    /// uninstall left several gigabytes and a registered distribution that
+    /// only `wsl --unregister` could clear.
+    ///
+    /// The hook is what closes that, and these are the three things about it
+    /// that have to stay true. It cannot be executed from here -- NSIS runs
+    /// only on Windows, and only during a real uninstall -- so CI's Windows
+    /// job building the installer is what proves it parses.
+    #[test]
+    fn the_windows_uninstaller_removes_the_data_the_checkbox_promises() {
+        // Normalised: CI's Windows runner checks the tree out with CRLF, and a
+        // needle spanning a line break would find nothing there.
+        let config = include_str!("../tauri.windows.conf.json").replace("\r\n", "\n");
+        let hooks = include_str!("../installer/hooks.nsh").replace("\r\n", "\n");
+
+        assert!(
+            config.contains(r#""installerHooks": "installer/hooks.nsh""#),
+            "the uninstaller's data checkbox does nothing without this hook"
+        );
+        // Pinned rather than left to Tauri's default, which decides whether
+        // the app lands in Program Files and needs Administrator.
+        assert!(
+            config.contains(r#""installMode": "currentUser""#),
+            "the install mode has to be a decision here, not a default \
+             elsewhere that can change under us"
+        );
+
+        assert!(
+            hooks.contains("!macro NSIS_HOOK_PREUNINSTALL"),
+            "PRE, not POST: by POSTUNINSTALL lemma-locald.exe has already been \
+             deleted, and it is the thing that knows how to unregister the guest"
+        );
+        assert!(
+            !hooks.contains("NSIS_HOOK_POSTUNINSTALL"),
+            "nothing can run from $INSTDIR after the files are gone"
+        );
+        assert!(
+            hooks.contains("$DeleteAppDataCheckboxState = 1") && hooks.contains("$UpdateMode <> 1"),
+            "erasing local data must happen only when it was asked for, and \
+             never during an update"
+        );
+        let purge = hooks
+            .find("reset --confirm=erase-local-lemma")
+            .expect("the hook runs locald's own reset rather than reimplementing it");
+        let stop = hooks
+            .find("taskkill /F /T /IM lemma-locald.exe")
+            .expect("reset refuses while the daemon is answering, so it stops first");
+        assert!(
+            stop < purge,
+            "the daemon has to be stopped before the reset, or the reset refuses"
+        );
+    }
+
+    /// On Windows the updater exits this process to run the installer, so
+    /// there is no line after `install` in which to record anything. An
+    /// installer cancelled at the UAC prompt, or interrupted by a reboot, left
+    /// the app running the old version with nothing anywhere saying an update
+    /// had been attempted -- so the next launch, and the user, had no account
+    /// of why they were still on the version they were on.
+    #[test]
+    fn an_update_attempt_is_read_against_the_version_actually_running() {
+        let attempt = json!({"schema_version": 1, "from": "0.7.2", "to": "0.7.3"});
+
+        assert_eq!(
+            classify_update_attempt(Some(&attempt), "0.7.3"),
+            UpdateAttempt::Landed { to: "0.7.3".into() },
+            "running the version it aimed at is the update having happened"
+        );
+        assert_eq!(
+            classify_update_attempt(Some(&attempt), "0.7.2"),
+            UpdateAttempt::DidNotLand { to: "0.7.3".into() },
+            "still on the version it started from means the installer never ran"
+        );
+        // Neither end matches: a third version got installed in between, and
+        // this record explains nothing about the launch reading it.
+        assert_eq!(
+            classify_update_attempt(Some(&attempt), "0.8.0"),
+            UpdateAttempt::Unexplained
+        );
+        assert_eq!(
+            classify_update_attempt(Some(&json!({"schema_version": 1})), "0.7.2"),
+            UpdateAttempt::Unexplained,
+            "a record missing its versions cannot be acted on"
+        );
+        assert_eq!(classify_update_attempt(None, "0.7.2"), UpdateAttempt::None);
+    }
+
+    /// The record lives where an install cannot take it.
+    ///
+    /// Measured on Windows rather than assumed: the NSIS installer puts Lemma
+    /// in `%LOCALAPPDATA%\Lemma`, which is also where `locald` keeps its
+    /// state, so "beside the app" and "in the state root" are the same
+    /// directory there. What separates them is that the uninstaller removes
+    /// only the files it installed -- verified by leaving a file in
+    /// `locald\` across an `uninstall.exe /S` and finding it still there --
+    /// so anything under `locald` survives an install, an update and an
+    /// uninstall alike, and the shipped executables do not.
+    ///
+    /// Which makes the state root the only correct home for a record whose
+    /// whole job is to outlive the installer.
+    #[test]
+    fn the_update_record_is_kept_where_an_install_cannot_take_it() {
+        let path = update_attempt_path();
+        assert!(
+            path.starts_with(locald_root()),
+            "the record has to live in the state root, not beside the app: {}",
+            path.display()
+        );
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("shell-update.json"),
+        );
+    }
+
     #[test]
     fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
         // Every `set_*` on a menu item blocks until the main thread is free, and
@@ -7622,7 +8029,6 @@ mod tests {
         const PURE_UI: &[&str] = &[
             "open_developer_tools",
             "close_local_settings",
-            "open_control_center",
             "get_state",
             // One mutex read of state locald has already pushed into the
             // shell. It talks to nothing, so dispatching it on the main
@@ -9656,21 +10062,288 @@ mod tests {
     /// succeeded, so a wedged VM left the app running on "Winding down." with
     /// the user's quit unanswered -- and the error screen's button read "Try
     /// again", offering to *start* Lemma to somebody who had asked to leave.
+    /// The shell's view of the daemon, folded one event at a time.
+    ///
+    /// `handle_locald_event` was 391 lines with no test at all — the path that
+    /// decides what every screen shows, checked only by running the app. These
+    /// drive the reducer it was split into.
+    mod locald_events {
+        use super::super::{apply_locald_event, UiState};
+        use serde_json::json;
+
+        /// A phase event is progress, and progress is not an error.
+        #[test]
+        fn a_phase_event_describes_the_work_without_claiming_readiness() {
+            let mut ui = UiState {
+                ready: true,
+                ..UiState::default()
+            };
+
+            apply_locald_event(
+                &mut ui,
+                "phase",
+                &json!({
+                    "label": "Starting authentication",
+                    "key": "supertokens",
+                    "progress": 40,
+                    "detail": "waiting for the guest",
+                }),
+            );
+
+            assert_eq!(ui.phase_key, "supertokens");
+            assert_eq!(ui.progress, 40);
+            assert_eq!(ui.status, "Starting authentication: waiting for the guest");
+            assert!(!ui.ready, "work in progress is not a ready workspace");
+            assert!(!ui.error);
+        }
+
+        /// Lifecycle state outranks a stale phase.
+        ///
+        /// Older daemons legitimately report `stopped` while their last phase
+        /// still reads ready at 100%. Taking the phase at face value showed
+        /// "It's ready" over a stack that had stopped.
+        #[test]
+        fn a_stopped_daemon_is_shown_as_stopped_even_if_its_last_phase_said_ready() {
+            let mut ui = UiState {
+                phase: "Ready".into(),
+                phase_key: "ready".into(),
+                progress: 100,
+                ready: true,
+                ..UiState::default()
+            };
+
+            apply_locald_event(
+                &mut ui,
+                "state",
+                &json!({"running": false, "ready": false, "status": "stopped"}),
+            );
+
+            assert_eq!(ui.phase_key, "stopped");
+            assert_eq!(ui.progress, 0);
+            assert!(!ui.ready);
+        }
+
+        /// An error the user can act on survives the ordinary status traffic
+        /// that follows it, or the screen offering the fix disappears before it
+        /// can be read.
+        #[test]
+        fn an_actionable_error_is_not_cleared_by_the_next_status() {
+            let mut ui = UiState {
+                error: true,
+                error_code: "wsl-required".into(),
+                ..UiState::default()
+            };
+
+            apply_locald_event(
+                &mut ui,
+                "status",
+                &json!({"running": false, "ready": false, "status": "idle"}),
+            );
+
+            assert!(ui.error, "the recovery screen must not vanish on its own");
+            assert_eq!(ui.error_code, "wsl-required");
+        }
+
+        /// Reaching ready is what clears it.
+        #[test]
+        fn becoming_ready_clears_a_previous_error() {
+            let mut ui = UiState {
+                error: true,
+                error_code: "locald-start-failed".into(),
+                ..UiState::default()
+            };
+
+            apply_locald_event(
+                &mut ui,
+                "status",
+                &json!({"running": true, "ready": true, "status": "ready"}),
+            );
+
+            assert!(!ui.error);
+            assert!(ui.error_code.is_empty());
+            assert!(ui.ready);
+        }
+
+        /// Recovery options are fetched once per error, not on every event that
+        /// repeats it — the daemon reports status continuously while stopped.
+        #[test]
+        fn terminal_recovery_is_scheduled_once_for_one_error() {
+            let mut ui = UiState::default();
+            let failure = json!({"running": false, "ready": false, "status": "error", "code": "x"});
+
+            let first = apply_locald_event(&mut ui, "state", &failure);
+            assert!(first.schedule_terminal_recovery, "the first error asks");
+
+            let second = apply_locald_event(&mut ui, "status", &failure);
+            assert!(
+                !second.schedule_terminal_recovery,
+                "repeats of the same error must not ask again"
+            );
+        }
+
+        /// A workspace URL is adopted only when both halves are trusted.
+        #[test]
+        fn an_untrusted_workspace_url_is_refused() {
+            let mut ui = UiState::default();
+
+            apply_locald_event(
+                &mut ui,
+                "status",
+                &json!({
+                    "running": true,
+                    "ready": true,
+                    "status": "ready",
+                    "url": "https://evil.example",
+                    "api_url": "https://evil.example/api",
+                }),
+            );
+
+            assert!(
+                ui.url.is_empty(),
+                "the shell must not navigate anywhere the daemon names: {}",
+                ui.url
+            );
+        }
+    }
+
+    /// Each platform's data disk, spelled the way that platform spells it.
+    ///
+    /// The Windows branch pointed at `runtime/windows`, which nothing creates.
+    /// So on Windows `has_local_runtime_data` answered "no data" for a real
+    /// installation — the guard that refuses to reset a user's data during an
+    /// update was leaning entirely on the config check — and Recovery reported
+    /// the disk as zero bytes.
     #[test]
-    fn a_confirmed_quit_offers_to_leave_when_the_stop_does_not_finish() {
-        let body = function_body(include_str!("main.rs"), "fn stop_then_quit(");
+    fn the_managed_data_disk_is_the_one_this_platform_actually_writes() {
+        let disk = managed_data_disk();
+        let tail: Vec<_> = disk
+            .components()
+            .rev()
+            .take(2)
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect();
+
+        if cfg!(windows) {
+            assert_eq!(tail, vec!["ext4.vhdx", "wsl"], "{}", disk.display());
+        } else {
+            assert_eq!(tail, vec!["data.raw", "macos"], "{}", disk.display());
+        }
         assert!(
-            body.contains("QUIT_STOP_BUDGET"),
-            "the wait must be bounded, or a stop that never lands never quits",
+            disk.starts_with(locald_root()),
+            "the disk belongs to this installation: {}",
+            disk.display()
+        );
+    }
+
+    /// A build keeps its data where its own name says, not where "Lemma" does.
+    ///
+    /// Qualifying a candidate means running it on the same Mac as the real
+    /// installation. Sharing `Application Support/Lemma` would let the
+    /// candidate stop the user's daemon, adopt its runtime and reset its pods
+    /// -- so a QA build bakes in a different directory, and a release build
+    /// must keep the one every existing installation already uses.
+    #[test]
+    fn a_release_build_keeps_its_data_where_installed_lemma_already_has_it() {
+        assert_eq!(
+            option_env!("LEMMA_DESKTOP_DATA_DIR_NAME"),
+            None,
+            "a build with this set is a qualification candidate, not a release"
+        );
+        assert_eq!(DATA_DIR_NAME, "Lemma");
+        assert!(
+            app_support_dir().ends_with("Lemma"),
+            "moving this orphans every existing installation's data: {}",
+            app_support_dir().display()
+        );
+    }
+
+    /// An update that fails after the stack is stopped must say the previous
+    /// version survived, and whether it is running.
+    ///
+    /// `install_app_update` stops locald before installing, on purpose: an
+    /// in-place update writes to the same path, so a stale daemon would be
+    /// adopted by the new shell. But when the install then failed it returned
+    /// the error and stopped there, leaving someone in Local settings looking
+    /// at a workspace whose backend had gone, with nothing on screen offering
+    /// to bring it back.
+    #[test]
+    fn a_failed_update_says_the_previous_version_survived_it() {
+        let recovered = failed_install_message("the bundle is not writable", None);
+        assert!(
+            recovered.contains("previous version is still installed"),
+            "{recovered}"
         );
         assert!(
-            body.contains("Quit Anyway"),
-            "the way out has to be on screen, not only on a second Cmd-Q",
+            recovered.contains("starting again"),
+            "the user needs to know the stack is coming back: {recovered}"
+        );
+
+        let stranded = failed_install_message(
+            "the bundle is not writable",
+            Some("daemon did not answer".into()),
         );
         assert!(
-            body.contains("quit_after_stop.store(true"),
-            "choosing to keep waiting must re-arm, so a late stop still quits",
+            stranded.contains("previous version is still installed"),
+            "{stranded}"
         );
+        assert!(
+            stranded.contains("Recovery"),
+            "a stack that stayed down has to name the way out: {stranded}"
+        );
+        assert!(
+            stranded.contains("daemon did not answer"),
+            "the reason it stayed down is the actionable half: {stranded}"
+        );
+    }
+
+    /// Choosing "Keep waiting" must bring the offer back, not retire it.
+    ///
+    /// The watchdog used to ask once. On "Keep waiting" it re-armed the flag
+    /// and returned, so a stop that never confirmed left the app on "Winding
+    /// down." for ever with no way out -- repeating the shortcut does not help,
+    /// because `request_quit` returns early once the quit is confirmed.
+    #[test]
+    fn a_confirmed_quit_keeps_offering_to_leave_until_the_stop_finishes() {
+        let asked = std::cell::Cell::new(0);
+        let rearmed = std::cell::Cell::new(0);
+        let left = std::cell::Cell::new(false);
+
+        run_quit_watchdog(
+            || {},
+            || true, // The stop never lands.
+            || {
+                asked.set(asked.get() + 1);
+                // Wait three times, then take the way out.
+                asked.get() > 3
+            },
+            || rearmed.set(rearmed.get() + 1),
+            || left.set(true),
+        );
+
+        assert_eq!(asked.get(), 4, "each budget must ask again");
+        assert_eq!(rearmed.get(), 3, "waiting must re-arm so a late stop quits");
+        assert!(left.get(), "Quit Anyway must actually leave");
+    }
+
+    /// The other exit: the stop lands, and nobody is asked anything.
+    #[test]
+    fn a_quit_watchdog_stands_down_once_the_stop_finishes() {
+        let asked = std::cell::Cell::new(0);
+        let left = std::cell::Cell::new(false);
+
+        run_quit_watchdog(
+            || {},
+            || false, // `quit_after_stop` was consumed by a `done` event.
+            || {
+                asked.set(asked.get() + 1);
+                true
+            },
+            || {},
+            || left.set(true),
+        );
+
+        assert_eq!(asked.get(), 0, "a finished stop must not prompt");
+        assert!(!left.get(), "the quit already completed on its own");
     }
 
     /// A web inspector does not ship enabled in the top-level menus.

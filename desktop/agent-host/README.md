@@ -189,6 +189,14 @@ own copy against the same pairing, speaking an older protocol. Desktop is the
 supported way to keep a host running; `lemma-agent-host serve` runs one in the
 foreground for containers or an external supervisor.
 
+A machine that ran `install-service` before still has that service. `status`
+reports it, and `uninstall-service` removes it:
+
+```bash
+lemma-agent-host status --json   # "service": { "installed": true, ... }
+lemma-agent-host uninstall-service
+```
+
 Disconnect revokes the remote device before deleting its local identity:
 
 ```bash

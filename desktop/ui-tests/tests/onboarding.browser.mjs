@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright';
+import { launchSplash } from '../drivers/splash.mjs';
 
 let browser;
 before(async () => {
@@ -9,57 +9,10 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function onboarding(t, { viewport = { width: 1100, height: 760 }, windows = false, initialState = null, deferState = false, intent = '', colorScheme = 'light' } = {}) {
-  const context = await browser.newContext({
-    viewport,
-    reducedMotion: 'reduce',
-    colorScheme,
-    userAgent: windows ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-  });
-  t.after(() => context.close());
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
-  t.after(() => assert.deepEqual(errors, []));
-  const assets = new URL('../../ui/', import.meta.url);
-  await page.route('https://desktop.test/**', async route => {
-    const name = new URL(route.request().url()).pathname.slice(1);
-    const file = new URL(name, assets);
-    if (!file.href.startsWith(assets.href)) return route.abort();
-    const contentType = name.endsWith('.html') ? 'text/html'
-      : name.endsWith('.js') ? 'text/javascript'
-        : name.endsWith('.json') ? 'application/json' : 'application/octet-stream';
-    try {
-      await route.fulfill({ body: await readFile(file), contentType });
-    } catch {
-      await route.abort();
-    }
-  });
-  await page.addInitScript(({ initialState, deferState }) => {
-    window.__fixture = { calls: [], rejectInstall: false };
-    window.__TAURI__ = {
-      event: { listen: async (name, listener) => {
-        if (name === 'lemma:state') window.__fixture.renderState = state => listener({ payload: state });
-      } },
-      core: { async invoke(command, args) {
-        window.__fixture.calls.push({ command, args });
-        if (command === 'get_state' && deferState) return new Promise(() => {});
-        if (command === 'get_state') return initialState || {
-          mode: 'undecided', phaseKey: 'boot', status: 'waiting',
-          running: false, ready: false, error: false, setup: true,
-        };
-        if (command === 'diagnostic_logs') return { entries: '', sources: [] };
-        if (command === 'local_recovery_options') return {};
-        if (command === 'set_connection_mode' && window.__fixture.rejectInstall) {
-          throw new Error('Not enough disk space for the local runtime. Free space and retry.');
-        }
-      } },
-    };
-  }, { initialState, deferState });
-  await page.goto(`https://desktop.test/index.html?intent=${encodeURIComponent(intent)}`);
-  if (!initialState) await page.locator('#choose').waitFor({ state: 'visible' });
-  return page;
+// The fixture moved to drivers/splash.mjs when the startup suite needed the
+// same one. This keeps the local name, so nothing below had to change.
+async function onboarding(t, options = {}) {
+  return launchSplash(browser, t, options);
 }
 
 async function deploymentCalls(page) {
@@ -93,6 +46,77 @@ test('shutdown ignores stale startup readiness and retries shutdown without star
   const calls = await page.evaluate(() => window.__fixture.calls.filter(call =>
     ['stop', 'start', 'open_app', 'set_connection_mode'].includes(call.command)));
   assert.deepEqual(calls, [{ command: 'stop', args: { includeInfra: true } }]);
+});
+
+// The quit case above was guarded; Stop was not. Stop puts the same splash up
+// after the daemon admits the operation, and a snapshot taken just before that
+// still says ready -- which used to reach `scheduleReadyOpen` and navigate the
+// window into a workspace whose services were going away, 650ms later.
+test('stopping ignores stale readiness instead of opening the workspace it is shutting down', async t => {
+  const page = await onboarding(t, { intent: 'stop', initialState: {
+    mode: 'local', phaseKey: 'stopping', status: 'Stopping services', running: true,
+  } });
+  await page.getByText('Winding down.', { exact: true }).waitFor();
+
+  await page.evaluate(() => window.__fixture.renderState({
+    mode: 'local', phaseKey: 'ready', ready: true, running: true,
+  }));
+  // Longer than the 650ms the ready screen waits before opening on its own.
+  await page.waitForTimeout(900);
+
+  assert.equal(await page.locator('#open-app').isVisible(), false,
+    'a stop must not offer to open the workspace');
+  assert.deepEqual(
+    await page.evaluate(() => window.__fixture.calls.filter(call =>
+      ['open_app', 'start'].includes(call.command))),
+    [],
+    'a stale ready snapshot must not start or open anything',
+  );
+  assert.equal(await page.getByText('Winding down.', { exact: true }).count(), 1,
+    'the screen must keep saying what is actually happening');
+});
+
+// Keyboard and screen-reader users, on the two screens everybody sees first.
+test('choosing local keeps focus on screen and announces a failure', async t => {
+  const page = await onboarding(t, { initialState: { mode: 'undecided' } });
+
+  await page.getByRole('button', { name: /Use Local Lemma/ }).click();
+  // Clicking hid the button that had focus. Without a move, focus falls to
+  // <body>: nothing is announced and Tab restarts from the top of the page.
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id),
+    'confirm-local',
+    'focus must follow the user to the screen they just opened',
+  );
+
+  // A failure has to be spoken, not merely drawn.
+  assert.equal(
+    await page.locator('#local-setup-error').getAttribute('role'),
+    'alert',
+  );
+  assert.equal(await page.locator('#errwrap').getAttribute('role'), 'alert');
+});
+
+test('every control on the splash shows keyboard focus', async t => {
+  const page = await onboarding(t, { initialState: { mode: 'undecided' } });
+  // `all: unset` on the corner controls removed the user-agent ring too, so
+  // these were the only things on screen a keyboard user could not locate.
+  for (const id of ['toggle-log', 'open-recovery', 'switch-mode']) {
+    // Reached with the keyboard, because that is what `:focus-visible` is for;
+    // then read from the element itself, since a pseudo-class cannot be asked
+    // for through getComputedStyle's pseudo-element argument.
+    const ring = await page.evaluate((target) => {
+      const button = document.getElementById(target);
+      if (!button) return 'missing';
+      button.hidden = false;
+      button.focus({ focusVisible: true });
+      const style = getComputedStyle(button);
+      return style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0
+        ? 'ring'
+        : `none (${style.outlineStyle} ${style.outlineWidth})`;
+    }, id);
+    assert.equal(ring, 'ring', `${id} must show where the keyboard is`);
+  }
 });
 
 test('opening or reloading the splash never duplicates shell-owned startup', async t => {

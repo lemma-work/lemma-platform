@@ -266,6 +266,10 @@ impl HostRuntime {
         let global_capacity = Arc::new(Semaphore::new(usize::from(self.config.max_runs)));
         let mut targets =
             HashMap::<Uuid, (watch::Sender<bool>, OwnedTask<anyhow::Result<()>>)>::new();
+        // What the scan falls back to when the file on disk stops parsing, and
+        // whether that has already been said once. See the scan loop below.
+        let mut last_good_config = self.config.clone();
+        let mut config_unreadable = false;
         let mut scan = tokio::time::interval(DISK_SCAN_INTERVAL);
         scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // One sweep for the process, announced to every worker.
@@ -288,12 +292,19 @@ impl HostRuntime {
                 }
                 _ = scan.tick() => {
                     if std::time::Instant::now() >= cleanup_due {
-                        let deleted = self.journal.cleanup_retained(Utc::now())?;
-                        if deleted > 0 {
-                            tracing::info!(
+                        // Retention is housekeeping. Letting a transient
+                        // journal error out of this loop ends `serve`, and
+                        // locald restarts the host straight back into it.
+                        match self.journal.cleanup_retained(Utc::now()) {
+                            Ok(deleted) if deleted > 0 => tracing::info!(
                                 deleted,
                                 "cleaned retained Agent Host journal records"
-                            );
+                            ),
+                            Ok(_) => {}
+                            Err(error) => tracing::warn!(
+                                %error,
+                                "could not clean retained Agent Host journal records"
+                            ),
                         }
                         cleanup_due =
                             std::time::Instant::now() + JOURNAL_CLEANUP_INTERVAL;
@@ -302,8 +313,32 @@ impl HostRuntime {
                         tracing::info!("agents on this computer changed; re-probing");
                         agents_changed.send_modify(|generation| *generation += 1);
                     }
-                    let current = HostConfig::load_or_create(&self.paths)?;
-                    current.validate()?;
+                    // A config this scan cannot read is not a reason to stop
+                    // serving the targets already running. Exiting here ended
+                    // `serve`, and locald restarted the host into the same
+                    // unreadable file -- so one bad edit took the Agent Host
+                    // away until somebody found and fixed it by hand, with the
+                    // reason only in a log.
+                    let current = match HostConfig::load_or_create(&self.paths)
+                        .and_then(|config| config.validate().map(|()| config))
+                    {
+                        Ok(config) => {
+                            config_unreadable = false;
+                            last_good_config = config.clone();
+                            config
+                        }
+                        Err(error) => {
+                            if !config_unreadable {
+                                config_unreadable = true;
+                                tracing::error!(
+                                    %error,
+                                    "the Agent Host configuration could not be read; \
+                                     continuing with the last good one"
+                                );
+                            }
+                            last_good_config.clone()
+                        }
+                    };
                     let enabled = current
                         .targets
                         .iter()
@@ -1355,12 +1390,16 @@ impl TargetWorker {
                 lease_epoch,
                 host_cwd: Some(host_cwd),
                 provider_seen: AtomicBool::new(false),
+                dispatched: AtomicBool::new(false),
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
                 events_ready: Arc::clone(&events_ready),
             });
             let remaining = (spec.run_deadline - Utc::now())
                 .to_std()
                 .unwrap_or(Duration::ZERO);
+            // Kept behind, so the failure path below can still ask whether the
+            // user pressed Stop.
+            let asked_to_stop = cancel_rx.clone();
             let request = AcpRunRequest {
                 adapter,
                 run_spec: spec,
@@ -1422,7 +1461,18 @@ impl TargetWorker {
                         .get_run(target_id, run_id)?
                         .ok_or_else(|| anyhow::anyhow!("run disappeared after adapter failure"))?;
                     let state = if run.checkpoint == Checkpoint::DispatchIntent {
+                        // Cancellation does not resolve side-effect
+                        // uncertainty: we still do not know whether the
+                        // provider received the prompt.
                         RunState::DispatchUnknown
+                    } else if *asked_to_stop.borrow() {
+                        // The user pressed Stop and the turn did not end
+                        // cleanly. That is a cancellation that went the hard
+                        // way, not a fault in their coding agent -- and
+                        // calling it a failure put "Claude Code encountered an
+                        // error on this computer" in front of someone whose
+                        // only mistake was stopping a run.
+                        RunState::Cancelled
                     } else {
                         RunState::Failed
                     };
@@ -1436,8 +1486,15 @@ impl TargetWorker {
                         // at the failure that told them.
                         reprobe_requested.store(true, Ordering::SeqCst);
                     }
-                    let rewritten = authentication_hint(&adapter_name, &raw)
-                        .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)));
+                    let rewritten = if state == RunState::Cancelled {
+                        // Say what happened. The adapter-failure wording is
+                        // written for a fault and would describe the agent as
+                        // broken to a user who simply stopped it.
+                        Some("run cancelled by Lemma; the agent did not stop on request".to_owned())
+                    } else {
+                        authentication_hint(&adapter_name, &raw)
+                            .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
+                    };
                     // Rewriting an internal error does not mean the text it
                     // interrupted was an error. Drop only a proven duplicate.
                     let supersedes =
@@ -1507,6 +1564,16 @@ impl TargetWorker {
             if active.kill_at.is_none() {
                 active.kill_at = Some(tokio::time::Instant::now() + CANCEL_KILL_AFTER);
             }
+            // Release anything parked on the user, before waiting for the turn
+            // to end. An adapter that blocks its turn on an outstanding
+            // `request_permission` -- which is the normal shape, not an edge
+            // case -- can never answer `session/cancel` while a prompt nobody
+            // will now respond to is still open. The turn then ran out the
+            // grace period and the run was recorded as a *failure*, so someone
+            // who pressed Stop was told their coding agent had crashed.
+            // Dropping the waiters resolves them as denials, which is what
+            // cancelling a turn means for a permission it will never use.
+            self.permissions.abandon_run(run_id);
             return Ok(());
         }
         // No task to ask: the run is already gone, so its terminal state is
@@ -1615,6 +1682,7 @@ impl TargetWorker {
                 lease_epoch: run.lease_epoch,
                 host_cwd: None,
                 provider_seen: AtomicBool::new(true),
+                dispatched: AtomicBool::new(true),
                 stream_segments: std::sync::Mutex::new(segments),
                 events_ready: Arc::clone(&self.events_ready),
             }
@@ -2072,6 +2140,29 @@ impl TargetWorker {
 
     async fn graceful_shutdown(&mut self) -> anyhow::Result<()> {
         self.draining = true;
+        // Ask every run in flight to stop, the same way Stop does.
+        //
+        // Waiting for turns to end on their own and then aborting the ones that
+        // did not is how quitting Lemma mid-answer lost a conversation its
+        // history: `cancel_all` drops the ACP connection, the child guard
+        // SIGKILLs the process group, and the provider never writes the session
+        // file the *next* turn resumes from. Signalling first gives each agent
+        // its ten seconds to finish through ACP, and `enforce_cancellations`
+        // still kills whatever ignores that -- inside this grace, because
+        // CANCEL_KILL_AFTER is half of SHUTDOWN_GRACE.
+        let signalled = tokio::time::Instant::now() + CANCEL_KILL_AFTER;
+        for active in self.active_runs.values_mut() {
+            active.cancel.send_replace(true);
+            if active.kill_at.is_none() {
+                active.kill_at = Some(signalled);
+            }
+        }
+        let abandoned = self.active_runs.keys().copied().collect::<Vec<_>>();
+        for run_id in abandoned {
+            // As in `handle_cancel`: an adapter blocked on an approval nobody
+            // is going to answer cannot act on the cancel it was just sent.
+            self.permissions.abandon_run(run_id);
+        }
         let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
         loop {
             self.reap_finished().await;
@@ -2199,6 +2290,8 @@ struct JournalCallbacks {
     lease_epoch: u32,
     host_cwd: Option<String>,
     provider_seen: AtomicBool,
+    /// Whether the prompt has actually gone out. See `event`.
+    dispatched: AtomicBool,
     stream_segments: std::sync::Mutex<StreamSegments>,
     /// Raised whenever this run journals an event, so the poll loop stops
     /// waiting and flushes. Without it a run's output sits in the journal until
@@ -2206,6 +2299,12 @@ struct JournalCallbacks {
     /// and the conversation still waited twenty.
     events_ready: Arc<tokio::sync::Notify>,
 }
+
+/// How much streamed text is held before it is sealed into an upsert.
+///
+/// `recover_event` replays multiple upserts correctly, so sealing early costs
+/// nothing beyond an extra row.
+const STREAM_SEGMENT_SEAL_BYTES: usize = 64 * 1024;
 
 /// Accumulated per-kind streamed text awaiting a full-text upsert.
 ///
@@ -2301,6 +2400,7 @@ impl JournalCallbacks {
 
 impl AcpCallbacks for JournalCallbacks {
     fn before_prompt(&self, provider_session_id: &str) -> anyhow::Result<()> {
+        self.dispatched.store(true, Ordering::SeqCst);
         self.journal.mark_dispatch_intent(
             self.target_id,
             self.run_id,
@@ -2338,7 +2438,18 @@ impl AcpCallbacks for JournalCallbacks {
         object_id: Option<String>,
         payload: JsonMap,
     ) -> anyhow::Result<()> {
-        if !self.provider_seen.swap(true, Ordering::SeqCst) {
+        // Only once the prompt is actually on its way.
+        //
+        // Lemma reads a RUNNING checkpoint as proof the prompt landed, and
+        // promotes the conversation's pending instructions to delivered on the
+        // strength of it. Not every event comes after dispatch: a model the
+        // harness will not take is reported as a config update *before*
+        // `before_prompt`, and letting that write RUNNING marked the
+        // instructions delivered before a prompt existed. A run that then died
+        // before dispatch left them skipped for the rest of the conversation.
+        if self.dispatched.load(Ordering::SeqCst)
+            && !self.provider_seen.swap(true, Ordering::SeqCst)
+        {
             self.journal.checkpoint(
                 self.target_id,
                 self.run_id,
@@ -2356,16 +2467,27 @@ impl AcpCallbacks for JournalCallbacks {
                     // the current text segment ahead of itself.
                     self.flush_stream_segment(is_message)?;
                 } else {
-                    let mut segments = self
-                        .stream_segments
-                        .lock()
-                        .expect("stream segments poisoned");
-                    let segment = if is_message {
-                        &mut segments.message
-                    } else {
-                        &mut segments.thought
+                    let outgrew_segment = {
+                        let mut segments = self
+                            .stream_segments
+                            .lock()
+                            .expect("stream segments poisoned");
+                        let segment = if is_message {
+                            &mut segments.message
+                        } else {
+                            &mut segments.thought
+                        };
+                        segment.push_str(&text);
+                        segment.len() >= STREAM_SEGMENT_SEAL_BYTES
                     };
-                    segment.push_str(&text);
+                    // Sealed on size as well as on a change of kind. A turn that
+                    // only ever streams text never changes kind, so the whole
+                    // answer was held in memory, written again in full as one
+                    // upsert row, and sent twice -- once as chunks and once as
+                    // that row. Long answers are exactly when that hurts.
+                    if outgrew_segment {
+                        self.flush_stream_segment(is_message)?;
+                    }
                 }
                 self.journal.append_event(
                     self.target_id,
@@ -2732,11 +2854,20 @@ fn authentication_hint(harness: &str, error: &str) -> Option<String> {
 ///
 /// Returns `None` for anything that is not an adapter's internal error, so
 /// ordinary messages ("run deadline elapsed") stay exactly as they are.
+///
+/// An agent that simply dies is the same thing to a person: it went wrong on
+/// their computer and the place to find out why is a terminal. It did not read
+/// as one here, because it does not report itself -- there is no JSON-RPC
+/// error to forward, only an exit status. Since this host took ownership of the
+/// child process, that arrives as "Process exited with ...", and a crash
+/// mid-answer was framed as a bare failure with nothing to act on. The browser
+/// journey that drives a crashing adapter is what noticed.
 fn adapter_failure_message(harness: &str, error: &str) -> Option<String> {
     let normalized = error.to_ascii_lowercase();
     let is_adapter_internal = normalized.contains("internal error")
         || normalized.contains("service failure")
-        || normalized.contains("\"service\"");
+        || normalized.contains("\"service\"")
+        || normalized.starts_with("process exited with");
     if !is_adapter_internal {
         return None;
     }
@@ -2807,7 +2938,7 @@ mod target_worker_tests {
     use tokio::sync::{Semaphore, watch};
     use uuid::Uuid;
 
-    use super::{ProbedHarnesses, TargetWorker, deliver_events};
+    use super::{CANCEL_KILL_AFTER, ProbedHarnesses, TargetWorker, deliver_events};
     use crate::acp::{AcpCallbacks, AcpProbeOutcome, AcpRunOutcome, AcpRunRequest, AgentDriver};
     use crate::adapters::{AdapterManifest, ResolvedAdapter};
     use crate::api::PublishedHarness;
@@ -3976,6 +4107,130 @@ mod target_worker_tests {
         );
     }
 
+    /// Quitting Lemma with an answer still streaming.
+    ///
+    /// Shutdown used to wait out its grace and then abort whatever was left,
+    /// which drops the ACP connection and SIGKILLs the agent's process group.
+    /// The provider had not yet written the session file the conversation's
+    /// *next* turn resumes from, so quitting during a long turn silently cost
+    /// that conversation its history -- the same failure the Stop path was
+    /// reworked to avoid, on a route that never got the fix.
+    #[tokio::test]
+    async fn shutdown_asks_a_streaming_run_to_stop_before_it_kills_anything() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let handle = tokio::spawn(async move {
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        harness.worker.track_run(run_id, handle);
+
+        let permissions = harness.worker.permissions.clone();
+        let parked = tokio::spawn(async move {
+            permissions
+                .wait(
+                    run_id,
+                    "approval-1".to_owned(),
+                    Duration::from_secs(300),
+                    None,
+                )
+                .await
+        });
+        while harness.worker.permissions.parked() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // Only the signalling half; the loop that follows it would wait out
+        // the full grace against a run that never ends.
+        harness.worker.draining = true;
+        let signalled = tokio::time::Instant::now() + CANCEL_KILL_AFTER;
+        for active in harness.worker.active_runs.values_mut() {
+            active.cancel.send_replace(true);
+            if active.kill_at.is_none() {
+                active.kill_at = Some(signalled);
+            }
+        }
+        for id in harness
+            .worker
+            .active_runs
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            harness.worker.permissions.abandon_run(id);
+        }
+
+        let active = &harness.worker.active_runs[&run_id];
+        assert!(
+            *active.cancel.borrow(),
+            "the agent must be asked through ACP, so it can flush its session"
+        );
+        assert!(
+            !active.handle.is_finished(),
+            "shutdown must not abort the turn outright"
+        );
+        assert!(
+            active.kill_at.is_some(),
+            "an agent that ignores the request still has to be reaped"
+        );
+        assert_eq!(
+            parked.await.unwrap(),
+            PermissionDecision::Deny,
+            "an approval nobody will answer must not hold the turn open through shutdown"
+        );
+    }
+
+    /// Stop, pressed while the agent is waiting on an approval.
+    ///
+    /// Adapters block the turn on an outstanding `request_permission`, so the
+    /// agent cannot answer `session/cancel` while a prompt nobody will now
+    /// respond to is still parked. The turn ran out its grace period, the run
+    /// was recorded as a failure, and the message was rewritten to say the
+    /// coding agent had crashed -- to a user whose only action was Stop.
+    /// Cancelling has to release the waiters as well as raise the flag.
+    #[tokio::test]
+    async fn cancelling_releases_an_approval_the_agent_is_still_waiting_on() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let handle = tokio::spawn(async move {
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        harness.worker.track_run(run_id, handle);
+
+        // The agent asks, and blocks its turn until someone answers.
+        let permissions = harness.worker.permissions.clone();
+        let parked = tokio::spawn(async move {
+            permissions
+                .wait(
+                    run_id,
+                    "approval-1".to_owned(),
+                    Duration::from_secs(300),
+                    None,
+                )
+                .await
+        });
+        while harness.worker.permissions.parked() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        harness
+            .worker
+            .handle_cancel(&cancel_command(run_id))
+            .unwrap();
+
+        assert_eq!(
+            parked.await.unwrap(),
+            PermissionDecision::Deny,
+            "a cancelled turn will never use the permission, so the agent must be told at once"
+        );
+        assert_eq!(
+            harness.worker.permissions.parked(),
+            0,
+            "cancelling must leave nothing waiting on a user who has already stopped the run"
+        );
+    }
+
     /// `abort` only requests cancellation, so the run task can still park one
     /// more request after the kill fallback has swept the gate. Keeping the
     /// handle until it is reaped is what closes that window.
@@ -4039,6 +4294,90 @@ mod stream_upsert_tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    /// A long answer that only ever streams text never changes kind, so nothing
+    /// sealed its segment: the whole thing sat in memory, was written again in
+    /// full as a single upsert row, and reached Lemma twice. Sealing on size as
+    /// well as on a change of kind bounds it, and `recover_event` already
+    /// replays multiple upserts correctly.
+    #[test]
+    fn a_long_text_only_answer_is_sealed_in_pieces_rather_than_held_whole() {
+        let (_directory, callbacks, run_id) = fixture();
+
+        // Comfortably past the seal threshold, in realistic chunk sizes.
+        let chunk = "a".repeat(4096);
+        for _ in 0..40 {
+            callbacks
+                .event(EventType::AgentMessageChunk, None, payload(&chunk))
+                .unwrap();
+        }
+
+        let batches = callbacks
+            .journal
+            .pending_events(callbacks.target_id, 4096)
+            .unwrap();
+        let upserts = batches
+            .iter()
+            .flat_map(|batch| batch.events.iter())
+            .filter(|event| event.event_type == EventType::AgentMessageUpsert)
+            .count();
+        assert!(
+            upserts >= 2,
+            "a {}KiB answer should seal more than once, saw {upserts}",
+            40 * 4
+        );
+
+        let recovered: String = batches
+            .iter()
+            .flat_map(|batch| batch.events.iter())
+            .filter(|event| event.event_type == EventType::AgentMessageChunk)
+            .map(|event| super::chunk_text(&event.payload))
+            .collect();
+        assert_eq!(
+            recovered.len(),
+            40 * 4096,
+            "sealing must not drop or duplicate any of the answer"
+        );
+        let _ = run_id;
+    }
+
+    /// A run whose model the harness will not take reports that as a config
+    /// update *before* the prompt goes out. Lemma treats a RUNNING checkpoint
+    /// as proof the prompt landed and promotes the conversation's pending
+    /// instructions to delivered on it -- so that pre-dispatch event marked
+    /// them delivered before a prompt existed, and a run that then died before
+    /// dispatch left them skipped for the rest of the conversation.
+    #[test]
+    fn an_event_before_dispatch_does_not_claim_the_prompt_landed() {
+        let (_directory, callbacks, run_id) = fixture();
+        // The fixture stands in for a run already under way; this one has not
+        // dispatched yet.
+        callbacks
+            .dispatched
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        callbacks
+            .provider_seen
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        callbacks
+            .event(EventType::ConfigUpdate, None, payload("model_unavailable"))
+            .unwrap();
+
+        let run = callbacks
+            .journal
+            .get_run(callbacks.target_id, run_id)
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            run.state,
+            crate::protocol::RunState::Running,
+            "a config update before the prompt must not report the run as running"
+        );
+        assert!(
+            !run.prompt_dispatched,
+            "and must not look like a prompt that landed"
+        );
+    }
+
     fn payload(text: &str) -> JsonMap {
         let mut payload = JsonMap::new();
         payload.insert("text".to_owned(), Value::String(text.to_owned()));
@@ -4085,6 +4424,7 @@ mod stream_upsert_tests {
             lease_epoch: 1,
             host_cwd: Some("/test/Projects/Δ workspace".to_owned()),
             provider_seen: AtomicBool::new(true),
+            dispatched: AtomicBool::new(true),
             stream_segments: std::sync::Mutex::new(StreamSegments::default()),
             events_ready: Arc::new(tokio::sync::Notify::new()),
         };
@@ -4413,6 +4753,39 @@ mod capability_tests {
 #[cfg(test)]
 mod adapter_failure_message_tests {
     use super::authentication_hint;
+
+    /// An agent that just dies went wrong on this computer too.
+    ///
+    /// It does not report itself: there is no JSON-RPC error to forward, only
+    /// an exit status, which since this host took ownership of the child
+    /// process arrives as "Process exited with ...". That matched none of the
+    /// adapter-internal shapes, so a crash mid-answer was framed as a bare
+    /// failure with nothing in it to act on -- while the person watching had
+    /// just seen half an answer appear and stop.
+    #[test]
+    fn an_agent_that_exits_non_zero_is_framed_like_any_other_adapter_failure() {
+        let framed = super::adapter_failure_message("Codex", "Process exited with exit status: 23")
+            .expect("a crashed adapter has to say whose crash it was");
+        assert!(
+            framed.starts_with("Codex encountered an error on this computer"),
+            "{framed}"
+        );
+        assert!(framed.contains("exit status: 23"), "{framed}");
+
+        // With its own last words, when it managed any.
+        let with_stderr = super::adapter_failure_message(
+            "Codex",
+            "Process exited with exit status: 1: panicked at src/main.rs",
+        )
+        .expect("framed");
+        assert!(
+            with_stderr.contains("panicked at src/main.rs"),
+            "{with_stderr}"
+        );
+
+        // Still not everything: an ordinary message is left alone.
+        assert!(super::adapter_failure_message("Codex", "run deadline elapsed").is_none());
+    }
 
     #[test]
     fn a_signed_out_agent_is_told_to_sign_in_rather_than_reported_as_internal() {

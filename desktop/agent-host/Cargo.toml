@@ -20,6 +20,9 @@ path = "src/main.rs"
 
 [dependencies]
 agent-client-protocol = "=2.0.0"
+# The agent child is spawned through the protocol crate's escape hatch and
+# supervised here; see `SupervisedAgent` in acp.rs for why.
+async-process = "2.5"
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
@@ -40,6 +43,7 @@ url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 semver = "1"
 futures-util = "0.3.33"
+rustix = { version = "1", features = ["process"] }
 fs4 = { version = "1.1.0", features = ["sync"] }
 lemma-desktop-process = { path = "../process" }
 
