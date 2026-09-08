@@ -286,8 +286,8 @@ async def test_delete_all_for_pod_tears_down_every_schedule():
     )
 
     pod_id = uuid4()
-    s1 = SimpleNamespace(id=uuid4(), pod_id=pod_id)
-    s2 = SimpleNamespace(id=uuid4(), pod_id=pod_id)
+    s1 = SimpleNamespace(id=uuid4())
+    s2 = SimpleNamespace(id=uuid4())
     schedule_repo.list_all_by_pod.return_value = [s1, s2]
     service.delete_schedule = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
@@ -308,8 +308,8 @@ async def test_delete_all_for_pod_force_deletes_on_teardown_failure():
     )
 
     pod_id = uuid4()
-    failing = SimpleNamespace(id=uuid4(), pod_id=pod_id)
-    ok = SimpleNamespace(id=uuid4(), pod_id=pod_id)
+    failing = SimpleNamespace(id=uuid4())
+    ok = SimpleNamespace(id=uuid4())
     schedule_repo.list_all_by_pod.return_value = [failing, ok]
     # First schedule's full teardown blows up; second succeeds normally.
     service.delete_schedule = AsyncMock(  # type: ignore[method-assign]

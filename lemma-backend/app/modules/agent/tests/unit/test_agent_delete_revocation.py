@@ -1,4 +1,4 @@
-"""Deleting an agent must revoke its tokens and take its mailbox and schedules."""
+"""Deleting an agent must revoke its tokens and take its mailbox with it."""
 
 from __future__ import annotations
 
@@ -14,29 +14,13 @@ from app.modules.agent.services import agent_service as agent_service_module
 from app.modules.agent.services.agent_service import AgentService
 
 
-def _schedule_teardown(on_call=None) -> SimpleNamespace:
-    """A stand-in for the schedule module, injected rather than patched.
-
-    The real one reaches a repository over the mock session these tests use.
-    Passed in as a collaborator because patching the factory that builds it
-    would be a double inside the subject, which `make quality` counts.
-    """
-    return SimpleNamespace(
-        remove_all_for_agent=AsyncMock(side_effect=on_call, return_value=0)
-    )
-
-
 @pytest.mark.asyncio
 async def test_delete_agent_revokes_delegation(monkeypatch):
     agent = SimpleNamespace(id=uuid4(), user_id=uuid4(), kind=AgentKind.USER)
     repo = AsyncMock()
     uow = AsyncMock()
-    teardown_schedules = _schedule_teardown()
     service = AgentService(
-        uow=uow,
-        agent_repository=repo,
-        authorization_service=AsyncMock(),
-        schedule_teardown=teardown_schedules,
+        uow=uow, agent_repository=repo, authorization_service=AsyncMock()
     )
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     revoke_spy = AsyncMock()
@@ -70,12 +54,8 @@ async def test_delete_agent_takes_its_surfaces_with_it(monkeypatch):
     )
     repo = AsyncMock()
     uow = AsyncMock()
-    teardown_schedules = _schedule_teardown()
     service = AgentService(
-        uow=uow,
-        agent_repository=repo,
-        authorization_service=AsyncMock(),
-        schedule_teardown=teardown_schedules,
+        uow=uow, agent_repository=repo, authorization_service=AsyncMock()
     )
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     monkeypatch.setattr(agent_service_module, "revoke_delegation", AsyncMock())
@@ -88,30 +68,23 @@ async def test_delete_agent_takes_its_surfaces_with_it(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_the_surfaces_and_schedules_go_before_the_agent_row_does(monkeypatch):
+async def test_the_surfaces_go_before_the_agent_row_does(monkeypatch):
     """Order is the whole trick, not an incidental.
 
-    Both teardowns find their rows *by* ``agent_id``. Deleting the agent first
-    would have the database null that column out from under the surfaces,
-    leaving nothing to match and the mailbox behind — and would leave the
-    schedules pointing at an agent that is gone, firing on a timer forever with
-    nobody able to see why they did nothing (`PS-SCHED-030`).
+    The teardown finds the surfaces *by* ``agent_id``. Deleting the agent first
+    would have the database null that column out from under it, leaving nothing
+    to match and the mailbox behind.
     """
     agent = SimpleNamespace(id=uuid4(), user_id=uuid4(), kind=AgentKind.USER)
     repo = AsyncMock()
     uow = AsyncMock()
-    order: list[str] = []
-    teardown_schedules = _schedule_teardown(
-        on_call=lambda *a, **k: order.append("schedules") or 0
-    )
     service = AgentService(
-        uow=uow,
-        agent_repository=repo,
-        authorization_service=AsyncMock(),
-        schedule_teardown=teardown_schedules,
+        uow=uow, agent_repository=repo, authorization_service=AsyncMock()
     )
     monkeypatch.setattr(service, "get_agent_by_name", AsyncMock(return_value=agent))
     monkeypatch.setattr(agent_service_module, "revoke_delegation", AsyncMock())
+
+    order: list[str] = []
     monkeypatch.setattr(
         email_surfaces,
         "teardown_agent_surfaces",
@@ -121,8 +94,6 @@ async def test_the_surfaces_and_schedules_go_before_the_agent_row_does(monkeypat
 
     await service.delete_agent(pod_id=uuid4(), name="reporter")
 
-    assert order == ["surfaces", "schedules", "agent"], (
-        "the agent row must go last, or its surfaces and schedules are "
-        f"unfindable: {order}"
+    assert order == ["surfaces", "agent"], (
+        f"the agent row must go last, or its surfaces are unfindable: {order}"
     )
-    teardown_schedules.remove_all_for_agent.assert_awaited_once_with(agent.id)

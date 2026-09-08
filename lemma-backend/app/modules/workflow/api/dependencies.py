@@ -17,9 +17,6 @@ from app.modules.agent_surfaces.contracts.workflow_notifications import (
     build_workflow_notification_adapter,
 )
 from app.modules.icon.contracts.provisioning import create_icon_service
-from app.modules.schedule.contracts.target_teardown import (
-    create_target_schedule_teardown,
-)
 from app.modules.agent.contracts.workflow_control import build_agent_control_adapter
 from app.modules.function.contracts.workflow_control import (
     build_function_control_adapter,
@@ -31,11 +28,7 @@ from app.modules.workflow.services.workflow_service import WorkflowService
 
 def get_workflow_service(uow: UoWDep) -> WorkflowService:
     """Provide workflow service."""
-    return WorkflowService(
-        uow,
-        icon_service=create_icon_service(),
-        schedule_teardown=create_target_schedule_teardown(uow),
-    )
+    return WorkflowService(uow, icon_service=create_icon_service())
 
 
 def build_workflow_engine(uow: SqlAlchemyUnitOfWork) -> WorkflowEngine:

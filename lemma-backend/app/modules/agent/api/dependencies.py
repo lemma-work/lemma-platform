@@ -18,9 +18,6 @@ from app.modules.agent.infrastructure.repositories import (
     ConversationRepository,
 )
 from app.modules.agent.services.agent_service import AgentService
-from app.modules.schedule.contracts.target_teardown import (
-    create_target_schedule_teardown,
-)
 from app.modules.agent.services.conversation_service import ConversationService
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.usage.contracts.execution import build_usage_service
@@ -43,7 +40,6 @@ def get_agent_service(uow: UoWDep) -> AgentService:
         uow=uow,
         agent_repository=AgentRepository(uow),
         authorization_service=create_authorization_data_service(uow),
-        schedule_teardown=create_target_schedule_teardown(uow),
     )
 
 

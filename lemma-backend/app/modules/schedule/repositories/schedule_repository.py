@@ -389,27 +389,6 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         result = await self.session.execute(stmt)
         return [row.to_entity() for row in result.scalars().all()]
 
-    async def list_all_by_workflow(self, workflow_id: UUID) -> List[ScheduleEntity]:
-        """Every schedule pointing at a workflow, without RBAC filtering.
-
-        System-level, for workflow-deletion cleanup. Includes internal
-        schedules and inactive ones: a disarmed schedule still has to go when
-        the thing it fires no longer exists.
-        """
-        stmt = select(Schedule).where(Schedule.workflow_id == workflow_id)
-        result = await self.session.execute(stmt)
-        return [row.to_entity() for row in result.scalars().all()]
-
-    async def list_all_by_agent(self, agent_id: UUID) -> List[ScheduleEntity]:
-        """Every schedule pointing at an agent, without RBAC filtering.
-
-        The sibling of ``list_all_by_workflow``; agents are the other thing a
-        schedule can fire.
-        """
-        stmt = select(Schedule).where(Schedule.agent_id == agent_id)
-        result = await self.session.execute(stmt)
-        return [row.to_entity() for row in result.scalars().all()]
-
     async def find_schedules_by_config(
         self,
         schedule_type: ScheduleType,
