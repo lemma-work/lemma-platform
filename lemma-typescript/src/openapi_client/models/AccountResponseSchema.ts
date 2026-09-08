@@ -15,6 +15,10 @@ export type AccountResponseSchema = {
     display_name?: (string | null);
     email: (string | null);
     id: string;
+    /**
+     * READY, INSTALL_REQUIRED, CHOOSE_INSTALL or PENDING_APPROVAL. Anything but READY means the connection cannot reach resources yet.
+     */
+    install_state?: string;
     is_default?: boolean;
     kind?: (string | null);
     organization_id: string;

@@ -14,6 +14,7 @@ _NAME_TO_MODULE = {
     'AccountCreateSchemaPreferencesType0': 'account_create_schema_preferences_type_0',
     'AccountCredentialsUpdateSchema': 'account_credentials_update_schema',
     'AccountCredentialsUpdateSchemaCredentials': 'account_credentials_update_schema_credentials',
+    'AccountInstallationsSchema': 'account_installations_schema',
     'AccountListResponseSchema': 'account_list_response_schema',
     'AccountResponseSchema': 'account_response_schema',
     'AccountResponseSchemaPreferencesType0': 'account_response_schema_preferences_type_0',
@@ -273,6 +274,10 @@ _NAME_TO_MODULE = {
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
     'ImportStatusResponse': 'import_status_response',
+    'InstallRequestInitiateSchema': 'install_request_initiate_schema',
+    'InstallRequestResponseSchema': 'install_request_response_schema',
+    'InstallationBindSchema': 'installation_bind_schema',
+    'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
     'LiteralInputBinding': 'literal_input_binding',
@@ -544,6 +549,7 @@ if TYPE_CHECKING:
     from .account_create_schema_preferences_type_0 import AccountCreateSchemaPreferencesType0
     from .account_credentials_update_schema import AccountCredentialsUpdateSchema
     from .account_credentials_update_schema_credentials import AccountCredentialsUpdateSchemaCredentials
+    from .account_installations_schema import AccountInstallationsSchema
     from .account_list_response_schema import AccountListResponseSchema
     from .account_response_schema import AccountResponseSchema
     from .account_response_schema_preferences_type_0 import AccountResponseSchemaPreferencesType0
@@ -803,6 +809,10 @@ if TYPE_CHECKING:
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
     from .import_status_response import ImportStatusResponse
+    from .install_request_initiate_schema import InstallRequestInitiateSchema
+    from .install_request_response_schema import InstallRequestResponseSchema
+    from .installation_bind_schema import InstallationBindSchema
+    from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
     from .literal_input_binding import LiteralInputBinding
@@ -1087,6 +1097,7 @@ __all__ = [
     'AccountCreateSchemaPreferencesType0',
     'AccountCredentialsUpdateSchema',
     'AccountCredentialsUpdateSchemaCredentials',
+    'AccountInstallationsSchema',
     'AccountListResponseSchema',
     'AccountResponseSchema',
     'AccountResponseSchemaPreferencesType0',
@@ -1346,6 +1357,10 @@ __all__ = [
     'ImportStartRequest',
     'ImportStatus',
     'ImportStatusResponse',
+    'InstallRequestInitiateSchema',
+    'InstallRequestResponseSchema',
+    'InstallationBindSchema',
+    'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
     'LiteralInputBinding',

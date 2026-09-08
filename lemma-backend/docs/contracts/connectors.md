@@ -10,9 +10,11 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
+| `connector.account.bind_installation` | POST | `/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations` | Bind Account Installation |
 | `connector.account.create` | POST | `/organizations/{organization_id}/connectors/accounts` | Create Account |
 | `connector.account.delete` | DELETE | `/organizations/{organization_id}/connectors/accounts/{account_id}` | Delete Account |
 | `connector.account.get` | GET | `/organizations/{organization_id}/connectors/accounts/{account_id}` | Get Account |
+| `connector.account.installations` | GET | `/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations` | Account Installations |
 | `connector.account.list` | GET | `/organizations/{organization_id}/connectors/accounts` | List Accounts |
 | `connector.account.update` | PATCH | `/organizations/{organization_id}/connectors/accounts/{account_id}` | Update Account |
 | `connector.auth_config.create` | POST | `/organizations/{organization_id}/connectors/auth-configs` | Create Auth Config |
@@ -22,6 +24,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `connector.auth_config.refresh_operations` | POST | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh` | Refresh Auth Config Operations |
 | `connector.auth_config.update` | PATCH | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | Update Auth Config |
 | `connector.connect_request.create` | POST | `/organizations/{organization_id}/connectors/connect-requests` | Initiate Connect Request |
+| `connector.connect_request.install` | POST | `/organizations/{organization_id}/connectors/connect-requests/install` | Start Install Step |
 | `connector.get` | GET | `/connectors/{connector_id}` | Get Connector |
 | `connector.list` | GET | `/connectors` | List Connectors |
 | `connector.oauth.callback` | GET | `/connectors/connect-requests/oauth/callback` | OAuth Callback |

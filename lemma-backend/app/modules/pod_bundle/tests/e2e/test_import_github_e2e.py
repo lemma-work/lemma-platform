@@ -93,14 +93,17 @@ class _MemoryGithubOps:
         self.files: dict[str, bytes] = {}
         self.head = "head-0"
 
-    async def resolve_repo(self, *, name):
-        return self.repo
-
-    async def create_repo(self, *, name, private, description):
-        self.repo = RepoCreateResult(
-            owner="acme", repo=name, html_url=f"https://github.com/acme/{name}"
-        )
-        self.files["README.md"] = b"# Initialized"
+    async def resolve_repo(self, *, name, owner=None):
+        # The repository exists before a publish now, always: a GitHub App
+        # cannot create one on the person's behalf, so they make it themselves
+        # and Lemma publishes into it.
+        if self.repo is None:
+            self.repo = RepoCreateResult(
+                owner=owner or "acme",
+                repo=name,
+                html_url=f"https://github.com/{owner or 'acme'}/{name}",
+            )
+            self.files["README.md"] = b"# Initialized"
         return self.repo
 
     async def get_head(self, *, owner, repo, branch):

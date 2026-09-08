@@ -267,13 +267,87 @@ export const useCreateConnectRequest = (organizationId?: string) => {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async (data: { connectorId: string; authConfigId?: string }) => {
+        mutationFn: async (data: { connectorId: string; authConfigId?: string; returnTo?: string }) => {
             if (!organizationId) throw new Error('organizationId is required to connect an app');
             const response = await getLemmaClient().connectors.createConnectRequest(
                 organizationId,
-                data.authConfigId ? { auth_config_id: data.authConfigId } : data.connectorId,
+                {
+                    ...(data.authConfigId
+                        ? { auth_config_id: data.authConfigId }
+                        : { connector_id: data.connectorId }),
+                    // Where to put the person when the round trip ends. The
+                    // connectors UI lives under a pod, and a connect request is
+                    // scoped to an organisation, so the flow cannot work out
+                    // this path on its own.
+                    return_to: data.returnTo,
+                },
             );
             return response;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['accounts', organizationId] });
+        },
+    });
+};
+
+/**
+ * Where to send somebody who authorized but has not installed.
+ *
+ * A mutation rather than a query because the URL it returns carries a
+ * single-use state that expires: it is minted when the person is about to
+ * follow it, not when a page renders.
+ */
+export const useCreateInstallRequest = (organizationId?: string) => {
+    return useMutation({
+        mutationFn: async (data: { accountId: string; returnTo?: string }) => {
+            if (!organizationId) throw new Error('organizationId is required to install an app');
+            return getLemmaClient().connectors.createInstallRequest(
+                organizationId,
+                data.accountId,
+                data.returnTo,
+            );
+        },
+    });
+};
+
+/**
+ * What an account can actually reach, asked of the provider.
+ *
+ * `refresh` is the only way to see a repository-access change made on GitHub:
+ * editing an installation sends no callback and no reliable event.
+ */
+export const useAccountInstallations = (organizationId?: string) => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (data: { accountId: string; refresh?: boolean }) => {
+            if (!organizationId) throw new Error('organizationId is required');
+            return getLemmaClient().connectors.accountInstallations(
+                organizationId,
+                data.accountId,
+                data.refresh ?? false,
+            );
+        },
+        onSuccess: () => {
+            // Resolving an installation writes it onto the account, so the rows
+            // this page is showing are now out of date.
+            queryClient.invalidateQueries({ queryKey: ['accounts', organizationId] });
+        },
+    });
+};
+
+/** Settle which installation an account speaks for, when it can reach several. */
+export const useBindAccountInstallation = (organizationId?: string) => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (data: { accountId: string; installationId: string }) => {
+            if (!organizationId) throw new Error('organizationId is required');
+            return getLemmaClient().connectors.bindAccountInstallation(
+                organizationId,
+                data.accountId,
+                data.installationId,
+            );
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['accounts', organizationId] });
