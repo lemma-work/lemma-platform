@@ -214,8 +214,21 @@ async fn a_crashed_agent_keeps_partial_text_and_reports_one_failed_terminal() {
         )
         .await;
     host.shutdown().await;
-    assert_eq!(control.assistant_text(), "前 café 👩🏽‍💻\n");
     let events = control.events();
+    // Diagnostics rather than a bare `assert_eq`, because this has failed once
+    // in a loaded full-suite run and the message -- left "" right the text --
+    // could not distinguish "the chunks were dropped in flight" from "the run
+    // failed before the prompt was ever dispatched". Both produce a terminal
+    // with no text. The next occurrence should say which.
+    assert_eq!(
+        control.assistant_text(),
+        "前 café 👩🏽‍💻\n",
+        "events the control plane received: {:#?}",
+        events
+            .iter()
+            .map(|event| (event.event_type, event.payload.clone()))
+            .collect::<Vec<_>>()
+    );
     let terminals = events
         .iter()
         .filter(|event| event.event_type == EventType::Terminal)
@@ -307,4 +320,60 @@ async fn a_host_restart_preserves_partial_text_without_dispatching_the_prompt_ag
             .count(),
         1
     );
+}
+
+/// A crash while output is still in flight must not cost the user the answer.
+///
+/// The SDK races the protocol future against the child's exit. When the exit
+/// wins -- which is what a burst of output followed by an immediate exit makes
+/// likely -- `finish_child_exit` returns `Err` for a non-zero status and the
+/// `?` propagates, so `await_protocol_shutdown_after_successful_child_exit` is
+/// never reached and whatever was still buffered in the pipe is dropped. The
+/// helper's own name says it: the drain only happens after a *successful*
+/// exit.
+///
+/// `crash.json` hides this because two chunks usually arrive before the exit is
+/// observed; it failed one loaded full-suite run in five with empty text. This
+/// scenario sends 120 chunks and then exits 23, and when the suite runs its
+/// siblings concurrently the loss is reliable and large: measured at 405 bytes
+/// delivered of 1080 sent, so 675 bytes of a real answer were dropped.
+///
+/// IGNORED, and deliberately not weakened: the assertion is correct and the
+/// product is wrong. Fixing it means Lemma taking over the child lifecycle from
+/// the SDK -- `AcpAgent::spawn_process` and `ByteStreams` are both public, so
+/// this is supported -- and draining the protocol to EOF *before* reporting a
+/// non-zero exit. That also brings the adapter child under a Windows job
+/// object, which it needs anyway. Until then this is the reproduction:
+///
+///     cargo test -p lemma-agent-host --test streaming_flow_e2e -- --ignored
+///
+/// Run it alongside its siblings rather than alone; on an idle machine the
+/// reader wins the race and it passes.
+#[ignore = "reproduces a confirmed SDK data-loss bug; unignore with the fix"]
+#[tokio::test]
+async fn a_crash_mid_stream_keeps_every_chunk_the_agent_had_already_sent() {
+    let (_directory, _shims, control, host) = streaming_run("stream-crash-midstream", false).await;
+    control
+        .wait_for(
+            "failed terminal after agent exit",
+            Duration::from_secs(90),
+            ControlPlane::saw_terminal,
+        )
+        .await;
+    host.shutdown().await;
+
+    let expected = (0..120).fold(String::new(), |mut text, index| {
+        use std::fmt::Write as _;
+        let _ = write!(text, "chunk{index:03} ");
+        text
+    });
+    let actual = control.assistant_text();
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "the agent sent {} bytes before exiting and the user was shown {}",
+        expected.len(),
+        actual.len()
+    );
+    assert_eq!(actual, expected);
 }

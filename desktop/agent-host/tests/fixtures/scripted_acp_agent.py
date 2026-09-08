@@ -365,7 +365,12 @@ def run_cancel_turn():
 def run_stream_turn():
     from json_acp_scenario import run_scenario
 
-    scenario = "crash.json" if MODE == "stream-crash" else "stream.json"
+    scenario = {
+        "stream-crash": "crash.json",
+        # Same crash, but with enough output in flight that the child's exit is
+        # observed while the host is still draining the pipe.
+        "stream-crash-midstream": "crash-midstream.json",
+    }.get(MODE, "stream.json")
     run_scenario(
         pathlib.Path(__file__).parent / "scenarios" / scenario,
         emit,
@@ -439,7 +444,12 @@ def main():
                 run_parallel_permission_turn(("", ""))
             elif MODE == "cancel":
                 stop_reason = run_cancel_turn()
-            elif MODE in {"stream", "stream-crash", "stream-deadline"}:
+            elif MODE in {
+                "stream",
+                "stream-crash",
+                "stream-crash-midstream",
+                "stream-deadline",
+            }:
                 run_stream_turn()
             elif MODE == "permission":
                 run_permission_turn()
