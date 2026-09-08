@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from app.core.api.callback_page import (
     identity_html,
     message_html,
+    next_step_html,
     render_callback_page,
     safe_provider_error,
     sentence,
@@ -20,6 +21,7 @@ from app.modules.connectors.api.schemas import (
     ConnectRequestInitiateSchema,
     ConnectRequestResponseSchema,
 )
+from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.errors import ConnectorDomainError
 from app.core.log.log import get_logger
 
@@ -53,6 +55,23 @@ async def initiate_connect_request(
     )
 
     return ConnectRequestResponseSchema.model_validate(connect_request)
+
+
+def _outstanding_install_url(account: AccountEntity) -> str | None:
+    """Where an account still has to be installed before it can see anything.
+
+    Only GitHub has this shape today, and the check is deliberately asked of the
+    connectors module rather than written here as `if connector.id == "github"`:
+    the controller renders a result, it does not know what any provider needs.
+    """
+    from app.modules.connectors.contracts.github import (
+        github_install_url,
+        installation_still_needed,
+    )
+
+    if not installation_still_needed(account.connector_id, account.external_ref):
+        return None
+    return github_install_url()
 
 
 def _wants_json(request: Request, response_format: str | None) -> bool:
@@ -142,6 +161,23 @@ async def oauth_callback(
     app_label = (
         connector.title or connector.id.replace("_", " ").replace("-", " ").title()
     )
+    install_url = _outstanding_install_url(account)
+    if install_url is not None:
+        return render_callback_page(
+            succeeded=True,
+            app_label=app_label,
+            icon=connector.icon,
+            title=f"{app_label} needs one more step",
+            body_html=identity_html(account.display_name, account.email)
+            + next_step_html(
+                "Authorizing signed you in, but it does not grant access to any "
+                "repository. Install it on the account or organization whose "
+                "repositories it should see, then connect again from Lemma so "
+                "the installation is recorded:",
+                href=install_url,
+                label=f"Install {app_label}",
+            ),
+        )
     return render_callback_page(
         succeeded=True,
         app_label=app_label,

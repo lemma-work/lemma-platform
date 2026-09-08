@@ -48,6 +48,25 @@ def install_url() -> str | None:
     return f"https://github.com/apps/{slug}/installations/new" if slug else None
 
 
+def installation_still_needed(connector_id: str, external_ref: str | None) -> bool:
+    """Whether a just-connected account can reach nothing until someone installs.
+
+    A GitHub App's user token is scoped to the repositories the App is installed
+    on, and authorizing is not installing — `install_url` above says so. So a
+    first connect ends with a valid token, the right person, and no
+    installation, and until this the flow reported that as "GitHub is
+    connected" and stopped. It was true and useless: every repository call came
+    back empty, and the only thing that ever mentioned installing was a trigger
+    refusing to be created, much later and somewhere else.
+
+    `external_ref` is the installation this account speaks for -- named by the
+    install redirect, or resolved from the token by `resolve_installation`.
+    Absent, there is either no installation or more than one, and both mean the
+    person is not finished.
+    """
+    return (connector_id or "").strip().lower() == "github" and not external_ref
+
+
 async def _installations(access_token: str) -> list[Installation]:
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         response = await client.get(
