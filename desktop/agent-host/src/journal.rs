@@ -1300,6 +1300,23 @@ mod tests {
         );
     }
 
+    /// Interleaved journal writes and reads, in a child process.
+    ///
+    /// The property is that two threads contending on the journal both make
+    /// progress. A lock cycle shows up in the first handful of interleavings,
+    /// not the two hundredth, so the loop is short on purpose: every write
+    /// commits under `synchronous = FULL`, which is an fsync each, and the cost
+    /// of those is what separates a developer SSD from a CI runner's virtual
+    /// disk. At 200 iterations this test spent over 30 seconds on Windows CI
+    /// and was killed by its own timeout, which then reported a deadlock that
+    /// was not happening.
+    const CONCURRENCY_ITERATIONS: usize = 50;
+
+    /// Generous because of what it is for. A real deadlock never finishes, so
+    /// waiting longer only delays a true failure; waiting too little invents
+    /// one. The child completes in well under a second on a developer machine.
+    const CONCURRENCY_BUDGET: Duration = Duration::from_secs(120);
+
     #[tokio::test]
     async fn concurrent_checkpoints_and_event_reads_make_progress() {
         // A SQLite mutex deadlock cannot be cancelled by a Tokio timeout on
@@ -1308,17 +1325,33 @@ mod tests {
         if std::env::var_os("LEMMA_JOURNAL_CONCURRENCY_CHILD").is_none() {
             let thread = std::thread::current();
             let test_name = thread.name().expect("the test runner names its thread");
+            // The child records how far it got. Without it a timeout cannot
+            // tell "wedged on the third write" from "still going, just slow",
+            // and those want opposite fixes.
+            let progress = TempDir::new().unwrap();
+            let progress_path = progress.path().join("iterations");
             let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", test_name, "--nocapture"])
                 .env("LEMMA_JOURNAL_CONCURRENCY_CHILD", "1")
+                .env("LEMMA_JOURNAL_CONCURRENCY_PROGRESS", &progress_path)
                 .kill_on_drop(true)
                 .spawn()
                 .unwrap();
-            if let Ok(status) = tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+            if let Ok(status) = tokio::time::timeout(CONCURRENCY_BUDGET, child.wait()).await {
                 assert!(status.unwrap().success());
             } else {
                 child.kill().await.unwrap();
-                panic!("concurrent journal operations deadlocked");
+                let reached = std::fs::read_to_string(&progress_path)
+                    .ok()
+                    .and_then(|text| text.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                panic!(
+                    "concurrent journal operations did not finish within \
+                     {CONCURRENCY_BUDGET:?}: the writer completed {reached} of \
+                     {CONCURRENCY_ITERATIONS} iterations. Stuck near zero is a lock \
+                     cycle; most of the way through is a slow disk, and the budget is \
+                     what needs changing."
+                );
             }
             return;
         }
@@ -1326,9 +1359,10 @@ mod tests {
         journal
             .accept_start(target, &command, &spec, "codex", "1.0")
             .unwrap();
+        let progress_path = std::env::var_os("LEMMA_JOURNAL_CONCURRENCY_PROGRESS");
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                for _ in 0..200 {
+                for iteration in 0..CONCURRENCY_ITERATIONS {
                     journal
                         .checkpoint(
                             target,
@@ -1348,10 +1382,16 @@ mod tests {
                             JsonMap::new(),
                         )
                         .unwrap();
+                    // Best effort: this is diagnostics for a failure that has
+                    // already happened, and a failed write here must not turn a
+                    // passing run into a failing one.
+                    if let Some(path) = progress_path.as_ref() {
+                        let _ = std::fs::write(path, (iteration + 1).to_string());
+                    }
                 }
             });
             scope.spawn(|| {
-                for _ in 0..200 {
+                for _ in 0..CONCURRENCY_ITERATIONS {
                     journal.pending_events(target, 256).unwrap();
                     journal.pending_control(target).unwrap();
                 }
@@ -1359,7 +1399,7 @@ mod tests {
         });
         assert_eq!(
             journal.pending_events(target, 256).unwrap()[0].events.len(),
-            200
+            CONCURRENCY_ITERATIONS
         );
     }
 
