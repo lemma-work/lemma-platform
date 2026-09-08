@@ -332,7 +332,7 @@ impl ManagedRuntime {
         {
             // Allowing failure on purpose. This runs *because* something has
             // already gone wrong, so the guest is often exactly the kind of
-            // half-up that makes journalctl exit non-zero -- and whatever it
+            // half-up that makes a collector exit non-zero -- and whatever it
             // managed to print before giving up is the reason anyone asked for
             // diagnostics. Failing here would throw away the evidence.
             let output = self.wsl_allowing_failure(
@@ -342,10 +342,9 @@ impl ManagedRuntime {
                     "--user",
                     "root",
                     "--exec",
-                    "/usr/bin/journalctl",
-                    "--no-pager",
-                    "--lines",
-                    "300",
+                    "/bin/sh",
+                    "-c",
+                    GUEST_DIAGNOSTICS,
                 ],
                 None,
             )?;
@@ -1401,6 +1400,38 @@ fn decode_wsl_output(value: &[u8]) -> String {
     decoded.replace('\u{feff}', "")
 }
 
+/// What to collect from a Windows guest that has just failed.
+///
+/// This used to be `journalctl --lines 300`, and on Windows it collected
+/// nothing at all, ever. The guest ships `/etc/wsl.conf` with
+/// `systemd=false` -- deliberately, because `lemma-runtime-init` starts
+/// containerd itself -- so there is no journal to read. Every Windows failure
+/// wrote the literal text "-- No entries --" into `logs/guest.log` and that
+/// was the whole record. A start that failed because the guest reported an
+/// unreachable address left nothing on the machine to say so.
+///
+/// So: the logs the guest actually writes, and the two pieces of state that
+/// explain most of what goes wrong here -- what addresses the guest has, and
+/// which containers are up. Bounded per file, and `2>&1` throughout, because a
+/// collector that fails halfway is still worth what it printed first.
+#[cfg(any(windows, test))]
+const GUEST_DIAGNOSTICS: &str = "\
+set +e
+echo '--- addresses ---'
+ip -4 -o addr show 2>&1
+echo '--- routes ---'
+ip -4 route show 2>&1
+echo '--- listening ---'
+ss -ltn 2>&1 || cat /proc/net/tcp 2>&1
+echo '--- containers ---'
+/usr/local/bin/nerdctl ps -a 2>&1
+for log in /var/log/lemma/*.log; do
+  [ -f \"$log\" ] || continue
+  echo \"--- $log ---\"
+  tail -n 200 \"$log\" 2>&1
+done
+";
+
 /// How long a `wsl.exe` invocation is given before it is killed.
 ///
 /// Backstops against a hang, not performance targets, so deliberately
@@ -2031,6 +2062,43 @@ mod tests {
             .collect();
         assert!(decode_wsl_output(&encoded).contains("LemmaRuntime"));
     }
+    /// A Windows failure used to record the words "-- No entries --".
+    ///
+    /// Diagnostics ran `journalctl`, and the Windows guest ships
+    /// `systemd=false` -- on purpose, since `lemma-runtime-init` starts
+    /// containerd itself -- so there was no journal and never had been. Every
+    /// failure on that platform captured nothing, which is how a start that
+    /// failed because the guest reported an unreachable address left no
+    /// account of itself anywhere on the machine it happened on.
+    ///
+    /// The two state lines are not padding: the address list is what makes
+    /// that exact failure obvious at a glance.
+    #[test]
+    fn a_windows_guest_is_asked_for_the_logs_it_actually_writes() {
+        assert!(
+            !GUEST_DIAGNOSTICS.contains("journalctl"),
+            "there is no journal in a guest that runs without systemd"
+        );
+        assert!(
+            GUEST_DIAGNOSTICS.contains("/var/log/lemma/"),
+            "these are the logs the guest does write"
+        );
+        for state in ["ip -4 -o addr show", "nerdctl ps -a"] {
+            assert!(
+                GUEST_DIAGNOSTICS.contains(state),
+                "a failed guest has to be asked `{state}`"
+            );
+        }
+        assert!(
+            GUEST_DIAGNOSTICS.contains("tail -n 200"),
+            "bounded per file: this runs on a machine that is already unhappy"
+        );
+        assert!(
+            GUEST_DIAGNOSTICS.contains("set +e"),
+            "a collector that fails halfway is still worth what it printed first"
+        );
+    }
+
     #[test]
     fn budgets_leave_room_for_slow_work_without_letting_a_query_hang() {
         assert!(wsl_budget(&["--import", "LemmaRuntime"]) >= Duration::from_secs(15 * 60));
