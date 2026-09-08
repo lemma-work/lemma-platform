@@ -1,6 +1,7 @@
 //! Generic ACP v1 adapter driver.
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -133,10 +134,13 @@ impl AgentDriver for AcpDriver {
             .builder()
             .name("lemma-agent-host-probe")
             .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
-                let initialization = connection
-                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                    .block_task()
-                    .await?;
+                let initialization = before_prompt_deadline(
+                    "initialize",
+                    connection
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task(),
+                )
+                .await?;
                 let session = connection
                     .send_request(NewSessionRequest::new(scratch_directory))
                     .block_task()
@@ -314,10 +318,13 @@ impl AgentDriver for AcpDriver {
                 agent_client_protocol::on_receive_request!(),
             )
             .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
-                connection
-                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                    .block_task()
-                    .await?;
+                before_prompt_deadline(
+                    "initialize",
+                    connection
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task(),
+                )
+                .await?;
                 let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
                 // A Lemma conversation is one provider session: resuming is what
                 // lets the agent answer "what did I just say" instead of meeting
@@ -325,13 +332,16 @@ impl AgentDriver for AcpDriver {
                 let mut established = None;
                 let attempted_resume = resume_session_id.is_some();
                 if let Some(existing) = resume_session_id {
-                    match connection
-                        .send_request(
-                            LoadSessionRequest::new(existing.clone(), scratch_directory.clone())
-                                .mcp_servers(mcp_servers.clone()),
-                        )
-                        .block_task()
-                        .await
+                    match before_prompt_deadline(
+                        "session/load",
+                        connection
+                            .send_request(
+                                LoadSessionRequest::new(existing.clone(), scratch_directory.clone())
+                                    .mcp_servers(mcp_servers.clone()),
+                            )
+                            .block_task(),
+                    )
+                    .await
                     {
                         Ok(loaded) => {
                             established = Some((existing.into(), loaded.config_options));
@@ -361,12 +371,15 @@ impl AgentDriver for AcpDriver {
                 let (session_id, config_options) = if let Some(established) = established {
                     established
                 } else {
-                    let session = connection
-                        .send_request(
-                            NewSessionRequest::new(scratch_directory).mcp_servers(mcp_servers),
-                        )
-                        .block_task()
-                        .await?;
+                    let session = before_prompt_deadline(
+                        "session/new",
+                        connection
+                            .send_request(
+                                NewSessionRequest::new(scratch_directory).mcp_servers(mcp_servers),
+                            )
+                            .block_task(),
+                    )
+                    .await?;
                     (session.session_id, session.config_options)
                 };
                 let session_options = config_options
@@ -956,6 +969,33 @@ pub fn normalize_session_update(
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     ))
+}
+
+/// How long each request made before the prompt may take.
+///
+/// `initialize`, `session/new` and `session/load` are the three round trips
+/// between spawning an agent and dispatching the user's prompt, and none of
+/// them had a deadline of its own. An adapter that hangs on one -- Claude Code
+/// waiting on a TTY for onboarding is the shape that has actually been seen --
+/// held its capacity permit for the run's entire deadline, up to an hour, while
+/// the conversation showed nothing at all. Failing here is safe: it is before
+/// `before_prompt`, so nothing has been dispatched and the run is retryable.
+const SETUP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound one of those requests.
+async fn before_prompt_deadline<T>(
+    what: &str,
+    request: impl Future<Output = Result<T, agent_client_protocol::schema::v1::Error>>,
+) -> Result<T, agent_client_protocol::schema::v1::Error> {
+    match tokio::time::timeout(SETUP_REQUEST_TIMEOUT, request).await {
+        Ok(result) => result,
+        Err(_) => Err(
+            agent_client_protocol::schema::v1::Error::internal_error().data(format!(
+                "the agent did not answer {what} within {}s",
+                SETUP_REQUEST_TIMEOUT.as_secs()
+            )),
+        ),
+    }
 }
 
 /// The backend stores an event's `object_id` in a 255-character column, and
@@ -2349,5 +2389,42 @@ mod scoped_mcp_approval_tests {
             &permission_request_named("bash"),
             &empty
         ));
+    }
+}
+
+#[cfg(test)]
+mod setup_deadline_tests {
+    use super::{SETUP_REQUEST_TIMEOUT, before_prompt_deadline};
+
+    /// An agent that never answers `initialize` used to hold its capacity
+    /// permit for the run's whole deadline -- up to an hour -- while the
+    /// conversation showed nothing. Claude Code waiting on a TTY for onboarding
+    /// is the shape this has actually taken.
+    #[tokio::test(start_paused = true)]
+    async fn a_setup_request_that_never_answers_gives_up_rather_than_holding_the_run() {
+        let hangs = std::future::pending::<Result<(), agent_client_protocol::schema::v1::Error>>();
+
+        let outcome = before_prompt_deadline("initialize", hangs).await;
+
+        let error = outcome.expect_err("a request that never answers must not wait for ever");
+        let reported = format!("{error:?}");
+        assert!(
+            reported.contains("initialize"),
+            "the message must name which request hung: {reported}"
+        );
+        assert!(
+            reported.contains(&SETUP_REQUEST_TIMEOUT.as_secs().to_string()),
+            "and how long it was given: {reported}"
+        );
+    }
+
+    /// The deadline must not interfere with an agent that simply answers.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_within_the_deadline_is_passed_straight_through() {
+        let answered = async { Ok::<_, agent_client_protocol::schema::v1::Error>(7) };
+        assert_eq!(
+            before_prompt_deadline("session/new", answered).await.ok(),
+            Some(7)
+        );
     }
 }
