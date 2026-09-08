@@ -44,9 +44,7 @@ SPEC_URL = (
     "https://raw.githubusercontent.com/github/rest-api-description/main/"
     "descriptions/api.github.com/api.github.com.json"
 )
-SPEC_PATH = (
-    Path(__file__).parent.parent / "lemma-connectors" / "openapi_specs" / "github.json"
-)
+SPEC_PATH = Path(__file__).parent.parent / "openapi_specs" / "github.json"
 LEMMA_APPS_CONFIG_PATH = Path(__file__).parent / "lemma_apps_config.json"
 
 

@@ -20,7 +20,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from lemma_connectors.core.results import BinaryContentResult
+from app.modules.connectors.domain.results import BinaryContentResult
 
 from app.core.log.log import get_logger
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url, request_guarded
