@@ -24,6 +24,7 @@ import shlex
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
@@ -85,10 +86,25 @@ _CREDENTIALS_PATH = "/tmp/.git-credentials"
 _GH_CONFIG_DIR = "/tmp/lemma-gh"
 _GH_HOSTS_PATH = f"{_GH_CONFIG_DIR}/hosts.yml"
 _MARKER_KEY_PREFIX = "workspace:github-credentials:v1"
-# Re-provision periodically rather than trusting a stale/possibly-revoked
-# token forever. GitHub OAuth App tokens do not expire on their own, so this
-# is a safety net (account disconnected, token rotated), not expiry handling.
+# How long a copy of the token written into the sandbox may be trusted.
+#
+# This used to be a flat 45 minutes, reasoning that "GitHub OAuth App tokens do
+# not expire on their own". That is true of an OAuth App and false here: this
+# connector is a GitHub *App* -- `services/auth/github_app.py` exists precisely
+# because it is -- and its user tokens expire in eight hours. The marker was
+# therefore not expiry handling at all, and the bridge re-wrote the same dead
+# token into the workspace every 45 minutes once it went stale.
+#
+# So the ceiling stays as the safety net it was described as (an account
+# disconnected upstream, a token revoked -- neither of which changes an expiry),
+# and the actual expiry, when the provider states one, is what bounds it.
 _PROVISIONED_TTL_SECONDS = 45 * 60
+# Re-provision this far before the token dies, so a command that starts just
+# inside the window does not run past it.
+_EXPIRY_SKEW_SECONDS = 5 * 60
+# Below this there is nothing worth writing: whatever we put in the sandbox
+# would be dead before it was used.
+_MIN_PROVISION_SECONDS = 30
 # A failed resolution (no connected account, not authorized) is cached too, so
 # a session running several git commands in a row doesn't repeat the same DB
 # round trip and authorization check for every single one of them.
@@ -101,9 +117,29 @@ _UNAVAILABLE_TTL_SECONDS = 5 * 60
 # this bridge at all.
 _GIT_COMMAND_PATTERN = re.compile(r"(?:^|[;&|(]|\s)(?:git|gh)\s")
 
+# The same question asked of Python source, where there is no command line to
+# read. An agent that shells out to git from `execute_python` needs the same
+# credential file as one that types it into a shell, and used to get it only if
+# something else in the session had already provisioned -- so the very first git
+# call of a session failed if it happened to be made this way.
+#
+# Matched inside string literals on purpose: that is where a command being
+# handed to `subprocess` lives. Wrong guesses are cheap in both directions -- a
+# false positive provisions a file nothing reads, a false negative fails with
+# git's own auth error exactly as it does today.
+_GIT_IN_SOURCE_PATTERN = re.compile(
+    r"""["'\s(\[]\s*(?:git|gh)(?:\s|["'])|\bgitpython\b|\bdulwich\b""",
+    re.IGNORECASE,
+)
+
 
 def looks_like_git_command(cmd: str) -> bool:
     return bool(_GIT_COMMAND_PATTERN.search(cmd))
+
+
+def source_may_use_git(code: str) -> bool:
+    """Whether this Python is likely to reach GitHub before it finishes."""
+    return bool(_GIT_IN_SOURCE_PATTERN.search(code or ""))
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +154,13 @@ class _GithubCredential:
     # "Please tell me who you are" until the agent sets one itself.
     login: str | None
     email: str | None
+    # GitHub's numeric account id. The noreply address needs it: the bare
+    # `{login}@users.noreply.github.com` form stops associating commits with
+    # the account the moment somebody renames themselves, and GitHub documents
+    # the `{id}+{login}` form as the one that survives it.
+    user_id: str | None = None
+    # When the copy written into the sandbox stops working, if GitHub said.
+    expires_at: datetime | None = None
 
 
 async def ensure_github_credentials(
@@ -205,16 +248,85 @@ async def ensure_github_credentials(
     # convention (the same address `git commit` shows in the GitHub UI as a
     # verified author for commits made this way) rather than leaving the
     # commit identity half-configured.
-    git_email = credential.email or (
-        f"{credential.login}@users.noreply.github.com" if credential.login else None
-    )
+    git_email = credential.email or _noreply_email(credential)
     if git_email:
         setup_commands.append(
             f"git config --global user.email {shlex.quote(git_email)}"
         )
     await workspace_session.exec_command(cmd=" && ".join(setup_commands), timeout=15)
 
-    await redis.set(marker_key, "provisioned", ex=_PROVISIONED_TTL_SECONDS)
+    await redis.set(marker_key, "provisioned", ex=_provisioned_ttl(credential))
+
+
+async def _refreshed_credentials(
+    uow: SqlAlchemyUnitOfWork, account: object, user_id: UUID
+) -> dict[str, object] | None:
+    """This account's credentials, renewed if they are due to expire.
+
+    A collaborator rather than a direct call, like everything else this module
+    reaches for: building a `ConnectorService` is the one step here that needs a
+    real unit of work, and a test of the bridge's own decisions should not have
+    to supply one.
+    """
+    # Imported here rather than at module scope to avoid an import cycle.
+    from app.modules.connectors.contracts.credentials import (
+        fresh_account_credentials,
+    )
+
+    return await fresh_account_credentials(uow, account, user_id)
+
+
+def _expires_at(credentials: dict[str, object] | None) -> "datetime | None":
+    from app.modules.connectors.contracts.credentials import credentials_expire_at
+
+    return credentials_expire_at(credentials)
+
+
+def _github_user_id(credentials: dict[str, object] | None) -> str | None:
+    """GitHub's numeric id for the account, out of the stored profile.
+
+    `provider_account_id` is the *login* for this connector, which is the right
+    handle for everything else and the wrong one here: the noreply address that
+    survives a rename is keyed by the number.
+    """
+    user_data = (credentials or {}).get("user_data")
+    if not isinstance(user_data, dict):
+        return None
+    profile = user_data.get("profile")
+    if not isinstance(profile, dict):
+        return None
+    identifier = profile.get("id")
+    return str(identifier) if identifier is not None else None
+
+
+def _provisioned_ttl(credential: "_GithubCredential") -> int:
+    """How long the copy in the sandbox may be trusted before it is rewritten.
+
+    The provider's own expiry when there is one, less a margin so a command
+    starting just inside the window does not run past it; the flat ceiling
+    otherwise, which is all a non-expiring credential needs.
+    """
+    if credential.expires_at is None:
+        return _PROVISIONED_TTL_SECONDS
+    remaining = (credential.expires_at - datetime.now(timezone.utc)).total_seconds()
+    usable = int(remaining) - _EXPIRY_SKEW_SECONDS
+    return max(_MIN_PROVISION_SECONDS, min(_PROVISIONED_TTL_SECONDS, usable))
+
+
+def _noreply_email(credential: "_GithubCredential") -> str | None:
+    """GitHub's own address for an account that keeps its email private.
+
+    Withholding the address is normal rather than an error -- "keep my email
+    address private" -- and leaving the commit identity half-configured would
+    make the agent's first `git commit` fail with git's own "Please tell me who
+    you are". The numeric id is part of the address on purpose: the bare
+    `{login}@` form stops associating commits with the account after a rename.
+    """
+    if not credential.login:
+        return None
+    if credential.user_id:
+        return f"{credential.user_id}+{credential.login}@users.noreply.github.com"
+    return f"{credential.login}@users.noreply.github.com"
 
 
 async def _resolve_github_credential(
@@ -226,6 +338,10 @@ async def _resolve_github_credential(
         [SqlAlchemyUnitOfWork, BaseAgentContext], Awaitable[Context]
     ] = build_delegated_context,
     account_resolution: Callable[[SqlAlchemyUnitOfWork], _AccountResolution]
+    | None = None,
+    refresh_credentials: Callable[
+        [SqlAlchemyUnitOfWork, object, UUID], Awaitable[dict[str, object] | None]
+    ]
     | None = None,
 ) -> _GithubCredential | None:
     """Resolve the connected GitHub account's token for this conversation.
@@ -246,6 +362,8 @@ async def _resolve_github_credential(
         account_resolution = get_account_resolution_service
     if uow_factory is None:
         uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+    if refresh_credentials is None:
+        refresh_credentials = _refreshed_credentials
 
     # A project names the account it is worked as. Without one, resolution picks
     # for a user who may have connected GitHub twice -- fine as a fallback, but
@@ -265,14 +383,23 @@ async def _resolve_github_credential(
                 )
             except AccountResolutionError, ConnectorAccessDeniedError:
                 return None
-            credentials = account.credentials
-            access_token = getattr(credentials, "access_token", None)
+            # Refreshed if it is due, exactly like every connector operation.
+            # This path used to read `account.credentials` verbatim, which is
+            # how an expired token kept being written into the workspace: the
+            # refresh machinery existed, and only the sandbox did not use it.
+            credentials = await refresh_credentials(uow, account, ctx.user_id)
+            access_token = (credentials or {}).get("access_token")
+            reveal = getattr(access_token, "get_secret_value", None)
+            if callable(reveal):
+                access_token = reveal()
             if not isinstance(access_token, str) or not access_token:
                 return None
             return _GithubCredential(
                 access_token=access_token,
                 login=account.display_name,
                 email=account.email,
+                user_id=_github_user_id(credentials),
+                expires_at=_expires_at(credentials),
             )
         finally:
             reset_current_context(token)

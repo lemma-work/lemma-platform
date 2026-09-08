@@ -79,6 +79,7 @@ from app.modules.connectors.services.auth_install_resolver import (
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
     pkce_verifier_for,
+    with_return_path,
 )
 from app.modules.connectors.services.install_provisioning import (
     DiscoveryOutcome,
@@ -655,6 +656,7 @@ class ConnectorService:
         organization_id: UUID,
         connector_id: str | None = None,
         auth_config_id: UUID | None = None,
+        return_to: str | None = None,
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
         auth_config = await self._resolve_auth_config(
@@ -722,11 +724,14 @@ class ConnectorService:
             connector_id=connector.id,
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
-            attributes={
-                "state": state,
-                "provider_state": provider_state,
-                **({"code_verifier": code_verifier} if code_verifier else {}),
-            },
+            attributes=with_return_path(
+                {
+                    "state": state,
+                    "provider_state": provider_state,
+                    **({"code_verifier": code_verifier} if code_verifier else {}),
+                },
+                return_to,
+            ),
         )
         connect_request = await self.connect_request_repository.create(connect_request)
         await self.uow.commit()
