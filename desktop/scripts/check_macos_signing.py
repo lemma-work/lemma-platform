@@ -72,6 +72,47 @@ def designated_requirement(output: str) -> str:
     raise ValueError("signature has no designated requirement")
 
 
+VIRTUALIZATION = "com.apple.security.virtualization"
+
+# Where the guest helper lands in the bundle. A resource, not an externalBin,
+# which is why Tauri never re-signs it and why it can hold an entitlement the
+# app does not.
+VZ_HELPER = "Contents/Resources/lemma-vz"
+
+
+def entitlements(binary: Path) -> str:
+    return codesign("-d", "--entitlements", ":-", str(binary))
+
+
+def validate_entitlements(app: Path) -> None:
+    """The virtualization entitlement is on the helper, and only on the helper.
+
+    Read off the shipped bundle rather than off the plists, because the thing
+    that could go wrong is a signing step, not a file. Tauri applies one
+    entitlements file to the app and to every sidecar it signs, so a grant that
+    belongs to one binary reaches four; and it does not sign the resource that
+    actually needs one, so the grant can equally be missing.
+    """
+    if VIRTUALIZATION not in entitlements(app / VZ_HELPER):
+        raise ValueError(
+            f"{VZ_HELPER} is missing {VIRTUALIZATION}: it cannot start a guest, "
+            f"so the macOS runtime will never come up on an installed copy"
+        )
+    # Everything Tauri signs with the app's entitlements file: the bundle and
+    # the three externalBin sidecars. lemma-vz is in HELPERS too, and is the one
+    # thing excluded here -- it is the binary the entitlement belongs to.
+    signed_with_the_app = [".", *(name for name in HELPERS if name != VZ_HELPER)]
+    assert len(signed_with_the_app) == 4, signed_with_the_app
+    for relative in signed_with_the_app:
+        binary = app / relative
+        if VIRTUALIZATION in entitlements(binary):
+            raise ValueError(
+                f"{binary.name} carries {VIRTUALIZATION} and cannot use it. "
+                f"Only Contents/Resources/lemma-vz links Virtualization.framework"
+            )
+    print(f"verified {VIRTUALIZATION} is on lemma-vz alone")  # noqa: T201 -- CLI report
+
+
 def check(
     app: Path,
     *,
@@ -110,6 +151,7 @@ def check(
                 str(binary),
             )
         print(f"verified signing continuity: {identifier}")  # noqa: T201 -- CLI report
+    validate_entitlements(app)
 
 
 def main() -> None:

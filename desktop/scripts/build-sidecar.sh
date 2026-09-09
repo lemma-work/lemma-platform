@@ -83,7 +83,7 @@ sign "$OUT_DIR/lemma-runtime-$TRIPLE"
 # the app entitlement only to its main executable and re-signs externalBin
 # sidecars without helper-specific entitlements. Release CI re-signs this helper
 # with Developer ID and its entitlement before bundling.
-sign "$OUT_DIR/lemma-vz-$TRIPLE" --entitlements desktop/entitlements.plist
+sign "$OUT_DIR/lemma-vz-$TRIPLE" --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist
 echo "locald: $OUT_DIR/lemma-locald-$TRIPLE"
 echo "agent host: $OUT_DIR/lemma-agent-host-$TRIPLE"
 echo "runtime bridge: $OUT_DIR/lemma-runtime-$TRIPLE"

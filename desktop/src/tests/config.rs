@@ -60,6 +60,69 @@ fn each_channel_reads_its_own_feed() {
     }
 }
 
+/// The documented endpoints are the endpoints.
+///
+/// `docs/installation.md` tells a reader exactly what leaves their machine when
+/// they open Local settings, and a reader has no way to check it. A URL that
+/// moves in code and not in the doc turns that section from an assurance into a
+/// claim -- which is what the register found: this traffic was not written down
+/// anywhere at all.
+///
+/// Both directions on purpose. A doc naming an address the app no longer uses
+/// is as wrong as a doc missing one it does.
+#[test]
+fn the_installation_guide_names_the_addresses_this_build_asks() {
+    let guide = include_str!("../../../docs/installation.md").replace("\r\n", "\n");
+    let section = guide
+        .split("### Checking for updates")
+        .nth(1)
+        .expect("the guide documents where updates are checked");
+    let section = section.split("\n## ").next().unwrap_or(section);
+
+    for channel in ["stable", "nightly"] {
+        for endpoint in updater_endpoints(channel) {
+            // The nightly address is written with an ellipsis for the host it
+            // shares with the line above it, so compare on the part that says
+            // which release and which file.
+            let path = endpoint
+                .split_once("lemma-platform")
+                .map(|(_, rest)| rest)
+                .unwrap_or(&endpoint);
+            assert!(
+                section.contains(path),
+                "docs/installation.md does not name the {channel} update \
+                 endpoint {endpoint}",
+            );
+        }
+    }
+
+    // And nothing it names has gone away. Token by token rather than line by
+    // line: one of the two addresses is written inside a sentence.
+    for token in section.split_whitespace() {
+        // Prose punctuation, so a sentence that ends on a URL is not read as
+        // naming a different one.
+        let named = token
+            .trim_matches(|c: char| !c.is_ascii_graphic() || "`,()\"".contains(c))
+            .trim_end_matches('.');
+        if !named.contains("latest.json") || !named.contains("releases/") {
+            continue;
+        }
+        // The nightly address elides the host it shares with the line above.
+        let path = named
+            .split_once("lemma-platform")
+            .map(|(_, rest)| rest)
+            .unwrap_or(named)
+            .trim_start_matches("...");
+        assert!(
+            ["stable", "nightly"]
+                .iter()
+                .flat_map(|channel| updater_endpoints(channel))
+                .any(|endpoint| endpoint.ends_with(path)),
+            "docs/installation.md names {path}, which no channel reads",
+        );
+    }
+}
+
 /// The updater's transport policy is not weakened, and the artifact flag
 /// stays out of the base config.
 /// The key an installed app verifies with is real, and matches its own id.
