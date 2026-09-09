@@ -246,6 +246,36 @@ pub(crate) fn path_identity(path: &std::path::Path) -> String {
         .into_owned()
 }
 
+/// Which *build* of an executable is at a path, not just which path it is.
+///
+/// A path is not an identity when the file at it can be replaced. On macOS an
+/// update moves the old app to the Trash, so the running daemon's path changes
+/// and comparing paths is enough. On Windows an in-place update writes to the
+/// same path -- so a daemon from the previous version reports an identical
+/// path, and a shell that compares only paths adopts it: the new app
+/// supervising the old runtime, with the same version on both sides and
+/// nothing anywhere saying so.
+///
+/// Size and modification time rather than a content hash. The daemon sends
+/// this on every handshake and the shell computes it on every connect, and
+/// reading thirty megabytes to answer "is this the file I ship" is not a cost
+/// worth paying for a question a replaced file already answers: an installer
+/// that writes a new file changes both.
+///
+/// `None` when the file cannot be measured, which is itself a different
+/// daemon -- the executable it is running from is gone.
+pub(crate) fn executable_stamp(path: &std::path::Path) -> Option<(u64, u128)> {
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let metadata = std::fs::metadata(&resolved).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some((metadata.len(), modified))
+}
+
 /// The storage partition a server's session lives in.
 ///
 /// Lemma Cloud and a local install are different servers -- different accounts,
