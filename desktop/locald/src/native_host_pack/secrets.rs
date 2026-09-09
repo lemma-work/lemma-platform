@@ -1,7 +1,7 @@
 //! This installation's own secrets, and the private files holding them.
 
 pub(crate) use lemma_private_file::{
-    make_private as ensure_private_file, write_atomic as write_private_atomic,
+    ensure_private as ensure_private_file, write_atomic as write_private_atomic,
 };
 
 use super::*;
@@ -18,6 +18,7 @@ pub(crate) fn load_or_create_host_secrets(
     healed: &mut Vec<String>,
 ) -> io::Result<HostSecrets> {
     if path.is_file() {
+        narrow_exposed_secret(path, healed)?;
         match read_existing_host_secrets(path) {
             Ok(secrets) => return Ok(secrets),
             Err(reason) => {
@@ -66,6 +67,45 @@ pub(crate) fn load_or_create_host_secrets(
     };
     write_private_atomic(path, &serde_json::to_vec(&secrets)?)?;
     Ok(secrets)
+}
+
+/// Narrow a secret that more than this user can read, and say that it was.
+///
+/// Repaired rather than refused, unlike the managed runtime's secrets, and the
+/// difference is what refusing costs here. A refusal sends this file into the
+/// quarantine path above, which remints the installation secret and requires a
+/// data reset -- every encrypted row in the installation permanently
+/// unreadable, arrived at from a mode bit. `cp -R` instead of `cp -Rp` lands
+/// exactly here, and the directory holding this file is 0700, so the widened
+/// file inside it was never actually readable by anybody else.
+///
+/// Not silently, though, which is what it used to be: the mode was set on
+/// every read and nothing was recorded either way. A secret found wider than it
+/// should be is worth an operator hearing about even when nothing read it, and
+/// `healed` is where this daemon says what it had to repair to start.
+///
+/// A symlink or a directory is left to `read_existing_host_secrets`, which
+/// refuses it. That is not a permissions accident and repairing it would be the
+/// bug.
+fn narrow_exposed_secret(path: &Path, healed: &mut Vec<String>) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.file_type().is_file() && metadata.mode() & 0o077 != 0 {
+            lemma_private_file::make_private(path)?;
+            healed.push(format!(
+                "this installation's secret at {} could be read by more than this user                  (mode {:o}); it has been narrowed. Nothing else was changed, and the                  secret itself still works -- but if this machine is shared, treat it as                  known to anyone who had an account on it",
+                path.display(),
+                metadata.mode() & 0o777,
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, healed);
+    }
+    Ok(())
 }
 
 pub(crate) fn read_existing_host_secrets(path: &Path) -> Result<HostSecrets, String> {

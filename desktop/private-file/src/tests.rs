@@ -164,3 +164,60 @@ fn repairing_still_refuses_what_is_not_a_regular_file() {
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     assert!(make_private(root.path()).is_err(), "nor is a directory");
 }
+
+/// A log that already existed is narrowed, not only one this call creates.
+///
+/// `OpenOptions::mode` applies to a file this call brings into existence and to
+/// nothing else, so a log written by an older build that set no mode -- or one
+/// copied without `-p` -- stayed as wide as it was while every appended line
+/// made it worth more.
+#[cfg(unix)]
+#[test]
+fn an_existing_log_is_narrowed_rather_than_left_as_it_was_found() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = scratch();
+    let path = root.path().join("run.log");
+    std::fs::write(&path, b"already here\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    {
+        let mut log = appending_log(&path).unwrap();
+        log.write_all(b"and this\n").unwrap();
+    }
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o077, 0, "mode was {mode:o}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "already here\nand this\n",
+        "narrowing a log must not cost what was in it"
+    );
+}
+
+/// Which directory-sync failures are forgiven, and which are not.
+///
+/// A filesystem that implements no `fsyncdir` -- a FUSE server, some network
+/// mounts -- answers `EINVAL` or `ENOTSUP`. By then the rename has already
+/// succeeded, so reporting it failed a write that had landed and skipped the
+/// privacy check after it. Everything else is a real failure: the interesting
+/// half of this guard is the second list, because forgiving too much turns a
+/// device error into a write that claims to have been made durable.
+#[test]
+fn only_a_filesystem_that_will_not_sync_a_directory_is_forgiven() {
+    for kind in [io::ErrorKind::InvalidInput, io::ErrorKind::Unsupported] {
+        assert!(
+            directory_sync_is_unsupported(&io::Error::new(kind, "no fsyncdir here")),
+            "{kind:?} means the filesystem declined, not that the write failed"
+        );
+    }
+    for kind in [
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::NotFound,
+        io::ErrorKind::Other,
+    ] {
+        assert!(
+            !directory_sync_is_unsupported(&io::Error::new(kind, "a real failure")),
+            "{kind:?} is a durability failure and must be reported"
+        );
+    }
+}

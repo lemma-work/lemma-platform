@@ -197,6 +197,18 @@ pub fn ensure_private_directory(path: &Path) -> io::Result<()> {
 }
 
 /// A log only this user may read, opened for appending.
+///
+/// Narrowed as well as created narrow. `mode` applies to a file this call
+/// brings into existence and to nothing else, so a log that already existed --
+/// written by an older build that did not set a mode, or copied without `-p` --
+/// stayed as wide as it was, for ever, while every line appended to it made it
+/// worth more. These carry `wsl.exe` output, daemon diagnostics and the
+/// occasional error message with a path or a name in it.
+///
+/// Repaired rather than refused, like the config files: a log is not the thing
+/// an attacker wants and refusing to open one takes the diagnostics away
+/// exactly when somebody is trying to work out what went wrong. A symlink is
+/// still refused, by `make_private`.
 pub fn appending_log(path: &Path) -> io::Result<File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -208,7 +220,9 @@ pub fn appending_log(path: &Path) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)
+    let log = options.open(path)?;
+    make_private(path)?;
+    Ok(log)
 }
 
 /// A name beside `path` that no other writer will choose.
@@ -238,8 +252,18 @@ fn temporary_beside(path: &Path) -> PathBuf {
 /// Make the rename durable as well as the contents.
 ///
 /// A file whose bytes are on the disk but whose directory entry is not is a
-/// file that is not there. Best-effort on the platforms where a directory
-/// cannot be opened for this.
+/// file that is not there.
+///
+/// Best-effort where the filesystem will not do it, which the comment used to
+/// claim and the code did not. Not every filesystem answers `fsync` on a
+/// directory descriptor: a FUSE server that implements no `fsyncdir`, and some
+/// network mounts, return `EINVAL` or `ENOTSUP`. By the time this runs the
+/// rename has already succeeded, so returning that error failed a write that
+/// had landed -- and, because `write_atomic` returns immediately, skipped the
+/// `ensure_private` after it, leaving the file written and unchecked.
+///
+/// Only those two. Anything else -- the directory gone, permission refused, an
+/// I/O error from the device -- is a real failure and is still reported.
 #[cfg_attr(
     not(unix),
     expect(
@@ -250,13 +274,35 @@ fn temporary_beside(path: &Path) -> PathBuf {
 fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(path)?.sync_all()
+        match File::open(path).and_then(|directory| directory.sync_all()) {
+            Err(error) if directory_sync_is_unsupported(&error) => Ok(()),
+            outcome => outcome,
+        }
     }
     #[cfg(not(unix))]
     {
         let _ = path;
         Ok(())
     }
+}
+
+/// Whether the filesystem declined to sync a directory at all, as opposed to
+/// failing to.
+///
+/// Its own function so the line between the two is one thing, in one place,
+/// with a test on it. Widening this is how a real durability failure -- a
+/// device error, a directory that has gone -- becomes a write that silently
+/// claims to have landed.
+///
+/// Compiled for the test on every platform and called only on unix: Windows
+/// has no directory descriptor to sync, so `sync_directory` does nothing there
+/// and this would be dead code.
+#[cfg(any(unix, test))]
+fn directory_sync_is_unsupported(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+    )
 }
 
 #[cfg(test)]
