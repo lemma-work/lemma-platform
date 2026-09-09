@@ -258,6 +258,7 @@ pub(crate) fn run_quit_watchdog(
 pub(crate) fn finish_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
+    note_session_length();
     let worker = app.clone();
     let exiting = app.clone();
     shell.shutdown.start(
@@ -267,7 +268,21 @@ pub(crate) fn finish_quit(app: &AppHandle) {
     );
 }
 
+/// How long this session lasted, once, however the app is quit.
+///
+/// Both quit paths end in a shutdown, and either can be reached first, so the
+/// once-only is here rather than at each call site.
+fn note_session_length() {
+    static NOTED: std::sync::Once = std::sync::Once::new();
+    NOTED.call_once(|| {
+        telemetry::note(telemetry::InstallEvent::Quit {
+            session_seconds: LAUNCH_START.get_or_init(Instant::now).elapsed().as_secs(),
+        });
+    });
+}
+
 pub(crate) fn finish_quit_after_daemon(app: &AppHandle) {
+    note_session_length();
     let worker = app.clone();
     let exiting = app.clone();
     app.state::<Shell>().shutdown.start(

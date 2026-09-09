@@ -32,6 +32,12 @@ pub(crate) struct UiState {
     pub(crate) completed_operation_ids: Vec<String>,
     #[serde(skip)]
     pub(crate) terminal_recovery_pending: bool,
+    /// Whether this launch had to install a runtime before it could start.
+    ///
+    /// Only for the readiness measurement: a first run and a warm start take
+    /// wildly different times, and a number that mixes them says nothing.
+    #[serde(skip)]
+    pub(crate) installed_this_launch: bool,
 }
 
 /// What a broken installation can still be offered.
