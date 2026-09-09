@@ -125,15 +125,8 @@ fn a_release_build_ignores_every_runtime_redirecting_env_var() {
     // out by name rather than narrowing the scan, so the exception is visible
     // here instead of being a file this test quietly never looked at.
     let all = shell_source();
-    let source = match (
-        all.find("fn local_artifacts_enabled"),
-        all.find("fn download_client"),
-    ) {
-        (Some(start), Some(end)) if start < end => {
-            format!("{}{}", &all[..start], &all[end..])
-        }
-        _ => panic!("the local-artifacts exception moved; re-check it still is one"),
-    };
+    let source = all.replace(function_body(&all, "fn local_artifacts_enabled"), "");
+    assert!(source.len() < all.len(), "the exception was not cut out");
     for name in [
         "LEMMA_DESKTOP_HOST_PACK_ROOT",
         "LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT",

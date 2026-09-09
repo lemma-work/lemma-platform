@@ -59,23 +59,17 @@ fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
 
 /// Every guard's own source, so the guards can be checked.
 fn test_sources() -> Vec<(String, String)> {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("tests");
-    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&directory)
-        .expect("the shell's test directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
+    let files: Vec<std::path::PathBuf> = rust_files_under(&shell_source_directory())
+        .into_iter()
+        .filter(|path| is_test_module(path))
         .collect();
-    files.sort();
-    assert!(files.len() > 5, "the guards are a directory of modules");
+    assert!(files.len() > 5, "the guards are a tree of modules");
     files
         .iter()
         .map(|path| {
             let name = path
-                .file_name()
-                .expect("a file name")
+                .strip_prefix(shell_source_directory())
+                .unwrap_or(path)
                 .to_string_lossy()
                 .into_owned();
             let source = std::fs::read_to_string(path).expect("a guard module");
@@ -166,31 +160,59 @@ fn invoked_commands(script: &str) -> Vec<String> {
 /// Every source file of the shell, concatenated.
 ///
 /// `main.rs` was 11,297 lines and the guards below scanned it by name. It is a
-/// directory of modules now, and a guard still reading one file would go on
-/// passing while covering a fraction of what it used to — so the ones that
-/// scan for a pattern anywhere read all of it, and the ones that slice around
-/// a named function read the module that owns that function.
+/// tree of modules now, and a guard still reading one file would go on passing
+/// while covering a fraction of what it used to — so the ones that scan for a
+/// pattern anywhere read all of it, and the ones that slice around a named
+/// function read the module that owns that function.
 ///
 /// From disk rather than a list of `include_str!`s, for the reason the daemon
-/// guard gives: a list somebody maintains is how a module goes unscanned.
+/// guard gives: a list somebody maintains is how a module goes unscanned. And
+/// recursively, for the same reason one directory deeper: `artifact_install`
+/// became a directory and a non-recursive walk stopped seeing 2,272 lines of
+/// it without saying so.
 pub(crate) fn shell_source() -> String {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&directory)
-        .expect("the shell's source directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
-        .collect();
-    files.sort();
-    assert!(
-        files.len() > 5,
-        "the shell is a directory of modules; reading one file means the scan \
-         is looking at a fraction of it"
-    );
-    files
+    let files = rust_files_under(&shell_source_directory());
+    let sources: Vec<String> = files
         .iter()
+        .filter(|path| !is_test_module(path))
         .map(|path| std::fs::read_to_string(path).expect("a shell module"))
-        .collect::<Vec<_>>()
-        .join("\n")
-        .replace("\r\n", "\n")
+        .collect();
+    assert!(
+        sources.len() > 20,
+        "the shell is a tree of modules; reading {} file(s) means the scan is \
+         looking at a fraction of it",
+        sources.len(),
+    );
+    sources.join("\n").replace("\r\n", "\n")
+}
+
+fn shell_source_directory() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
+}
+
+/// A guard lives beside the code it guards, so the walk has to tell them
+/// apart: a scan that swept the guards in would keep finding its own needles.
+fn is_test_module(path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|name| name == "tests.rs")
+        || path
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .is_some_and(|name| name == "tests")
+}
+
+fn rust_files_under(directory: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let mut directories = vec![directory.to_path_buf()];
+    while let Some(next) = directories.pop() {
+        for entry in std::fs::read_dir(&next).expect("a source directory") {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|kind| kind == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
 }
