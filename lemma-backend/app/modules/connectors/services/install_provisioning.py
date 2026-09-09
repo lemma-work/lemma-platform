@@ -286,7 +286,7 @@ async def discovery_credentials(
 async def discover_operations_for_new_account(
     service: InstallServiceSeam, auth_config: AuthConfigEntity
 ) -> None:
-    """Fill in an OAuth install's operations once somebody has connected.
+    """Fill in an install's operations once somebody has connected.
 
     An install whose credential lives on the account cannot be discovered when
     it is created -- there is no account yet -- so it is committed with zero
@@ -294,6 +294,11 @@ async def discover_operations_for_new_account(
     succeed. Without this the install stays empty until an operator finds the
     refresh endpoint, which is not something a person connecting an MCP server
     should have to know about.
+
+    Both ways of connecting reach here, and for the same reason. This was
+    called from the OAuth callback alone, so an MCP server connected with an
+    API key, a header or no auth at all -- which goes through `create_account`
+    -- came up with zero tools every time.
 
     Only when the install has none. The tool list belongs to the server, so
     re-running it for the second and later people to connect would re-ask the

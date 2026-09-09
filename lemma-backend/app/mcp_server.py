@@ -140,6 +140,13 @@ class ConversationMCPASGIApp:
         # `notifications/initialized` lands on a different worker/replica (no
         # session affinity) the server returns 404 "session expired" and clients
         # like Codex's rmcp abort the handshake. Stateless avoids that entirely.
+        #
+        # The flag only governs the *handshake* era now. MCP revision
+        # 2026-07-28 removed protocol sessions and the initialize handshake
+        # outright, so a client speaking it is self-describing per request and
+        # is routed before this flag is consulted. It stays because the older
+        # revisions are still supported (deprecation is a twelve-month window,
+        # minimum) and it is what keeps them working across replicas.
         self._mcp_app = mcp_server.http_app(
             path="/mcp",
             transport="http",
