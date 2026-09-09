@@ -16,6 +16,13 @@ import { WaitingScreen } from "@/components/shared/loading";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ArrowRight, Boxes } from "@/components/ui/icons";
 import {
   buildNewPodConversationHref,
@@ -37,6 +44,11 @@ import { getLemmaClient } from "@/lib/sdk/lemma-client";
  * The chips are the same start paths as first run, minus the form. They create
  * the pod under the name in the field, then seed that composer with the start
  * of a sentence — see `startPathComposerLaunch`.
+ *
+ * A pod is created in an organization, and the screen used to pick that
+ * silently: whichever org happened to be active. Someone in two orgs could only
+ * find out afterwards, from the pod they had already made. The org now sits in
+ * the name row, so the destination is visible next to the decision.
  */
 
 const DEFAULT_POD_NAME = "Untitled pod";
@@ -54,7 +66,7 @@ type PendingAction = ComposerStartPath | "create" | "templates";
 export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: string | null }) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { currentOrg, isLoading } = useOrganization();
+  const { currentOrg, setCurrentOrg, organizations, isLoading } = useOrganization();
   const remixSource = normalizeRemixSource(rawRemixSource);
   const [name, setName] = useState(
     remixSource ? `Remix of ${remixSourceLabel(remixSource)}` : "",
@@ -165,12 +177,50 @@ export function CreatePodScreen({ remixSource: rawRemixSource }: { remixSource: 
               );
             }}
           >
-            <Label
-              htmlFor="create-pod-name"
-              className="text-sm text-[var(--text-secondary)]"
-            >
-              Name
-            </Label>
+            <div className="flex items-center justify-between gap-3">
+              <Label
+                htmlFor="create-pod-name"
+                className="text-sm text-[var(--text-secondary)]"
+              >
+                Name
+              </Label>
+              {/* One org is not a choice, so it gets no control — the pod can
+                  only land in the one place. The selector appears the moment
+                  there is somewhere else it could go, and switching here
+                  switches the active org, which is what opening the new pod
+                  would have done anyway. */}
+              {organizations.length > 1 ? (
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="text-xs text-[var(--text-tertiary)]">in</span>
+                  <Select
+                    value={currentOrg?.id}
+                    disabled={Boolean(pending)}
+                    onValueChange={(organizationId) => {
+                      const organization = organizations.find(
+                        (candidate) => candidate.id === organizationId,
+                      );
+                      if (organization) setCurrentOrg(organization);
+                    }}
+                  >
+                    <SelectTrigger
+                      aria-label="Organization"
+                      className="setup-detail-choice h-8 w-auto max-w-56 gap-2 px-2.5 text-sm font-normal"
+                    >
+                      <SelectValue placeholder="Choose organization">
+                        {currentOrg?.name}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {organizations.map((organization) => (
+                        <SelectItem key={organization.id} value={organization.id}>
+                          {organization.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+            </div>
             <Input
               id="create-pod-name"
               autoFocus
