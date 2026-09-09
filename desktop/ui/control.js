@@ -1320,7 +1320,15 @@ async function loadRuntimeInfo() {
  * Now it retries on a heartbeat until a snapshot arrives, and says so on screen
  * while it is trying.
  */
-const SNAPSHOT_RETRY_MS = 5000;
+// Backed off rather than flat. A daemon that is coming back does so within a
+// second or two, and one that is not is usually not coming back at all -- a
+// stopped stack, a crash loop, a machine going to sleep with this window open.
+// A fixed five seconds asked that question for ever at the same rate, which is
+// a wake-up every five seconds on a laptop lid nobody has opened. Starting
+// sooner also makes the ordinary case feel faster than the flat interval did.
+const SNAPSHOT_RETRY_FLOOR_MS = 1000;
+const SNAPSHOT_RETRY_CEILING_MS = 30000;
+let snapshotRetryDelay = SNAPSHOT_RETRY_FLOOR_MS;
 let snapshotRetryTimer = null;
 
 function requestSnapshot() {
@@ -1335,10 +1343,22 @@ function requestSnapshot() {
 
 function scheduleSnapshotRetry() {
   if (snapshotRetryTimer) return;
+  const delay = snapshotRetryDelay;
+  snapshotRetryDelay = Math.min(snapshotRetryDelay * 2, SNAPSHOT_RETRY_CEILING_MS);
   snapshotRetryTimer = setTimeout(() => {
     snapshotRetryTimer = null;
     requestSnapshot();
-  }, SNAPSHOT_RETRY_MS);
+  }, delay);
+}
+
+// A snapshot arrived, so the next outage starts asking quickly again. Without
+// this the backoff is one-way: a window left open through a restart would keep
+// the half-minute interval it had reached, and the next real outage would take
+// thirty seconds to notice.
+function resetSnapshotRetry() {
+  snapshotRetryDelay = SNAPSHOT_RETRY_FLOOR_MS;
+  clearTimeout(snapshotRetryTimer);
+  snapshotRetryTimer = null;
 }
 
 /* Daemon errors, said in a way a person can act on.
@@ -1448,6 +1468,7 @@ function handleLocaldEvent(event) {
     snapshot = event;
     state = event.state;
     clearSnapshotUnavailable();
+    resetSnapshotRetry();
     if (!sharingChoice) sharingChoice = snapshot.sharing?.mode || "this_computer";
     fillConfiguration();
     render();
