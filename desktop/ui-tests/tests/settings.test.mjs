@@ -210,3 +210,44 @@ test('saving one section cannot silently rebase another draft past an unseen cha
   assert.equal(context.sectionRevisions.get('ai'), 1);
   assert.equal(context.sectionRevisions.get('integrations'), 3);
 });
+
+test('the install-health switch is hidden unless this build can send anything', async () => {
+  const { context, element } = fixture();
+  // A build with no ingestion key sends nothing at all, so a switch would be a
+  // control over nothing. The whole panel stays hidden rather than offering a
+  // toggle that does not toggle anything.
+  context.invoke = async () => ({ available: false, enabled: false, host: 'https://eu.i.posthog.com' });
+  element('telemetry-panel').hidden = true;
+  load(context, 'let telemetryLoaded = false;', '\n// Matches `formatUptime`');
+  await context.loadTelemetry();
+  assert.equal(element('telemetry-panel').hidden, true);
+});
+
+test('turning the install-health switch off is sent once and kept on failure', async () => {
+  const { context, element } = fixture();
+  const listeners = [];
+  const box = element('telemetry-enabled');
+  box.addEventListener = (_event, handler) => listeners.push(handler);
+  element('telemetry-panel').hidden = true;
+  const sent = [];
+  context.invoke = async (command, args) => {
+    if (command === 'telemetry_status') {
+      return { available: true, enabled: true, host: 'https://eu.i.posthog.com', install_id: 'abcdef0123456789' };
+    }
+    sent.push(args);
+    throw new Error('the daemon said no');
+  };
+  load(context, 'let telemetryLoaded = false;', '\n// Matches `formatUptime`');
+  await context.loadTelemetry();
+
+  assert.equal(element('telemetry-panel').hidden, false);
+  assert.equal(box.checked, true, 'the stored choice is what the switch shows');
+  assert.match(element('telemetry-detail').textContent, /eu\.i\.posthog\.com/);
+  assert.match(element('telemetry-detail').textContent, /abcdef01/, 'the install id is shown, abbreviated');
+
+  box.checked = false;
+  await listeners[0]();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].enabled, false);
+  assert.equal(box.checked, true, 'a refused save puts the switch back rather than lying');
+});
