@@ -176,6 +176,75 @@ pub(crate) fn locald_sources() -> Vec<(String, String)> {
 }
 
 #[cfg(test)]
+mod lock_scope_policy {
+    /// A lock taken in the scrutinee is held for the whole block.
+    ///
+    /// `if let Some(x) = self.thing.lock()...take() { ... }` reads like the
+    /// guard is dropped once the value is out. It is not: the temporary lives
+    /// to the end of the `if let`, so the lock is held across everything in
+    /// the body. Four places in this crate did that across work that waits --
+    /// terminating a process tree, `Child::wait`, `JoinHandle::join`, a
+    /// tunnel's shutdown -- and every one of them stalled a reader of the same
+    /// lock for as long as the work took. Stopping the Agent Host froze the
+    /// tray menu it was stopped from, for up to eleven seconds.
+    ///
+    /// The fix is always the same shape: bind the take to a `let`, which drops
+    /// the guard at the end of that statement, and use the value below.
+    ///
+    /// Two are left, and they are here rather than fixed because the body
+    /// cannot wait. Adding a third means saying which it is.
+    const HOLDS_NOTHING_THAT_WAITS: [&str; 2] = [
+        // A `HashMap` lookup, then `send` on an unbounded `mpsc::Sender`,
+        // which never blocks.
+        "daemon/supervisor.rs",
+        // A `HashMap` lookup and a `return`. The keychain read that *can*
+        // block is deliberately outside, and says so.
+        "operator_config/vault.rs",
+    ];
+
+    #[test]
+    fn no_lock_is_held_across_a_block_that_can_wait() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut held = Vec::new();
+        for (name, source) in super::rust_sources(&root, "locald/src") {
+            if name.contains("tests") || HOLDS_NOTHING_THAT_WAITS.iter().any(|k| name.ends_with(k))
+            {
+                continue;
+            }
+            let lines: Vec<&str> = source.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                let trimmed = line.trim_start();
+                if !(trimmed.starts_with("if let ")
+                    || trimmed.starts_with("while let ")
+                    || trimmed.starts_with("match "))
+                {
+                    continue;
+                }
+                // The scrutinee can span several lines; it ends at the brace.
+                let mut scrutinee = String::new();
+                for line in &lines[index..(index + 8).min(lines.len())] {
+                    scrutinee.push_str(line);
+                    scrutinee.push('\n');
+                    if line.trim_end().ends_with('{') {
+                        break;
+                    }
+                }
+                if scrutinee.contains(".lock()") {
+                    held.push(format!("{name}:{}: {}", index + 1, trimmed));
+                }
+            }
+        }
+        assert!(
+            held.is_empty(),
+            "these hold a lock for the whole block they open. Bind the value \
+             with a `let` first, or add the site to HOLDS_NOTHING_THAT_WAITS \
+             with the reason its body cannot wait:\n{}",
+            held.join("\n"),
+        );
+    }
+}
+
+#[cfg(test)]
 mod doc_comment_policy {
     /// An indented block in a doc comment is a *Rust* code block.
     ///
