@@ -412,3 +412,47 @@ pub(crate) fn request_desktop_release() -> Result<(), String> {
         }
     }
 }
+
+/// What an `ExitRequested` should do, from the three facts that decide it.
+///
+/// Its own function because the arm that used to hold it ended in two branches
+/// that did the same thing -- one of them computing `quit_impact` and throwing
+/// the answer away to decide nothing. Two paths to one call is how one of them
+/// drifts, and inside a `RunEvent` closure neither could be tested at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExitDisposition {
+    /// Let the exit through. The shutdown worker has finished its work.
+    Allow,
+    /// Refuse the exit, and do nothing else about it.
+    Hold,
+    /// Refuse the exit and start the quit that will earn it.
+    Quit,
+}
+
+pub(crate) fn exit_disposition(
+    swapping_window: bool,
+    may_exit: bool,
+    quit_confirmed: bool,
+) -> ExitDisposition {
+    // A server switch closes one window and opens another. In between there
+    // are no windows, which looks exactly like the last one closing -- so the
+    // exit is held rather than asked about or taken.
+    if swapping_window {
+        return ExitDisposition::Hold;
+    }
+    if may_exit {
+        return ExitDisposition::Allow;
+    }
+    // Already on its way out. Asking again, or starting a second quit, is how
+    // a confirmed quit gets a second dialog in front of it.
+    if quit_confirmed {
+        return ExitDisposition::Hold;
+    }
+    // Whether or not there is anything to warn about, there is something to
+    // do: the daemon outlives the app deliberately, so quitting has to stop
+    // it. Letting the exit through here ran that on the main thread from
+    // `RunEvent::Exit`, which is why Dock -> Quit sat "not responding" for
+    // several seconds before the window went away. `request_quit` does the
+    // same work on a worker and exits when it is done.
+    ExitDisposition::Quit
+}

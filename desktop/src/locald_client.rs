@@ -1,8 +1,34 @@
 use super::*;
 
+/// How many messages may be waiting for a daemon that is not reading.
+///
+/// Generous for a daemon that is merely busy -- these are small control
+/// messages and it drains them in order -- and small enough that one which has
+/// stopped reading is noticed rather than accumulated. The failure this bounds
+/// is unbounded memory behind a socket nobody is emptying.
+const LOCALD_WRITE_BACKLOG: usize = 256;
+
 pub(crate) fn install_locald_connection(app: &AppHandle, connection: LocaldConnection) {
     let shell: State<Shell> = app.state();
-    *shell.locald_writer.lock().unwrap() = Some(connection.writer);
+    let (sender, outbound) = mpsc::sync_channel::<String>(LOCALD_WRITE_BACKLOG);
+    *shell.locald_writer.lock().unwrap() = Some(sender);
+    // The one thread that touches the socket, so a write that blocks blocks
+    // only itself. It ends when the sender is dropped, which is what
+    // `locald_gone` does.
+    let mut writer = connection.writer;
+    std::thread::Builder::new()
+        .name("lemma-locald-writer".into())
+        .spawn(move || {
+            for message in outbound {
+                if writeln!(writer, "{message}").is_err() || writer.flush().is_err() {
+                    // The reader thread below is what notices a dead
+                    // connection and tells the rest of the shell; there is
+                    // nothing useful to add from here.
+                    break;
+                }
+            }
+        })
+        .expect("the locald writer thread");
     let handle = app.clone();
     std::thread::spawn(move || {
         // Bounded as the bytes arrive. `lines()` builds the whole line first,
@@ -33,14 +59,24 @@ pub(crate) fn install_locald_connection(app: &AppHandle, connection: LocaldConne
     );
 }
 
+/// Hand one message to the daemon's writer, without waiting for the socket.
+///
+/// `try_send`, deliberately. The lock here is held only for the length of a
+/// channel push, so a daemon that has stopped reading can no longer hold every
+/// other caller behind it -- and a full backlog is an answer the caller can
+/// act on rather than a wait it cannot escape.
 pub(crate) fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
     let shell: State<Shell> = app.state();
-    let mut guard = shell.locald_writer.lock().unwrap();
-    let writer = guard.as_mut().ok_or("lemma-locald is not connected")?;
-    writeln!(writer, "{message}").map_err(|e| format!("locald write failed: {e}"))?;
+    let guard = shell.locald_writer.lock().unwrap();
+    let writer = guard.as_ref().ok_or("lemma-locald is not connected")?;
     writer
-        .flush()
-        .map_err(|e| format!("locald flush failed: {e}"))
+        .try_send(message.to_string())
+        .map_err(|error| match error {
+            mpsc::TrySendError::Full(_) => {
+                "lemma-locald is not reading its control socket".to_owned()
+            }
+            mpsc::TrySendError::Disconnected(_) => "lemma-locald is not connected".to_owned(),
+        })
 }
 
 pub(crate) fn reserve_ui_operation(
