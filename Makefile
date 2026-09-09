@@ -1201,10 +1201,16 @@ desktop-dmg:
 		--sign "$${APPLE_SIGNING_IDENTITY:--}" \
 		$(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE) 2>/dev/null
 	@codesign --verify --strict $(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE)
+	@# `--ci` is not about being in CI. Without it the DMG bundler runs
+	@# AppleScript against Finder purely to position the icons, and a shell
+	@# with no Automation grant -- an SSH session, an agent, a fresh terminal
+	@# -- gets "Not authorised to send Apple events to Finder. (-1743)" and the
+	@# build fails after the .app is already built and signed. The documented
+	@# command has to work where it is documented to be run.
 	@echo "→ Bundling the self-contained DMG…"
 	@cd $(DESKTOP_DIR) && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
 		LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)" \
-		npx -y $(TAURI_CLI) build --config $(DESKTOP_DMG_CONFIG)
+		npx -y $(TAURI_CLI) build --ci --config $(DESKTOP_DMG_CONFIG)
 	@$(MAKE) --no-print-directory _desktop-verify-dist-app
 	@echo ""
 	@dmg=$$(ls $(DESKTOP_DIR)/target/release/bundle/dmg/*_*.dmg 2>/dev/null | head -1); \

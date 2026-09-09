@@ -1602,7 +1602,27 @@ fn activate_installed_runtime(
             config["previousRuntime"] = current;
         }
         config["installedRuntime"] = next;
-    })
+    })?;
+
+    // Only after the config records the pair, so a crash between the two
+    // leaves a release too many rather than a release too few. Failure is not
+    // propagated: disk that could not be reclaimed is not a reason to fail an
+    // upgrade that has already succeeded.
+    let config = read_config();
+    let keep: Vec<std::path::PathBuf> = ["installedRuntime", "previousRuntime"]
+        .iter()
+        .filter_map(|key| configured_runtime(&config, key))
+        .filter_map(|runtime| {
+            runtime
+                .host_pack_root
+                .parent()
+                .map(std::path::Path::to_path_buf)
+        })
+        .collect();
+    for release in artifact_install::prune_retired_releases(&runtime_install_root(), &keep) {
+        append_install_log(&format!("removed retired runtime {}", release.display()));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
