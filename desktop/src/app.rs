@@ -80,6 +80,8 @@ pub(crate) fn run() {
             prompts::resolve_confirmation,
             diagnostics::open_developer_tools,
             local_recovery::local_recovery_options,
+            telemetry::telemetry_status,
+            telemetry::set_telemetry_enabled,
             local_recovery::reset_local_data,
             local_recovery::reset_full_reinstall,
             local_recovery::restart_into_recovery,
@@ -134,6 +136,12 @@ pub(crate) fn run() {
                 "resume: hit, opening the workspace directly"
             } else {
                 "resume: miss, falling back to the splash"
+            });
+            // Cold means this launch found nothing already serving and has to
+            // bring the stack up. It is the launch that can go wrong, and the
+            // one whose duration is worth knowing.
+            telemetry::note(telemetry::InstallEvent::Launched {
+                cold: resume.is_none(),
             });
 
             let initial_url = if mode == "hosted" {

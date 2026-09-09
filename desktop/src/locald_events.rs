@@ -151,6 +151,17 @@ pub(crate) fn apply_locald_event(ui: &mut UiState, kind: &str, event: &Value) ->
         "ready" => {
             if !ui.ready {
                 launch_trace("daemon reported ready");
+                // How long this launch took to become usable, and whether it
+                // had to install anything to get there. The first of those is
+                // the number the whole runtime install exists to keep small,
+                // and nothing was measuring it outside a developer's console.
+                telemetry::note(telemetry::InstallEvent::RuntimeReady {
+                    cached: !ui.installed_this_launch,
+                    duration_ms: u64::try_from(
+                        LAUNCH_START.get_or_init(Instant::now).elapsed().as_millis(),
+                    )
+                    .unwrap_or(u64::MAX),
+                });
             }
             ui.ready = true;
             ui.running = true;
