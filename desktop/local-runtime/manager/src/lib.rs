@@ -123,25 +123,55 @@ pub struct ManagedRuntimeStatus {
 
 /// Which rootfs a registered distribution was imported from.
 ///
-/// Size, and deliberately not modification time. The question this answers is
-/// "was this guest imported from a *different release*", and what the answer is
-/// used for is a prompt offering to delete the distribution -- which is where
-/// the user's workspaces and databases live. Modification time changes whenever
-/// the archive is written again, so a repair, a re-download or a plain reinstall
-/// of the very same release all looked like a different one, and offered to
-/// destroy the only copy of the data over a timestamp.
+/// The question this answers is "was this guest imported from a *different
+/// release*", and the answer decides whether the runtime distribution is
+/// replaced. Getting it wrong in either direction is expensive, and the two
+/// directions cost different things.
 ///
-/// Two different releases with a byte-identical archive size would go unnoticed.
-/// That is remote, and its consequence is one in-place start this check would
-/// otherwise have refused; the alternative, hashing several gigabytes on every
-/// launch, costs every user real time to catch it.
+/// Not modification time. That changes whenever the archive is written again,
+/// so a repair, a re-download or a plain reinstall of the very same release
+/// all looked like a different one -- and back when the data lived inside the
+/// distribution, that offered to destroy the only copy of it over a timestamp.
+///
+/// The recorded digest when there is one. `artifact_install` writes the signed
+/// manifest's `guest_sha256` beside the release when it installs it, so the
+/// exact identity is already on disk and costs a small read -- not the several
+/// gigabytes of hashing that made "just hash it" the wrong answer here.
+///
+/// Size only when there is not, which is the older layout and the bundled one.
+/// It is a weak discriminator and worth saying why: `tar` pads every member to
+/// a 512-byte block and the archive to the blocking factor, so archive size is
+/// coarsely quantised and two builds that differ by a few bytes in a script --
+/// which is exactly what a guest-side change usually is -- routinely produce a
+/// byte-identical size. A false "current" leaves this release's host talking to
+/// the previous release's guestd, which is the failure this check exists for.
 ///
 /// Free and un-gated so it is tested on every platform, not only compiled on
-/// one -- the Windows guest path is its only caller, and code that exists on one
-/// platform and is checked on none is how the mtime bug survived.
+/// one -- the Windows guest path is its only caller, and code that exists on
+/// one platform and is checked on none is how the mtime bug survived.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn rootfs_stamp(rootfs: &Path) -> io::Result<String> {
+    if let Some(digest) = recorded_guest_digest(rootfs) {
+        return Ok(digest);
+    }
     Ok(fs::metadata(rootfs)?.len().to_string())
+}
+
+/// The guest artifact's digest, as the installer recorded it.
+///
+/// `<release>/managed-runtime/<target>/rootfs.tar` is three levels below the
+/// release root, which is where `.lemma-runtime-artifacts.json` lives. Absent,
+/// unreadable or missing the field all mean the same thing -- there is nothing
+/// better than size to go on -- so none of them is an error.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recorded_guest_digest(rootfs: &Path) -> Option<String> {
+    let recorded = rootfs
+        .ancestors()
+        .nth(3)?
+        .join(".lemma-runtime-artifacts.json");
+    let value: Value = serde_json::from_slice(&fs::read(recorded).ok()?).ok()?;
+    let digest = value.get("guest_sha256")?.as_str()?.trim();
+    (!digest.is_empty()).then(|| digest.to_owned())
 }
 
 fn guest_request_budget(operation: &str) -> Duration {
@@ -2215,6 +2245,54 @@ mod tests {
         validate_macos_release(&release).unwrap();
         fs::remove_file(release.join("disk.raw")).unwrap();
         assert!(validate_macos_release(&release).is_err());
+    }
+
+    /// Two releases can ship archives of exactly the same size.
+    ///
+    /// `tar` pads every member to a 512-byte block and the archive to the
+    /// blocking factor, so archive size is coarsely quantised: a guest-side
+    /// change of a few bytes in a shell script -- which is what most of them
+    /// are -- routinely lands on a byte-identical size. Reading that as "same
+    /// release" leaves this release's host talking to the previous release's
+    /// guestd, which is the failure this stamp exists to prevent.
+    ///
+    /// The installer already wrote the signed manifest's digest beside the
+    /// release, so the exact answer is on disk for the cost of a small read.
+    #[test]
+    fn two_releases_of_the_same_size_are_still_two_releases() {
+        let root = tempdir().unwrap();
+        let stamp_of = |digest: &str| {
+            let release = root.path().join(digest);
+            let target = release.join("managed-runtime/windows-x86_64");
+            fs::create_dir_all(&target).unwrap();
+            let rootfs = target.join("rootfs.tar");
+            // Byte-identical size, as tar's padding makes likely.
+            fs::write(&rootfs, vec![0u8; 10240]).unwrap();
+            fs::write(
+                release.join(".lemma-runtime-artifacts.json"),
+                format!("{{\"schema_version\":1,\"guest_sha256\":\"{digest}\"}}"),
+            )
+            .unwrap();
+            rootfs_stamp(&rootfs).unwrap()
+        };
+
+        assert_ne!(
+            stamp_of("aaaa1111"),
+            stamp_of("bbbb2222"),
+            "size alone cannot tell these apart, and the recorded digest can"
+        );
+    }
+
+    /// Nothing recorded is not an error, it is the older layout.
+    #[test]
+    fn a_release_with_no_recorded_digest_still_has_a_stamp() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("managed-runtime/windows-x86_64");
+        fs::create_dir_all(&target).unwrap();
+        let rootfs = target.join("rootfs.tar");
+        fs::write(&rootfs, b"a guest filesystem").unwrap();
+
+        assert_eq!(rootfs_stamp(&rootfs).unwrap(), "18");
     }
 
     /// Re-writing the same archive must not look like a different release.
