@@ -70,7 +70,11 @@ def load_extension_modules_if_local() -> None:
         return
     try:
         load_extension_modules()
-    except Exception:
+    except ImportError, OSError:
+        # The two ways importing a package of native extensions fails: it is
+        # not installed, or its shared libraries will not load. Anything else
+        # is not a broken installation and should not be turned into one
+        # silently.
         logger.warning(
             "embeddings.local_embedder.backend_import_failed.degraded",
             exc_info=True,
