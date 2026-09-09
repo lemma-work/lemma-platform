@@ -16,7 +16,5 @@
   "desktop/locald/src/managed_runtime.rs": 2239,
   "desktop/locald/src/native_host_pack.rs": 1968,
   "desktop/locald/src/operator_config.rs": 2423,
-  "desktop/locald/src/sharing.rs": 2254,
-  "desktop/src/artifact_install.rs": 2272,
-  "desktop/src/main.rs": 11475
+  "desktop/locald/src/sharing.rs": 2254
 }
