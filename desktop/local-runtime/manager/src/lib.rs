@@ -968,8 +968,20 @@ impl ManagedRuntime {
     /// is ready. A fresh install runs it too and copies nothing: what it is
     /// really doing there is recording that the holder is now the home, so the
     /// first upgrade afterwards knows it may replace the runtime.
+    ///
+    /// The distribution is terminated first, and only when there is really
+    /// something to move. On a warm start the container store is several
+    /// gigabytes with live overlay mounts stacked on it -- 3.6 GB on the
+    /// machine this was written against -- and copying that from underneath a
+    /// running containerd copies a moving target. Terminating costs nothing
+    /// here: the next command in the start sequence is the init that brings
+    /// the distribution back up.
     #[cfg(windows)]
     fn migrate_data_into_holder(&self) -> io::Result<()> {
+        if self.data_holder_is_ready()? {
+            return Ok(());
+        }
+        let _ = self.wsl_allowing_failure(&["--terminate", self.wsl_distribution()], None);
         self.wsl(
             &[
                 "--distribution",
@@ -2084,6 +2096,39 @@ mod tests {
         assert!(
             script.find("exit 0").expect("it is idempotent") < marker,
             "a second run has to stop before copying over what it already moved"
+        );
+    }
+
+    /// A live container store is a moving target.
+    ///
+    /// On a warm start containerd is running with several gigabytes of overlay
+    /// mounts stacked on the store -- 3.6 GB on the machine this was written
+    /// against. Copying that out from underneath it would copy a filesystem
+    /// mid-write, and the copy is the thing the upgrade then trusts enough to
+    /// delete the original.
+    #[test]
+    fn the_migration_quiesces_the_distribution_before_copying_it() {
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn migrate_data_into_holder")
+            .expect("the migration exists");
+        let body = &source[start..];
+        let end = body.find("\n    }\n").expect("the function ends");
+        let body = &body[..end];
+
+        let skip = body
+            .find("data_holder_is_ready")
+            .expect("it does nothing once the holder has the data");
+        let terminate = body
+            .find("\"--terminate\"")
+            .expect("it quiesces before copying");
+        let copy = body
+            .find("MIGRATE_DATA_INTO_HOLDER")
+            .expect("it runs the copy");
+        assert!(
+            skip < terminate && terminate < copy,
+            "a warm start must not be terminated when there is nothing to \
+             move, and the copy must not run against a live store:\n{body}"
         );
     }
 
