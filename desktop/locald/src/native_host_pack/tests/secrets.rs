@@ -141,11 +141,22 @@ fn a_world_readable_installation_secret_is_narrowed_and_reported_not_reminted() 
 #[cfg(unix)]
 #[test]
 fn a_symbolic_link_where_the_secret_belongs_is_not_repaired() {
+    use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let root = root.path();
     std::fs::create_dir_all(root.join("data/files")).unwrap();
     let elsewhere = root.join("elsewhere.json");
-    std::fs::write(&elsewhere, br#"{"installation_secret":"00"}"#).unwrap();
+    // A secret that would be accepted in every respect if it were reached:
+    // valid hex, and private. Neither was true of the fixture this replaced,
+    // so a regression that followed the link would have been refused for one
+    // of those instead and the guard would have passed without the link
+    // mattering at all.
+    std::fs::write(
+        &elsewhere,
+        format!(r#"{{"installation_secret":"{}"}}"#, "ab".repeat(32)).as_bytes(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o600)).unwrap();
     let path = root.join("host.secrets.json");
     std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
 
