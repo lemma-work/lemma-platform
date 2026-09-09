@@ -1,7 +1,43 @@
 ; Lemma's NSIS hooks.
 ;
-; One thing, done at the one point where it can work.
+; Two things, each at the one point where it can work.
 ;
+; PREINSTALL stops the previous installation's background services, because
+; Windows will not replace a file that is open.
+;
+; PREUNINSTALL erases the local data when the uninstaller's checkbox asked
+; for it, which is not where Tauri would have looked.
+
+; An upgrade installs over a running installation.
+;
+; Windows will not replace a file that is open, so an installer that runs while
+; locald and the Agent Host are up either fails outright or -- because Tauri's
+; NSIS template does not stop on a failed file write -- leaves the previous
+; binaries in place and reports success. The app then launches as the new
+; version against the old daemon, which answers with the same path it always
+; did, and until the build stamp in the handshake landed there was nothing that
+; could tell the difference.
+;
+; Killed rather than asked to stop: there is no window here in which to wait,
+; and a daemon that is killed comes back when the app is next opened. Its state
+; is on disk and survives.
+
+!macro NSIS_HOOK_PREINSTALL
+  DetailPrint "Stopping Lemma's background services..."
+  ; By image name, which is wider than this installation, for the reason the
+  ; uninstall hook gives: narrowing it needs the process path, which NSIS
+  ; cannot filter on without a PowerShell round trip that nothing here can
+  ; test. Installing is explicit and rare.
+  nsExec::ExecToLog 'taskkill /F /T /IM lemma-locald.exe'
+  Pop $0
+  nsExec::ExecToLog 'taskkill /F /T /IM lemma-agent-host.exe'
+  Pop $0
+  ; Give the handles time to close. `taskkill /F` returns once the kill is
+  ; requested, not once the process is gone, and a file whose last handle
+  ; closes a moment later is still in use when the copy starts.
+  Sleep 1500
+!macroend
+
 ; Tauri's uninstaller offers to delete application data, and what it deletes is
 ; %APPDATA%\${BUNDLEID} and %LOCALAPPDATA%\${BUNDLEID} -- for Lemma,
 ; work.lemma.desktop. Lemma's data is not there. It is in %LOCALAPPDATA%\Lemma,
@@ -11,11 +47,13 @@
 ; uninstalling left a registered distribution and a multi-gigabyte disk that
 ; only `wsl --unregister` from a terminal could remove.
 ;
+;
 ; locald already knows how to do this properly: `reset --confirm=erase-local-
 ; lemma` unregisters the guest, reclaims the installation's processes and
 ; removes its state, and it refuses to touch a directory whose contents are not
 ; recognisably Lemma's. This runs it, at PREUNINSTALL, because by POSTUNINSTALL
 ; its binary has already been deleted.
+
 
 !macro NSIS_HOOK_PREUNINSTALL
   ; `reset` refuses while the daemon's socket is answering -- deliberately, so

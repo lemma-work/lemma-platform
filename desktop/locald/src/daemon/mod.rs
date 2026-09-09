@@ -32,7 +32,7 @@ use crate::PROTOCOL_VERSION;
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Bump whenever Desktop must replace a durable daemon even when the public
 // app/host-pack release has not changed (for example, a test-build hotfix).
-const DAEMON_API_REVISION: u64 = 5;
+const DAEMON_API_REVISION: u64 = 6;
 
 /// Broadcasts held for a subscriber that is not keeping up.
 ///
@@ -82,7 +82,7 @@ mod supervisor;
 
 use dispatch::{error_diagnostic_source, runtime_operation_error_code};
 use environment::{compose_backend_environment, sharing_environment, validate_canonical_origin};
-use supervisor::prepare_compatibility_host_manifest;
+use supervisor::{executable_stamp, prepare_compatibility_host_manifest};
 
 impl Daemon {
     pub fn new(paths: LocalPaths) -> io::Result<Arc<Self>> {
@@ -316,6 +316,18 @@ impl Daemon {
                     .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
                     .ok()
                     .map(|path| path.to_string_lossy().into_owned()),
+                // And which build is at that path. On Windows an in-place
+                // update writes to the *same* path, so the path alone says
+                // nothing: a daemon from the previous version answers with an
+                // identical one and gets adopted by the new shell, which then
+                // supervises the old runtime with the same version reported on
+                // both sides. Size and mtime, because an installer that writes
+                // a new file changes both and reading the whole binary on every
+                // handshake to learn the same thing is not worth it.
+                "executable_size": executable_stamp().map(|(size, _)| size),
+                "executable_modified_ms": executable_stamp()
+                    .map(|(_, modified)| modified)
+                    .map(|modified| modified.to_string()),
                 "compatibility_supervisor": self.managed_runtime.is_none(),
                 "mode": if self.managed_runtime.is_some() {
                     "managed-local"

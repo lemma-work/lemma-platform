@@ -905,6 +905,12 @@ jobs:
           $paths = @(
             "desktop/target/release/lemma-desktop.exe",
             "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            # The Agent Host runs the user's coding agents with their
+            # credentials and was the one shipped executable nothing here
+            # checked. It is bundled by the same `externalBin` list as the
+            # other two, so an unsigned one is a build problem, not a missing
+            # step -- which is exactly what this is for.
+            "desktop/binaries/lemma-agent-host-x86_64-pc-windows-msvc.exe",
             "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe"
           )
           $installers = Get-ChildItem `
