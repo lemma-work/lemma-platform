@@ -28,6 +28,22 @@ pub(crate) const STDERR_TAIL_LIMIT: usize = 8 * 1024;
 /// `a_crash_mid_stream_keeps_every_chunk_the_agent_had_already_sent`.
 pub(crate) struct SupervisedAgent {
     child: async_process::Child,
+    /// Everything this agent starts, held so that dropping this ends all of
+    /// it. Windows only, and inert elsewhere: on unix the process group the
+    /// protocol crate spawns into already does this.
+    ///
+    /// `taskkill /T` walks the tree the OS still maintains, which is not the
+    /// case that matters. Agents ship behind wrapper launchers -- `npx`,
+    /// `uvx` -- and a wrapper that has already exited leaves its child in no
+    /// tree at all. That child holds the workspace open, holds the provider
+    /// credential and can still write files, after the run it belonged to has
+    /// ended. A job object has no such hole.
+    ///
+    /// `None` when the job could not be created or the child could not be
+    /// assigned. Not fatal: `kill_agent_tree` is still what it was, and
+    /// refusing to run an agent because a job object was unavailable would
+    /// trade a leak for an outage.
+    job: Option<lemma_job_object::Job>,
 }
 
 impl SupervisedAgent {
@@ -42,9 +58,10 @@ impl SupervisedAgent {
         let (stdin, stdout, stderr, child) = agent
             .spawn_process()
             .map_err(|error| anyhow::anyhow!("could not start the agent: {error}"))?;
+        let job = adopt_into_job(&child);
         // `new(outgoing, incoming)`: we write to the child's stdin and read its
         // stdout.
-        Ok((Self { child }, ByteStreams::new(stdin, stdout), stderr))
+        Ok((Self { child, job }, ByteStreams::new(stdin, stdout), stderr))
     }
 
     /// Explain a protocol failure using what the process did, now that the
@@ -84,6 +101,30 @@ impl Drop for SupervisedAgent {
     fn drop(&mut self) {
         kill_agent_tree(self.child.id());
         let _ = self.child.kill();
+        // Last, and only on Windows does it do anything: closing the job ends
+        // every process in it, including the ones no tree walk can reach.
+        drop(self.job.take());
+    }
+}
+
+/// Put a freshly spawned agent, and everything it goes on to start, in a job.
+///
+/// Best effort by design. A job object that cannot be created or assigned is
+/// a leak we already had; refusing to run the agent over it would trade that
+/// leak for an outage.
+fn adopt_into_job(child: &async_process::Child) -> Option<lemma_job_object::Job> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+
+        let job = lemma_job_object::Job::new().ok()?;
+        job.adopt(child.as_raw_handle()).ok()?;
+        Some(job)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = child;
+        None
     }
 }
 
