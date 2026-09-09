@@ -22,8 +22,15 @@
     "`rawInput: {}` and sends the real arguments moments later on a",
     "status-less `tool_call_update`, which the backend dropped. Every streamed",
     "tool call rendered with empty arguments, and views built from them had",
-    "nothing to build from."
+    "nothing to build from.",
+    "",
+    "`protocol_version` is `lemma_agent_host::PROTOCOL_VERSION` and",
+    "`AGENT_HOST_PROTOCOL_VERSION`. Two literals, in two languages, that the",
+    "host sends and the backend compares against -- and nothing tied them, so",
+    "raising one and not the other makes every host of the old version look",
+    "unrecognised, silently, from the moment the backend deploys."
   ],
+  "protocol_version": 2,
   "event_types": [
     "run_state",
     "user_message",

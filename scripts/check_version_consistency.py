@@ -142,24 +142,52 @@ SOURCES: tuple[Source, ...] = (
         "desktop bundled runtime manifest",
         REPO_ROOT / "desktop/runtime/lemma-local.json",
     ),
+    # `install.sh` installs this as a uv tool and SUPPORT.md tells people to
+    # run it, so it is a version somebody has installed. It was not in this
+    # list and had fallen a release behind: `lemma-stack --version` said 0.7.1
+    # while the backend it manages said 0.7.2, which is exactly the skew a
+    # support conversation cannot see past.
+    Source(
+        "lemma-stack package",
+        REPO_ROOT / "lemma-stack/pyproject.toml",
+        re.compile(r'(?m)^version = "([^"]+)"'),
+    ),
 )
+
+def workspace_members() -> tuple[str, ...]:
+    """Every crate in the desktop workspace, read from the workspace manifest.
+
+    Derived rather than listed. The list was written out by hand here and
+    `desktop/process` was never added to it, so that crate could re-declare its
+    own version and nothing would say -- which is the drift this check exists to
+    catch. The manifest is the one place that already has to name every member,
+    and it is the place a new crate is added.
+
+    The root manifest is both the workspace's definition and its own package, so
+    it is checked too; it is not in its own members list.
+    """
+    manifest = (REPO_ROOT / "desktop/Cargo.toml").read_text(encoding="utf-8")
+    listed = re.search(r"^members\s*=\s*\[(.*?)\]", manifest, re.MULTILINE | re.DOTALL)
+    if listed is None:
+        raise SystemExit(
+            "desktop/Cargo.toml declares no workspace members; this check reads them "
+            "from there and has nothing to check"
+        )
+    members = re.findall(r'"([^"]+)"', listed.group(1))
+    if len(members) < 5:
+        raise SystemExit(
+            f"desktop/Cargo.toml lists {len(members)} workspace member(s); that is fewer "
+            "than the workspace has ever had, so the manifest is not being read correctly"
+        )
+    return ("desktop", *(f"desktop/{member}" for member in members))
+
 
 # Every crate in the desktop workspace inherits one version. A member that
 # re-declares its own would be invisible to SOURCES above and would drift at the
 # next release, so the shape is checked rather than the value.
-WORKSPACE_MEMBERS: tuple[str, ...] = (
-    "desktop/job-object",
-    "desktop/locald",
-    "desktop/agent-host",
-    "desktop/local-runtime/manager",
-    "desktop/local-runtime/hostctl",
-    "desktop/local-runtime/guestd",
-)
-
-
 def workspace_member_problems() -> list[str]:
     problems: list[str] = []
-    for member in WORKSPACE_MEMBERS:
+    for member in workspace_members():
         manifest = REPO_ROOT / member / "Cargo.toml"
         if not manifest.exists():
             problems.append(f"  {member}: no Cargo.toml")

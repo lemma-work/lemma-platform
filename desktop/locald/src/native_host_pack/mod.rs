@@ -11,10 +11,9 @@
 //! rendered entirely by the durable daemon.
 
 use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self};
+use std::io::{self};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
