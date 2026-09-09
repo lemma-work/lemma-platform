@@ -436,6 +436,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.github_reconciler.cache_unavailable.degraded': EventSpec('warning', frozenset()),
     'connectors.github_reconciler.installation_bound.diagnostic': EventSpec('info', frozenset({'account_id'})),
     'connectors.github_reconciler.no_token.degraded': EventSpec('warning', frozenset({'account_id'})),
+    'connectors.install_provisioning.account_operation_discovery.degraded': EventSpec('warning', frozenset({'auth_config_id'})),
     'connectors.install_update.renegotiating_mcp_authorization': EventSpec('info', frozenset({'replacing_registered_client'})),
     'connectors.lemma_auth_provider.access_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
     'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
