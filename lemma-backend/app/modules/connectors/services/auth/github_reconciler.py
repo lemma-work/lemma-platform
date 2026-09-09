@@ -111,17 +111,7 @@ class GithubInstallationReconciler:
         Called by the webhook path: a delivery does not carry the answer in a
         form this trusts, but it does say reliably that the answer moved.
         """
-        try:
-            async with connection_released(self._session):
-                await self._cache.delete(str(account_id))
-        except Exception:
-            # Best effort, like the read and write above. `bind_account_installation`
-            # commits `external_ref` before it gets here, so letting Redis fail the
-            # call would report an error for work that already succeeded -- and the
-            # only cost of a stale entry is one short TTL of staleness.
-            logger.warning(
-                "connectors.github_reconciler.cache_unavailable.degraded", exc_info=True
-            )
+        await self._cache_op(self._cache.delete(str(account_id)))
 
     async def _ask(self, account: Any) -> InstallationOutcome:
         credentials = await fresh_credentials(
@@ -165,26 +155,33 @@ class GithubInstallationReconciler:
             account_id=str(account.id),
         )
 
-    async def _cached(self, key: str) -> InstallationOutcome | None:
+    async def _cache_op(self, awaitable: Any) -> Any:
+        """Run one cache call, and never let it be the reason something failed.
+
+        One boundary rather than three identical ones. Every caller here is
+        best effort in the same way: a read that fails means asking GitHub
+        again, a write that fails means asking sooner than we would have, and
+        an invalidation that fails costs one short TTL of staleness. Meanwhile
+        `bind_account_installation` commits before it invalidates, so an
+        escaping Redis error would report failure for work that succeeded.
+
+        The connection goes back for the duration: Redis is fast, but a session
+        holds a pooled Postgres connection until it closes.
+        """
         try:
             async with connection_released(self._session):
-                payload = await self._cache.get_json(key)
+                return await awaitable
         except Exception:
-            # A cache that is down must not take the page with it.
             logger.warning(
                 "connectors.github_reconciler.cache_unavailable.degraded", exc_info=True
             )
             return None
-        return _from_payload(payload)
+
+    async def _cached(self, key: str) -> InstallationOutcome | None:
+        return _from_payload(await self._cache_op(self._cache.get_json(key)))
 
     async def _remember(self, key: str, outcome: InstallationOutcome) -> None:
-        try:
-            async with connection_released(self._session):
-                await self._cache.set_json(key, _to_payload(outcome))
-        except Exception:
-            logger.warning(
-                "connectors.github_reconciler.cache_unavailable.degraded", exc_info=True
-            )
+        await self._cache_op(self._cache.set_json(key, _to_payload(outcome)))
 
 
 def _to_payload(outcome: InstallationOutcome) -> dict[str, Any]:

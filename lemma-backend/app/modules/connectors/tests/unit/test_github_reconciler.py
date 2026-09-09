@@ -220,3 +220,79 @@ async def test_other_connectors_are_never_asked_about_installations(answers):
 
     assert outcome.state is InstallState.READY
     assert calls == []
+
+
+class TestTheCacheCannotBreakAnything:
+    """One boundary now covers the cache read, write and invalidation.
+
+    That consolidation is only safe if a failing cache stays survivable in all
+    three directions, so each is pinned here: a read that fails is a miss and
+    the answer is fetched, a write that fails is silent, and an invalidation
+    that fails does not surface -- `bind_account_installation` commits before
+    it invalidates, so an escaping error would report failure for work that
+    already succeeded.
+    """
+
+    class _BrokenCache(_Cache):
+        def __init__(self, *, failing: str) -> None:
+            super().__init__()
+            self.failing = failing
+
+        async def get_json(self, key: str):
+            if self.failing == "get":
+                raise ConnectionError("redis is gone")
+            return await super().get_json(key)
+
+        async def set_json(self, key: str, value: object, **kwargs) -> None:
+            if self.failing == "set":
+                raise ConnectionError("redis is gone")
+            await super().set_json(key, value, **kwargs)
+
+        async def delete(self, key: str) -> None:
+            if self.failing == "delete":
+                raise ConnectionError("redis is gone")
+            await super().delete(key)
+
+    async def test_a_failing_read_is_a_miss_and_github_is_asked(self, answers, caplog):
+        setter, calls = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="1"))
+        reconciler = GithubInstallationReconciler(
+            _Service(), self._BrokenCache(failing="get")
+        )
+
+        with caplog.at_level("WARNING"):
+            outcome = await reconciler.outcome(_account())
+
+        assert outcome.installation_id == "1"
+        assert calls == ["gho_token"], "a broken cache stopped the lookup"
+        assert "connectors.github_reconciler.cache_unavailable.degraded" in caplog.text
+
+    async def test_a_failing_write_does_not_surface(self, answers, caplog):
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="1"))
+        service = _Service()
+        reconciler = GithubInstallationReconciler(
+            service, self._BrokenCache(failing="set")
+        )
+        account = _account()
+
+        with caplog.at_level("WARNING"):
+            outcome = await reconciler.outcome(account)
+
+        # The answer is still recorded where it actually matters.
+        assert outcome.installation_id == "1"
+        assert account.external_ref == "1"
+        assert "connectors.github_reconciler.cache_unavailable.degraded" in caplog.text
+
+    async def test_a_failing_invalidation_does_not_surface(self, answers, caplog):
+        """The one with a committed write behind it."""
+        setter, _ = answers
+        setter(InstallationOutcome(InstallState.READY, installation_id="1"))
+        reconciler = GithubInstallationReconciler(
+            _Service(), self._BrokenCache(failing="delete")
+        )
+
+        with caplog.at_level("WARNING"):
+            await reconciler.invalidate("some-account")
+
+        assert "connectors.github_reconciler.cache_unavailable.degraded" in caplog.text

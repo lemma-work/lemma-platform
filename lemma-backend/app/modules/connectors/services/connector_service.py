@@ -84,6 +84,7 @@ from app.modules.connectors.services.connect_request_lifecycle import (
 from app.modules.connectors.services.install_provisioning import (
     DiscoveryOutcome,
     discover_install_operations,
+    discover_operations_for_new_account,
     org_has_install,
     refresh_install_operations,
     resolve_install_kind,
@@ -851,6 +852,12 @@ class ConnectorService:
             )
         )
         await self.uow.commit()
+
+        # The step the OAuth callback also takes, and for the reason that
+        # function documents. After the commit, and it does not raise: a
+        # discovery failure must not report a failed connection for an account
+        # that exists.
+        await discover_operations_for_new_account(self, auth_config)
         return account
 
     async def _reject_if_identity_already_connected(
