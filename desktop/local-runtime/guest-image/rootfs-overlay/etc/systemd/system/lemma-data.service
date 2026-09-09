@@ -13,11 +13,26 @@ After=dev-nvme0n1.device local-fs.target
 Requires=dev-nvme0n1.device
 RequiresMountsFor=/mnt/lemma-control
 Before=containerd.service lemma-guestd.service
+# The Assert above fails the unit before ExecStart runs, so the script
+# never gets to say why. This does, and it is the only way the assert case
+# reaches the host at all.
+OnFailure=lemma-data-unavailable.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/lemma-mount-data
 RemainAfterExit=yes
+# The console, not just the journal.
+#
+# The host's whole data-repair path -- `guest_needs_data_repair`, the
+# named error, the reset the app then offers -- greps the serial console
+# for `lemma-data: needs-repair:`. Under the default `journal` that line
+# went to a journal nothing on the host can read: the kernel command line
+# sets no `forward_to_console`, and Windows runs this guest with systemd
+# off entirely. Every one of those diagnoses was written somewhere nobody
+# would ever look, and the host reported a flat timeout instead.
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target

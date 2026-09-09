@@ -7,7 +7,7 @@ import { AlertCircle, Bot, CheckCircle2, ChevronRight, Loader2, Play, Sparkles, 
 import { cn } from "@/components/lemma/lib/utils";
 import { Badge } from "@/components/lemma/ui/badge";
 import { Button } from "@/components/lemma/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/lemma/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/lemma/ui/card";
 import {
   Dialog,
   DialogContent,
