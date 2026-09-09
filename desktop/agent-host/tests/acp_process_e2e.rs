@@ -54,6 +54,10 @@ fn python() -> PathBuf {
 }
 
 fn fake_adapter(directory: &TempDir) -> (ResolvedAdapter, PathBuf) {
+    fake_adapter_in_mode(directory, None)
+}
+
+fn fake_adapter_in_mode(directory: &TempDir, mode: Option<&str>) -> (ResolvedAdapter, PathBuf) {
     let log = directory.path().join("messages.jsonl");
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -66,10 +70,13 @@ fn fake_adapter(directory: &TempDir) -> (ResolvedAdapter, PathBuf) {
                 display_name: "Fake".into(),
                 adapter_version: "1.0.0".into(),
                 command: "python3".into(),
-                args: vec![
+                args: [
                     fixture.to_string_lossy().into_owned(),
                     log.to_string_lossy().into_owned(),
-                ],
+                ]
+                .into_iter()
+                .chain(mode.map(str::to_owned))
+                .collect(),
                 upstream_command: "python3".into(),
                 upstream_version_args: vec!["--version".into()],
                 upstream_path_env: None,
@@ -235,4 +242,94 @@ async fn every_harness_opens_and_resumes_in_the_same_saved_directory() {
             assert_eq!(session["params"]["cwd"], cwd.to_str().unwrap(), "{harness}");
         }
     }
+}
+
+/// A conversation the provider has forgotten is answered, and said so.
+///
+/// The case Lemma cannot predict: it leaves the conversation's history out of
+/// the prompt exactly when it expects `session/load` to supply it, and a
+/// provider is free to have pruned the session by then. The turn used to be
+/// answered as though nothing had happened -- a confident reply to a question
+/// about something the agent had never seen, with the only record a `warn!` on
+/// the user's own machine.
+#[tokio::test]
+async fn a_forgotten_session_is_answered_and_reported_rather_than_silently_lost() {
+    let directory = TempDir::new().unwrap();
+    let (adapter, log) = fake_adapter_in_mode(&directory, Some("forget-session"));
+    let callbacks = std::sync::Arc::new(CapturingCallbacks::default());
+    let cwd = directory.path().join("cwd");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    AcpDriver
+        .run(
+            AcpRunRequest {
+                adapter,
+                run_spec: RunSpec {
+                    agent_run_id: Uuid::new_v4(),
+                    conversation_id: Uuid::new_v4(),
+                    harness_id: Uuid::new_v4(),
+                    profile_revision: "r".into(),
+                    model_name: None,
+                    config_selections: JsonMap::new(),
+                    system_prompt: "Be concise.".into(),
+                    prompt: vec![serde_json::json!({"type": "text", "text": "and then?"})],
+                    // Lemma expects this to be resumed, so the prompt above is
+                    // the whole of what the agent is given.
+                    resume_session_id: Some("fake-session".into()),
+                    workspace_cwd: None,
+                    context: JsonMap::new(),
+                    mcp: serde_json::Value::Null,
+                    run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
+                    system_prompt_delivery: Some(
+                        lemma_agent_host::protocol::NEW_SESSION_ONLY.to_owned(),
+                    ),
+                },
+                scratch_directory: cwd,
+                mcp_server: None,
+                can_load_session: true,
+                published_config_options: Vec::new(),
+                permissions: PermissionGate::new(),
+                permission_timeout: Duration::ZERO,
+                cancel: lemma_agent_host::acp::never_cancelled(),
+                cancel_grace: Duration::from_secs(5),
+            },
+            callbacks.clone(),
+        )
+        .await
+        .expect("the turn is still answered");
+
+    let traffic: Vec<Value> = std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let methods: Vec<&str> = traffic
+        .iter()
+        .filter_map(|message| message["method"].as_str())
+        .collect();
+    assert!(
+        methods.contains(&"session/load") && methods.contains(&"session/new"),
+        "the load is attempted and the fresh session replaces it: {methods:?}"
+    );
+
+    let prompt = traffic
+        .iter()
+        .find(|message| message["method"] == "session/prompt")
+        .expect("the turn was prompted");
+    let text = serde_json::to_string(&prompt["params"]).unwrap();
+    assert!(
+        text.contains("could not be recovered"),
+        "the agent has to be told it is missing the conversation: {text}"
+    );
+    assert!(
+        text.contains("Be concise."),
+        "and a session that has never seen the instructions gets them: {text}"
+    );
+
+    let events = callbacks.events.lock().unwrap();
+    let reported = events
+        .iter()
+        .find(|(_, payload)| payload.get("status") == Some(&Value::from("session_lost")))
+        .expect("Lemma is told which session was lost, not just the log file");
+    assert_eq!(reported.1["requested_session"], "fake-session");
 }

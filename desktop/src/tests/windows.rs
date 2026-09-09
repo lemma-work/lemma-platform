@@ -34,6 +34,29 @@ fn the_windows_uninstaller_removes_the_data_the_checkbox_promises() {
          elsewhere that can change under us"
     );
 
+    // An upgrade installs over a running installation, and Windows will not
+    // replace an open file. Without this the previous binaries survive the
+    // copy and the new app launches against the old daemon.
+    assert!(
+        hooks.contains("!macro NSIS_HOOK_PREINSTALL"),
+        "an installer that runs while locald is up cannot replace its binary"
+    );
+    let stopped = hooks
+        .find("!macro NSIS_HOOK_PREINSTALL")
+        .expect("the pre-install hook exists");
+    let preinstall = &hooks[stopped..hooks.find("!macroend").expect("it ends")];
+    for image in ["lemma-locald.exe", "lemma-agent-host.exe"] {
+        assert!(
+            preinstall.contains(&format!("taskkill /F /T /IM {image}")),
+            "{image} holds its own file open during an upgrade"
+        );
+    }
+    assert!(
+        preinstall.contains("Sleep "),
+        "`taskkill /F` returns when the kill is requested, not when the \
+         handles are closed, so the copy has to wait for them"
+    );
+
     assert!(
         hooks.contains("!macro NSIS_HOOK_PREUNINSTALL"),
         "PRE, not POST: by POSTUNINSTALL lemma-locald.exe has already been \

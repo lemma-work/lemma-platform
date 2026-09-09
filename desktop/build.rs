@@ -12,7 +12,6 @@ const COMMANDS: &[&str] = &[
     "restart",
     "open_app",
     "open_logs",
-    "installer_log",
     "diagnostic_logs",
     "choose_connection_mode",
     "set_connection_mode",

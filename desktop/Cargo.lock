@@ -2738,6 +2738,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "lemma-desktop-process",
+ "lemma-job-object",
  "predicates",
  "reqwest",
  "rusqlite",
@@ -2764,6 +2765,7 @@ dependencies = [
  "hex",
  "interprocess",
  "lemma-desktop-process",
+ "lemma-job-object",
  "lemma-private-file",
  "libc",
  "objc2",
@@ -2804,6 +2806,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "lemma-job-object"
+version = "0.7.2"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

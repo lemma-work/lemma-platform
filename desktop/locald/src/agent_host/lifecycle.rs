@@ -12,19 +12,25 @@ impl AgentHostSupervisor {
     }
 
     pub fn start(&self) -> io::Result<()> {
-        let mut state = self.state.lock().expect("Agent Host state lock poisoned");
-        state.desired_running = true;
-        // A deliberate start forgives the past, the way `start_all` does for
-        // the host processes. Somebody pressing the button has, in effect,
-        // said the cause is fixed.
-        state.circuit_open = false;
-        state.window_restarts = 0;
-        state.window_started = Instant::now();
-        state.next_restart = Instant::now();
-        if child_running(&mut state) {
-            return Ok(());
+        let _transition = self
+            .transition
+            .lock()
+            .expect("Agent Host transition lock poisoned");
+        {
+            let mut state = self.state.lock().expect("Agent Host state lock poisoned");
+            state.desired_running = true;
+            // A deliberate start forgives the past, the way `start_all` does
+            // for the host processes. Somebody pressing the button has, in
+            // effect, said the cause is fixed.
+            state.circuit_open = false;
+            state.window_restarts = 0;
+            state.window_started = Instant::now();
+            state.next_restart = Instant::now();
+            if child_running(&mut state) {
+                return Ok(());
+            }
         }
-        self.spawn_locked(&mut state)
+        self.spawn()
     }
 
     /// Stop the process and stop wanting it back, for this daemon's lifetime.
@@ -46,21 +52,38 @@ impl AgentHostSupervisor {
     }
 
     pub(crate) fn halt(&self, keep_desire: bool) -> io::Result<()> {
-        let mut state = self.state.lock().expect("Agent Host state lock poisoned");
-        if !keep_desire {
-            state.desired_running = false;
-        }
-        if let Some(mut child) = state.child.take() {
-            state.last_exit_code = terminate_process_tree(&mut child)?;
+        // The transition lock, not the state lock, is what makes a stop and a
+        // start exclusive. The child comes out under `state`; it dies outside
+        // it, because dying takes up to eleven seconds and `status` -- which
+        // the shell polls to draw the tray -- takes the same `state`.
+        let _transition = self
+            .transition
+            .lock()
+            .expect("Agent Host transition lock poisoned");
+        let mut child = {
+            let mut state = self.state.lock().expect("Agent Host state lock poisoned");
+            if !keep_desire {
+                state.desired_running = false;
+            }
+            state.started_at = None;
+            state.started_at_ms = None;
+            state.child.take()
+        };
+
+        let exit = child.as_mut().map(terminate_process_tree).transpose();
+
+        {
+            let mut state = self.state.lock().expect("Agent Host state lock poisoned");
+            if let Ok(Some(code)) = exit {
+                state.last_exit_code = code;
+            }
         }
         // Stopped on purpose is not a leftover: clear the record whether or
         // not there was a child, so a stale one cannot outlive the thing it
         // describes and get some later daemon to kill an innocent pid.
         self.forget_running();
-        state.started_at = None;
-        state.started_at_ms = None;
         self.invalidate_details();
-        Ok(())
+        exit.map(|_| ())
     }
 
     pub fn restart(&self) -> io::Result<()> {
@@ -75,6 +98,13 @@ impl AgentHostSupervisor {
         if self.executable.is_none() {
             return Ok(());
         }
+        // Taken before `state`, and before the decision to spawn: a tick that
+        // decided to restart while a stop was still terminating the old child
+        // would put a second one on top of it.
+        let _transition = self
+            .transition
+            .lock()
+            .expect("Agent Host transition lock poisoned");
         // A healthy Agent Host is spawned once and never again, so rotating
         // only at spawn means it never rotates at all. This tick is the only
         // thing that bounds the log of a host that simply keeps running.
@@ -109,7 +139,8 @@ impl AgentHostSupervisor {
             return Ok(());
         }
         state.window_restarts = state.window_restarts.saturating_add(1);
-        self.spawn_locked(&mut state)
+        drop(state);
+        self.spawn()
     }
 
     /// Stop a sidecar this installation started and never got to stop.
@@ -189,7 +220,9 @@ impl AgentHostSupervisor {
         let _ = std::fs::remove_file(&self.record_path);
     }
 
-    pub(crate) fn spawn_locked(&self, state: &mut SupervisorState) -> io::Result<()> {
+    /// Start the sidecar. The caller holds `transition`; this takes `state`
+    /// only to record what happened.
+    pub(crate) fn spawn(&self) -> io::Result<()> {
         // Before taking the lock for ourselves, give up any we already hold.
         // A sidecar left over from a daemon that did not live to stop it holds
         // that lock against every future launch, and the new one can do
@@ -200,6 +233,7 @@ impl AgentHostSupervisor {
         match self.spawn_process() {
             Ok(mut child) => {
                 self.record_running(&mut child);
+                let mut state = self.state.lock().expect("Agent Host state lock poisoned");
                 state.child = Some(child);
                 state.restart_count = state.restart_count.saturating_add(1);
                 state.started_at = Some(Instant::now());
@@ -210,6 +244,7 @@ impl AgentHostSupervisor {
                 Ok(())
             }
             Err(error) => {
+                let mut state = self.state.lock().expect("Agent Host state lock poisoned");
                 state.last_error = Some(error.to_string());
                 state.next_restart = Instant::now() + RESTART_BACKOFF;
                 Err(error)

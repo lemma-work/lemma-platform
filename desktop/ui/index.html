@@ -1670,7 +1670,18 @@
   // AnomalousOrb, ported from lemma-frontend/components/ui/anomalous-orb.tsx.
   // Same shaders, geometry, and gold (0x7a5ce0); three.js vendored locally so
   // the splash never depends on the network.
-  import * as THREE from "./vendor/three.module.min.js";
+  //
+  // Imported where it is used rather than at the top of the module. It is
+  // 356 KB of JavaScript to parse before anything else in this file runs, on
+  // the one screen whose whole job is to appear immediately -- and it was
+  // being parsed even when it could not be used: the reduced-motion check
+  // below is what decides whether an orb is drawn at all, and a static import
+  // is fetched and evaluated regardless of what any check afterwards says.
+  // Someone who has told their computer they do not want motion paid the whole
+  // cost for nothing.
+  //
+  // Every caller reaches the orb through `window.__orb?.`, so arriving late is
+  // already the case they handle.
 
   const vertexShader = `
 uniform float time;
@@ -1751,6 +1762,7 @@ void main() {
   // Reduced motion must avoid the rendering loop and its graphics context.
   if (!prefersReducedMotion) {
     try {
+      const THREE = await import("./vendor/three.module.min.js");
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
       camera.position.z = 3.4;
