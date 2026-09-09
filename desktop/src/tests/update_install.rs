@@ -217,29 +217,22 @@ fn every_daemon_redirect_variable_is_stripped_from_a_release_build() {
     // exactly the maintained list this test exists to replace: a module
     // added there would be compile-time green and review-invisible, which
     // is how the first three variables went missing.
-    let daemon = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locald/src/daemon");
-    let mut sources: Vec<String> = std::fs::read_dir(&daemon)
-        .expect("locald's daemon module directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
-        .map(|path| std::fs::read_to_string(&path).expect("a daemon module"))
+    // Both crates entire, walked from disk. This used to read the daemon
+    // directory and then name five files beside it; four of those five have
+    // since become directories of their own, and a guard that keeps naming
+    // the old path does not fail -- it stops compiling if the file is gone,
+    // and covers a fraction of the tree if it is not.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let sources: Vec<String> = ["locald/src", "local-runtime/manager/src"]
+        .iter()
+        .flat_map(|relative| rust_files_under(&manifest.join(relative)))
+        .map(|path| std::fs::read_to_string(&path).expect("a source file"))
         .collect();
     assert!(
-        sources.len() > 1,
-        "the daemon is a directory of modules; reading one file means the \
-         scan is looking at a fraction of it"
-    );
-    sources.extend(
-        [
-            include_str!("../../locald/src/agent_host.rs"),
-            include_str!("../../locald/src/native_host_pack.rs"),
-            include_str!("../../locald/src/managed_runtime.rs"),
-            include_str!("../../locald/src/paths.rs"),
-            include_str!("../../local-runtime/manager/src/lib.rs"),
-        ]
-        .into_iter()
-        .map(str::to_owned),
+        sources.len() > 30,
+        "the daemon and the runtime manager are trees of modules; reading {} \
+         file(s) means the scan is looking at a fraction of them",
+        sources.len(),
     );
 
     let mut read_by_the_daemon = std::collections::BTreeSet::new();
