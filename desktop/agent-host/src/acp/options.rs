@@ -227,3 +227,30 @@ pub(crate) fn session_config_value(
         )),
     }
 }
+
+/// What Lemma is told when a conversation's provider session is gone.
+///
+/// Reported rather than raised, like `model_unavailable_payload` above, and
+/// for the same reason: the turn still has an answer in it. The difference is
+/// that this one is a fact about the answer's quality, so it belongs where a
+/// person can see it rather than in a `warn!` on the machine that noticed.
+///
+/// It used to be exactly that `warn!`. Lemma leaves the conversation's history
+/// out of the prompt when it expects the resume to supply it, so a failed load
+/// produced a turn answered out of context, with no record anywhere that the
+/// context had been lost -- neither the user nor Lemma had any way to tell
+/// that reply apart from an ordinary one.
+pub(crate) fn session_lost_payload(requested: &str) -> JsonMap {
+    let mut payload = JsonMap::new();
+    payload.insert("status".to_owned(), Value::from("session_lost"));
+    payload.insert("requested_session".to_owned(), Value::from(requested));
+    payload.insert(
+        "detail".to_owned(),
+        Value::from(
+            "This agent no longer has the session this conversation was in, so \
+             the earlier messages could not be recovered. It answered this turn \
+             on its own, and was told that it is missing the conversation.",
+        ),
+    );
+    payload
+}
