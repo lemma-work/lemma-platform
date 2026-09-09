@@ -21,6 +21,7 @@ import pytest
 from uuid import uuid7
 
 from app.modules.agent.domain.agent_host import (
+    AGENT_HOST_PROTOCOL_VERSION,
     AgentHostCapacity,
     AgentHostEvent,
     AgentHostEventType,
@@ -149,3 +150,14 @@ def test_the_declared_limits_are_the_ones_this_side_enforces() -> None:
         item.le for item in max_runs.metadata if getattr(item, "le", None) is not None
     )
     assert ceiling == limits["max_runs"]
+
+
+def test_the_protocol_version_is_the_one_the_host_sends() -> None:
+    """One number, in two languages, that nothing used to tie together.
+
+    The host puts ``PROTOCOL_VERSION`` in every identity it publishes and this
+    process compares it. Raising one side and not the other makes every host of
+    the old version look unrecognised, from the moment this deploys, with
+    nothing failing on either side to say so.
+    """
+    assert AGENT_HOST_PROTOCOL_VERSION == _contract()["protocol_version"]

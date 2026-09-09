@@ -1,11 +1,12 @@
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self};
+use std::io::{self};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+
+use lemma_private_file::write_atomic as write_private_atomic;
 
 use crate::paths::LocalPaths;
 use crate::port_reservation::PortReservation;
@@ -221,65 +222,6 @@ fn allocate_ports() -> io::Result<(NetworkPorts, ReservedPair)> {
         io::ErrorKind::AddrNotAvailable,
         "could not allocate high local ports for Lemma",
     ))
-}
-
-fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "network path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let temporary = parent.join(format!(".network-{}.tmp", std::process::id()));
-    let _ = fs::remove_file(&temporary);
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    replace_file(&temporary, path)?;
-    #[cfg(unix)]
-    {
-        if let Ok(directory) = fs::File::open(parent) {
-            let _ = directory.sync_all();
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::rename(source, destination)
-}
-
-#[cfg(windows)]
-fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
 }
 
 fn now_ms() -> u128 {

@@ -1,6 +1,10 @@
 //! What the guest is handed at boot: its manifest, the infrastructure
 //! secrets, and the environment the backend reads them from.
 
+pub(crate) use lemma_private_file::{
+    ensure_private as ensure_private_file, write_atomic as write_private_atomic,
+};
+
 use super::*;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -216,47 +220,6 @@ pub(crate) fn validate_secret(name: &str, value: &str) -> io::Result<()> {
             format!("managed {name} must be a 64-character lowercase hex secret"),
         ));
     }
-    Ok(())
-}
-
-pub(crate) fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "secret path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temporary = parent.join(format!(".infra-secrets-{}-{nonce}.tmp", std::process::id()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    fs::rename(&temporary, path)?;
-    ensure_private_file(path)
-}
-
-pub(crate) fn ensure_private_file(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() || metadata.mode() & 0o077 != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("managed secret file is not private: {}", path.display()),
-            ));
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = path;
     Ok(())
 }
 
