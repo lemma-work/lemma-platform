@@ -122,3 +122,71 @@ fn a_failure_never_echoes_the_pairing_code() {
     assert!(detail.contains("<pairing code>"));
     assert!(detail.contains("already paired"));
 }
+
+/// Reporting on the Agent Host must not wait for it to stop.
+///
+/// `halt` used to hold the state lock across `terminate_process_tree`, which
+/// is a five-second `SIGTERM` wait before a `SIGKILL` and another wait for the
+/// process group. `status` takes the same lock, and the shell polls `status`
+/// to draw the tray -- so stopping the Agent Host froze the menu it was
+/// stopped from, for up to eleven seconds.
+///
+/// A sidecar that ignores `SIGTERM` is the case that makes the wait real.
+#[cfg(unix)]
+#[test]
+fn status_answers_while_a_stubborn_sidecar_is_still_being_stopped() {
+    use std::io::BufRead;
+    use std::os::unix::process::CommandExt;
+
+    let home = tempdir().unwrap();
+    let supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+    std::fs::create_dir_all(&supervisor.data_dir).unwrap();
+
+    // `trap '' TERM` is the whole point: the terminate has to spend its
+    // budget. Blocked on a pipe nothing writes to, with no child of its own --
+    // a `sleep` in the same group receives the group signal, dies, and takes
+    // the trapping shell out with it, which is not the case being tested.
+    let mut child = Command::new("/bin/sh")
+        .arg("-c")
+        .arg("trap '' TERM; echo ready; read line")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let _stdin = child.stdin.take().expect("stdin is piped");
+    // Wait for the trap to be installed. A `SIGTERM` that arrives in the
+    // milliseconds before it lands on the default disposition and kills the
+    // shell outright, which would make this test pass for the wrong reason.
+    let mut ready = String::new();
+    std::io::BufReader::new(child.stdout.take().expect("stdout is piped"))
+        .read_line(&mut ready)
+        .expect("the sidecar says when its trap is installed");
+    assert_eq!(ready.trim(), "ready");
+    let pid = child.id();
+    supervisor.state.lock().unwrap().child.replace(child);
+
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        let stopping = scope.spawn(|| supervisor.stop());
+        // Long enough that the terminate is certainly in its wait, short
+        // enough that it is nowhere near finished.
+        std::thread::sleep(Duration::from_millis(200));
+        let asked = Instant::now();
+        let status = supervisor.status();
+        assert!(
+            asked.elapsed() < Duration::from_millis(500),
+            "status waited {:?} for a stop that had not finished",
+            asked.elapsed(),
+        );
+        assert_eq!(status["running"], false, "the child is on its way out");
+        stopping.join().unwrap().unwrap();
+    });
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "the stop returned too fast to have waited on anything; \
+         the test is not exercising what it claims",
+    );
+    // Nothing is left behind.
+    assert_eq!(unsafe { libc::kill(-i32::try_from(pid).unwrap(), 0) }, -1);
+}

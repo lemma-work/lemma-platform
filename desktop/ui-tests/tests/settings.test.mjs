@@ -124,7 +124,9 @@ test('an existing snapshot does not prevent reconnect or hide an outage', () => 
   let retry;
   let requested = false;
   context.snapshotRetryTimer = null;
-  context.SNAPSHOT_RETRY_MS = 5000;
+  context.SNAPSHOT_RETRY_FLOOR_MS = 1000;
+  context.SNAPSHOT_RETRY_CEILING_MS = 30000;
+  context.snapshotRetryDelay = 1000;
   context.setTimeout = (callback) => { retry = callback; return 1; };
   context.requestSnapshot = () => { requested = true; };
   load(context, 'function scheduleSnapshotRetry(', '/* Daemon errors,');
@@ -156,6 +158,7 @@ function eventFixture() {
   Object.assign(context, {
     state: null, sharingChoice: null, sharingBusy: false,
     clearSnapshotUnavailable() {}, fillConfiguration() {}, render() {}, requestSnapshot() {}, scheduleSnapshotRetry() {},
+    resetSnapshotRetry() {},
     setSectionError(page, message) { page.error = message; },
   });
   // From the shape guard, not from the handler: the handler now refuses an
@@ -250,4 +253,43 @@ test('turning the install-health switch off is sent once and kept on failure', a
   assert.equal(sent.length, 1);
   assert.equal(sent[0].enabled, false);
   assert.equal(box.checked, true, 'a refused save puts the switch back rather than lying');
+});
+
+test('a daemon that does not come back is asked less and less often', () => {
+  const { context } = fixture();
+  const delays = [];
+  context.snapshotRetryTimer = null;
+  context.SNAPSHOT_RETRY_FLOOR_MS = 1000;
+  context.SNAPSHOT_RETRY_CEILING_MS = 30000;
+  context.snapshotRetryDelay = 1000;
+  context.requestSnapshot = () => {};
+  // Captured rather than run inline: the callback is what clears the timer, and
+  // firing it from inside `setTimeout` would clear it before the assignment
+  // that sets it — so every later call would schedule afresh and the guard
+  // against double-scheduling would never be exercised.
+  let fire = null;
+  context.setTimeout = (callback, delay) => { delays.push(delay); fire = callback; return 1; };
+  context.clearTimeout = () => {};
+  load(context, 'function scheduleSnapshotRetry(', '/* Daemon errors,');
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    vm.runInContext('scheduleSnapshotRetry()', context);
+    // A second call while one is pending must not stack another timer.
+    vm.runInContext('scheduleSnapshotRetry()', context);
+    fire();
+  }
+
+  // It starts sooner than the flat five seconds it replaced, so the ordinary
+  // case — a daemon restarting — is noticed faster, and it stops growing at
+  // the ceiling rather than drifting to minutes.
+  assert.equal(delays[0], 1000);
+  assert.deepEqual(delays.slice(0, 6), [1000, 2000, 4000, 8000, 16000, 30000]);
+  assert.ok(delays.every((delay) => delay <= 30000), `${delays}`);
+
+  // And a snapshot arriving puts it back, so the next outage is noticed
+  // quickly rather than inheriting the interval the last one reached.
+  vm.runInContext('resetSnapshotRetry()', context);
+  delays.length = 0;
+  vm.runInContext('scheduleSnapshotRetry()', context);
+  assert.deepEqual(delays, [1000]);
 });

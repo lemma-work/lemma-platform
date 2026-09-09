@@ -272,27 +272,6 @@ pub(crate) fn open_developer_tools(window: Webview, app: AppHandle) -> Result<()
 }
 
 #[tauri::command(async)]
-pub(crate) fn installer_log(window: Webview) -> Result<String, String> {
-    require_local_native_window(&window)?;
-    let path = install_log_path();
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok("No local installer log entries yet.".into());
-        }
-        Err(error) => {
-            return Err(format!(
-                "could not read local installer log {}: {error}",
-                path.display()
-            ));
-        }
-    };
-    let mut lines: Vec<&str> = raw.lines().rev().take(500).collect();
-    lines.reverse();
-    Ok(lines.join("\n"))
-}
-
-#[tauri::command(async)]
 pub(crate) fn diagnostic_logs(
     window: Webview,
     source: Option<String>,

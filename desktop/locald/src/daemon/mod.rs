@@ -32,7 +32,7 @@ use crate::PROTOCOL_VERSION;
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 // Bump whenever Desktop must replace a durable daemon even when the public
 // app/host-pack release has not changed (for example, a test-build hotfix).
-const DAEMON_API_REVISION: u64 = 5;
+const DAEMON_API_REVISION: u64 = 6;
 
 /// Broadcasts held for a subscriber that is not keeping up.
 ///
@@ -68,21 +68,34 @@ pub struct Daemon {
     /// State this daemon had to repair before it could start, in the operator's
     /// words rather than serde's. Empty on every healthy launch.
     healed: Vec<String>,
+    /// The size and modification time of the binary this daemon started from.
+    ///
+    /// Measured once, here, and not again. The case it exists for is a Windows
+    /// in-place update, which replaces the file at `current_exe()` under a
+    /// daemon that is still running -- so a stamp read at handshake time is a
+    /// measurement of the build that just replaced this one, handed to a shell
+    /// that then adopts the daemon the update was meant to retire. It is also
+    /// two metadata reads off every connection, which is two more than a value
+    /// that cannot change needs.
+    executable_stamp: Option<(u64, u128)>,
 }
 
 mod agent_host_ops;
 mod config_ops;
 mod dispatch;
 mod environment;
+mod handshake;
 mod monitors;
 mod reset_ops;
 mod sharing_ops;
 mod stack_ops;
+mod startup_state;
 mod supervisor;
 
 use dispatch::{error_diagnostic_source, runtime_operation_error_code};
 use environment::{compose_backend_environment, sharing_environment, validate_canonical_origin};
-use supervisor::prepare_compatibility_host_manifest;
+use startup_state::remember_derived_origin;
+use supervisor::{executable_stamp, prepare_compatibility_host_manifest};
 
 impl Daemon {
     pub fn new(paths: LocalPaths) -> io::Result<Arc<Self>> {
@@ -138,7 +151,7 @@ impl Daemon {
                     "http://{}:{backend_port}",
                     crate::local_domain::LocalDomain::from_env().frontend_host()
                 );
-                state.persist(&paths.state)?;
+                remember_derived_origin(&state, &paths.state, &mut healed);
             }
         }
         let managed_runtime = host_processes
@@ -221,6 +234,10 @@ impl Daemon {
             shutdown_running: AtomicBool::new(false),
             agent_host,
             healed,
+            // Before `serve` binds the socket, which is the whole point: after
+            // that a Windows installer can replace this file while this
+            // process is still answering on it.
+            executable_stamp: executable_stamp(),
         }))
     }
 
@@ -297,37 +314,7 @@ impl Daemon {
             }
         });
 
-        self.send_direct(
-            &sender,
-            json!({
-                "v": PROTOCOL_VERSION,
-                "event": "hello",
-                "protocol": PROTOCOL_VERSION,
-                "daemon_version": DAEMON_VERSION,
-                "daemon_api_revision": DAEMON_API_REVISION,
-                "pid": std::process::id(),
-                // Which binary is actually serving this socket, resolved through
-                // the filesystem rather than argv. A replaced app bundle keeps
-                // running from wherever its executable went — ~/.Trash, in the
-                // case this was written for — and the shell has no other way to
-                // tell that the daemon answering it is not the one it ships.
-                // Same version, same API revision, different build.
-                "executable": std::env::current_exe()
-                    .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
-                    .ok()
-                    .map(|path| path.to_string_lossy().into_owned()),
-                "compatibility_supervisor": self.managed_runtime.is_none(),
-                "mode": if self.managed_runtime.is_some() {
-                    "managed-local"
-                } else if self.host_processes.is_some() {
-                    "host-packs"
-                } else {
-                    "compatibility"
-                },
-                "host_pack_release": self.host_processes.as_ref().map(|manager| manager.release()),
-                "host_pack_root": self.host_pack_root.as_deref(),
-            }),
-        );
+        self.send_direct(&sender, self.hello_event());
         self.send_direct(
             &sender,
             self.state.lock().expect("state lock poisoned").event(None),

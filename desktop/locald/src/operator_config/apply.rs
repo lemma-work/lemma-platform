@@ -77,8 +77,6 @@ impl OperatorConfigStore {
     /// no key is supplied the stored one is used, so an already-configured
     /// provider can be re-listed without the caller handling the secret at all.
     pub fn discover_models(&self, request: Value) -> io::Result<Vec<String>> {
-        // Pair the destination and vault read with the same committed revision.
-        let _write = self.writes.lock().expect("operator writes poisoned");
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct DiscoverRequest {
@@ -94,17 +92,26 @@ impl OperatorConfigStore {
         }
         validate_ai_shape(&request.ai)?;
 
-        let saved = self
-            .config
-            .lock()
-            .expect("operator config poisoned")
-            .clone();
-        let api_key = match request.api_key {
-            Some(value) if !value.is_empty() => Some(value),
-            // An empty string is the page saying "no key", which is legitimate
-            // for a loopback provider. Absent means "use whatever is stored".
-            Some(_) => None,
-            None => self.saved_provider_key(&saved, &request.ai)?,
+        // The write lock pairs the destination with the vault read, off one
+        // committed revision -- and that is all it is for. It used to be held
+        // across the probe below, which is an HTTP round trip to a provider
+        // the caller chose, with a timeout measured in seconds: every settings
+        // save waited behind a model list.
+        let api_key = {
+            let _write = self.writes.lock().expect("operator writes poisoned");
+            let saved = self
+                .config
+                .lock()
+                .expect("operator config poisoned")
+                .clone();
+            match request.api_key {
+                Some(value) if !value.is_empty() => Some(value),
+                // An empty string is the page saying "no key", which is
+                // legitimate for a loopback provider. Absent means "use
+                // whatever is stored".
+                Some(_) => None,
+                None => self.saved_provider_key(&saved, &request.ai)?,
+            }
         };
         if !local_no_auth(&request.ai.base_url) && api_key.is_none() {
             return Err(invalid("this AI provider requires an API key"));

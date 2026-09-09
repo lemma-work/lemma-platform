@@ -9,7 +9,7 @@ use std::sync::mpsc;
 /// the arms that are pure protocol -- authentication, unknown commands, the
 /// stopping gate, the shapes of acks and errors -- can be driven without a
 /// VM, a backend or a tunnel. Those arms had no test at all.
-fn daemon() -> (tempfile::TempDir, std::sync::Arc<Daemon>) {
+pub(super) fn daemon() -> (tempfile::TempDir, std::sync::Arc<Daemon>) {
     let root = tempfile::tempdir().unwrap();
     let daemon = Daemon::new(LocalPaths::new(root.path().join("locald")))
         .expect("a daemon over an empty root");

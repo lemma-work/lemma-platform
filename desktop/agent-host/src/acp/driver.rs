@@ -11,7 +11,7 @@ use super::{
     before_prompt_deadline, build_agent, cancel_requested, capture_stderr, convert_config_option,
     is_scoped_mcp_tool_approval, model_unavailable_payload, normalize_session_update,
     permission_payload, prompt_blocks, run_outcome, scoped_mcp_tool_names, selection_is_allowed,
-    session_config_value, session_to_resume, tool_call_id,
+    session_config_value, session_lost_payload, session_to_resume, tool_call_id,
 };
 
 #[derive(Clone, Default)]
@@ -247,8 +247,10 @@ impl AgentDriver for AcpDriver {
                 // lets the agent answer "what did I just say" instead of meeting
                 // the user again every turn.
                 let mut established = None;
+                let mut lost_session: Option<String> = None;
                 let attempted_resume = resume_session_id.is_some();
                 if let Some(existing) = resume_session_id {
+                    let existing_id = existing.clone();
                     match before_prompt_deadline(
                         "session/load",
                         connection
@@ -267,10 +269,18 @@ impl AgentDriver for AcpDriver {
                         // its rollout files, a Claude Code session can be deleted
                         // from disk. Losing history is survivable; losing the
                         // answer is not, so a failed load starts fresh.
-                        Err(error) => tracing::warn!(
-                            %error,
-                            "could not resume the conversation's provider session; starting a new one"
-                        ),
+                        //
+                        // Not silently, though. See `SessionOrigin::Recovered`:
+                        // the fresh session it leaves behind is the one case
+                        // where the prompt has no history either, so the agent
+                        // is told and so is Lemma.
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                "could not resume the conversation's provider session; starting a new one"
+                            );
+                            lost_session = Some(existing_id);
+                        }
                     }
                 }
                 // Captured against the branch it describes, so the two cannot
@@ -282,6 +292,8 @@ impl AgentDriver for AcpDriver {
                 // instructions.
                 let origin = if established.is_some() {
                     SessionOrigin::Loaded
+                } else if lost_session.is_some() {
+                    SessionOrigin::Recovered
                 } else {
                     SessionOrigin::New
                 };
@@ -350,6 +362,21 @@ impl AgentDriver for AcpDriver {
                         ))
                         .block_task()
                         .await?;
+                }
+                // Said to Lemma as well as to the agent. The prompt note tells
+                // the agent it is missing the conversation; this is what lets a
+                // person see why the answer they got starts from nothing.
+                if let Some(lost) = lost_session.as_deref() {
+                    callbacks
+                        .event(
+                            EventType::ConfigUpdate,
+                            None,
+                            session_lost_payload(lost),
+                        )
+                        .map_err(|error| {
+                            agent_client_protocol::schema::v1::Error::internal_error()
+                                .data(error.to_string())
+                        })?;
                 }
                 // A model this harness will not take is a preference we cannot
                 // honour, not a reason to lose the turn. Both of these used to
