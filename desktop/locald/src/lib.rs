@@ -100,59 +100,34 @@ pub(crate) fn join_before<T>(
     panic!("{what} never finished; it is still blocked on the socket");
 }
 
-/// Every file the daemon was split into.
+/// Every Rust source file under a crate's `src`, read from disk.
 ///
-/// `daemon.rs` was one 3,261-line file, and three guards below scanned it
-/// by name. It is a directory now. A guard still naming the old file would
-/// have failed to compile, which is the good case; one updated to name a
-/// single new file would have gone on passing while checking a fraction of
-/// what it used to. So the list lives once, and the test under it fails if
-/// a module is added to the directory without being added here.
-#[cfg(test)]
-const DAEMON_SOURCES: &[(&str, &str)] = &[
-    (
-        "daemon/agent_host_ops.rs",
-        include_str!("daemon/agent_host_ops.rs"),
-    ),
-    ("daemon/config_ops.rs", include_str!("daemon/config_ops.rs")),
-    ("daemon/dispatch.rs", include_str!("daemon/dispatch.rs")),
-    (
-        "daemon/environment.rs",
-        include_str!("daemon/environment.rs"),
-    ),
-    ("daemon/mod.rs", include_str!("daemon/mod.rs")),
-    ("daemon/monitors.rs", include_str!("daemon/monitors.rs")),
-    ("daemon/reset_ops.rs", include_str!("daemon/reset_ops.rs")),
-    (
-        "daemon/sharing_ops.rs",
-        include_str!("daemon/sharing_ops.rs"),
-    ),
-    ("daemon/stack_ops.rs", include_str!("daemon/stack_ops.rs")),
-    ("daemon/supervisor.rs", include_str!("daemon/supervisor.rs")),
-    ("daemon/tests.rs", include_str!("daemon/tests.rs")),
-];
-
-/// Every `.rs` file under a directory, at any depth, named relative to it.
+/// The guards below are source scans, and they used to name the files they
+/// scanned. `daemon.rs` was one 3,261-line file and `host_process.rs` another
+/// of 4,688; both are directories now. A guard naming a file that no longer
+/// exists fails to compile, which is the good case. A hand-maintained list of
+/// the files that replaced it goes stale in silence, which is not: the guard
+/// keeps passing while covering less of the tree every time somebody adds a
+/// module.
 ///
-/// Recursive on purpose. `read_dir` sees direct children only, so the moment
-/// one of these modules becomes a directory of its own -- which is how every
-/// file in this crate over 600 lines will end up -- its contents leave the
-/// scan without anything saying so.
+/// So there is no list. The guards read the tree.
 #[cfg(test)]
-fn rust_files_under(directory: &std::path::Path, prefix: &str) -> Vec<String> {
+pub(crate) fn rust_sources(root: &std::path::Path, label: &str) -> Vec<(String, String)> {
     let mut found = Vec::new();
-    let mut pending = vec![(directory.to_path_buf(), prefix.to_owned())];
-    while let Some((next, at)) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&next) else {
-            continue;
-        };
-        for entry in entries.filter_map(Result::ok) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
+    let mut directories = vec![root.to_path_buf()];
+    while let Some(next) = directories.pop() {
+        for entry in std::fs::read_dir(&next).expect("a source directory") {
+            let path = entry.expect("a directory entry").path();
             if path.is_dir() {
-                pending.push((path, format!("{at}{name}/")));
-            } else if name.ends_with(".rs") {
-                found.push(format!("{at}{name}"));
+                directories.push(path);
+            } else if path.extension().is_some_and(|kind| kind == "rs") {
+                let name = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let source = std::fs::read_to_string(&path).expect("a source file");
+                found.push((format!("{label}/{name}"), source.replace("\r\n", "\n")));
             }
         }
     }
@@ -160,46 +135,45 @@ fn rust_files_under(directory: &std::path::Path, prefix: &str) -> Vec<String> {
     found
 }
 
-/// A module in a subdirectory is one the scan would otherwise not see.
+/// A module in a subdirectory is one a non-recursive walk would not see.
+///
+/// `read_dir` sees direct children only. The guard this replaced used it, so
+/// the first daemon module to become a directory of its own would have taken
+/// its contents out of every policy scan without anything saying so -- which
+/// is exactly what `host_process.rs` and `daemon.rs` have both since done.
 #[cfg(test)]
 #[test]
-fn a_daemon_module_one_directory_deeper_is_still_found() {
+fn a_module_one_directory_deeper_is_still_read() {
     let root = tempfile::tempdir().expect("a temporary directory");
-    std::fs::write(root.path().join("top.rs"), "").expect("a top-level module");
+    std::fs::write(root.path().join("top.rs"), "top").expect("a top-level module");
     std::fs::create_dir(root.path().join("nested")).expect("a nested directory");
-    std::fs::write(root.path().join("nested/inner.rs"), "").expect("a nested module");
+    std::fs::write(root.path().join("nested/inner.rs"), "inner").expect("a nested module");
     std::fs::write(root.path().join("nested/notes.txt"), "").expect("a non-module file");
     assert_eq!(
-        rust_files_under(root.path(), "daemon/"),
+        rust_sources(root.path(), "locald/src"),
         vec![
-            "daemon/nested/inner.rs".to_string(),
-            "daemon/top.rs".to_string()
+            ("locald/src/nested/inner.rs".to_string(), "inner".to_string()),
+            ("locald/src/top.rs".to_string(), "top".to_string()),
         ],
     );
 }
 
-/// A daemon module nobody scans is a rule nobody enforces.
+/// Every source file in this crate.
 #[cfg(test)]
-#[test]
-fn every_daemon_source_is_scanned() {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/daemon");
-    let on_disk = rust_files_under(&directory, "daemon/");
-    let mut listed: Vec<String> = DAEMON_SOURCES
-        .iter()
-        .map(|(name, _)| (*name).to_owned())
-        .collect();
-    listed.sort();
-    assert_eq!(
-        on_disk, listed,
-        "every file under src/daemon has to be in DAEMON_SOURCES, or the \
-         guards that scan the daemon silently stop covering it"
+pub(crate) fn locald_sources() -> Vec<(String, String)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let sources = rust_sources(&root, "locald/src");
+    assert!(
+        sources.len() > 25,
+        "locald is a tree of modules; reading {} file(s) means the scan is \
+         looking at a fraction of it",
+        sources.len(),
     );
+    sources
 }
 
 #[cfg(test)]
 mod doc_comment_policy {
-    use super::DAEMON_SOURCES;
-
     /// An indented block in a doc comment is a *Rust* code block.
     ///
     /// rustdoc treats four spaces after `///` as code and tries to compile it,
@@ -212,23 +186,19 @@ mod doc_comment_policy {
     /// where it costs seconds, rather than on a push.
     #[test]
     fn no_doc_comment_quotes_prose_as_an_indented_code_block() {
-        let sources: Vec<(&str, &str)> = [
-            ("locald/src/lib.rs", include_str!("lib.rs")),
-            (
-                "locald/src/host_process.rs",
-                include_str!("host_process.rs"),
-            ),
-            (
-                "local-runtime/guestd/src/lib.rs",
-                include_str!("../../local-runtime/guestd/src/lib.rs"),
-            ),
-        ]
-        .into_iter()
-        .chain(DAEMON_SOURCES.iter().copied())
-        .collect();
+        // The guest agent as well as locald: the rule is about rustdoc, and
+        // both crates are built by the same job.
+        let sources: Vec<(String, String)> = super::locald_sources()
+            .into_iter()
+            .chain(super::rust_sources(
+                &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../local-runtime/guestd/src"),
+                "local-runtime/guestd/src",
+            ))
+            .collect();
 
         let mut offenders = Vec::new();
-        for (name, source) in sources {
+        for (name, source) in &sources {
             let mut fenced = false;
             for (number, line) in source.replace("\r\n", "\n").lines().enumerate() {
                 let Some(doc) = line.trim_start().strip_prefix("///") else {
@@ -299,7 +269,6 @@ mod join_within_policy {
 
 #[cfg(test)]
 mod http_client_policy {
-    use super::DAEMON_SOURCES;
 
     /// Every HTTP client locald builds must opt out of the system proxy.
     ///
@@ -319,22 +288,23 @@ mod http_client_policy {
     /// So this does.
     #[test]
     fn every_client_locald_builds_opts_out_of_the_system_proxy() {
-        let sources: Vec<(&str, &str)> = [
-            ("sharing.rs", include_str!("sharing.rs")),
-            ("provider_probe.rs", include_str!("provider_probe.rs")),
-            ("agent_host.rs", include_str!("agent_host.rs")),
-            ("host_process.rs", include_str!("host_process.rs")),
-            ("native_host_pack.rs", include_str!("native_host_pack.rs")),
-            ("network.rs", include_str!("network.rs")),
-            ("operator_config.rs", include_str!("operator_config.rs")),
-            ("managed_runtime.rs", include_str!("managed_runtime.rs")),
-        ]
-        .into_iter()
-        .chain(DAEMON_SOURCES.iter().copied())
-        .collect();
+        let sources = super::locald_sources();
 
-        for (name, source) in sources {
-            for (offset, _) in source.match_indices("Client::builder()") {
+        // Assembled at compile time so this guard does not find itself: it
+        // reads every file in the crate now, and this one is one of them.
+        let builder = concat!("Client::", "builder()");
+        // The one client here that is not talking to the supervised stack.
+        // Telemetry posts to an ingestion host on the internet, which is
+        // exactly the traffic a system proxy exists to carry -- so it must
+        // *not* opt out. Named here because it was never in the list this
+        // rule used to read, and "not in the list" is not a decision anyone
+        // made.
+        const OUTBOUND: [&str; 1] = ["locald/src/telemetry.rs"];
+        for (name, source) in &sources {
+            if OUTBOUND.contains(&name.as_str()) {
+                continue;
+            }
+            for (offset, _) in source.match_indices(builder) {
                 // The builder chain runs until the `.build()` that ends it.
                 let rest = &source[offset..];
                 let chain = rest.find(".build()").map_or(rest, |end| &rest[..end]);
@@ -351,7 +321,6 @@ mod http_client_policy {
 
 #[cfg(test)]
 mod console_window_policy {
-    use super::DAEMON_SOURCES;
 
     /// Nothing locald spawns may open a console window.
     ///
@@ -366,20 +335,14 @@ mod console_window_policy {
     /// Windows at all.
     #[test]
     fn every_spawned_command_suppresses_its_console_window() {
-        let sources: Vec<(&str, &str)> = [
-            ("agent_host.rs", include_str!("agent_host.rs")),
-            ("host_process.rs", include_str!("host_process.rs")),
-            ("managed_runtime.rs", include_str!("managed_runtime.rs")),
-            ("sharing.rs", include_str!("sharing.rs")),
-        ]
-        .into_iter()
-        .chain(DAEMON_SOURCES.iter().copied())
-        .collect();
+        let sources = super::locald_sources();
 
+        // Assembled at compile time, for the reason the proxy rule gives.
+        let spawn = concat!("Command::", "new(");
         for (name, source) in sources {
-            for (offset, _) in source.match_indices("Command::new(") {
+            for (offset, _) in source.match_indices(spawn) {
                 let rest = &source[offset..];
-                if rest["Command::new(".len()..].starts_with("\"/") {
+                if rest[spawn.len()..].starts_with("\"/") {
                     continue;
                 }
                 // The chain runs until whatever actually starts the process.
