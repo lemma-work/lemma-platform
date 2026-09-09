@@ -62,6 +62,18 @@ pub(crate) struct SupervisorState {
 }
 
 pub struct AgentHostSupervisor {
+    /// Held by whoever is starting or stopping the sidecar; never by anyone
+    /// only reporting on it.
+    ///
+    /// Terminating the process tree is a five-second `SIGTERM` wait before it
+    /// is a `SIGKILL`, and reclaiming a leftover is another. Those used to
+    /// happen under `state`, which `status` also takes -- so stopping the
+    /// Agent Host froze the tray menu it was stopped from, for up to eleven
+    /// seconds. This serialises the transitions instead, and `state` is held
+    /// only long enough to read or write a field.
+    ///
+    /// Lock order: this one before `state`, never the other way.
+    transition: Mutex<()>,
     executable: Option<PathBuf>,
     data_dir: PathBuf,
     log_path: PathBuf,
@@ -122,6 +134,7 @@ impl AgentHostSupervisor {
         // choosing "off": the Agent Host stayed down after the stack came back.
         let desired_running = host_is_paired(&shared_root.join("config.json"));
         Self {
+            transition: Mutex::new(()),
             executable,
             data_dir: shared_root.clone(),
             log_path: shared_root.join("agent-host.log"),

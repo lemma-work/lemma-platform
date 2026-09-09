@@ -31,8 +31,31 @@ pub(crate) fn in_flight_pulls() -> &'static Mutex<HashMap<String, PullState>> {
     PULLS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Why a pull did not happen, which is two different things.
+///
+/// `Busy` is not a failure of this image: somebody else is already fetching
+/// it, and the caller wants to say "still downloading" rather than report an
+/// error or start a second transfer.
+pub(crate) enum PullFailure {
+    Busy,
+    Failed(String),
+}
+
 /// The pull itself, callable without a `GuestService` so a thread can run it.
-pub(crate) fn pull_with(engine: &dyn Engine, image: &str) -> Result<(), String> {
+///
+/// Every path that runs `nerdctl pull` goes through here, and here is where
+/// the claim is taken, so no caller can start a download that another process
+/// is already doing by forgetting to ask.
+pub(crate) fn pull_with(
+    engine: &dyn Engine,
+    claims: &Path,
+    image: &str,
+) -> Result<(), PullFailure> {
+    let claimed =
+        claim_pull(claims, image).map_err(|error| PullFailure::Failed(error.to_string()))?;
+    let Some(_claim) = claimed else {
+        return Err(PullFailure::Busy);
+    };
     let output = engine
         .run(&[
             "pull".into(),
@@ -42,12 +65,12 @@ pub(crate) fn pull_with(engine: &dyn Engine, image: &str) -> Result<(), String> 
             guest_platform().into(),
             image.into(),
         ])
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| PullFailure::Failed(error.to_string()))?;
     if output.status.success() {
         return Ok(());
     }
-    Err(redact_engine_error(&String::from_utf8_lossy(
-        &output.stderr,
+    Err(PullFailure::Failed(redact_engine_error(
+        &String::from_utf8_lossy(&output.stderr),
     )))
 }
 
@@ -228,17 +251,22 @@ impl<E: Engine + 'static> GuestService<E> {
         }
 
         let engine = Arc::clone(&self.engine);
+        let claims = self.pull_claims();
         let owned = image.to_owned();
         let spawned = thread::Builder::new()
             .name("lemma-guest-image-pull".into())
             .spawn(move || {
-                let outcome = pull_with(&*engine, &owned);
+                let outcome = pull_with(&*engine, &claims, &owned);
                 let mut table = in_flight_pulls().lock().expect("pull table poisoned");
                 match outcome {
-                    Ok(()) => {
+                    // `Busy` means another process holds the claim, so this
+                    // image is being fetched and no failure has happened.
+                    // Clearing the entry lets the next attempt look again
+                    // rather than be told about a download nobody is doing.
+                    Ok(()) | Err(PullFailure::Busy) => {
                         table.remove(&owned);
                     }
-                    Err(reason) => {
+                    Err(PullFailure::Failed(reason)) => {
                         table.insert(owned, PullState::Failed(reason));
                     }
                 }
@@ -275,6 +303,32 @@ impl<E: Engine + 'static> GuestService<E> {
             return Ok(());
         }
         self.start_or_join_pull(image)
+    }
+
+    /// Have the image a sandbox is about to start from, for this transport.
+    ///
+    /// Non-blocking only where something can carry on downloading after the
+    /// request is answered.
+    ///
+    /// A resident guest can. A pull inline would hold its single control
+    /// channel for the length of a registry transfer -- every health probe and
+    /// every other sandbox operation on the machine behind one download -- so
+    /// it hands back a retryable answer and keeps fetching on a worker thread.
+    ///
+    /// A per-request guest cannot. `wsl.exe --exec lemma-guestd request` ends
+    /// when the reply is written, taking the worker with it, so the same code
+    /// fetched into a thread nobody would ever hear from: the outcome was
+    /// recorded in memory that was already gone, and the next attempt -- given
+    /// an empty table by a fresh process -- started the transfer again beside
+    /// the `nerdctl` this one had orphaned. There the download belongs in the
+    /// request, and the caller's budget is what bounds it. See
+    /// `guest_request_budget` in the runtime manager.
+    pub(crate) fn ensure_sandbox_image_for_start(
+        &self,
+        image: &str,
+        workload_kind: WorkloadKind,
+    ) -> Result<(), GuestError> {
+        self.ensure_sandbox_image(image, workload_kind, self.per_request_process)
     }
 
     pub(crate) fn ensure_sandbox_image(
@@ -357,22 +411,20 @@ impl<E: Engine + 'static> GuestService<E> {
             .is_ok_and(|output| output.status.success())
     }
 
+    /// Where this guest records which images are being fetched right now.
+    ///
+    /// Under the state root, so it is shared by every guestd process on this
+    /// machine -- which on Windows is one per request.
+    pub(crate) fn pull_claims(&self) -> PathBuf {
+        self.state_root.join("run/pulls")
+    }
+
     pub(crate) fn pull_image(&self, image: &str) -> Result<(), GuestError> {
-        let output = self
-            .engine
-            .run(&[
-                "pull".into(),
-                "--quiet".into(),
-                "--unpack=true".into(),
-                "--platform".into(),
-                guest_platform().into(),
-                image.into(),
-            ])
-            .map_err(GuestError::engine)?;
-        if output.status.success() {
-            return Ok(());
-        }
-        let error = redact_engine_error(&String::from_utf8_lossy(&output.stderr));
+        let error = match pull_with(&*self.engine, &self.pull_claims(), image) {
+            Ok(()) => return Ok(()),
+            Err(PullFailure::Busy) => return Err(pull_in_progress(image)),
+            Err(PullFailure::Failed(error)) => error,
+        };
         let diagnostic = network_diagnostics();
         let dns_ok = diagnostic["dns_ok"].as_bool().unwrap_or(false);
         let registry_reachable = diagnostic["registry_reachable"].as_bool().unwrap_or(false);
