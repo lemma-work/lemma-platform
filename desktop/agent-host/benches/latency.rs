@@ -13,8 +13,13 @@
 //! pipeline a real message travels first.
 //!
 //! ```text
-//! LEMMA_REAL_AGENT_HOST_DATA_DIR=... cargo test --test latency_bench -- --ignored --nocapture
+//! LEMMA_REAL_AGENT_HOST_DATA_DIR=... cargo bench -p lemma-agent-host
 //! ```
+//!
+//! A bench target, not a test one. It asserted nothing and was `#[ignore]`d,
+//! so `cargo test` gained nothing from it and paid for it anyway: an
+//! integration test is its own binary to compile and link, on every run, in
+//! every lane.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +38,19 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+// The shared helpers live beside the integration tests, and a bench target
+// cannot reach a sibling target's modules -- so this names the module by path
+// rather than duplicating it. The whole module, not just the `mcp` half this
+// file uses: that half reads `MCP_BEARER` from the parent, and a copy of the
+// token here is a second place for it to drift.
+//
+// The allowance is for borrowing it, not for the module. `use super::*` inside
+// a test helper is idiomatic and clippy says nothing about it there; pulled
+// into a bench target it becomes an ordinary wildcard import under
+// `-D warnings`, and rewriting a shared test helper to suit a benchmark that
+// borrows it is the wrong way round.
+#[allow(clippy::wildcard_imports)]
+#[path = "../tests/support/mod.rs"]
 mod support;
 
 const HOST_SECRET: &str = "latency-bench-host-secret-with-entropy";
@@ -545,18 +563,28 @@ async fn measure(mode: Mode, harness: &str, prompt: &str) {
     println!("  event batches delivered:               {batches}");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "measurement; spends real provider quota"]
-async fn turn_latency_with_a_fast_control_plane() {
+/// Which control plane to stand in front of the host, from the command line.
+///
+/// `cargo bench -p lemma-agent-host -- fast` measures against a poll that
+/// answers immediately; `real` against one that holds like the controller
+/// does. Both, with no argument.
+fn main() {
+    let requested: Vec<String> = std::env::args().skip(1).collect();
+    let modes: Vec<Mode> = if requested.iter().any(|arg| arg == "fast") {
+        vec![Mode::Fast]
+    } else if requested.iter().any(|arg| arg == "real") {
+        vec![Mode::Real]
+    } else {
+        vec![Mode::Fast, Mode::Real]
+    };
     let harness = std::env::var("LEMMA_BENCH_HARNESS").unwrap_or_else(|_| "claude-code".to_owned());
-    measure(Mode::Fast, &harness, &bench_prompt()).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "measurement; spends real provider quota"]
-async fn turn_latency_with_a_realistic_control_plane() {
-    let harness = std::env::var("LEMMA_BENCH_HARNESS").unwrap_or_else(|_| "claude-code".to_owned());
-    measure(Mode::Real, &harness, &bench_prompt()).await;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime to measure on");
+    for mode in modes {
+        runtime.block_on(measure(mode, &harness, &bench_prompt()));
+    }
 }
 
 /// The turn to measure. Short by default, so the number is startup overhead;
