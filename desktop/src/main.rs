@@ -37,6 +37,7 @@ mod shell_paths;
 mod shutdown;
 mod stack_control;
 mod state;
+mod telemetry;
 mod update_policy;
 mod window_placement;
 mod windowing;
