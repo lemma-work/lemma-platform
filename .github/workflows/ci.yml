@@ -815,12 +815,48 @@ jobs:
             lemma-frontend/package-lock.json
             desktop/ui-tests/package-lock.json
 
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
+
       - name: Install chat UI test dependencies
         run: |
           npm ci --prefix lemma-typescript
           npm ci --prefix lemma-frontend
           npm ci --prefix desktop/ui-tests
-          npm exec --prefix desktop/ui-tests -- playwright install --with-deps chromium
+          # The browser first, from the cache above, with no apt involved.
+          npm exec --prefix desktop/ui-tests -- playwright install chromium
+          # Then the system libraries it wants. This is the apt half, and it is
+          # the half that fails: `--with-deps` fetches Google's Chrome
+          # repository index, and a "Hash Sum mismatch" there exits 100 and
+          # takes the lane down after every Rust test in it has already passed.
+          # Four times in one afternoon, on an index this repository neither
+          # controls nor needs -- the browser is already downloaded.
+          #
+          # Retrying it was the wrong fix and is gone: a mismatch is apt saying
+          # its cached index disagrees with the server, so the same fetch fails
+          # the same way, which is exactly what three attempts did.
+          #
+          # Not fatal now. `ubuntu-latest` ships the libraries Chromium needs,
+          # so this is belt and braces; if that ever stops being true the
+          # browser fails to launch in the next step and names the library it
+          # is missing, which is a better failure than a lane that dies on a
+          # mirror being mid-update.
+          if ! npm exec --prefix desktop/ui-tests -- playwright install-deps chromium; then
+            echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
+          fi
 
       - name: Chat UI with JSON ACP agents
         run: make desktop-agent-host-browser-e2e
@@ -955,6 +991,22 @@ jobs:
 
       - name: Guest boot tooling tests
         run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       - name: Settings behavior tests
         working-directory: desktop/ui-tests
@@ -1303,6 +1355,22 @@ jobs:
 
       - name: Guest packaging tests
         run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       - name: Settings behavior tests
         working-directory: desktop/ui-tests

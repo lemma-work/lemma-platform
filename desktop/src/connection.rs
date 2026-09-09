@@ -98,6 +98,11 @@ pub(crate) fn set_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
         config["connectionMode"] = json!(mode);
         config["connectionModePromptRevision"] = json!(CONNECTION_MODE_PROMPT_REVISION);
     })?;
+    // Every path that changes the deployment choice comes through here, which
+    // is why the event is here rather than in the three callers.
+    telemetry::note(telemetry::InstallEvent::ModeSelected {
+        local: mode == "local",
+    });
     refresh_menus_for_connection_mode(app);
     let changed = {
         let shell: State<Shell> = app.state();
