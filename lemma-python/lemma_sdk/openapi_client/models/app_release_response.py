@@ -24,7 +24,7 @@ class AppReleaseResponse:
         has_source (bool): Whether this release's own source archive is still stored.
         id (UUID):
         is_live (bool): True for the release this app currently serves.
-        preview_url (str):
+        preview_url (None | str):
         release_number (int):
         version (str): sha256 digest of the release's dist archive.
         created_by (None | Unset | UUID):
@@ -38,7 +38,7 @@ class AppReleaseResponse:
     has_source: bool
     id: UUID
     is_live: bool
-    preview_url: str
+    preview_url: None | str
     release_number: int
     version: str
     created_by: None | Unset | UUID = UNSET
@@ -61,6 +61,7 @@ class AppReleaseResponse:
 
         is_live = self.is_live
 
+        preview_url: None | str
         preview_url = self.preview_url
 
         release_number = self.release_number
@@ -138,7 +139,12 @@ class AppReleaseResponse:
 
         is_live = d.pop("is_live")
 
-        preview_url = d.pop("preview_url")
+        def _parse_preview_url(data: object) -> None | str:
+            if data is None:
+                return data
+            return cast(None | str, data)
+
+        preview_url = _parse_preview_url(d.pop("preview_url"))
 
         release_number = d.pop("release_number")
 
