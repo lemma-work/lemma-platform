@@ -212,3 +212,41 @@ def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
             ):
                 assert expected in paths, f"{name} misses {expected}"
     assert installing, "no job installs a browser; this contract found nothing"
+
+
+def test_every_dmg_build_survives_a_busy_hdiutil() -> None:
+    """`bundle_dmg.sh` fails on a busy `hdiutil`, and it fails late.
+
+    By then the workspace has compiled, every test in the job has passed, and
+    the only thing left is wrapping a signed `.app` in a disk image. That took
+    main red once, and the re-run went green untouched.
+
+    The retry is not enough on its own, which is the part worth pinning: a
+    failed run leaves its image attached and a half-built bundle behind, so an
+    attempt that does not clear both meets the last one's leftovers and fails
+    the same way. Retrying an unchanged failure is how the first version of the
+    apt retry managed three identical failures.
+    """
+    import yaml
+
+    building = []
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-local-images.yml",
+    ):
+        workflow = yaml.safe_load(_read(path))
+        for name, job in workflow["jobs"].items():
+            for step in job.get("steps", []):
+                run = step.get("run") or ""
+                # The steps that *invoke* the CLI to build, not the one that
+                # puts its version in the environment — and not the
+                # Windows-only `--bundles nsis` one, which makes no disk image.
+                if '"$TAURI_CLI" build' not in run or "nsis" in run:
+                    continue
+                building.append((path, name))
+                assert "for attempt in" in run, f"{name} bundles a DMG without retrying"
+                assert "hdiutil detach" in run, (
+                    f"{name} retries without detaching what the failure left "
+                    "attached, so the retry asks the same broken question"
+                )
+    assert len(building) == 2, f"expected both DMG lanes, found {building}"

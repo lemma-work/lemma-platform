@@ -24,6 +24,7 @@ from scripts.build_local_host_pack import (
     _resolve_rpath_libraries,
     enforce_windows_path_budget,
     prune_unused_twilio_domains,
+    report_windows_path_headroom,
     copy_browser_assets,
     copy_node_runtime,
     npm_executable,
@@ -355,3 +356,43 @@ def test_pruning_twilio_is_safe_where_twilio_is_absent(tmp_path: Path) -> None:
     site_packages = tmp_path / "site-packages"
     site_packages.mkdir()
     prune_unused_twilio_domains(site_packages)
+
+
+def test_a_pack_says_how_much_windows_path_budget_is_left(tmp_path, capsys) -> None:
+    """The gate only speaks once something has crossed the line.
+
+    Which makes every crossing a surprise: a build that was fine yesterday
+    fails today because a dependency grew a directory level. A `twilio` file
+    sat nine characters over, and nothing before it had ever said how much room
+    was left.
+    """
+    # Under the pack root directly: `installed_path` is what prepends
+    # `local-runtime/`, so building one here would count it twice.
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "short.py").write_text("x")
+
+    report_windows_path_headroom(pack)
+
+    printed = capsys.readouterr().out
+    assert "longest installed path is" in printed
+    assert "below the 170-character Windows budget" in printed
+    assert "::warning::" not in printed, "a short path is not worth a warning"
+
+
+def test_a_pack_close_to_the_limit_says_so_before_it_fails(tmp_path, capsys) -> None:
+    """The last quiet release before a failure should not look like the rest."""
+    pack = tmp_path / "pack"
+    deep = pack / ("d" * 120)
+    deep.mkdir(parents=True)
+    # Inside the budget, and only just. `installed_path` adds the
+    # `local-runtime/` prefix, so that is counted here rather than created.
+    prefix = len("local-runtime/") + 120 + 1
+    name = "n" * (WINDOWS_PATH_BUDGET - prefix - len(".py"))
+    (deep / f"{name}.py").write_text("x")
+
+    report_windows_path_headroom(pack)
+
+    printed = capsys.readouterr().out
+    assert "::warning::" in printed, printed
+    assert "will fail the build" in printed
