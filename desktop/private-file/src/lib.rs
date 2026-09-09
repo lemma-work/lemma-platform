@@ -79,30 +79,57 @@ pub fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     //
     // `MOVEFILE_WRITE_THROUGH` is what makes the rename itself durable on
     // Windows; `fs::rename` does not pass it.
+    //
+    // Retried, because on Windows replacing a file is not a single instant the
+    // way `rename(2)` is. The destination is opened for the duration, and
+    // anything else holding it without `FILE_SHARE_DELETE` -- another writer
+    // mid-replace, a virus scanner reading the file that was written a
+    // millisecond ago, Windows Search indexing it -- makes the call fail with
+    // "Access is denied" or a sharing violation. Neither is a permissions
+    // problem and neither lasts: the guard for two threads persisting state at
+    // once failed here on Windows and passed on every other platform, because
+    // on every other platform the second rename simply wins.
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
+        use std::time::{Duration, Instant};
         use windows_sys::Win32::Storage::FileSystem::{
             MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
         };
+
+        /// `ERROR_ACCESS_DENIED` and `ERROR_SHARING_VIOLATION`, spelled out
+        /// rather than pulling in another `windows-sys` feature for two
+        /// integers. These are the two the contention above produces.
+        const CONTENDED: [i32; 2] = [5, 32];
+        /// Long enough to outlast a scanner's hold on a file this size, short
+        /// enough that a real permissions failure is still reported promptly.
+        const PATIENCE: Duration = Duration::from_secs(2);
 
         let wide =
             |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
         let source = wide(source);
         let destination = wide(destination);
-        // SAFETY: both strings are NUL-terminated and outlive the call, and
-        // the return value is checked.
-        let result = unsafe {
-            MoveFileExW(
-                source.as_ptr(),
-                destination.as_ptr(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
-        };
-        if result == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            // SAFETY: both strings are NUL-terminated and outlive the call,
+            // and the return value is checked.
+            let result = unsafe {
+                MoveFileExW(
+                    source.as_ptr(),
+                    destination.as_ptr(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            if result != 0 {
+                return Ok(());
+            }
+            let error = io::Error::last_os_error();
+            if !CONTENDED.contains(&error.raw_os_error().unwrap_or_default())
+                || Instant::now() >= deadline
+            {
+                return Err(error);
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
