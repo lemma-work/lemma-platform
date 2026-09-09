@@ -1,5 +1,9 @@
 //! This installation's own secrets, and the private files holding them.
 
+pub(crate) use lemma_private_file::{
+    make_private as ensure_private_file, write_atomic as write_private_atomic,
+};
+
 use super::*;
 
 /// Read the installation secret, replacing it only if unreadable.
@@ -91,41 +95,5 @@ pub(crate) fn validate_hex_secret(label: &str, value: &str) -> io::Result<()> {
             "{label} is not a 32-byte lowercase hex secret"
         )));
     }
-    Ok(())
-}
-
-pub(crate) fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| invalid("private file has no parent directory"))?;
-    fs::create_dir_all(parent)?;
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let temporary = parent.join(format!(".native-host-{}-{nonce}.tmp", std::process::id()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(contents)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    fs::rename(&temporary, path)?;
-    ensure_private_file(path)
-}
-
-pub(crate) fn ensure_private_file(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
     Ok(())
 }

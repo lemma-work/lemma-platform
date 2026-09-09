@@ -159,6 +159,7 @@ SOURCES: tuple[Source, ...] = (
 # next release, so the shape is checked rather than the value.
 WORKSPACE_MEMBERS: tuple[str, ...] = (
     "desktop/locald",
+    "desktop/private-file",
     "desktop/agent-host",
     "desktop/local-runtime/manager",
     "desktop/local-runtime/hostctl",
