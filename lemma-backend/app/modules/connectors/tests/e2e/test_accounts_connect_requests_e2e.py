@@ -486,14 +486,64 @@ async def test_direct_credential_managed_account_create_encrypts_credentials(
 
 
 @pytest.mark.asyncio
-async def test_oauth_callback_renders_html_for_browser(authenticated_client):
+async def test_oauth_callback_returns_a_browser_to_the_app(authenticated_client):
+    """The round trip ends inside Lemma, not on a page about Lemma.
+
+    It used to render a server-side card in whatever tab the provider was
+    opened in, which is a dead end by construction: every state worth reporting
+    -- an app to install, an organisation to pick, an owner to wait for -- is
+    something somebody has to act on, and none of them can be acted on there.
+    """
     response = await authenticated_client.get(
         "/connectors/connect-requests/oauth/callback"
     )
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "connect=error" in location
+    assert "CONNECT_REQUEST_STATE_REQUIRED" in location
+    # Not `/connectors`: that route is a stub whose only job is `redirect('/')`,
+    # so landing there dropped the query string and said nothing at all.
+    assert "/connectors?" not in location
+
+
+@pytest.mark.asyncio
+async def test_the_callback_still_wants_a_state_when_nothing_names_an_install(
+    authenticated_client,
+):
+    """A bare callback is still refused. Only a provider announcing an
+    installation is allowed through without one."""
+    response = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback?format=json"
+    )
     assert response.status_code == 400
-    assert "text/html" in response.headers["content-type"]
-    assert "The account wasn’t connected" in response.text
-    assert "State parameter is required" in response.text
+    assert response.json()["code"] == "CONNECT_REQUEST_STATE_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_an_install_redirect_without_a_state_is_not_an_error(
+    authenticated_client,
+):
+    """The exact dead end this change is about.
+
+    Installing the App redirects back here carrying `installation_id` and
+    `setup_action`, and when the link that started it carried no `state` there
+    is no connect request to claim. That answered "State parameter is required"
+    -- so the one redirect that ever names the installation was rejected, and
+    the person was left with a valid token that could read nothing and no way
+    forward.
+
+    Nothing is exchanged here: completing a connection nobody began is the
+    shape of the substitution attack the identity binding refuses. The
+    installation is picked up by reconciling the account instead.
+    """
+    response = await authenticated_client.get(
+        "/connectors/connect-requests/oauth/callback"
+        "?installation_id=158040062&setup_action=install"
+    )
+    assert response.status_code == 303
+    location = response.headers["location"]
+    assert "connect=install_received" in location
+    assert "connect=error" not in location
 
 
 @pytest.mark.asyncio

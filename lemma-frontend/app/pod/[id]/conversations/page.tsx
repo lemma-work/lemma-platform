@@ -23,9 +23,14 @@ export default function PodConversationsPage({
         router.push(`/pod/${podId}/conversations/new`);
     };
 
+    // `shrink-0` is what keeps the header below sticky. This div is a flex item
+    // of a surface exactly the viewport tall, and `min-h-full` replaces the
+    // content-based `min-height: auto` a flex item would otherwise get -- so
+    // without it the box caps at the surface height, and the header, which can
+    // only stick inside its own containing block, scrolls away with the list.
     return (
-        <div className="flex min-h-full flex-col bg-[var(--pod-main-bg)]">
-            <header className="pod-shell-topbar flex h-14 shrink-0 items-center px-4 sm:px-6 lg:px-8">
+        <div className="flex min-h-full shrink-0 flex-col bg-[var(--pod-main-bg)]">
+            <header className="pod-shell-topbar sticky top-0 z-10 flex h-14 shrink-0 items-center px-4 sm:px-6 lg:px-8">
                 <div className="flex h-8 w-full items-center justify-between gap-3">
                     <div className="flex min-w-0 items-center gap-2">
                         {isCompact ? (

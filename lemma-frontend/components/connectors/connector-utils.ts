@@ -364,6 +364,56 @@ export interface AccountStatusMeta {
     hint: string;
 }
 
+/**
+ * How far an account is from reaching anything, when that is not the same
+ * question as whether it is connected.
+ *
+ * A GitHub App's user token reaches only the repositories the App is
+ * *installed* on, and there is no escape hatch — `GET /user/repos` is not
+ * available to App user tokens at all. So an authorized-but-not-installed
+ * account has a valid token, the right person, and no access to anything, and
+ * `status: CONNECTED` said so as a plain green "Connected". These states are
+ * read before `status` for exactly that reason.
+ */
+export const INSTALL_STATE = {
+    READY: 'READY',
+    INSTALL_REQUIRED: 'INSTALL_REQUIRED',
+    CHOOSE_INSTALL: 'CHOOSE_INSTALL',
+    PENDING_APPROVAL: 'PENDING_APPROVAL',
+} as const;
+
+const INSTALL_STATE_META: Record<string, AccountStatusMeta> = {
+    [INSTALL_STATE.INSTALL_REQUIRED]: {
+        label: 'Install required',
+        variant: 'warning',
+        needsAttention: true,
+        hint: 'Signing in did not grant access to any repository. Install the app on the account or organisation whose repositories it should see.',
+    },
+    [INSTALL_STATE.CHOOSE_INSTALL]: {
+        label: 'Choose organisation',
+        variant: 'warning',
+        needsAttention: true,
+        hint: 'This account can reach more than one installation. Pick which one it should work as.',
+    },
+    [INSTALL_STATE.PENDING_APPROVAL]: {
+        label: 'Waiting for approval',
+        variant: 'warning',
+        needsAttention: true,
+        hint: 'An owner of the organisation has to approve the app before it can be installed. Nothing more to do here until they do.',
+    },
+};
+
+export const getAccountStateMeta = (
+    status: string | null | undefined,
+    installState: string | null | undefined,
+): AccountStatusMeta => {
+    // An unfinished install outranks the status: a connection that can read
+    // nothing must not read as ready, whatever the credential says.
+    const outstanding = installState ? INSTALL_STATE_META[installState] : undefined;
+    if (outstanding && status === ACCOUNT_STATUS.CONNECTED) return outstanding;
+    return getAccountStatusMeta(status);
+};
+
 export const getAccountStatusMeta = (status: string | null | undefined): AccountStatusMeta => {
     switch (status) {
         case ACCOUNT_STATUS.REAUTH_REQUIRED:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from functools import partial
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -413,12 +414,33 @@ def _uow_factory():
     return lambda: _scope()
 
 
-async def _resolve(ctx, service):
+async def _passthrough_refresh(_uow, account, _user_id):
+    """Stand in for the refresh, returning what the account already holds.
+
+    The real one builds a `ConnectorService`, which is the single step in this
+    function that needs a live unit of work -- so it is a collaborator, and
+    these tests stay about the bridge's own decisions.
+    """
+    credentials = getattr(account, "credentials", None)
+    if credentials is None:
+        return {}
+    dump = getattr(credentials, "model_dump", None)
+    if callable(dump):
+        return dump()
+    return {
+        key: value
+        for key, value in vars(credentials).items()
+        if not key.startswith("_")
+    }
+
+
+async def _resolve(ctx, service, refresh=_passthrough_refresh):
     return await bridge._resolve_github_credential(
         ctx,
         uow_factory=_uow_factory(),
         delegated_context=_fake_build_delegated_context,
         account_resolution=lambda _uow: service,
+        refresh_credentials=refresh,
     )
 
 
@@ -522,3 +544,89 @@ async def test_resolve_github_credential_names_the_projects_connected_account() 
     assert credential is not None
     assert credential.email is None
     assert resolution.captured["account_id"] == account_id
+
+
+# The token the sandbox is handed is a *copy*, so how long it is good for is
+# this module's problem and not only the connector layer's.
+
+
+@pytest.mark.asyncio
+async def test_the_written_token_is_the_refreshed_one() -> None:
+    """The bridge used to read `account.credentials` verbatim while the refresh
+    machinery sat unused one module away, so an expired token was re-written
+    into the workspace every 45 minutes for as long as the session lasted."""
+
+    async def _refresh(_uow, _account, _user_id):
+        return {"access_token": "gho_refreshed"}
+
+    credential = await _resolve(_context(), _WorkingResolution(), _refresh)
+
+    assert credential is not None
+    assert credential.access_token == "gho_refreshed"
+
+
+@pytest.mark.asyncio
+async def test_the_numeric_id_comes_from_the_stored_profile() -> None:
+    """`provider_account_id` is the login for this connector, and the noreply
+    address that survives a rename is keyed by the number instead."""
+
+    async def _refresh(_uow, _account, _user_id):
+        return {
+            "access_token": "gho_realtoken",
+            "user_data": {"profile": {"id": 583231, "login": "octocat"}},
+        }
+
+    credential = await _resolve(_context(), _WorkingResolution(email=None), _refresh)
+
+    assert credential is not None
+    assert credential.user_id == "583231"
+    assert (
+        bridge._noreply_email(credential) == "583231+octocat@users.noreply.github.com"
+    )
+
+
+def test_the_noreply_address_survives_a_rename_only_with_the_id() -> None:
+    without = bridge._GithubCredential(
+        access_token="t", login="octocat", email=None, user_id=None
+    )
+    assert bridge._noreply_email(without) == "octocat@users.noreply.github.com"
+    assert (
+        bridge._noreply_email(
+            bridge._GithubCredential(access_token="t", login=None, email=None)
+        )
+        is None
+    )
+
+
+class TestProvisioningWindow:
+    """How long a copy written into the sandbox may be trusted."""
+
+    def _credential(self, expires_in_seconds: float | None):
+        from datetime import timedelta
+
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+            if expires_in_seconds is not None
+            else None
+        )
+        return bridge._GithubCredential(
+            access_token="t", login="octocat", email=None, expires_at=expires_at
+        )
+
+    def test_a_credential_with_no_stated_expiry_keeps_the_flat_ceiling(self) -> None:
+        assert bridge._provisioned_ttl(self._credential(None)) == 45 * 60
+
+    def test_a_long_lived_token_is_still_capped_by_the_ceiling(self) -> None:
+        """Eight hours is the GitHub App user-token lifetime, and the ceiling is
+        the safety net for things an expiry cannot see: a disconnected account,
+        a revoked token."""
+        assert bridge._provisioned_ttl(self._credential(8 * 3600)) == 45 * 60
+
+    def test_a_token_dying_sooner_shortens_the_window(self) -> None:
+        ttl = bridge._provisioned_ttl(self._credential(20 * 60))
+        assert ttl == pytest.approx(20 * 60 - 5 * 60, abs=2)
+
+    def test_an_expired_token_is_not_trusted_for_45_minutes(self) -> None:
+        """The bug this whole change is about: without an expiry-derived
+        window, a dead token was rewritten on a wall clock and believed."""
+        assert bridge._provisioned_ttl(self._credential(-1)) == 30

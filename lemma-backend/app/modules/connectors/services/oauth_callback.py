@@ -46,6 +46,7 @@ from app.modules.connectors.domain.connect_request import (
 )
 from app.modules.connectors.domain.connector import ConnectorEntity
 from app.modules.connectors.domain.errors import (
+    ConnectRequestIdentityMismatchError,
     AccountAlreadyConnectedError,
     ConnectRequestNotFoundError,
     ConnectRequestStateRequiredError,
@@ -66,6 +67,8 @@ from app.modules.connectors.services.auth.github_installation import (
     bound_external_ref,
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
+    followup_account_id,
+    followup_identity,
     oldest_claimable_connect_request,
     stored_code_verifier,
     stored_provider_state,
@@ -157,6 +160,12 @@ async def handle_oauth_callback(
         credentials=credentials,
         redirect_uri=redirect_uri,
     )
+    _enforce_followup_identity(pending_request, identity)
+
+    if followup_account_id(pending_request) is not None:
+        return await _record_installation(
+            service, pending_request=pending_request, identity=identity
+        )
 
     account = await _persist_account(
         service,
@@ -293,6 +302,94 @@ async def _resolve_identity(
         display_name=display_name,
         external_ref=external_ref,
     )
+
+
+def _enforce_followup_identity(
+    pending_request: ConnectRequestEntity, identity: _ConnectedIdentity
+) -> None:
+    """Refuse a second leg that came back as a different person.
+
+    Only follow-up requests carry an expected identity, so every ordinary
+    connect passes straight through -- there is nobody to expect yet. See
+    `followup_attributes` for why this stands in for PKCE on that leg.
+    """
+    if followup_account_id(pending_request) is None:
+        # Not a follow-up: there is nobody to expect yet.
+        return
+    expected = followup_identity(pending_request)
+    if expected is None:
+        # A follow-up with no expected identity has no protection at all, since
+        # this check is what stands in for the PKCE that leg cannot have. That
+        # can happen when the first leg's profile lookup failed and the account
+        # was stored without a `provider_account_id`. Refuse rather than wave it
+        # through -- `initiate_followup_request` also declines to mint one now,
+        # so this is the second of two closed doors.
+        logger.warning(
+            "connectors.oauth_callback.followup_identity_absent.denied",
+            connector_id=pending_request.connector_id,
+        )
+        raise ConnectRequestIdentityMismatchError()
+    if str(identity.provider_account_id or "") != expected:
+        logger.warning(
+            "connectors.oauth_callback.followup_identity_mismatch.denied",
+            connector_id=pending_request.connector_id,
+        )
+        raise ConnectRequestIdentityMismatchError()
+
+
+async def _record_installation(
+    service: OAuthCallbackSeam,
+    *,
+    pending_request: ConnectRequestEntity,
+    identity: _ConnectedIdentity,
+) -> AccountEntity:
+    """Close a second leg, which has an account already and only lacks a tenant.
+
+    The connect saga cannot be reused here. It ends in `_persist_account`, whose
+    job is to decide whether this identity is a new account, a reconnect, or a
+    duplicate -- and a follow-up leg is none of those. The account was created
+    by the first leg moments ago and is healthy, so that function correctly
+    refuses it as `ACCOUNT_ALREADY_CONNECTED`: from where it stands, somebody is
+    connecting GitHub twice.
+
+    What is actually outstanding is one field. The identity has already been
+    checked against the one this leg was minted for, so the only work left is to
+    record the installation that the round trip went to fetch.
+
+    The freshly minted credentials replace the stored ones deliberately.
+    Authorizing again issues a new token and may retire the previous one, so the
+    newer of the two is the one worth keeping.
+    """
+    account_id = followup_account_id(pending_request)
+    account = await service.account_repository.get(UUID(str(account_id)))
+    if account is not None and account.user_id != pending_request.user_id:
+        # The request names an account; it does not get to name somebody else's.
+        logger.warning(
+            "connectors.oauth_callback.followup_account_foreign.denied",
+            connector_id=pending_request.connector_id,
+        )
+        raise ConnectRequestIdentityMismatchError()
+    if account is None:
+        # The account was deleted while its install leg was in flight. Nothing
+        # to record it on, and inventing one here would sidestep every check
+        # `_persist_account` exists to make.
+        raise ConnectRequestNotFoundError()
+
+    account.credentials = identity.credentials
+    if identity.external_ref:
+        account.external_ref = identity.external_ref
+    account.status = AccountStatus.CONNECTED
+    account = await service.account_repository.update(account)
+
+    pending_request.status = ConnectRequestStatus.SUCCESS
+    pending_request.attributes = without_spent_secrets(pending_request)
+    await service.connect_request_repository.update(pending_request)
+    await service.uow.commit()
+    logger.info(
+        "connectors.oauth_callback.installation_recorded.diagnostic",
+        connector_id=account.connector_id,
+    )
+    return account
 
 
 async def _persist_account(

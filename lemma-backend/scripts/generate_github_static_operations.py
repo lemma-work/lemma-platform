@@ -83,10 +83,33 @@ ALLOWLIST = [
         "users/get-authenticated",
         "users/get-by-username",
         # Repositories
+        #
+        # `repos/list-for-authenticated-user` (GET /user/repos) is deliberately
+        # absent. It is not available to GitHub App user tokens, and it does not
+        # fail loudly: it returns only repositories inside an installation, so
+        # an agent asking "what repositories do I have?" with no installation is
+        # told *none*. `apps/list-repos-accessible-to-installation` is the
+        # enumeration a GitHub App actually has.
+        #
+        # `repos/create-for-authenticated-user` (POST /user/repos) is absent for
+        # a harder reason: neither identity this App has can call it. It needs
+        # the OAuth `repo` scope, App user tokens carry no scopes at all, and
+        # GitHub marks the route as unavailable to installations. It was shipped
+        # and could only ever fail.
         "repos/get",
-        "repos/list-for-authenticated-user",
         "repos/list-for-org",
-        "repos/create-for-authenticated-user",
+        # Both, because a GitHub App has two identities and each has its own
+        # listing. `list-repos-accessible-to-installation` is the installation
+        # asking what it covers (`installation_ok`); it answers 403 "Resource
+        # not accessible by integration" to a user token, so it is not a
+        # replacement for the user-facing question.
+        # `list-installation-repos-for-authenticated-user` is that one: what
+        # *this person* can reach through an installation. Which of the two an
+        # operation gets is decided per call by `github_presenter`, from the
+        # `github_token_kind` generated here.
+        "apps/list-repos-accessible-to-installation",
+        "apps/list-installation-repos-for-authenticated-user",
+        "apps/list-installations-for-authenticated-user",
         "repos/list-branches",
         "repos/get-branch",
         "repos/list-commits",
