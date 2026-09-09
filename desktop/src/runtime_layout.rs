@@ -272,7 +272,21 @@ pub(crate) fn locald_is_this_build(
         // whatever it built. Identity is the developer's business there.
         return true;
     };
-    hello["executable"].as_str() == Some(path_identity(expected).as_str())
+    if hello["executable"].as_str() != Some(path_identity(expected).as_str()) {
+        return false;
+    }
+    // And the same *build* at that path. On Windows an in-place update writes
+    // to the same path, so the path alone matches a daemon from the previous
+    // version -- which the shell would then adopt, supervising the old runtime
+    // under a new app with the same version reported on both sides.
+    //
+    // A file we cannot measure is not the one we ship, and neither is a daemon
+    // that will not say. Both are refused rather than assumed.
+    let Some((size, modified)) = executable_stamp(expected) else {
+        return false;
+    };
+    hello["executable_size"].as_u64() == Some(size)
+        && hello["executable_modified_ms"].as_str() == Some(modified.to_string().as_str())
 }
 
 pub(crate) fn locald_matches_host_pack(

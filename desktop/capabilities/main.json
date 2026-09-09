@@ -13,7 +13,6 @@
     "allow-open-app",
     "allow-open-control-center",
     "allow-open-logs",
-    "allow-installer-log",
     "allow-diagnostic-logs",
     "allow-choose-connection-mode",
     "allow-set-connection-mode",

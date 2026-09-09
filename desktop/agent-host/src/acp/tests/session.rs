@@ -178,7 +178,7 @@ fn text_blocks_are_still_assembled_into_one_leading_block() {
     assert!(text.text.contains("Hello."));
 }
 
-fn spec_delivered_once() -> RunSpec {
+pub(super) fn spec_delivered_once() -> RunSpec {
     let mut spec = spec_resuming(Some("sess-1"));
     spec.system_prompt_delivery = Some(crate::protocol::NEW_SESSION_ONLY.to_owned());
     spec
@@ -269,7 +269,7 @@ fn the_explanations_differ_from_each_other() {
     assert_ne!(messages[0], messages[2]);
 }
 
-fn spec_resuming(resume_session_id: Option<&str>) -> RunSpec {
+pub(super) fn spec_resuming(resume_session_id: Option<&str>) -> RunSpec {
     RunSpec {
         agent_run_id: uuid::Uuid::new_v4(),
         conversation_id: uuid::Uuid::new_v4(),

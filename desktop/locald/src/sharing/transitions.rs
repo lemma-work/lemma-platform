@@ -317,12 +317,17 @@ impl SharingController {
     }
 
     pub(crate) fn stop_active(&self) {
-        if let Some(mut active) = self
+        // Taken out under the lock, stopped outside it. The guard used to live
+        // to the end of the `if let`, which held it across a tunnel process's
+        // termination and the gateway's shutdown -- and `snapshot` takes the
+        // same lock to say whether sharing is on, so turning it off froze the
+        // page that turned it off.
+        let taken = self
             .active
             .lock()
             .expect("sharing active lock poisoned")
-            .take()
-        {
+            .take();
+        if let Some(mut active) = taken {
             if let Some(tunnel) = active.tunnel.as_mut() {
                 tunnel.stop();
             }

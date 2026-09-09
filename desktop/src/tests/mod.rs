@@ -9,6 +9,7 @@ mod agent_host;
 mod config;
 mod diagnostics;
 mod locald;
+mod locald_writer;
 mod misc;
 mod navigation;
 mod quit;
@@ -17,6 +18,7 @@ mod runtime;
 mod splash;
 mod telemetry_privacy;
 mod update_install;
+mod update_single_flight;
 mod window_placement;
 mod windows;
 
@@ -159,12 +161,29 @@ pub(crate) fn granted(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every `invoke("name")` a bundled page makes.
+/// Every `invoke("name")` a bundled page makes, whichever quote it used.
+///
+/// Both, because `confirmation.js` writes `invoke('resolve_confirmation')` and
+/// the double-quoted scan walked straight past it -- so the guard that checks
+/// a page is granted what it calls was not looking at that page's only call.
+/// A gap in a guard is invisible in exactly the way the thing it guards is
+/// not.
 fn invoked_commands(script: &str) -> Vec<String> {
-    script
-        .split("invoke(\"")
-        .skip(1)
-        .filter_map(|rest| rest.split('"').next().map(str::to_string))
+    [("invoke(\"", '"'), ("invoke('", '\'')]
+        .into_iter()
+        .flat_map(|(opening, quote)| {
+            script
+                .split(opening)
+                .skip(1)
+                .filter_map(move |rest| rest.split(quote).next().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .filter(|command| {
+            !command.is_empty()
+                && command
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        })
         .collect()
 }
 
