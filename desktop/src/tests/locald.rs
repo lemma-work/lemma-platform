@@ -189,3 +189,43 @@ fn only_the_operation_on_screen_moves_the_splash() {
         EventAdmission::Apply
     );
 }
+
+/// The size cap has to be applied by the reader, not by a measurement after.
+///
+/// `lines()` and `read_line` both build the whole line and only then let
+/// anything look at it, so a daemon that sent a gigabyte with no newline made
+/// the desktop process allocate a gigabyte before the guard could object. Two
+/// readers did that: the event stream and the quit path's release
+/// confirmation.
+#[test]
+fn a_line_without_an_end_is_refused_rather_than_buffered() {
+    use std::io::BufReader;
+
+    // Well past the cap and with no newline anywhere.
+    let flood = vec![b'x'; 4096];
+    let mut reader = BufReader::new(flood.as_slice());
+    let error = ipc_read::bounded_line(&mut reader, 1024)
+        .expect_err("an unterminated line over the cap has to be an error");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+
+    // A line exactly at the cap still frames.
+    let exact = format!("{}\n", "x".repeat(1024));
+    let mut reader = BufReader::new(exact.as_bytes());
+    assert_eq!(
+        ipc_read::bounded_line(&mut reader, 1024).expect("at the cap"),
+        Some("x".repeat(1024))
+    );
+
+    // Several messages on one connection, and a clean end of stream after.
+    let mut reader = BufReader::new("one\ntwo\r\n".as_bytes());
+    assert_eq!(
+        ipc_read::bounded_line(&mut reader, 1024).unwrap(),
+        Some("one".into())
+    );
+    assert_eq!(
+        ipc_read::bounded_line(&mut reader, 1024).unwrap(),
+        Some("two".into()),
+        "a CRLF checkout must not leave the carriage return in the message"
+    );
+    assert_eq!(ipc_read::bounded_line(&mut reader, 1024).unwrap(), None);
+}

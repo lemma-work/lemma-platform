@@ -22,7 +22,26 @@ pub(crate) fn configured_connection_mode(config: &Value) -> String {
 }
 
 pub(crate) fn hosted_url() -> String {
-    std::env::var("LEMMA_DESKTOP_HOSTED_URL").unwrap_or_else(|_| DEFAULT_HOSTED_URL.into())
+    // The capability that grants this origin the shell's commands is gated on
+    // `dev_override`; the navigation has to be gated the same way, or a
+    // release build would be sent to an environment-named host with no
+    // permissions and no explanation.
+    dev_override("LEMMA_DESKTOP_HOSTED_URL")
+        .and_then(|value| value.into_string().ok())
+        .unwrap_or_else(|| DEFAULT_HOSTED_URL.into())
+}
+
+/// The first URL a hosted launch opens.
+///
+/// `LEMMA_DESKTOP_HOSTED_URL` is read from the environment and nothing
+/// validates it, so an unparseable value used to abort `setup` through an
+/// `expect` -- before any window exists, which is a launch that shows nothing
+/// and says nothing. The splash can say so instead.
+pub(crate) fn hosted_entry_url(hosted: &str) -> WebviewUrl {
+    match hosted.parse() {
+        Ok(url) => WebviewUrl::External(url),
+        Err(_) => WebviewUrl::App("index.html".into()),
+    }
 }
 
 pub(crate) fn set_connection_mode_impl(app: AppHandle, mode: String) -> Result<(), String> {
@@ -202,7 +221,14 @@ pub(crate) fn local_auth_url(base: &str, auth_mode: &str) -> String {
 /// portal's own origin, so it cannot point off it, and it survives locald
 /// handing out a different port than the one this launch happens to use.
 pub(crate) fn local_auth_url_returning_to(base: &str, auth_mode: &str, route: &str) -> String {
-    let route = if route.starts_with('/') { route } else { "/" };
+    // Relative means one leading slash and nothing that reads as an
+    // authority. `//evil.example/x` and `/\evil.example/x` both start with a
+    // slash and both resolve *off* the portal's origin -- and the portal hands
+    // the decoded value to `window.location.replace`.
+    let route = match route.as_bytes() {
+        [b'/', rest @ ..] if !matches!(rest.first(), Some(b'/') | Some(b'\\')) => route,
+        _ => "/",
+    };
     let mut url = format!("{}/auth", base.trim_end_matches('/'));
     match tauri::Url::parse(&url) {
         Ok(mut parsed) => {

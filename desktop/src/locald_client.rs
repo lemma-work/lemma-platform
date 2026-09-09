@@ -5,14 +5,22 @@ pub(crate) fn install_locald_connection(app: &AppHandle, connection: LocaldConne
     *shell.locald_writer.lock().unwrap() = Some(connection.writer);
     let handle = app.clone();
     std::thread::spawn(move || {
-        for line in connection.reader.lines().map_while(Result::ok) {
-            if line.len() > 1024 * 1024 {
-                emit_log(&handle, "locald protocol message exceeded 1 MiB");
-                break;
-            }
-            match serde_json::from_str::<Value>(&line) {
-                Ok(event) => handle_locald_event(&handle, &event),
-                Err(_) => emit_log(&handle, &line),
+        // Bounded as the bytes arrive. `lines()` builds the whole line first,
+        // so the 1 MiB check that used to sit here ran *after* the allocation
+        // it was meant to prevent -- a daemon that sent no newline could make
+        // this process allocate until it failed.
+        let mut reader = connection.reader;
+        loop {
+            match ipc_read::bounded_line(&mut reader, 1024 * 1024) {
+                Ok(Some(line)) => match serde_json::from_str::<Value>(&line) {
+                    Ok(event) => handle_locald_event(&handle, &event),
+                    Err(_) => emit_log(&handle, &line),
+                },
+                Ok(None) => break,
+                Err(error) => {
+                    emit_log(&handle, &format!("locald protocol error: {error}"));
+                    break;
+                }
             }
         }
         locald_gone(&handle);

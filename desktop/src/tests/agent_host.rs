@@ -91,15 +91,7 @@ fn choosing_a_connection_mode_re_enables_the_menus_it_gates() {
     // AppHandle, and the thing worth pinning is that the one function every
     // mode change goes through is what rebuilds them.
     let source = include_str!("../connection.rs").replace("\r\n", "\n");
-    let set_mode = {
-        let start = source
-            .find("fn set_mode(app: &AppHandle, mode: &str)")
-            .expect("set_mode exists");
-        let end = source[start..]
-            .find("\nfn ")
-            .map_or(source.len(), |offset| start + offset);
-        &source[start..end]
-    };
+    let set_mode = function_body(&source, "fn set_mode(app: &AppHandle, mode: &str)");
     assert!(
         set_mode.contains("refresh_menus_for_connection_mode(app)"),
         "set_mode must rebuild the menus, or the choice does not take effect \
@@ -169,4 +161,59 @@ fn the_menu_bar_speaks_the_products_language() {
             "{retired:?} is supervisor vocabulary, not a product menu item"
         );
     }
+}
+
+/// Every Agent Host command checks who is calling it.
+///
+/// `workspace.json` grants these to the workspace origin, and the origin is
+/// whatever the main window is currently showing -- so the check is what
+/// stands between a page and this computer's Agent Host. `agent_host_status`
+/// was the one command without it: any page in the main window could start
+/// locald and read the pairing state back.
+#[test]
+fn every_agent_host_command_checks_its_caller() {
+    let source = shell_source();
+    let mut unchecked = Vec::new();
+    for (index, _) in source.match_indices("#[tauri::command") {
+        let rest = &source[index..];
+        let Some(at) = rest.find("fn agent_host_") else {
+            continue;
+        };
+        // The attribute belongs to this function only if no other function
+        // begins between them.
+        let between = &rest[..at];
+        if [
+            "\nfn ",
+            "\nasync fn ",
+            "\npub(crate) fn ",
+            "\npub(crate) async fn ",
+        ]
+        .iter()
+        .any(|marker| between.contains(marker))
+        {
+            continue;
+        }
+        let name: String = rest[at + "fn ".len()..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        let body = function_body(&source, &format!("fn {name}("));
+        // `require_control_window` is the stricter of the two: it admits only
+        // Local settings, where `require_agent_host_caller` also admits the
+        // signed-in workspace. `agent_host_action` is granted by
+        // `control.json` alone and takes that one.
+        if !body.contains("require_agent_host_caller(") && !body.contains("require_control_window(")
+        {
+            unchecked.push(name);
+        }
+    }
+    assert!(
+        unchecked.is_empty(),
+        "these Agent Host commands do not check their caller: {unchecked:?}",
+    );
+    // Not vacuous: there are seven of them.
+    let checked = source
+        .matches("require_agent_host_caller(&window, &app)?")
+        .count();
+    assert!(checked >= 7, "only {checked} commands check their caller");
 }

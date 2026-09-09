@@ -153,21 +153,43 @@ pub(crate) fn mask_secret_shapes(text: String) -> String {
                     break;
                 }
                 let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-                let word = &rest[..end];
-                let trimmed = word.trim_matches(|c: char| {
-                    c == '"' || c == '\'' || c == ',' || c == ';' || c == ')'
-                });
-                if looks_like_a_credential(trimmed) {
-                    masked.push_str(&word.replace(trimmed, "[redacted]"));
-                } else {
-                    masked.push_str(word);
-                }
+                masked.push_str(&mask_word(&rest[..end]));
                 rest = &rest[end..];
             }
             masked
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// One whitespace-delimited word, with any credential inside it redacted.
+///
+/// A word is not always a value. `OPENAI_API_KEY=sk-...` carries one and does
+/// not start with `sk-`; `{"api_key":"sk-..."}` carries one and its leading
+/// brace survived the trim. Both went into a diagnostics bundle in full. So
+/// the word is cut at `=` and `:` and each part is judged on its own, and the
+/// punctuation that JSON puts around a value is trimmed as well as the
+/// punctuation prose does.
+fn mask_word(word: &str) -> String {
+    const PUNCTUATION: [char; 9] = ['"', '\'', ',', ';', ')', '{', '}', '[', ']'];
+    let mut masked = String::with_capacity(word.len());
+    let mut rest = word;
+    loop {
+        let end = rest.find(['=', ':']).unwrap_or(rest.len());
+        let (part, tail) = rest.split_at(end);
+        let trimmed = part.trim_matches(|c: char| PUNCTUATION.contains(&c));
+        if !trimmed.is_empty() && looks_like_a_credential(trimmed) {
+            masked.push_str(&part.replace(trimmed, "[redacted]"));
+        } else {
+            masked.push_str(part);
+        }
+        let Some(separator) = tail.chars().next() else {
+            break;
+        };
+        masked.push(separator);
+        rest = &tail[separator.len_utf8()..];
+    }
+    masked
 }
 
 /// Whether one whitespace-delimited word is a credential rather than prose.

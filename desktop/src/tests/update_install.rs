@@ -127,19 +127,48 @@ fn a_release_build_ignores_every_runtime_redirecting_env_var() {
     let all = shell_source();
     let source = all.replace(function_body(&all, "fn local_artifacts_enabled"), "");
     assert!(source.len() < all.len(), "the exception was not cut out");
+    // The five read by name. Two of them -- the daemon and the VZ helper --
+    // are worse than a redirected manifest: they name the executable itself,
+    // and they were read straight from the environment.
     for name in [
         "LEMMA_DESKTOP_HOST_PACK_ROOT",
         "LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT",
         "LEMMA_DESKTOP_RELEASE_MANIFEST",
+        "LEMMA_DESKTOP_LOCALD_BIN",
+        "LEMMA_DESKTOP_VZ_BIN",
     ] {
-        assert!(
-            !source.contains(&format!("std::env::var_os(\"{name}\")")),
-            "{name} must be read through dev_override, which is inert in a \
-             release build, not directly",
-        );
+        for direct in ["std::env::var_os", "std::env::var"] {
+            assert!(
+                !source.contains(&format!("{direct}(\"{name}\")")),
+                "{name} must be read through dev_override, which is inert in a \
+                 release build, not directly",
+            );
+        }
         assert!(
             source.contains(&format!("dev_override(\"{name}\")")),
             "{name} should still be honoured in a development build",
+        );
+    }
+
+    // The two that name an *origin* rather than a file. Read in a loop rather
+    // than by name, so they are asserted where they are read: one decides
+    // where a hosted launch navigates, the other grants that origin the
+    // shell's own commands. Gating one without the other would send a release
+    // build to an environment-named host with no permissions.
+    for name in ["LEMMA_DESKTOP_HOSTED_URL", "LEMMA_DESKTOP_LOCAL_URL"] {
+        for direct in ["std::env::var_os", "std::env::var"] {
+            assert!(
+                !source.contains(&format!("{direct}(\"{name}\")")),
+                "{name} must be read through dev_override, not directly",
+            );
+        }
+    }
+    for signature in ["fn hosted_url()", "fn overridden_workspace_capability()"] {
+        let body = function_body(&source, signature);
+        assert!(
+            body.contains("dev_override"),
+            "{signature} reads an origin from the environment without gating \
+             it to a development build:\n{body}",
         );
     }
     // The gate itself, so this cannot pass against a `dev_override` that
@@ -224,8 +253,18 @@ fn every_daemon_redirect_variable_is_stripped_from_a_release_build() {
             let name = &tail[..end];
             // Only where it is actually read from the environment, which is
             // what makes it a redirect rather than a mention.
-            let context_start = at.saturating_sub(40);
-            if rest[context_start..at].contains("env::var") {
+            // Clamped to a character boundary. A byte offset forty back
+            // from a `LEMMA_` token can land inside an em dash in the comment
+            // above it, and slicing there panics -- so an unrelated comment
+            // edit could take this guard out.
+            let before = &rest[..at];
+            let context_start = before
+                .char_indices()
+                .rev()
+                .take(40)
+                .last()
+                .map_or(0, |(index, _)| index);
+            if before[context_start..].contains("env::var") {
                 read_by_the_daemon.insert(name.to_owned());
             }
             rest = &tail[end..];

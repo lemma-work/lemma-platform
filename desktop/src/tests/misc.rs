@@ -327,7 +327,8 @@ fn native_copy_does_not_name_the_wrong_hardware() {
     let source = shell_source();
     for name in ["fn reset_local_data_impl(", "fn reset_full_reinstall_impl("] {
         let start = source.find(name).unwrap_or_else(|| panic!("{name} exists"));
-        let body = &source[start..start + 1200];
+        let body = head(&source[start..], 1200);
+        let body = body.as_str();
         assert!(
             !body.contains("this Mac"),
             "{name} hardcodes 'this Mac' in the copy that names what is deleted",
@@ -349,7 +350,8 @@ fn native_copy_does_not_name_the_wrong_hardware() {
 fn developer_tools_are_a_development_build_affordance() {
     let source = shell_source();
     for block in source.split("\"devtools\",").skip(1) {
-        let head = &block[..block.len().min(200)];
+        let head = head(block, 200);
+        let head = head.as_str();
         assert!(
             head.contains("cfg!(debug_assertions)"),
             "a release build must not offer a web inspector into a webview \

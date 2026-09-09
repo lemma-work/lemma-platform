@@ -325,7 +325,12 @@ pub(crate) fn sandbox_image_status(_window: Webview, app: AppHandle) -> Value {
 /// Runs off the UI thread. A synchronous `#[tauri::command]` is dispatched on
 /// the main thread, so any command that waits on the daemon, the network or a
 /// child process freezes every window for its whole duration.
-pub(crate) async fn agent_host_status(_window: Webview, app: AppHandle) -> Result<Value, String> {
+pub(crate) async fn agent_host_status(window: Webview, app: AppHandle) -> Result<Value, String> {
+    // The same check the other six Agent Host commands make, and it was the
+    // only one without it. `workspace.json` grants this to the workspace
+    // origin, so without the check any page the main window is showing could
+    // start locald and read the pairing state back.
+    require_agent_host_caller(&window, &app)?;
     tauri::async_runtime::spawn_blocking(move || agent_host_status_impl(app))
         .await
         .map_err(|error| error.to_string())?

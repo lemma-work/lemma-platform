@@ -144,3 +144,42 @@ fn replacing_a_log_changes_its_identity_so_a_stale_cursor_is_dropped() {
         "a rotated log is a different file and must reset the cursor"
     );
 }
+
+/// A credential is not always a word of its own.
+///
+/// `mask_secret_shapes` split the line on whitespace and judged each word
+/// whole, so `OPENAI_API_KEY=sk-...` did not start with `sk-` and
+/// `{"api_key":"sk-..."}` kept its leading brace through the trim. Both went
+/// into a diagnostics bundle in full.
+#[test]
+fn a_credential_attached_to_its_key_is_redacted_too() {
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+    for line in [
+        format!("OPENAI_API_KEY={secret}"),
+        format!("  \"api_key\": \"{secret}\","),
+        format!("{{\"api_key\":\"{secret}\"}}"),
+        format!("env: ANTHROPIC_API_KEY={secret} rest"),
+        format!("token:{secret}"),
+    ] {
+        let masked = mask_secret_shapes(line.clone());
+        assert!(
+            !masked.contains(secret),
+            "the credential survived redaction: {line} -> {masked}"
+        );
+        assert!(
+            masked.contains("[redacted]"),
+            "nothing was marked as removed: {line} -> {masked}"
+        );
+    }
+    // The key itself is still readable, which is the point of redacting the
+    // value rather than the line.
+    assert!(mask_secret_shapes(format!("OPENAI_API_KEY={secret}")).starts_with("OPENAI_API_KEY="));
+    // Prose and paths are left alone.
+    for ordinary in [
+        "loading /usr/local/bin/lemma-locald: ok",
+        "GET https://api.example.com/v1/models 200",
+        "  File \"app/main.py\", line 42, in handler",
+    ] {
+        assert_eq!(mask_secret_shapes(ordinary.to_string()), ordinary);
+    }
+}

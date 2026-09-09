@@ -145,13 +145,7 @@ fn the_window_layer_is_painted_in_both_appearances() {
 #[test]
 fn the_dock_follows_what_is_actually_on_screen() {
     let source = include_str!("../windowing.rs").replace("\r\n", "\n");
-    let start = source
-        .find("fn settle_dock_presence(")
-        .expect("the dock helper exists");
-    let end = source[start..]
-        .find("\nfn ")
-        .map_or(source.len(), |offset| start + offset);
-    let helper = &source[start..end];
+    let helper = function_body(&source, "fn settle_dock_presence(");
     assert!(
         helper.contains("windows()") && helper.contains("is_visible"),
         "dock presence must be decided by what is visible, not by the \

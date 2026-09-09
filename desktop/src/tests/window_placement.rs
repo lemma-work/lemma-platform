@@ -41,15 +41,12 @@ fn a_placement_this_build_would_not_have_written_is_ignored() {
 #[test]
 fn window_geometry_survives_a_launch_that_was_never_a_clean_quit() {
     let source = include_str!("../windowing.rs").replace("\r\n", "\n");
-    let start = source
-        .find("fn build_main_window_at(")
-        .expect("build_main_window_at exists");
-    let body = &source[start..];
+    let body = function_body(&source, "fn build_main_window_at(");
     let moved = body
         .find("tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)")
         .expect("placement is recorded on move and resize");
     assert!(
-        body[moved..moved + 200].contains("remember_placement(&window)"),
+        head(&body[moved..], 200).contains("remember_placement(&window)"),
         "both events have to write the placement"
     );
 }
@@ -60,10 +57,7 @@ fn a_replacement_window_is_never_left_invisible() {
     // A window that never paints and never appears is an app with no
     // interface, which is the failure the label wait already guards.
     let source = include_str!("../windowing.rs").replace("\r\n", "\n");
-    let start = source
-        .find("fn build_main_window_at(")
-        .expect("build_main_window_at exists");
-    let body = &source[start..];
+    let body = function_body(&source, "fn build_main_window_at(");
 
     assert!(
         body.contains("REPLACEMENT_REVEAL_TIMEOUT"),
@@ -122,4 +116,48 @@ fn desktop_config_replacement_never_exposes_a_partial_file() {
         r#"{"revision":2}"#
     );
     assert!(!source.exists());
+}
+
+/// A saved position at the edge of `i32` must not take the launch with it.
+///
+/// `saved_placement` accepts any `x` and `y` that parse, and the overlap
+/// arithmetic subtracted directly: `i32::MIN` overflowed, which panics in a
+/// debug build during launch and wraps in a release build -- to a large
+/// positive number, which reads as "reachable" for a window that is nowhere.
+#[test]
+fn a_placement_at_the_edge_of_the_coordinate_space_is_unreachable_not_a_panic() {
+    // Two displays, because that is the arrangement this whole feature is
+    // about -- and it is the second one, whose origin is not zero, that makes
+    // the subtraction overflow: `i32::MIN - 1920` has nowhere to go.
+    let screens = [
+        (
+            tauri::PhysicalPosition::new(0, 0),
+            tauri::PhysicalSize::new(1920u32, 1080u32),
+        ),
+        (
+            tauri::PhysicalPosition::new(1920, 0),
+            tauri::PhysicalSize::new(1920u32, 1080u32),
+        ),
+    ];
+    for (x, y) in [
+        (i32::MIN, 0),
+        (0, i32::MIN),
+        (i32::MIN, i32::MIN),
+        (i32::MAX, i32::MAX),
+    ] {
+        let placement = WindowPlacement {
+            position: tauri::PhysicalPosition::new(x, y),
+            size: tauri::PhysicalSize::new(1200u32, 800u32),
+        };
+        assert!(
+            !placement_is_reachable(&placement, &screens),
+            "({x}, {y}) is not on any display"
+        );
+    }
+    // The ordinary case still passes, so this is not vacuous.
+    let placement = WindowPlacement {
+        position: tauri::PhysicalPosition::new(100, 100),
+        size: tauri::PhysicalSize::new(1200u32, 800u32),
+    };
+    assert!(placement_is_reachable(&placement, &screens));
 }

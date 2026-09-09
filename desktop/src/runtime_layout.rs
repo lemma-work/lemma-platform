@@ -188,7 +188,9 @@ pub(crate) fn bundled_sibling(name: &str) -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn bundled_vz() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("LEMMA_DESKTOP_VZ_BIN")
+    // `dev_override` for the reason `locald_binary` gives: this names the
+    // helper that owns the virtual machine.
+    if let Some(path) = dev_override("LEMMA_DESKTOP_VZ_BIN")
         .map(PathBuf::from)
         .filter(|path| path.is_file())
     {
@@ -328,8 +330,13 @@ pub(crate) fn enriched_path() -> String {
 /// dev run — where `LEMMA_DESKTOP_LOCALD_BIN` overrides the sidecar — would
 /// reject the very daemon it had just started, forever.
 pub(crate) fn locald_binary() -> Option<PathBuf> {
-    std::env::var("LEMMA_DESKTOP_LOCALD_BIN")
-        .ok()
+    // Through `dev_override`, which is inert outside a development build. This
+    // read the environment directly, which made a signed, notarized Lemma
+    // start whichever `lemma-locald` its environment named -- a worse version
+    // of the redirection the three manifest variables are already gated
+    // against, because this one is the executable itself. Only
+    // `scripts/dev-local.sh` sets it.
+    dev_override("LEMMA_DESKTOP_LOCALD_BIN")
         .map(PathBuf::from)
         .filter(|p| p.exists())
         .or_else(bundled_locald)

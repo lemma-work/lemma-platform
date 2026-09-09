@@ -70,15 +70,10 @@ fn a_replaced_window_is_measured_before_it_is_destroyed() {
     // Asserted on the source for the same reason as the wait below: reaching
     // the real path needs a running event loop.
     let source = include_str!("../windowing.rs").replace("\r\n", "\n");
-    let body = {
-        let start = source
-            .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
-            .expect("rebuild_main_window_for_mode exists");
-        let end = source[start..]
-            .find("\nfn ")
-            .map_or(source.len(), |offset| start + offset);
-        &source[start..end]
-    };
+    let body = function_body(
+        &source,
+        "fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)",
+    );
 
     let measured = body
         .find("placement_of(&existing)")
@@ -218,15 +213,10 @@ fn the_window_swap_waits_between_destroying_and_rebuilding() {
     // Asserted on the source because reaching the real path needs a running
     // event loop; `wait_until_label_released` itself is tested above.
     let source = include_str!("../windowing.rs").replace("\r\n", "\n");
-    let body = {
-        let start = source
-            .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
-            .expect("rebuild_main_window_for_mode exists");
-        let end = source[start..]
-            .find("\nfn ")
-            .map_or(source.len(), |offset| start + offset);
-        &source[start..end]
-    };
+    let body = function_body(
+        &source,
+        "fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)",
+    );
 
     let destroy = body.find(".destroy()").expect("it destroys the old window");
     let first_build = body
@@ -309,13 +299,7 @@ fn explicit_new_windows_keep_the_browser_policy() {
 #[test]
 fn the_pod_app_window_can_download_what_an_app_offers() {
     let source = include_str!("../pod_windows.rs").replace("\r\n", "\n");
-    let start = source
-        .find("fn open_pod_app_window(")
-        .expect("the app window builder exists");
-    let end = source[start..]
-        .find("\nfn ")
-        .map_or(source.len(), |offset| start + offset);
-    let builder = &source[start..end];
+    let builder = function_body(&source, "fn open_pod_app_window(");
     assert!(
         builder.contains(".on_download("),
         "the app window registers no download policy, so downloads from an \

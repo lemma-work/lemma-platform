@@ -192,9 +192,13 @@ pub(crate) fn shipped_workspace_permissions() -> Vec<Value> {
 /// never reach further into the shell than a packaged one — nor, as it did,
 /// less far.
 pub(crate) fn overridden_workspace_capability() -> Option<String> {
+    // Through `dev_override`, so a signed release cannot be told to grant the
+    // shipped workspace's commands to an origin its environment names. Neither
+    // variable is set by anything but `scripts/dev-local.sh`.
     let configured = ["LEMMA_DESKTOP_HOSTED_URL", "LEMMA_DESKTOP_LOCAL_URL"]
         .into_iter()
-        .filter_map(|variable| std::env::var(variable).ok());
+        .filter_map(dev_override)
+        .filter_map(|value| value.into_string().ok());
     workspace_capability_for(configured)
 }
 

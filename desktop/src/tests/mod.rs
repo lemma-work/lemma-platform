@@ -57,6 +57,16 @@ fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
     &source[start..end]
 }
 
+/// A window of `characters` from the start of `text`.
+///
+/// Byte offsets are not character boundaries, and the sources these guards
+/// scan are prose as much as code -- em dashes, typographic quotes. A slice
+/// that lands inside one panics, and the guard then fails for a reason that
+/// has nothing to do with the property it asserts.
+fn head(text: &str, characters: usize) -> String {
+    text.chars().take(characters).collect()
+}
+
 /// Every guard's own source, so the guards can be checked.
 fn test_sources() -> Vec<(String, String)> {
     let files: Vec<std::path::PathBuf> = rust_files_under(&shell_source_directory())

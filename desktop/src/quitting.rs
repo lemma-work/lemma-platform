@@ -366,17 +366,16 @@ pub(crate) fn request_desktop_release() -> Result<(), String> {
         .map_err(|error| format!("could not request desktop release: {error}"))?;
 
     loop {
-        let mut line = String::new();
-        let bytes = connection
-            .reader
-            .read_line(&mut line)
-            .map_err(|error| format!("could not confirm desktop release: {error}"))?;
-        if bytes == 0 {
-            return Err("locald disconnected before confirming desktop release".into());
-        }
-        if line.len() > 1024 * 1024 {
-            return Err("locald desktop release response exceeded 1 MiB".into());
-        }
+        // Bounded as the bytes arrive, for the reason `bounded_line` gives:
+        // `read_line` allocated the whole line and only then let the 1 MiB
+        // check below look at it.
+        let line = match ipc_read::bounded_line(&mut connection.reader, 1024 * 1024) {
+            Ok(Some(line)) => line,
+            Ok(None) => return Err("locald disconnected before confirming desktop release".into()),
+            Err(error) => {
+                return Err(format!("could not confirm desktop release: {error}"));
+            }
+        };
         let Ok(event) = serde_json::from_str::<Value>(line.trim_end()) else {
             continue;
         };

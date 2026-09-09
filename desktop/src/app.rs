@@ -137,7 +137,7 @@ pub(crate) fn run() {
             });
 
             let initial_url = if mode == "hosted" {
-                WebviewUrl::External(hosted_url().parse().expect("valid hosted url"))
+                hosted_entry_url(&hosted_url())
             } else if let Some(target) = resume.as_ref() {
                 // Parseability was established by the filter above.
                 WebviewUrl::External(

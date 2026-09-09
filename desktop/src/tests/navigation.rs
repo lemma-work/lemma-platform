@@ -464,3 +464,45 @@ fn native_material_attributes_survive_navigation() {
     assert!(script.contains("if (d.vibrancy) root.setAttribute('data-desktop-vibrancy'"));
     assert!(script.contains("if (d.systemAccent) root.style.setProperty('--accent-rgb'"));
 }
+
+/// A return route that starts with a slash is not automatically relative.
+///
+/// The portal hands the decoded `redirect_uri` to `window.location.replace`,
+/// which resolves `//evil.example/x` against the *scheme* and not the origin
+/// -- so a protocol-relative value leaves the portal entirely. Backslash is
+/// the same door: browsers normalise `/\host` to `//host`.
+#[test]
+fn a_return_route_that_leaves_the_portal_is_replaced_with_the_root() {
+    let base = "http://lemma.localhost:63844";
+    for hostile in ["//evil.example/x", "/\\evil.example/x", "//evil.example"] {
+        let url = local_auth_url_returning_to(base, "signin", hostile);
+        assert!(
+            url.contains("redirect_uri=%2F&") || url.ends_with("redirect_uri=%2F"),
+            "{hostile} was kept as a return route: {url}"
+        );
+    }
+    // An ordinary relative route still survives.
+    let url = local_auth_url_returning_to(base, "signin", "/pods/abc");
+    assert!(url.contains("redirect_uri=%2Fpods%2Fabc"), "{url}");
+    // As does the fallback for anything not rooted at all.
+    let url = local_auth_url_returning_to(base, "signin", "pods/abc");
+    assert!(
+        url.contains("redirect_uri=%2F&") || url.ends_with("redirect_uri=%2F"),
+        "{url}"
+    );
+}
+
+/// A launch must not depend on an environment variable being well formed.
+#[test]
+fn an_unparseable_hosted_url_opens_the_splash_rather_than_aborting_setup() {
+    assert!(matches!(
+        hosted_entry_url("https://lemma.example.com"),
+        WebviewUrl::External(_)
+    ));
+    for malformed in ["", "not a url", "http://", ":://", "lemma.example.com"] {
+        assert!(
+            matches!(hosted_entry_url(malformed), WebviewUrl::App(_)),
+            "{malformed:?} has to fall back to the splash, not abort setup"
+        );
+    }
+}

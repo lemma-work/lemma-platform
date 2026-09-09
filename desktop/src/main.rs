@@ -63,7 +63,7 @@ use serde_json::{json, Value};
 use shell_paths::*;
 use stack_control::*;
 use state::*;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};

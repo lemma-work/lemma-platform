@@ -144,8 +144,14 @@ pub(crate) fn placement_is_reachable(
         let monitor_bottom = origin
             .y
             .saturating_add(i32::try_from(size.height).unwrap_or(i32::MAX));
-        let visible_width = right.min(monitor_right) - left.max(origin.x);
-        let visible_height = bar_bottom.min(monitor_bottom) - bar_top.max(origin.y);
+        // Saturating, like the additions above. A saved `x` of `i32::MIN` --
+        // and the config accepts any `i32` -- makes this subtraction overflow:
+        // a debug build panics during launch, and a release build wraps to a
+        // large positive number and calls an unreachable window visible.
+        let visible_width = right.min(monitor_right).saturating_sub(left.max(origin.x));
+        let visible_height = bar_bottom
+            .min(monitor_bottom)
+            .saturating_sub(bar_top.max(origin.y));
         visible_width >= GRABBABLE_WIDTH && visible_height >= GRABBABLE_HEIGHT
     })
 }
