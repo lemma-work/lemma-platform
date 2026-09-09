@@ -300,6 +300,13 @@ async def discover_operations_for_new_account(
     API key, a header or no auth at all -- which goes through `create_account`
     -- came up with zero tools every time.
 
+    Never raises. Both callers run it *after* the account is committed, so
+    anything escaping would report a failed connection for an account that
+    exists -- the worst of both answers. `discover_install_operations` already
+    swallows the discovery call itself, but the steps before it (the operation
+    read, the connector lookup, resolving a credential) did not, so the
+    boundary belongs here where both callers inherit it.
+
     Only when the install has none. The tool list belongs to the server, so
     re-running it for the second and later people to connect would re-ask the
     same question and answer it the same way.
@@ -307,14 +314,21 @@ async def discover_operations_for_new_account(
     repository = getattr(service, "auth_config_operation_repository", None)
     if repository is None:
         return
-    existing = await repository.list_by_auth_config(auth_config.id, limit=1)
-    if existing:
-        return
-    connector = await service.get_connector(auth_config.connector_id)
-    await discover_install_operations(
-        auth_config,
-        connector,
-        repository=repository,
-        uow=service.uow,
-        credentials=await discovery_credentials(service, auth_config),
-    )
+    try:
+        existing = await repository.list_by_auth_config(auth_config.id, limit=1)
+        if existing:
+            return
+        connector = await service.get_connector(auth_config.connector_id)
+        await discover_install_operations(
+            auth_config,
+            connector,
+            repository=repository,
+            uow=service.uow,
+            credentials=await discovery_credentials(service, auth_config),
+        )
+    except Exception:
+        logger.warning(
+            "connectors.install_provisioning.account_operation_discovery.degraded",
+            auth_config_id=str(auth_config.id),
+            exc_info=True,
+        )

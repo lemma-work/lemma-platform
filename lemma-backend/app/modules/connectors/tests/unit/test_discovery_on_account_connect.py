@@ -112,6 +112,37 @@ async def test_a_service_with_no_operation_store_does_nothing(discovery):
     assert discovery == []
 
 
+async def test_a_failure_never_reaches_the_caller(monkeypatch) -> None:
+    """Both callers run this after the account is committed, so anything
+    escaping would report a failed connection for an account that exists."""
+
+    async def _explode(*_args, **_kwargs):
+        raise RuntimeError("the server hung up")
+
+    monkeypatch.setattr(install_provisioning, "discovery_credentials", _explode)
+    service = _Service(_Repository(existing=[]))
+
+    await install_provisioning.discover_operations_for_new_account(
+        service, _auth_config()
+    )
+
+
+async def test_a_broken_operation_store_never_reaches_the_caller() -> None:
+    """The steps before the discovery call -- the operation read, the connector
+    lookup -- were outside the boundary that `discover_install_operations`
+    provides for itself."""
+
+    class _BrokenRepository(_Repository):
+        async def list_by_auth_config(self, auth_config_id, limit=None):
+            raise RuntimeError("the database went away")
+
+    service = _Service(_BrokenRepository())
+
+    await install_provisioning.discover_operations_for_new_account(
+        service, _auth_config()
+    )
+
+
 def test_creating_an_account_reaches_discovery() -> None:
     """The wiring itself, which is what was missing.
 
