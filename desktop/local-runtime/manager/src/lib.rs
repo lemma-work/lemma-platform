@@ -1691,6 +1691,16 @@ fi
 /// `cp -a` rather than a move: the source distribution is about to be deleted
 /// anyway on the upgrade path, and on the path where it is not, leaving the
 /// old copy in place costs disk and keeps a way back.
+///
+/// The container store is deliberately not among them, and this is not an
+/// oversight. `lemma-bind-data` discards a store whose recorded metadata
+/// generation is not the current one, and the old layout recorded none at all
+/// -- it predates that file -- so the store is rebuilt on the first start
+/// after the move whatever we do. Copying it first would move several
+/// gigabytes, measured at 3.6 GB on the machine this was written against, to
+/// delete them a second later. Images are re-pullable. What is not is named
+/// volumes and workspaces, and those come across: the generation reset clears
+/// nerdctl's container definitions and leaves `volumes` alone.
 #[cfg(any(windows, test))]
 const MIGRATE_DATA_INTO_HOLDER: &str = "\
 set -eu
@@ -1711,7 +1721,6 @@ copy_tree() {
   fi
 }
 copy_tree /var/lib/lemma \"$share/lemma\"
-copy_tree /var/lib/containerd \"$share/containerd\"
 copy_tree /var/lib/nerdctl \"$share/nerdctl\"
 copy_tree /etc/cni/net.d \"$share/cni/net.d\"
 chmod 0700 \"$share/lemma\"
@@ -2078,12 +2087,13 @@ mod tests {
         let marker = script
             .rfind(".lemma-data-holder")
             .expect("it writes the marker");
-        for tree in [
-            "/var/lib/lemma ",
-            "/var/lib/containerd ",
-            "/var/lib/nerdctl ",
-            "/etc/cni/net.d ",
-        ] {
+        assert!(
+            !script.contains("/var/lib/containerd"),
+            "the container store is rebuilt on the first start after the move \
+             whatever this does, so copying it moves gigabytes to delete them: \
+             {script}"
+        );
+        for tree in ["/var/lib/lemma ", "/var/lib/nerdctl ", "/etc/cni/net.d "] {
             let copy = script
                 .find(tree)
                 .unwrap_or_else(|| panic!("{tree} has to be carried across: {script}"));
