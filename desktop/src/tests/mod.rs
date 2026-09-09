@@ -15,6 +15,7 @@ mod quit;
 mod quit_prompt;
 mod runtime;
 mod splash;
+mod telemetry_privacy;
 mod update_install;
 mod window_placement;
 mod windows;
@@ -149,7 +150,7 @@ fn every_included_source_is_read_with_normalised_line_endings() {
     );
 }
 
-fn granted(name: &str) -> Vec<String> {
+pub(crate) fn granted(name: &str) -> Vec<String> {
     capability(name)["permissions"]
         .as_array()
         .expect("permissions array")

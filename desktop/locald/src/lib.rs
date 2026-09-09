@@ -16,7 +16,6 @@ pub mod reset;
 pub mod sharing;
 pub mod state;
 mod tcp_forwarder;
-pub mod telemetry;
 pub mod update_transaction;
 pub mod vault_process;
 
@@ -296,17 +295,7 @@ mod http_client_policy {
         // Assembled at compile time so this guard does not find itself: it
         // reads every file in the crate now, and this one is one of them.
         let builder = concat!("Client::", "builder()");
-        // The one client here that is not talking to the supervised stack.
-        // Telemetry posts to an ingestion host on the internet, which is
-        // exactly the traffic a system proxy exists to carry -- so it must
-        // *not* opt out. Named here because it was never in the list this
-        // rule used to read, and "not in the list" is not a decision anyone
-        // made.
-        const OUTBOUND: [&str; 1] = ["locald/src/telemetry.rs"];
         for (name, source) in &sources {
-            if OUTBOUND.contains(&name.as_str()) {
-                continue;
-            }
             for (offset, _) in source.match_indices(builder) {
                 // The builder chain runs until the `.build()` that ends it.
                 let rest = &source[offset..];
