@@ -266,7 +266,6 @@ function PodAssistantSurface({
   const assistant = useAIAssistant();
   const mentionPodId = assistant.conversationPodId || assistant.podContext?.pod?.id;
   const { data: usagePod } = usePod(mentionPodId || undefined);
-  const usageProfileScope = assistant.availableModels.find(model => model.id === assistant.conversationModel)?.profile?.scope;
   const usageOrganizationId = assistant.conversationOrganizationId !== undefined
     ? assistant.conversationOrganizationId
     : usagePod?.organization_id ?? assistant.podContext?.pod?.organization_id;
@@ -331,11 +330,9 @@ function PodAssistantSurface({
         composerTrailingControls={
           <ChatUsage
             organizationId={usageOrganizationId ?? undefined}
-            enabled={!mentionPodId || usageOrganizationId !== undefined}
             errorCode={assistant.errorReason === "configuration" ? null : assistant.errorCode}
             running={controller.isActiveConversationRunning}
             conversationId={controller.activeConversationId}
-            ownCredentials={usageProfileScope === "ORGANIZATION" || usageProfileScope === "PERSONAL"}
           />
         }
         showNewConversationButton={showNewConversationButton}

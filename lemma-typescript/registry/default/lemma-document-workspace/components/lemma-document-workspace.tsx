@@ -39,7 +39,6 @@ import {
   CheckSquare,
   Code2,
   Columns3,
-  Database,
   Download,
   ExternalLink,
   File,
@@ -49,7 +48,6 @@ import {
   Heading2,
   Image,
   Italic,
-  Link2,
   List,
   ListOrdered,
   MessageSquare,
@@ -1958,15 +1956,6 @@ function DocumentTableHandle() {
   )
 }
 
-function Grip({ className }: { className?: string }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <circle cx="9" cy="5" r="1" /><circle cx="9" cy="12" r="1" /><circle cx="9" cy="19" r="1" />
-      <circle cx="15" cy="5" r="1" /><circle cx="15" cy="12" r="1" /><circle cx="15" cy="19" r="1" />
-    </svg>
-  )
-}
-
 function getTableHandleState(editor: LemmaRichDocumentEditor) {
   return {
     addTableColumnBefore: {
@@ -2819,12 +2808,6 @@ function overlayClassName(appearance: LemmaDocumentWorkspaceAppearance, radius: 
   )
 }
 
-function chromePaddingClassName(density: LemmaDocumentWorkspaceDensity) {
-  if (density === "compact") return "px-4 py-2.5"
-  if (density === "spacious") return "px-6 py-4"
-  return "px-5 py-3"
-}
-
 function contentPaddingClassName(density: LemmaDocumentWorkspaceDensity) {
   if (density === "compact") return "px-4 pt-6 pb-10 md:px-8"
   if (density === "spacious") return "px-6 pt-10 pb-16 md:px-16"
@@ -2863,18 +2846,6 @@ function commandPaddingClassName(density: LemmaDocumentWorkspaceDensity) {
   if (density === "compact") return "p-2"
   if (density === "spacious") return "p-4"
   return "p-3"
-}
-
-function titleClassName(density: LemmaDocumentWorkspaceDensity) {
-  if (density === "compact") return "text-2xl"
-  if (density === "spacious") return "text-4xl"
-  return "text-[2rem]"
-}
-
-function summaryClassName(density: LemmaDocumentWorkspaceDensity) {
-  if (density === "compact") return "text-sm"
-  if (density === "spacious") return "text-base"
-  return "text-[15px]"
 }
 
 function radiusClassName(radius: LemmaDocumentWorkspaceRadius, target: "surface" | "control" | "overlay") {

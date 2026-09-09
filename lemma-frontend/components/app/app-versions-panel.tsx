@@ -27,8 +27,12 @@ interface AppVersionsPanelProps {
     appName: string | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
-    /** Show a release without promoting it. */
-    onPreview?: (release: AppRelease) => void;
+    /**
+     * Show a release without promoting it. Called only for a release that has a
+     * preview host, and handed that host — so the caller never has to decide
+     * what to do with a null `preview_url`.
+     */
+    onPreview?: (release: AppRelease, previewUrl: string) => void;
     /** The release currently being previewed, if any. */
     previewingReleaseNumber?: number | null;
     canPromote?: boolean;
@@ -100,6 +104,10 @@ export function AppVersionsPanel({
                     {(releases ?? []).map((release) => {
                         const isPruned = Boolean(release.pruned_at);
                         const isPreviewing = previewingReleaseNumber === release.release_number;
+                        // Bound to a const so the narrowing survives into the
+                        // click handler, which is what lets `onPreview` promise
+                        // its caller a URL rather than a maybe-URL.
+                        const previewUrl = release.preview_url;
                         return (
                             <li
                                 key={release.id}
@@ -139,13 +147,18 @@ export function AppVersionsPanel({
                                     </p>
                                 ) : (
                                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                                        {!release.is_live && onPreview ? (
+                                        {/* `preview_url` is null where the stack
+                                            serves no app host, so there is
+                                            nowhere to preview. Offering the
+                                            button anyway showed the live release
+                                            under a banner claiming otherwise. */}
+                                        {!release.is_live && onPreview && previewUrl ? (
                                             <Button
                                                 type="button"
                                                 variant="quiet"
                                                 size="sm"
                                                 className="h-7 gap-1.5 px-2 text-xs"
-                                                onClick={() => onPreview(release)}
+                                                onClick={() => onPreview(release, previewUrl)}
                                             >
                                                 <ExternalLink className="h-3.5 w-3.5" />
                                                 Preview

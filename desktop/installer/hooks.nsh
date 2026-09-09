@@ -42,7 +42,13 @@
       ; installation the user asked to remove, and saying so beats failing the
       ; uninstall over it.
       DetailPrint "Lemma's local data could not be removed automatically (code $0)."
-      DetailPrint "Run: wsl --list --quiet, then wsl --unregister <the LemmaRuntime entry>"
+      ; Both entries. The data lives in the second one now -- the runtime
+      ; distribution is replaced wholesale by every upgrade, so nothing that
+      ; must survive one is kept there -- and naming only the first would tell
+      ; somebody following this by hand to delete the disposable half and keep
+      ; the several gigabytes they were trying to remove.
+      DetailPrint "Run: wsl --list --quiet, then wsl --unregister on each Lemma entry"
+      DetailPrint "  (LemmaRuntime, and LemmaRuntimeData which holds the data)"
     ${EndIf}
   ${EndIf}
 !macroend

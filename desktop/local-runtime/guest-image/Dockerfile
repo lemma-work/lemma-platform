@@ -61,6 +61,8 @@ COPY rootfs-overlay/ /
 RUN chmod 0755 \
         /usr/local/bin/lemma-guestd \
         /usr/local/bin/lemma-mount-data \
+        /usr/local/bin/lemma-bind-data \
+        /usr/local/bin/lemma-data-unavailable \
         /usr/local/bin/lemma-set-host-time \
         /usr/local/bin/lemma-runtime-guest-service \
         /usr/local/bin/lemma-runtime-init \
