@@ -3581,7 +3581,7 @@ mod tests {
         // Every source file in this crate, not just this one. Both rounds of
         // Windows failures were in here, but the next one need not be -- and a
         // lint that only reads its own file is a lint that moves the problem.
-        let sources: [(&str, String); 6] = [
+        let sources: [(&str, String); 16] = [
             (
                 "host_process.rs",
                 include_str!("host_process.rs").replace("\r\n", "\n"),
@@ -3590,7 +3590,50 @@ mod tests {
                 "agent_host.rs",
                 include_str!("agent_host.rs").replace("\r\n", "\n"),
             ),
-            ("daemon.rs", include_str!("daemon.rs").replace("\r\n", "\n")),
+            (
+                "daemon/agent_host_ops.rs",
+                include_str!("daemon/agent_host_ops.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/config_ops.rs",
+                include_str!("daemon/config_ops.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/dispatch.rs",
+                include_str!("daemon/dispatch.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/environment.rs",
+                include_str!("daemon/environment.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/mod.rs",
+                include_str!("daemon/mod.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/monitors.rs",
+                include_str!("daemon/monitors.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/reset_ops.rs",
+                include_str!("daemon/reset_ops.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/sharing_ops.rs",
+                include_str!("daemon/sharing_ops.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/stack_ops.rs",
+                include_str!("daemon/stack_ops.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/supervisor.rs",
+                include_str!("daemon/supervisor.rs").replace("\r\n", "\n"),
+            ),
+            (
+                "daemon/tests.rs",
+                include_str!("daemon/tests.rs").replace("\r\n", "\n"),
+            ),
             (
                 "sharing.rs",
                 include_str!("sharing.rs").replace("\r\n", "\n"),

@@ -23,7 +23,7 @@ SHELL := /bin/bash
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
         desktop-lint desktop-guestd desktop-check-windows desktop-check \
         desktop-host-pack desktop-host-pack-check \
-        desktop-concepts desktop-concepts-check \
+        desktop-concepts desktop-concepts-check desktop-file-size \
         desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents desktop-agent-host-e2e desktop-agent-host-browser-e2e \
         desktop-verify-guest desktop-clean \
         version-check local-domain-check local-auth-gate-check script-portability-check \
@@ -1062,9 +1062,15 @@ desktop-host-pack-check:
 # Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
 # They need release certificates, so they cannot run on a contributor's machine
 # -- `make desktop-dmg` is the local approximation.
-desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows desktop-test-browser
+desktop-check: desktop-fmt desktop-concepts-check desktop-file-size desktop-lint desktop-test desktop-check-windows desktop-test-browser
 	@echo ""
-	@echo "  ✓ desktop: fmt, concepts, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
+	@echo "  ✓ desktop: fmt, concepts, file size, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
+
+# DES-09 reaches the desktop crates. `check_architecture.py` reads Python only,
+# which is how main.rs got to 11,297 lines with nothing objecting.
+desktop-file-size:
+	@echo "→ Rust file size (DES-09)…"
+	@python3 desktop/scripts/check_file_size.py
 
 .PHONY: desktop-test-browser
 desktop-test-browser:

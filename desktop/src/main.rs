@@ -9712,18 +9712,39 @@ mod tests {
     /// hole until this test names it.
     #[test]
     fn every_daemon_redirect_variable_is_stripped_from_a_release_build() {
-        let sources = [
-            include_str!("../locald/src/agent_host.rs"),
-            include_str!("../locald/src/daemon.rs"),
-            include_str!("../locald/src/native_host_pack.rs"),
-            include_str!("../locald/src/managed_runtime.rs"),
-            include_str!("../locald/src/paths.rs"),
-            include_str!("../local-runtime/manager/src/lib.rs"),
-        ];
+        // The daemon is a directory, and it is read from disk rather than
+        // named file by file. Enumerating its modules here would reintroduce
+        // exactly the maintained list this test exists to replace: a module
+        // added there would be compile-time green and review-invisible, which
+        // is how the first three variables went missing.
+        let daemon = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locald/src/daemon");
+        let mut sources: Vec<String> = std::fs::read_dir(&daemon)
+            .expect("locald's daemon module directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
+            .map(|path| std::fs::read_to_string(&path).expect("a daemon module"))
+            .collect();
+        assert!(
+            sources.len() > 1,
+            "the daemon is a directory of modules; reading one file means the \
+             scan is looking at a fraction of it"
+        );
+        sources.extend(
+            [
+                include_str!("../locald/src/agent_host.rs"),
+                include_str!("../locald/src/native_host_pack.rs"),
+                include_str!("../locald/src/managed_runtime.rs"),
+                include_str!("../locald/src/paths.rs"),
+                include_str!("../local-runtime/manager/src/lib.rs"),
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
 
         let mut read_by_the_daemon = std::collections::BTreeSet::new();
-        for source in sources {
-            let mut rest = source;
+        for source in &sources {
+            let mut rest = source.as_str();
             while let Some(at) = rest.find("LEMMA_") {
                 let tail = &rest[at..];
                 let end = tail

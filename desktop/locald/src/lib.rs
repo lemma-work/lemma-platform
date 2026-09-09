@@ -100,8 +100,67 @@ pub(crate) fn join_before<T>(
     panic!("{what} never finished; it is still blocked on the socket");
 }
 
+/// Every file the daemon was split into.
+///
+/// `daemon.rs` was one 3,261-line file, and three guards below scanned it
+/// by name. It is a directory now. A guard still naming the old file would
+/// have failed to compile, which is the good case; one updated to name a
+/// single new file would have gone on passing while checking a fraction of
+/// what it used to. So the list lives once, and the test under it fails if
+/// a module is added to the directory without being added here.
+#[cfg(test)]
+const DAEMON_SOURCES: &[(&str, &str)] = &[
+    (
+        "daemon/agent_host_ops.rs",
+        include_str!("daemon/agent_host_ops.rs"),
+    ),
+    ("daemon/config_ops.rs", include_str!("daemon/config_ops.rs")),
+    ("daemon/dispatch.rs", include_str!("daemon/dispatch.rs")),
+    (
+        "daemon/environment.rs",
+        include_str!("daemon/environment.rs"),
+    ),
+    ("daemon/mod.rs", include_str!("daemon/mod.rs")),
+    ("daemon/monitors.rs", include_str!("daemon/monitors.rs")),
+    ("daemon/reset_ops.rs", include_str!("daemon/reset_ops.rs")),
+    (
+        "daemon/sharing_ops.rs",
+        include_str!("daemon/sharing_ops.rs"),
+    ),
+    ("daemon/stack_ops.rs", include_str!("daemon/stack_ops.rs")),
+    ("daemon/supervisor.rs", include_str!("daemon/supervisor.rs")),
+    ("daemon/tests.rs", include_str!("daemon/tests.rs")),
+];
+
+/// A daemon module nobody scans is a rule nobody enforces.
+#[cfg(test)]
+#[test]
+fn every_daemon_source_is_scanned() {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/daemon");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&directory)
+        .expect("the daemon module directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".rs"))
+        .map(|name| format!("daemon/{name}"))
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = DAEMON_SOURCES
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    listed.sort();
+    assert_eq!(
+        on_disk, listed,
+        "every file under src/daemon has to be in DAEMON_SOURCES, or the \
+         guards that scan the daemon silently stop covering it"
+    );
+}
+
 #[cfg(test)]
 mod doc_comment_policy {
+    use super::DAEMON_SOURCES;
+
     /// An indented block in a doc comment is a *Rust* code block.
     ///
     /// rustdoc treats four spaces after `///` as code and tries to compile it,
@@ -114,9 +173,8 @@ mod doc_comment_policy {
     /// where it costs seconds, rather than on a push.
     #[test]
     fn no_doc_comment_quotes_prose_as_an_indented_code_block() {
-        const SOURCES: [(&str, &str); 4] = [
+        let sources: Vec<(&str, &str)> = [
             ("locald/src/lib.rs", include_str!("lib.rs")),
-            ("locald/src/daemon.rs", include_str!("daemon.rs")),
             (
                 "locald/src/host_process.rs",
                 include_str!("host_process.rs"),
@@ -125,10 +183,13 @@ mod doc_comment_policy {
                 "local-runtime/guestd/src/lib.rs",
                 include_str!("../../local-runtime/guestd/src/lib.rs"),
             ),
-        ];
+        ]
+        .into_iter()
+        .chain(DAEMON_SOURCES.iter().copied())
+        .collect();
 
         let mut offenders = Vec::new();
-        for (name, source) in SOURCES {
+        for (name, source) in sources {
             let mut fenced = false;
             for (number, line) in source.replace("\r\n", "\n").lines().enumerate() {
                 let Some(doc) = line.trim_start().strip_prefix("///") else {
@@ -199,6 +260,8 @@ mod join_within_policy {
 
 #[cfg(test)]
 mod http_client_policy {
+    use super::DAEMON_SOURCES;
+
     /// Every HTTP client locald builds must opt out of the system proxy.
     ///
     /// locald only ever talks to the stack it is itself supervising: the
@@ -217,8 +280,7 @@ mod http_client_policy {
     /// So this does.
     #[test]
     fn every_client_locald_builds_opts_out_of_the_system_proxy() {
-        const SOURCES: &[(&str, &str)] = &[
-            ("daemon.rs", include_str!("daemon.rs")),
+        let sources: Vec<(&str, &str)> = [
             ("sharing.rs", include_str!("sharing.rs")),
             ("provider_probe.rs", include_str!("provider_probe.rs")),
             ("agent_host.rs", include_str!("agent_host.rs")),
@@ -227,9 +289,12 @@ mod http_client_policy {
             ("network.rs", include_str!("network.rs")),
             ("operator_config.rs", include_str!("operator_config.rs")),
             ("managed_runtime.rs", include_str!("managed_runtime.rs")),
-        ];
+        ]
+        .into_iter()
+        .chain(DAEMON_SOURCES.iter().copied())
+        .collect();
 
-        for (name, source) in SOURCES {
+        for (name, source) in sources {
             for (offset, _) in source.match_indices("Client::builder()") {
                 // The builder chain runs until the `.build()` that ends it.
                 let rest = &source[offset..];
@@ -247,6 +312,8 @@ mod http_client_policy {
 
 #[cfg(test)]
 mod console_window_policy {
+    use super::DAEMON_SOURCES;
+
     /// Nothing locald spawns may open a console window.
     ///
     /// locald is started by a GUI app that has no console of its own, and every
@@ -260,15 +327,17 @@ mod console_window_policy {
     /// Windows at all.
     #[test]
     fn every_spawned_command_suppresses_its_console_window() {
-        const SOURCES: &[(&str, &str)] = &[
+        let sources: Vec<(&str, &str)> = [
             ("agent_host.rs", include_str!("agent_host.rs")),
-            ("daemon.rs", include_str!("daemon.rs")),
             ("host_process.rs", include_str!("host_process.rs")),
             ("managed_runtime.rs", include_str!("managed_runtime.rs")),
             ("sharing.rs", include_str!("sharing.rs")),
-        ];
+        ]
+        .into_iter()
+        .chain(DAEMON_SOURCES.iter().copied())
+        .collect();
 
-        for (name, source) in SOURCES {
+        for (name, source) in sources {
             for (offset, _) in source.match_indices("Command::new(") {
                 let rest = &source[offset..];
                 if rest["Command::new(".len()..].starts_with("\"/") {
