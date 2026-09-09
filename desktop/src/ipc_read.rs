@@ -1,5 +1,5 @@
 //! Bounded framing for an untrusted or stale daemon's replies.
-use std::io::{self, Read};
+use std::io::{self, BufRead, Read};
 use std::time::{Duration, Instant};
 
 pub fn response(
@@ -37,6 +37,40 @@ pub fn response(
             Some(_) => return Ok(event),
         }
     }
+}
+
+/// One line, with the cap applied while the bytes arrive.
+///
+/// `BufRead::lines()` and `read_line` both allocate the whole line and only
+/// then can anything measure it, so a daemon that sent a gigabyte without a
+/// newline made this process allocate a gigabyte before the check could
+/// object. The limit belongs to the reader: past it there is no framing left
+/// to trust, so this reports and the caller drops the connection.
+///
+/// `Ok(None)` is a clean end of stream.
+pub fn bounded_line(reader: &mut impl io::BufRead, limit: usize) -> io::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    // Saturating: `limit as u64 + 1` overflows at `usize::MAX`, and a wrapped
+    // `take(0)` reads nothing and reports a clean end of stream instead.
+    let read = reader
+        .take((limit as u64).saturating_add(1))
+        .read_until(b'\n', &mut bytes)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if bytes.last() != Some(&b'\n') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "daemon message exceeded its size limit",
+        ));
+    }
+    bytes.pop();
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 pub fn handshake_line(

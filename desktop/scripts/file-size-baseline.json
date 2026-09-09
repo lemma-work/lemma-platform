@@ -1,0 +1,20 @@
+{
+  "desktop/agent-host/src/acp.rs": 2564,
+  "desktop/agent-host/src/adapters.rs": 1595,
+  "desktop/agent-host/src/journal.rs": 2093,
+  "desktop/agent-host/src/main.rs": 635,
+  "desktop/agent-host/src/mcp_bridge.rs": 619,
+  "desktop/agent-host/src/permissions.rs": 642,
+  "desktop/agent-host/src/runtime.rs": 5126,
+  "desktop/agent-host/tests/lemma_mcp_e2e.rs": 699,
+  "desktop/agent-host/tests/real_harness_e2e.rs": 1202,
+  "desktop/agent-host/tests/support/mod.rs": 1417,
+  "desktop/local-runtime/guestd/src/lib.rs": 6257,
+  "desktop/local-runtime/manager/src/lib.rs": 2850,
+  "desktop/locald/src/agent_host.rs": 1564,
+  "desktop/locald/src/host_process.rs": 4688,
+  "desktop/locald/src/managed_runtime.rs": 2239,
+  "desktop/locald/src/native_host_pack.rs": 1968,
+  "desktop/locald/src/operator_config.rs": 2423,
+  "desktop/locald/src/sharing.rs": 2254
+}
