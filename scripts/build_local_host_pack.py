@@ -281,6 +281,40 @@ def prune_python_runtime(python_root: Path) -> None:
                 continue
             for tests in sorted(root.rglob("tests"), reverse=True):
                 shutil.rmtree(tests, ignore_errors=True)
+        prune_unused_twilio_domains(site_packages)
+
+
+def prune_unused_twilio_domains(site_packages: Path) -> None:
+    """Drop the Twilio REST domains, which this product never calls.
+
+    Twilio is here by accident of the dependency graph. Nothing in `app`
+    imports it; `supertokens_python` does, at module level, so that its
+    passwordless recipe can deliver a one-time code by SMS -- a feature Lemma
+    does not enable. The package cannot simply be removed, because that
+    module-level `from twilio.rest import Client` would then fail at import.
+
+    Its `rest/` tree can. Every domain under it is imported lazily: the
+    top-level names in `twilio/rest/__init__.py` are under `TYPE_CHECKING`, and
+    `Client.api` runs `from twilio.rest.api import Api` only when something
+    reaches for it. Nothing does.
+
+    What this buys is the Windows path budget below. `twilio/rest/api/v2010/
+    account/sip/domain/auth_types/auth_type_registrations/` is a directory tree
+    describing an API nobody here calls, and a source file inside it sat nine
+    characters past the limit -- which fails the build, correctly, because a
+    source file Windows cannot open is a backend that cannot import a module
+    sitting in its own directory listing.
+
+    Verified rather than assumed: with all 39 domain trees removed,
+    `from twilio.rest import Client` and the SuperTokens SMS delivery types
+    both still import.
+    """
+    rest = site_packages / "twilio" / "rest"
+    if not rest.is_dir():
+        return
+    for domain in sorted(rest.iterdir()):
+        if domain.is_dir():
+            shutil.rmtree(domain, ignore_errors=True)
 
 
 # How long a path inside the pack may be, measured from the pack's own root.
