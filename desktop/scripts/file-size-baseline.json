@@ -11,7 +11,5 @@
   "desktop/agent-host/tests/support/mod.rs": 1417,
   "desktop/locald/src/agent_host.rs": 1564,
   "desktop/locald/src/managed_runtime.rs": 2239,
-  "desktop/locald/src/native_host_pack.rs": 1968,
-  "desktop/locald/src/operator_config.rs": 2423,
-  "desktop/locald/src/sharing.rs": 2254
+  "desktop/locald/src/native_host_pack.rs": 1968
 }

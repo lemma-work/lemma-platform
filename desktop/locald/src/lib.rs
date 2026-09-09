@@ -152,7 +152,10 @@ fn a_module_one_directory_deeper_is_still_read() {
     assert_eq!(
         rust_sources(root.path(), "locald/src"),
         vec![
-            ("locald/src/nested/inner.rs".to_string(), "inner".to_string()),
+            (
+                "locald/src/nested/inner.rs".to_string(),
+                "inner".to_string()
+            ),
             ("locald/src/top.rs".to_string(), "top".to_string()),
         ],
     );
