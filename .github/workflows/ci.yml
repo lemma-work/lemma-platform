@@ -815,6 +815,22 @@ jobs:
             lemma-frontend/package-lock.json
             desktop/ui-tests/package-lock.json
 
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
+
       - name: Install chat UI test dependencies
         run: |
           npm ci --prefix lemma-typescript
@@ -976,6 +992,22 @@ jobs:
 
       - name: Guest boot tooling tests
         run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       - name: Settings behavior tests
         working-directory: desktop/ui-tests
@@ -1324,6 +1356,22 @@ jobs:
 
       - name: Guest packaging tests
         run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       - name: Settings behavior tests
         working-directory: desktop/ui-tests
