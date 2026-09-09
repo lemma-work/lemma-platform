@@ -89,10 +89,12 @@ mod monitors;
 mod reset_ops;
 mod sharing_ops;
 mod stack_ops;
+mod startup_state;
 mod supervisor;
 
 use dispatch::{error_diagnostic_source, runtime_operation_error_code};
 use environment::{compose_backend_environment, sharing_environment, validate_canonical_origin};
+use startup_state::remember_derived_origin;
 use supervisor::{executable_stamp, prepare_compatibility_host_manifest};
 
 impl Daemon {
@@ -149,7 +151,7 @@ impl Daemon {
                     "http://{}:{backend_port}",
                     crate::local_domain::LocalDomain::from_env().frontend_host()
                 );
-                state.persist(&paths.state)?;
+                remember_derived_origin(&state, &paths.state, &mut healed);
             }
         }
         let managed_runtime = host_processes
