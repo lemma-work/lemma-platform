@@ -211,9 +211,10 @@ fn every_agent_host_command_checks_its_caller() {
         unchecked.is_empty(),
         "these Agent Host commands do not check their caller: {unchecked:?}",
     );
-    // Not vacuous: there are seven of them.
-    let checked = source
-        .matches("require_agent_host_caller(&window, &app)?")
-        .count();
-    assert!(checked >= 7, "only {checked} commands check their caller");
+    // Not vacuous: there are eight commands in this module.
+    let commands = source.matches("#[tauri::command").count();
+    assert!(
+        commands >= 8,
+        "only {commands} commands were found to check"
+    );
 }

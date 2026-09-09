@@ -50,8 +50,10 @@ pub fn response(
 /// `Ok(None)` is a clean end of stream.
 pub fn bounded_line(reader: &mut impl io::BufRead, limit: usize) -> io::Result<Option<String>> {
     let mut bytes = Vec::new();
+    // Saturating: `limit as u64 + 1` overflows at `usize::MAX`, and a wrapped
+    // `take(0)` reads nothing and reports a clean end of stream instead.
     let read = reader
-        .take(limit as u64 + 1)
+        .take((limit as u64).saturating_add(1))
         .read_until(b'\n', &mut bytes)?;
     if read == 0 {
         return Ok(None);

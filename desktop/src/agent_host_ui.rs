@@ -303,10 +303,16 @@ pub(crate) async fn agent_host_action(
 /// Read straight out of the shell's own state, which locald has already
 /// pushed to: no daemon round trip, so the workspace can poll it while the
 /// download is running without paying for a socket each time.
-pub(crate) fn sandbox_image_status(_window: Webview, app: AppHandle) -> Value {
+pub(crate) fn sandbox_image_status(window: Webview, app: AppHandle) -> Result<Value, String> {
+    // Checked like every other command in this module. It reads nothing
+    // sensitive -- a download's state and its detail line -- but "not
+    // sensitive" is not a reason to be the one command in the Agent Host's
+    // surface that does not ask who is calling. The workspace page already
+    // catches a refusal and retries on its next tick.
+    require_agent_host_caller(&window, &app)?;
     let shell: State<Shell> = app.state();
     let ui = shell.ui.lock().unwrap();
-    json!({
+    Ok(json!({
         // `pending`, not the empty default, when locald has not said anything
         // yet. The workspace stops asking once the answer can no longer change,
         // and it reads a state it does not recognise as one of those -- so an
@@ -318,7 +324,7 @@ pub(crate) fn sandbox_image_status(_window: Webview, app: AppHandle) -> Value {
             ui.sandbox_images.as_str()
         },
         "detail": ui.sandbox_images_detail,
-    })
+    }))
 }
 
 #[tauri::command]

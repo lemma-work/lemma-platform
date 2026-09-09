@@ -216,6 +216,14 @@ fn a_line_without_an_end_is_refused_rather_than_buffered() {
         Some("x".repeat(1024))
     );
 
+    // A limit at the top of `usize` must not wrap the cap to zero, which
+    // would turn every message into a clean end of stream.
+    let mut reader = BufReader::new("one\n".as_bytes());
+    assert_eq!(
+        ipc_read::bounded_line(&mut reader, usize::MAX).unwrap(),
+        Some("one".into())
+    );
+
     // Several messages on one connection, and a clean end of stream after.
     let mut reader = BufReader::new("one\ntwo\r\n".as_bytes());
     assert_eq!(
