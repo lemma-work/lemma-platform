@@ -389,7 +389,7 @@ impl HostProcessManager {
         let installation_id = load_or_create_installation_id(state_root)?;
         let process_ledger_path = state_root.join("processes.json");
         reclaim_verified_processes(&process_ledger_path, &installation_id, &manifest)?;
-        let idle_port_reservations = reserve_managed_app_ports(&manifest)?;
+        let idle_port_reservations = reserve_managed_app_ports(&manifest);
         #[cfg(windows)]
         let windows_job = create_windows_job()?;
         let manager = Arc::new(Self {
@@ -974,10 +974,19 @@ impl HostProcessManager {
                 first_error.get_or_insert(error);
             }
         }
+        // Re-taking the ports is a courtesy to the next start, not part of
+        // stopping, and it routinely cannot be done. A service that has served
+        // even one connection leaves TIME_WAIT entries on its port, and a
+        // reservation deliberately sets no SO_REUSEADDR, so the bind is
+        // refused for a minute or two after the process is gone -- and the
+        // backend has always served locald's own health gate.
+        //
+        // Reported as a stop failure, that turned every Stop into "could not
+        // reserve Lemma's local port 53782: Address already in use" from a
+        // Stop that had in fact stopped everything. Seen on macOS, from the
+        // installed app, on the first stop that followed a real session.
         if first_error.is_none() {
-            if let Err(error) = self.reserve_idle_ports() {
-                first_error = Some(error);
-            }
+            let _ = self.reserve_idle_ports();
         }
         if let Some(error) = first_error {
             Err(error)
@@ -1262,17 +1271,13 @@ impl HostProcessManager {
             .idle_port_reservations
             .lock()
             .expect("idle port reservation lock poisoned");
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            reservations.entry(runtime.ports.backend)
-        {
-            let listener = bind_idle_port(runtime.ports.backend)?;
-            entry.insert(listener);
-        }
-        if let std::collections::hash_map::Entry::Vacant(entry) =
-            reservations.entry(runtime.ports.frontend)
-        {
-            let listener = bind_idle_port(runtime.ports.frontend)?;
-            entry.insert(listener);
+        for port in [runtime.ports.backend, runtime.ports.frontend] {
+            if let std::collections::hash_map::Entry::Vacant(entry) = reservations.entry(port) {
+                // Best effort, for the reasons on `reserve_managed_app_ports`.
+                if let Ok(reservation) = bind_idle_port(port) {
+                    entry.insert(reservation);
+                }
+            }
         }
         Ok(())
     }
@@ -2030,17 +2035,29 @@ fn random_generation() -> io::Result<String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn reserve_managed_app_ports(
-    manifest: &HostPackManifest,
-) -> io::Result<HashMap<u16, PortReservation>> {
+/// Hold the workspace ports, as far as that is possible.
+///
+/// Best effort, and deliberately so. A reservation closes the window between
+/// "the manifest says port N" and "the service binds port N"; a port it cannot
+/// take is a window left open, which is worse than it was and still far better
+/// than refusing to run. And the usual reason it cannot be taken is not a
+/// competitor at all: a service that served even one connection leaves
+/// TIME_WAIT entries on its port, which a reservation cannot bind past because
+/// it sets no SO_REUSEADDR -- while the service itself binds straight through
+/// them. Treating that as fatal made starting again shortly after stopping
+/// fail with "could not reserve Lemma's local port", for a port that was in
+/// every practical sense free.
+fn reserve_managed_app_ports(manifest: &HostPackManifest) -> HashMap<u16, PortReservation> {
     let Some(runtime) = manifest.managed_runtime.as_ref() else {
-        return Ok(HashMap::new());
+        return HashMap::new();
     };
     let mut reservations = HashMap::new();
     for port in [runtime.ports.backend, runtime.ports.frontend] {
-        reservations.insert(port, bind_idle_port(port)?);
+        if let Ok(reservation) = bind_idle_port(port) {
+            reservations.insert(port, reservation);
+        }
     }
-    Ok(reservations)
+    reservations
 }
 
 /// Hold a workspace port while nothing is serving it.
@@ -2637,16 +2654,10 @@ mod tests {
         drop(probe);
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
 
-        // What holding it used to do.
-        let listening = TcpListener::bind(address).unwrap();
-        assert!(
-            TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok(),
-            "a listening socket nobody accepts on still completes the handshake, \
-             which is what turned 'the backend is not running' into a timeout"
-        );
-        drop(listening);
-
-        // What it does now.
+        // What it does now. First, because a completed connection leaves the
+        // port in TIME_WAIT, and a reservation deliberately sets no
+        // SO_REUSEADDR -- so demonstrating the old behaviour first would make
+        // this half fail to bind for a reason that is not the point.
         let held = bind_idle_port(port).expect("the port is free to hold");
         assert!(
             TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err(),
@@ -2656,6 +2667,15 @@ mod tests {
         // And it really is held: nothing else could take it meanwhile.
         assert!(TcpListener::bind(address).is_err());
         drop(held);
+
+        // What holding it used to do.
+        let listening = TcpListener::bind(address).unwrap();
+        assert!(
+            TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok(),
+            "a listening socket nobody accepts on still completes the handshake, \
+             which is what turned 'the backend is not running' into a timeout"
+        );
+        drop(listening);
     }
     use std::net::{Ipv4Addr, TcpListener};
     use tempfile::{tempdir, TempDir};
@@ -2734,6 +2754,29 @@ mod tests {
         writer.write_all(b"after").unwrap();
         writer.flush().unwrap();
         assert_eq!(path.metadata().unwrap().len(), 5);
+    }
+
+    fn managed_runtime_spec(backend: u16, frontend: u16) -> ManagedRuntimeSpec {
+        ManagedRuntimeSpec {
+            images: ManagedRuntimeImages {
+                postgres: "postgres@sha256:test".into(),
+                redis: "redis@sha256:test".into(),
+                supertokens: "supertokens@sha256:test".into(),
+                workspace: None,
+                function: None,
+            },
+            credentials: ManagedRuntimeCredentials {
+                postgres_password: "a".repeat(64),
+                redis_password: "b".repeat(64),
+            },
+            ports: ManagedRuntimePorts {
+                postgres: 55432,
+                redis: 56379,
+                supertokens: 53567,
+                backend,
+                frontend,
+            },
+        }
     }
 
     fn manifest(services: Vec<HostProcessSpec>) -> HostPackManifest {
@@ -3699,6 +3742,39 @@ mod tests {
         assert!(child.try_wait().unwrap().is_none());
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+
+    /// Stopping reported a failure for a stop that had worked.
+    ///
+    /// The last thing `stop_all` does is re-reserve the workspace ports for
+    /// the next start. That bind is refused whenever anything still holds the
+    /// port -- and a service that served even one connection leaves TIME_WAIT
+    /// entries behind it, which a reservation cannot bind past because it sets
+    /// no SO_REUSEADDR. The backend always serves locald's own health gate, so
+    /// this was every stop that followed a real session: seen on macOS from
+    /// the installed app as "could not reserve Lemma's local port 53782:
+    /// Address already in use", from a Stop that had stopped everything.
+    #[test]
+    fn a_stop_that_cannot_retake_the_ports_is_still_a_stop() {
+        let root = tempdir().unwrap();
+        // Stands in for the TIME_WAIT the real backend leaves on its port:
+        // both refuse the reservation's bind, for the same reason.
+        let squatter = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = squatter.local_addr().unwrap().port();
+
+        let mut value = manifest(vec![
+            service("backend", &[]),
+            service("frontend", &["backend"]),
+        ]);
+        value.managed_runtime = Some(managed_runtime_spec(taken, taken));
+        // Nothing is started, so the setup command is never run: stopping is
+        // the whole subject, and it must survive a port it cannot retake.
+        let manager = manager_in(&root, value);
+
+        manager
+            .stop_all()
+            .expect("a port nobody could retake must not fail the stop");
+        assert!(manager.status().iter().all(|service| !service.running));
     }
 
     #[cfg(unix)]

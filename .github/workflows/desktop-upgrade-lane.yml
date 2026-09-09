@@ -57,6 +57,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # This lane installs to `/Applications` and writes into the *real*
+      # `~/Library/Application Support/Lemma`, deliberately -- an upgrade that
+      # is not tested against the directory it must preserve tests nothing.
+      # That is safe on the ephemeral `macos-14` runner above and ruinous
+      # anywhere else, because the cleanup at the end deletes both. A
+      # self-hosted runner, or this workflow copied onto one, would lose a real
+      # installation's pods and secrets. So: refuse rather than assume, and
+      # only arm the cleanup once there was demonstrably nothing here to lose.
+      - name: Refuse to run where an installation already lives
+        id: preflight
+        run: |
+          set -uo pipefail
+          found=""
+          for path in /Applications/Lemma*.app "${HOME}/Library/Application Support/Lemma"; do
+            [ -e "${path}" ] && found="${found}  ${path}"$'\n'
+          done
+          if [ -n "${found}" ]; then
+            echo "::error::this lane deletes what it installs, and it found an existing installation to delete:"
+            printf '%s' "${found}"
+            echo "::error::run it on an ephemeral macOS runner, not on a machine anybody uses"
+            exit 1
+          fi
+          echo "clear=yes" >> "${GITHUB_OUTPUT}"
+
       - name: Install the earlier build
         env:
           FROM_URL: ${{ inputs.from_url }}
@@ -143,8 +167,11 @@ jobs:
             || { echo "::error::the update rewrote data it should not touch"; exit 1; }
           echo "data directory survived the update unchanged"
 
+      # Only when the preflight proved there was nothing here beforehand.
+      # `always()` on its own would run this after the preflight *failed*,
+      # which is precisely the case where the paths below are somebody's.
       - name: Leave the runner as it was found
-        if: always()
+        if: always() && steps.preflight.outputs.clear == 'yes'
         run: |
           set -uo pipefail
           rm -rf "${APP:-}" "${HOME}/Library/Application Support/Lemma"

@@ -15,7 +15,12 @@ export interface AppRelease {
     has_source: boolean;
     /** Set once retention removed this release's build. */
     pruned_at?: string | null;
-    preview_url: string;
+    /**
+     * Null on a stack that serves no app host of its own — Desktop, or a tunnel
+     * sharing one origin. There is nowhere to preview a release there, so the
+     * caller must check this rather than assume a URL.
+     */
+    preview_url: string | null;
 }
 
 export const appReleasesQueryKey = (podId: string, appName: string) =>

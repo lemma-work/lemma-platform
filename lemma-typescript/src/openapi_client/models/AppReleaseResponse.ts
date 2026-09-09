@@ -19,7 +19,7 @@ export type AppReleaseResponse = {
      */
     is_live: boolean;
     label?: (string | null);
-    readonly preview_url: string;
+    readonly preview_url: (string | null);
     /**
      * Set when retention removed this release's build. The entry stays in the history, but it can no longer be previewed or promoted.
      */
