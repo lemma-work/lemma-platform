@@ -784,6 +784,18 @@ jobs:
         working-directory: desktop
         run: cargo test -p lemma-locald -p lemma-guestd --locked
 
+      # The Rust half of the Agent Host's wire contract. This job runs on
+      # backend-only pull requests -- `lemma-backend/**` is in its filter --
+      # and it did not run the half that would notice. Both sides of
+      # `tests/fixtures/wire_contract.json` are assertions over a committed
+      # file; only the named suites, because the rest of this crate's tests
+      # spawn agents.
+      - name: Agent Host wire contract
+        working-directory: desktop
+        run: >-
+          cargo test -p lemma-agent-host --locked
+          --test wire_contract --test control_plane_contract
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 

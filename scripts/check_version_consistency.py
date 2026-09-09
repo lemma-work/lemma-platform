@@ -142,6 +142,16 @@ SOURCES: tuple[Source, ...] = (
         "desktop bundled runtime manifest",
         REPO_ROOT / "desktop/runtime/lemma-local.json",
     ),
+    # `install.sh` installs this as a uv tool and SUPPORT.md tells people to
+    # run it, so it is a version somebody has installed. It was not in this
+    # list and had fallen a release behind: `lemma-stack --version` said 0.7.1
+    # while the backend it manages said 0.7.2, which is exactly the skew a
+    # support conversation cannot see past.
+    Source(
+        "lemma-stack package",
+        REPO_ROOT / "lemma-stack/pyproject.toml",
+        re.compile(r'(?m)^version = "([^"]+)"'),
+    ),
 )
 
 # Every crate in the desktop workspace inherits one version. A member that
