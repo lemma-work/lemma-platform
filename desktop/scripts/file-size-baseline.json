@@ -5,7 +5,6 @@
   "desktop/agent-host/src/main.rs": 635,
   "desktop/agent-host/src/mcp_bridge.rs": 619,
   "desktop/agent-host/src/permissions.rs": 642,
-  "desktop/agent-host/src/runtime.rs": 5126,
   "desktop/agent-host/tests/lemma_mcp_e2e.rs": 699,
   "desktop/agent-host/tests/real_harness_e2e.rs": 1202,
   "desktop/agent-host/tests/support/mod.rs": 1417
