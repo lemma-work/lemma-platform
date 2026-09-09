@@ -323,6 +323,39 @@ does not delete the private data disk. If a child exits during startup, Lemma
 fails immediately with its status and recent log excerpt instead of waiting
 for the health timeout.
 
+### Anonymous install health
+
+**Local settings → Diagnostics** carries one switch: *Send anonymous install
+health*. It is on in official builds and off in every build without an
+ingestion key compiled in, which includes anything you build yourself.
+
+What it sends is whether the app started and whether its runtime installed:
+`desktop.launched`, `desktop.runtime_install`, `desktop.runtime_ready`,
+`desktop.mode_selected`, `desktop.quit`. Each carries the operating system, the
+architecture, the app version, and — for the two that measure something — a
+*bucket* rather than a number, so `0-5s` rather than `3,214 ms`. An install
+failure carries which step failed and one word for why, from a fixed list.
+
+It cannot express anything else. There is no field for a pod, an organization,
+a user, a file name, a hostname, a path, or an error message, and the event
+type is a closed Rust enum rather than a map: an event this app cannot name is
+an event it does not send.
+
+It goes to `https://eu.i.posthog.com`, identified by a random id minted once
+for this installation and stored beside it. The id is random — never derived
+from your hostname, MAC address or machine id — and **Start over** takes it
+with it, so a reset installation is a new one.
+
+Three switches turn it off, and any one is enough:
+
+```bash
+LEMMA_TELEMETRY=0            # this launch
+```
+
+the toggle in Local settings, which is remembered and is never overridden by an
+upgrade; and building without an ingestion key, which is the default for a
+local build.
+
 ## Updates, data, and uninstall
 
 Local Lemma stores application data and runs Lemma services on your computer.

@@ -44,6 +44,8 @@ const COMMANDS: &[&str] = &[
     "restart_into_recovery",
     "check_for_app_update",
     "install_app_update",
+    "telemetry_status",
+    "set_telemetry_enabled",
 ];
 
 fn main() {
