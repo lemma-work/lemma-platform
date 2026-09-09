@@ -19,6 +19,7 @@ edition = "2021"
 [workspace]
 resolver = "2"
 members = [
+    "job-object",
     "locald",
     "agent-host",
     "private-file",
@@ -75,6 +76,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 lemma-desktop-process = { path = "process" }
+lemma-job-object = { path = "job-object" }
 lemma-private-file = { path = "private-file" }
 # macos-private-api is what gates WebviewWindowBuilder::transparent, which an
 # NSVisualEffectView has to sit behind to be visible at all. It is also what

@@ -46,6 +46,7 @@ futures-util = "0.3.33"
 rustix = { version = "1", features = ["process"] }
 fs4 = { version = "1.1.0", features = ["sync"] }
 lemma-desktop-process = { path = "../process" }
+lemma-job-object = { path = "../job-object" }
 
 [dev-dependencies]
 assert_cmd = "2"
