@@ -98,6 +98,13 @@ class ConnectRequestInitiateSchema(BaseModel):
 
     connector_id: str | None = Field(None, description="Connector ID to connect")
     auth_config_id: UUID | None = Field(None, description="Auth config ID to connect")
+    return_to: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path inside the app to come back to when the flow finishes. Only "
+            "a rooted path is accepted; anything else is ignored."
+        ),
+    )
 
 
 class ConnectRequestResponseSchema(BaseSchema):
@@ -123,6 +130,33 @@ class ConnectRequestResponseSchema(BaseSchema):
     updated_at: datetime.datetime
 
 
+class InstallRequestInitiateSchema(BaseModel):
+    """Which account still needs its provider-side installation."""
+
+    account_id: UUID = Field(
+        ..., description="The connected account the installation is for."
+    )
+    return_to: Optional[str] = Field(
+        default=None,
+        description=(
+            "Path inside the app to come back to. Only a rooted path is "
+            "accepted; anything else is ignored rather than followed."
+        ),
+    )
+
+
+class InstallRequestResponseSchema(BaseModel):
+    """Where to send somebody to finish installing.
+
+    Only the URL: like a connect request, the `state` on it is a capability and
+    does not belong in a response body, browser memory or a HAR capture.
+    """
+
+    authorization_url: str = Field(
+        ..., description="Provider URL that completes the installation step."
+    )
+
+
 # Account Schemas
 class AccountResponseSchema(BaseSchema):
     """Schema for account response."""
@@ -145,8 +179,60 @@ class AccountResponseSchema(BaseSchema):
     # AccountEntity itself (it lives on the auth config), so the controller
     # sets it explicitly after model_validate via ConnectorService.get_account_kind.
     kind: Optional[str] = None
+    # Whether this account can reach anything yet. `status` alone said CONNECTED
+    # for a GitHub account with a valid token and no App installation -- true,
+    # and useless, because installation is the unit of access and such a token
+    # reaches no repository at all. Derived from the account, so listing costs
+    # no network; the installations endpoint refines it.
+    install_state: str = Field(
+        default="READY",
+        description=(
+            "READY, INSTALL_REQUIRED, CHOOSE_INSTALL or PENDING_APPROVAL. "
+            "Anything but READY means the connection cannot reach resources yet."
+        ),
+    )
     created_at: datetime.datetime
     updated_at: datetime.datetime
+
+
+class InstallationChoiceSchema(BaseModel):
+    """One installation an account could speak for."""
+
+    installation_id: str
+    account_login: Optional[str] = None
+    account_type: Optional[str] = None
+    repository_selection: Optional[str] = Field(
+        default=None,
+        description=(
+            "'all' or 'selected'. A selected installation does not pick up "
+            "newly created repositories, which is the commonest reason a "
+            "repository is missing."
+        ),
+    )
+    manage_url: str = Field(
+        ...,
+        description=(
+            "Where the person changes this installation's repository access. A "
+            "link rather than an API call: the endpoints that add or remove a "
+            "repository accept only classic personal access tokens."
+        ),
+    )
+
+
+class AccountInstallationsSchema(BaseModel):
+    """What an account can actually reach, asked of the provider."""
+
+    install_state: str
+    installation_id: Optional[str] = None
+    choices: List[InstallationChoiceSchema] = Field(default_factory=list)
+
+
+class InstallationBindSchema(BaseModel):
+    """Which of several installations this account speaks for."""
+
+    installation_id: str = Field(
+        ..., description="One of the ids offered by the installations endpoint."
+    )
 
 
 class AccountListResponseSchema(BaseModel):

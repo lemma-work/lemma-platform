@@ -11297,6 +11297,76 @@
         }
       },
       {
+        "name": "apps_list_repos_accessible_to_installation",
+        "description": "List repositories accessible to the app installation",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "GET",
+          "path": "/installation/repositories",
+          "server_url": "https://api.github.com",
+          "path_params": [],
+          "query_params": [
+            {
+              "name": "per_page",
+              "style": null,
+              "explode": null
+            },
+            {
+              "name": "page",
+              "style": null,
+              "explode": null
+            }
+          ],
+          "header_params": [],
+          "request_body": null,
+          "response": {
+            "binary": false
+          },
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          },
+          "github_token_kind": "installation_ok"
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "apps_list_repos_accessible_to_installation",
+          "properties": {
+            "per_page": {
+              "type": "integer",
+              "default": 30,
+              "description": "The number of results per page (max 100). For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
+            },
+            "page": {
+              "type": "integer",
+              "default": 1,
+              "description": "The page number of the results to fetch. For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "total_count",
+            "repositories"
+          ],
+          "properties": {
+            "total_count": {
+              "type": "integer"
+            },
+            "repositories": {
+              "type": "array"
+            },
+            "repository_selection": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
         "name": "activity_list_notifications_for_authenticated_user",
         "description": "List notifications for the authenticated user",
         "execution": {
@@ -23531,6 +23601,10 @@
                   "description": "The name of the issue type to associate with this issue. _NOTE: Only users with push access can set the type for new issues. The type is silently dropped otherwise._",
                   "nullable": true,
                   "example": "Epic"
+                },
+                "parent_issue_id": {
+                  "type": "integer",
+                  "description": "The id of the parent issue to add this issue to as a sub-issue. _NOTE: Only users with triage access to both the parent issue's repository and this repository can set the parent issue._"
                 }
               },
               "required": [
@@ -26998,6 +27072,10 @@
                 "description": {
                   "type": "string",
                   "description": "A short description of the label. Must be 100 characters or fewer."
+                },
+                "archived": {
+                  "type": "boolean",
+                  "description": "Whether to archive or unarchive the label. Archived labels cannot be added to issues or pull requests. For more information, see \"[Archiving labels](https://docs.github.com/issues/organizing-your-work-with-labels/managing-labels).\""
                 }
               }
             }
@@ -35686,6 +35764,152 @@
         }
       },
       {
+        "name": "apps_list_installations_for_authenticated_user",
+        "description": "List app installations accessible to the user access token",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "GET",
+          "path": "/user/installations",
+          "server_url": "https://api.github.com",
+          "path_params": [],
+          "query_params": [
+            {
+              "name": "per_page",
+              "style": null,
+              "explode": null
+            },
+            {
+              "name": "page",
+              "style": null,
+              "explode": null
+            }
+          ],
+          "header_params": [],
+          "request_body": null,
+          "response": {
+            "binary": false
+          },
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          },
+          "github_token_kind": "user_only"
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "apps_list_installations_for_authenticated_user",
+          "properties": {
+            "per_page": {
+              "type": "integer",
+              "default": 30,
+              "description": "The number of results per page (max 100). For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
+            },
+            "page": {
+              "type": "integer",
+              "default": 1,
+              "description": "The page number of the results to fetch. For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "total_count",
+            "installations"
+          ],
+          "properties": {
+            "total_count": {
+              "type": "integer"
+            },
+            "installations": {
+              "type": "array"
+            }
+          }
+        }
+      },
+      {
+        "name": "apps_list_installation_repos_for_authenticated_user",
+        "description": "List repositories accessible to the user access token",
+        "execution": {
+          "kind": "http",
+          "mode": "openapi",
+          "method": "GET",
+          "path": "/user/installations/{installation_id}/repositories",
+          "server_url": "https://api.github.com",
+          "path_params": [
+            "installation_id"
+          ],
+          "query_params": [
+            {
+              "name": "per_page",
+              "style": null,
+              "explode": null
+            },
+            {
+              "name": "page",
+              "style": null,
+              "explode": null
+            }
+          ],
+          "header_params": [],
+          "request_body": null,
+          "response": {
+            "binary": false
+          },
+          "default_headers": {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "lemma-connectors"
+          },
+          "github_token_kind": "user_only"
+        },
+        "input_schema": {
+          "type": "object",
+          "title": "apps_list_installation_repos_for_authenticated_user",
+          "properties": {
+            "installation_id": {
+              "type": "integer",
+              "description": "The unique identifier of the installation."
+            },
+            "per_page": {
+              "type": "integer",
+              "default": 30,
+              "description": "The number of results per page (max 100). For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
+            },
+            "page": {
+              "type": "integer",
+              "default": 1,
+              "description": "The page number of the results to fetch. For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "installation_id"
+          ]
+        },
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "total_count",
+            "repositories"
+          ],
+          "properties": {
+            "total_count": {
+              "type": "integer"
+            },
+            "repository_selection": {
+              "type": "string"
+            },
+            "repositories": {
+              "type": "array"
+            }
+          }
+        }
+      },
+      {
         "name": "issues_list_for_authenticated_user",
         "description": "List user account issues assigned to the authenticated user",
         "execution": {
@@ -36136,1230 +36360,6 @@
               "description"
             ]
           }
-        }
-      },
-      {
-        "name": "repos_list_for_authenticated_user",
-        "description": "List repositories for the authenticated user",
-        "execution": {
-          "kind": "http",
-          "mode": "openapi",
-          "method": "GET",
-          "path": "/user/repos",
-          "server_url": "https://api.github.com",
-          "path_params": [],
-          "query_params": [
-            {
-              "name": "visibility",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "affiliation",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "type",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "sort",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "direction",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "per_page",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "page",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "since",
-              "style": null,
-              "explode": null
-            },
-            {
-              "name": "before",
-              "style": null,
-              "explode": null
-            }
-          ],
-          "header_params": [],
-          "request_body": null,
-          "response": {
-            "binary": false
-          },
-          "default_headers": {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "lemma-connectors"
-          },
-          "github_token_kind": "user_only"
-        },
-        "input_schema": {
-          "type": "object",
-          "title": "repos_list_for_authenticated_user",
-          "properties": {
-            "visibility": {
-              "type": "string",
-              "enum": [
-                "all",
-                "public",
-                "private"
-              ],
-              "default": "all",
-              "description": "Limit results to repositories with the specified visibility."
-            },
-            "affiliation": {
-              "type": "string",
-              "default": "owner,collaborator,organization_member",
-              "description": "Comma-separated list of values. Can include:  \n * `owner`: Repositories that are owned by the authenticated user.  \n * `collaborator`: Repositories that the user has been added to as a collaborator.  \n * `organization_member`: Repositories that the user has access to through being a member of an organization. This includes every repository on every team that the user is on."
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "all",
-                "owner",
-                "public",
-                "private",
-                "member"
-              ],
-              "default": "all",
-              "description": "Limit results to repositories of the specified type. Will cause a `422` error if used in the same request as **visibility** or **affiliation**."
-            },
-            "sort": {
-              "type": "string",
-              "enum": [
-                "created",
-                "updated",
-                "pushed",
-                "full_name"
-              ],
-              "default": "full_name",
-              "description": "The property to sort the results by."
-            },
-            "direction": {
-              "type": "string",
-              "enum": [
-                "asc",
-                "desc"
-              ],
-              "description": "The order to sort by. Default: `asc` when using `full_name`, otherwise `desc`."
-            },
-            "per_page": {
-              "type": "integer",
-              "default": 30,
-              "description": "The number of results per page (max 100). For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
-            },
-            "page": {
-              "type": "integer",
-              "default": 1,
-              "description": "The page number of the results to fetch. For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\""
-            },
-            "since": {
-              "type": "string",
-              "format": "date-time",
-              "description": "Only show repositories updated after the given time. This is a timestamp in [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) format: `YYYY-MM-DDTHH:MM:SSZ`."
-            },
-            "before": {
-              "type": "string",
-              "format": "date-time",
-              "description": "Only show repositories updated before the given time. This is a timestamp in [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) format: `YYYY-MM-DDTHH:MM:SSZ`."
-            }
-          },
-          "additionalProperties": false
-        },
-        "output_schema": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "integer"
-              },
-              "node_id": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              },
-              "full_name": {
-                "type": "string"
-              },
-              "license": {
-                "type": "object"
-              },
-              "forks": {
-                "type": "integer"
-              },
-              "permissions": {
-                "type": "object"
-              },
-              "owner": {
-                "type": "object"
-              },
-              "private": {
-                "type": "boolean"
-              },
-              "html_url": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string"
-              },
-              "fork": {
-                "type": "boolean"
-              },
-              "url": {
-                "type": "string"
-              },
-              "archive_url": {
-                "type": "string"
-              },
-              "assignees_url": {
-                "type": "string"
-              },
-              "blobs_url": {
-                "type": "string"
-              },
-              "branches_url": {
-                "type": "string"
-              },
-              "collaborators_url": {
-                "type": "string"
-              },
-              "comments_url": {
-                "type": "string"
-              },
-              "commits_url": {
-                "type": "string"
-              },
-              "compare_url": {
-                "type": "string"
-              },
-              "contents_url": {
-                "type": "string"
-              },
-              "contributors_url": {
-                "type": "string"
-              },
-              "deployments_url": {
-                "type": "string"
-              },
-              "downloads_url": {
-                "type": "string"
-              },
-              "events_url": {
-                "type": "string"
-              },
-              "forks_url": {
-                "type": "string"
-              },
-              "git_commits_url": {
-                "type": "string"
-              },
-              "git_refs_url": {
-                "type": "string"
-              },
-              "git_tags_url": {
-                "type": "string"
-              },
-              "git_url": {
-                "type": "string"
-              },
-              "issue_comment_url": {
-                "type": "string"
-              },
-              "issue_events_url": {
-                "type": "string"
-              },
-              "issues_url": {
-                "type": "string"
-              },
-              "keys_url": {
-                "type": "string"
-              },
-              "labels_url": {
-                "type": "string"
-              },
-              "languages_url": {
-                "type": "string"
-              },
-              "merges_url": {
-                "type": "string"
-              },
-              "milestones_url": {
-                "type": "string"
-              },
-              "notifications_url": {
-                "type": "string"
-              },
-              "pulls_url": {
-                "type": "string"
-              },
-              "releases_url": {
-                "type": "string"
-              },
-              "ssh_url": {
-                "type": "string"
-              },
-              "stargazers_url": {
-                "type": "string"
-              },
-              "statuses_url": {
-                "type": "string"
-              },
-              "subscribers_url": {
-                "type": "string"
-              },
-              "subscription_url": {
-                "type": "string"
-              },
-              "tags_url": {
-                "type": "string"
-              },
-              "teams_url": {
-                "type": "string"
-              },
-              "trees_url": {
-                "type": "string"
-              },
-              "clone_url": {
-                "type": "string"
-              },
-              "mirror_url": {
-                "type": "string"
-              },
-              "hooks_url": {
-                "type": "string"
-              },
-              "svn_url": {
-                "type": "string"
-              },
-              "homepage": {
-                "type": "string"
-              },
-              "language": {
-                "type": "string"
-              },
-              "forks_count": {
-                "type": "integer"
-              },
-              "stargazers_count": {
-                "type": "integer"
-              },
-              "watchers_count": {
-                "type": "integer"
-              },
-              "size": {
-                "type": "integer"
-              },
-              "default_branch": {
-                "type": "string"
-              },
-              "open_issues_count": {
-                "type": "integer"
-              },
-              "is_template": {
-                "type": "boolean"
-              },
-              "topics": {
-                "type": "array"
-              },
-              "has_issues": {
-                "type": "boolean"
-              },
-              "has_projects": {
-                "type": "boolean"
-              },
-              "has_wiki": {
-                "type": "boolean"
-              },
-              "has_pages": {
-                "type": "boolean"
-              },
-              "has_downloads": {
-                "type": "boolean"
-              },
-              "has_discussions": {
-                "type": "boolean"
-              },
-              "has_pull_requests": {
-                "type": "boolean"
-              },
-              "pull_request_creation_policy": {
-                "type": "string"
-              },
-              "archived": {
-                "type": "boolean"
-              },
-              "disabled": {
-                "type": "boolean"
-              },
-              "visibility": {
-                "type": "string"
-              },
-              "pushed_at": {
-                "type": "string"
-              },
-              "created_at": {
-                "type": "string"
-              },
-              "updated_at": {
-                "type": "string"
-              },
-              "allow_rebase_merge": {
-                "type": "boolean"
-              },
-              "temp_clone_token": {
-                "type": "string"
-              },
-              "allow_squash_merge": {
-                "type": "boolean"
-              },
-              "allow_auto_merge": {
-                "type": "boolean"
-              },
-              "delete_branch_on_merge": {
-                "type": "boolean"
-              },
-              "allow_update_branch": {
-                "type": "boolean"
-              },
-              "use_squash_pr_title_as_default": {
-                "type": "boolean"
-              },
-              "squash_merge_commit_title": {
-                "type": "string"
-              },
-              "squash_merge_commit_message": {
-                "type": "string"
-              },
-              "merge_commit_title": {
-                "type": "string"
-              },
-              "merge_commit_message": {
-                "type": "string"
-              },
-              "allow_merge_commit": {
-                "type": "boolean"
-              },
-              "allow_forking": {
-                "type": "boolean"
-              },
-              "web_commit_signoff_required": {
-                "type": "boolean"
-              },
-              "open_issues": {
-                "type": "integer"
-              },
-              "watchers": {
-                "type": "integer"
-              },
-              "master_branch": {
-                "type": "string"
-              },
-              "starred_at": {
-                "type": "string"
-              },
-              "anonymous_access_enabled": {
-                "type": "boolean"
-              },
-              "code_search_index_status": {
-                "type": "object"
-              }
-            },
-            "required": [
-              "archive_url",
-              "assignees_url",
-              "blobs_url",
-              "branches_url",
-              "collaborators_url",
-              "comments_url",
-              "commits_url",
-              "compare_url",
-              "contents_url",
-              "contributors_url",
-              "deployments_url",
-              "description",
-              "downloads_url",
-              "events_url",
-              "fork",
-              "forks_url",
-              "full_name",
-              "git_commits_url",
-              "git_refs_url",
-              "git_tags_url",
-              "hooks_url",
-              "html_url",
-              "id",
-              "node_id",
-              "issue_comment_url",
-              "issue_events_url",
-              "issues_url",
-              "keys_url",
-              "labels_url",
-              "languages_url",
-              "merges_url",
-              "milestones_url",
-              "name",
-              "notifications_url",
-              "owner",
-              "private",
-              "pulls_url",
-              "releases_url",
-              "stargazers_url",
-              "statuses_url",
-              "subscribers_url",
-              "subscription_url",
-              "tags_url",
-              "teams_url",
-              "trees_url",
-              "url",
-              "clone_url",
-              "default_branch",
-              "forks",
-              "forks_count",
-              "git_url",
-              "has_downloads",
-              "has_issues",
-              "has_projects",
-              "has_wiki",
-              "has_pages",
-              "homepage",
-              "language",
-              "archived",
-              "disabled",
-              "mirror_url",
-              "open_issues",
-              "open_issues_count",
-              "license",
-              "pushed_at",
-              "size",
-              "ssh_url",
-              "stargazers_count",
-              "svn_url",
-              "watchers",
-              "watchers_count",
-              "created_at",
-              "updated_at"
-            ],
-            "x-github-breaking-changes": [
-              {
-                "changeset": "remove_use_squash_pr_title_as_default",
-                "patch": {
-                  "properties": {
-                    "use_squash_pr_title_as_default": null
-                  }
-                },
-                "version": "2026-03-10"
-              },
-              {
-                "changeset": "deprecate_beta_media_type",
-                "patch": {
-                  "properties": {
-                    "master_branch": null
-                  }
-                },
-                "version": "2026-03-10"
-              },
-              {
-                "changeset": "remove_has_downloads",
-                "patch": {
-                  "properties": {
-                    "has_downloads": null
-                  },
-                  "required": [
-                    "archive_url",
-                    "assignees_url",
-                    "blobs_url",
-                    "branches_url",
-                    "collaborators_url",
-                    "comments_url",
-                    "commits_url",
-                    "compare_url",
-                    "contents_url",
-                    "contributors_url",
-                    "deployments_url",
-                    "description",
-                    "downloads_url",
-                    "events_url",
-                    "fork",
-                    "forks_url",
-                    "full_name",
-                    "git_commits_url",
-                    "git_refs_url",
-                    "git_tags_url",
-                    "hooks_url",
-                    "html_url",
-                    "id",
-                    "node_id",
-                    "issue_comment_url",
-                    "issue_events_url",
-                    "issues_url",
-                    "keys_url",
-                    "labels_url",
-                    "languages_url",
-                    "merges_url",
-                    "milestones_url",
-                    "name",
-                    "notifications_url",
-                    "owner",
-                    "private",
-                    "pulls_url",
-                    "releases_url",
-                    "stargazers_url",
-                    "statuses_url",
-                    "subscribers_url",
-                    "subscription_url",
-                    "tags_url",
-                    "teams_url",
-                    "trees_url",
-                    "url",
-                    "clone_url",
-                    "default_branch",
-                    "forks",
-                    "forks_count",
-                    "git_url",
-                    "has_issues",
-                    "has_projects",
-                    "has_wiki",
-                    "has_pages",
-                    "homepage",
-                    "language",
-                    "archived",
-                    "disabled",
-                    "mirror_url",
-                    "open_issues",
-                    "open_issues_count",
-                    "license",
-                    "pushed_at",
-                    "size",
-                    "ssh_url",
-                    "stargazers_count",
-                    "svn_url",
-                    "watchers",
-                    "watchers_count",
-                    "created_at",
-                    "updated_at"
-                  ]
-                },
-                "version": "2026-03-10"
-              }
-            ]
-          }
-        }
-      },
-      {
-        "name": "repos_create_for_authenticated_user",
-        "description": "Create a repository for the authenticated user",
-        "execution": {
-          "kind": "http",
-          "mode": "openapi",
-          "method": "POST",
-          "path": "/user/repos",
-          "server_url": "https://api.github.com",
-          "path_params": [],
-          "query_params": [],
-          "header_params": [],
-          "request_body": {
-            "content_type": "application/json",
-            "field": "body",
-            "binary_fields": [],
-            "form_fields": []
-          },
-          "response": {
-            "binary": false
-          },
-          "default_headers": {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "lemma-connectors"
-          },
-          "github_token_kind": "user_only"
-        },
-        "input_schema": {
-          "type": "object",
-          "title": "repos_create_for_authenticated_user",
-          "properties": {
-            "body": {
-              "properties": {
-                "name": {
-                  "description": "The name of the repository.",
-                  "type": "string",
-                  "example": "Team Environment"
-                },
-                "description": {
-                  "description": "A short description of the repository.",
-                  "type": "string"
-                },
-                "homepage": {
-                  "description": "A URL with more information about the repository.",
-                  "type": "string"
-                },
-                "private": {
-                  "description": "Whether the repository is private.",
-                  "default": false,
-                  "type": "boolean"
-                },
-                "has_issues": {
-                  "description": "Whether issues are enabled.",
-                  "default": true,
-                  "type": "boolean",
-                  "example": true
-                },
-                "has_projects": {
-                  "description": "Whether projects are enabled.",
-                  "default": true,
-                  "type": "boolean",
-                  "example": true
-                },
-                "has_wiki": {
-                  "description": "Whether the wiki is enabled.",
-                  "default": true,
-                  "type": "boolean",
-                  "example": true
-                },
-                "has_discussions": {
-                  "description": "Whether discussions are enabled.",
-                  "default": false,
-                  "type": "boolean",
-                  "example": true
-                },
-                "team_id": {
-                  "description": "The id of the team that will be granted access to this repository. This is only valid when creating a repository in an organization.",
-                  "type": "integer"
-                },
-                "auto_init": {
-                  "description": "Whether the repository is initialized with a minimal README.",
-                  "default": false,
-                  "type": "boolean"
-                },
-                "gitignore_template": {
-                  "description": "The desired language or platform to apply to the .gitignore.",
-                  "example": "Haskell",
-                  "type": "string"
-                },
-                "license_template": {
-                  "description": "The license keyword of the open source license for this repository.",
-                  "example": "mit",
-                  "type": "string"
-                },
-                "allow_squash_merge": {
-                  "description": "Whether to allow squash merges for pull requests.",
-                  "default": true,
-                  "type": "boolean",
-                  "example": true
-                },
-                "allow_merge_commit": {
-                  "description": "Whether to allow merge commits for pull requests.",
-                  "default": true,
-                  "type": "boolean",
-                  "example": true
-                },
-                "allow_rebase_merge": {
-                  "description": "Whether to allow rebase merges for pull requests.",
-                  "default": true,
-                  "type": "boolean",
-                  "example": true
-                },
-                "allow_auto_merge": {
-                  "description": "Whether to allow Auto-merge to be used on pull requests.",
-                  "default": false,
-                  "type": "boolean",
-                  "example": false
-                },
-                "delete_branch_on_merge": {
-                  "description": "Whether to delete head branches when pull requests are merged",
-                  "default": false,
-                  "type": "boolean",
-                  "example": false
-                },
-                "squash_merge_commit_title": {
-                  "type": "string",
-                  "enum": [
-                    "PR_TITLE",
-                    "COMMIT_OR_PR_TITLE"
-                  ],
-                  "description": "Required when using `squash_merge_commit_message`.\n\nThe default value for a squash merge commit title:\n\n- `PR_TITLE` - default to the pull request's title.\n- `COMMIT_OR_PR_TITLE` - default to the commit's title (if only one commit) or the pull request's title (when more than one commit)."
-                },
-                "squash_merge_commit_message": {
-                  "type": "string",
-                  "enum": [
-                    "PR_BODY",
-                    "COMMIT_MESSAGES",
-                    "BLANK"
-                  ],
-                  "description": "The default value for a squash merge commit message:\n\n- `PR_BODY` - default to the pull request's body.\n- `COMMIT_MESSAGES` - default to the branch's commit messages.\n- `BLANK` - default to a blank commit message."
-                },
-                "merge_commit_title": {
-                  "type": "string",
-                  "enum": [
-                    "PR_TITLE",
-                    "MERGE_MESSAGE"
-                  ],
-                  "description": "Required when using `merge_commit_message`.\n\nThe default value for a merge commit title.\n\n- `PR_TITLE` - default to the pull request's title.\n- `MERGE_MESSAGE` - default to the classic title for a merge message (e.g., Merge pull request #123 from branch-name)."
-                },
-                "merge_commit_message": {
-                  "type": "string",
-                  "enum": [
-                    "PR_BODY",
-                    "PR_TITLE",
-                    "BLANK"
-                  ],
-                  "description": "The default value for a merge commit message.\n\n- `PR_TITLE` - default to the pull request's title.\n- `PR_BODY` - default to the pull request's body.\n- `BLANK` - default to a blank commit message."
-                },
-                "has_downloads": {
-                  "description": "Whether downloads are enabled.",
-                  "default": true,
-                  "type": "boolean",
-                  "example": true
-                },
-                "is_template": {
-                  "description": "Whether this repository acts as a template that can be used to generate new repositories.",
-                  "default": false,
-                  "type": "boolean",
-                  "example": true
-                }
-              },
-              "required": [
-                "name"
-              ],
-              "type": "object"
-            }
-          },
-          "additionalProperties": false,
-          "required": [
-            "body"
-          ]
-        },
-        "output_schema": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "integer"
-            },
-            "node_id": {
-              "type": "string"
-            },
-            "name": {
-              "type": "string"
-            },
-            "full_name": {
-              "type": "string"
-            },
-            "owner": {
-              "type": "object"
-            },
-            "private": {
-              "type": "boolean"
-            },
-            "html_url": {
-              "type": "string"
-            },
-            "description": {
-              "type": "string"
-            },
-            "fork": {
-              "type": "boolean"
-            },
-            "url": {
-              "type": "string"
-            },
-            "archive_url": {
-              "type": "string"
-            },
-            "assignees_url": {
-              "type": "string"
-            },
-            "blobs_url": {
-              "type": "string"
-            },
-            "branches_url": {
-              "type": "string"
-            },
-            "collaborators_url": {
-              "type": "string"
-            },
-            "comments_url": {
-              "type": "string"
-            },
-            "commits_url": {
-              "type": "string"
-            },
-            "compare_url": {
-              "type": "string"
-            },
-            "contents_url": {
-              "type": "string"
-            },
-            "contributors_url": {
-              "type": "string"
-            },
-            "deployments_url": {
-              "type": "string"
-            },
-            "downloads_url": {
-              "type": "string"
-            },
-            "events_url": {
-              "type": "string"
-            },
-            "forks_url": {
-              "type": "string"
-            },
-            "git_commits_url": {
-              "type": "string"
-            },
-            "git_refs_url": {
-              "type": "string"
-            },
-            "git_tags_url": {
-              "type": "string"
-            },
-            "git_url": {
-              "type": "string"
-            },
-            "issue_comment_url": {
-              "type": "string"
-            },
-            "issue_events_url": {
-              "type": "string"
-            },
-            "issues_url": {
-              "type": "string"
-            },
-            "keys_url": {
-              "type": "string"
-            },
-            "labels_url": {
-              "type": "string"
-            },
-            "languages_url": {
-              "type": "string"
-            },
-            "merges_url": {
-              "type": "string"
-            },
-            "milestones_url": {
-              "type": "string"
-            },
-            "notifications_url": {
-              "type": "string"
-            },
-            "pulls_url": {
-              "type": "string"
-            },
-            "releases_url": {
-              "type": "string"
-            },
-            "ssh_url": {
-              "type": "string"
-            },
-            "stargazers_url": {
-              "type": "string"
-            },
-            "statuses_url": {
-              "type": "string"
-            },
-            "subscribers_url": {
-              "type": "string"
-            },
-            "subscription_url": {
-              "type": "string"
-            },
-            "tags_url": {
-              "type": "string"
-            },
-            "teams_url": {
-              "type": "string"
-            },
-            "trees_url": {
-              "type": "string"
-            },
-            "clone_url": {
-              "type": "string"
-            },
-            "mirror_url": {
-              "type": "string"
-            },
-            "hooks_url": {
-              "type": "string"
-            },
-            "svn_url": {
-              "type": "string"
-            },
-            "homepage": {
-              "type": "string"
-            },
-            "language": {
-              "type": "string"
-            },
-            "forks_count": {
-              "type": "integer"
-            },
-            "stargazers_count": {
-              "type": "integer"
-            },
-            "watchers_count": {
-              "type": "integer"
-            },
-            "size": {
-              "type": "integer"
-            },
-            "default_branch": {
-              "type": "string"
-            },
-            "open_issues_count": {
-              "type": "integer"
-            },
-            "is_template": {
-              "type": "boolean"
-            },
-            "topics": {
-              "type": "array"
-            },
-            "has_issues": {
-              "type": "boolean"
-            },
-            "has_projects": {
-              "type": "boolean"
-            },
-            "has_wiki": {
-              "type": "boolean"
-            },
-            "has_pages": {
-              "type": "boolean"
-            },
-            "has_downloads": {
-              "type": "boolean"
-            },
-            "has_discussions": {
-              "type": "boolean"
-            },
-            "has_pull_requests": {
-              "type": "boolean"
-            },
-            "pull_request_creation_policy": {
-              "type": "string"
-            },
-            "archived": {
-              "type": "boolean"
-            },
-            "disabled": {
-              "type": "boolean"
-            },
-            "visibility": {
-              "type": "string"
-            },
-            "pushed_at": {
-              "type": "string"
-            },
-            "created_at": {
-              "type": "string"
-            },
-            "updated_at": {
-              "type": "string"
-            },
-            "permissions": {
-              "type": "object"
-            },
-            "allow_rebase_merge": {
-              "type": "boolean"
-            },
-            "template_repository": {
-              "type": "object"
-            },
-            "temp_clone_token": {
-              "type": "string"
-            },
-            "allow_squash_merge": {
-              "type": "boolean"
-            },
-            "allow_auto_merge": {
-              "type": "boolean"
-            },
-            "delete_branch_on_merge": {
-              "type": "boolean"
-            },
-            "allow_merge_commit": {
-              "type": "boolean"
-            },
-            "allow_update_branch": {
-              "type": "boolean"
-            },
-            "use_squash_pr_title_as_default": {
-              "type": "boolean"
-            },
-            "squash_merge_commit_title": {
-              "type": "string"
-            },
-            "squash_merge_commit_message": {
-              "type": "string"
-            },
-            "merge_commit_title": {
-              "type": "string"
-            },
-            "merge_commit_message": {
-              "type": "string"
-            },
-            "allow_forking": {
-              "type": "boolean"
-            },
-            "web_commit_signoff_required": {
-              "type": "boolean"
-            },
-            "subscribers_count": {
-              "type": "integer"
-            },
-            "network_count": {
-              "type": "integer"
-            },
-            "license": {
-              "type": "object"
-            },
-            "organization": {
-              "type": "object"
-            },
-            "parent": {
-              "type": "object"
-            },
-            "source": {
-              "type": "object"
-            },
-            "forks": {
-              "type": "integer"
-            },
-            "master_branch": {
-              "type": "string"
-            },
-            "open_issues": {
-              "type": "integer"
-            },
-            "watchers": {
-              "type": "integer"
-            },
-            "anonymous_access_enabled": {
-              "type": "boolean"
-            },
-            "code_of_conduct": {
-              "type": "object"
-            },
-            "security_and_analysis": {
-              "type": "object"
-            },
-            "custom_properties": {
-              "type": "object"
-            }
-          },
-          "required": [
-            "archive_url",
-            "assignees_url",
-            "blobs_url",
-            "branches_url",
-            "collaborators_url",
-            "comments_url",
-            "commits_url",
-            "compare_url",
-            "contents_url",
-            "contributors_url",
-            "deployments_url",
-            "description",
-            "downloads_url",
-            "events_url",
-            "fork",
-            "forks_url",
-            "full_name",
-            "git_commits_url",
-            "git_refs_url",
-            "git_tags_url",
-            "hooks_url",
-            "html_url",
-            "id",
-            "node_id",
-            "issue_comment_url",
-            "issue_events_url",
-            "issues_url",
-            "keys_url",
-            "labels_url",
-            "languages_url",
-            "merges_url",
-            "milestones_url",
-            "name",
-            "notifications_url",
-            "owner",
-            "private",
-            "pulls_url",
-            "releases_url",
-            "stargazers_url",
-            "statuses_url",
-            "subscribers_url",
-            "subscription_url",
-            "tags_url",
-            "teams_url",
-            "trees_url",
-            "url",
-            "clone_url",
-            "default_branch",
-            "forks",
-            "forks_count",
-            "git_url",
-            "has_issues",
-            "has_projects",
-            "has_wiki",
-            "has_pages",
-            "has_discussions",
-            "homepage",
-            "language",
-            "archived",
-            "disabled",
-            "mirror_url",
-            "open_issues",
-            "open_issues_count",
-            "license",
-            "pushed_at",
-            "size",
-            "ssh_url",
-            "stargazers_count",
-            "svn_url",
-            "watchers",
-            "watchers_count",
-            "created_at",
-            "updated_at",
-            "network_count",
-            "subscribers_count"
-          ],
-          "x-github-breaking-changes": [
-            {
-              "changeset": "remove_use_squash_pr_title_as_default",
-              "patch": {
-                "properties": {
-                  "use_squash_pr_title_as_default": null
-                }
-              },
-              "version": "2026-03-10"
-            },
-            {
-              "changeset": "remove_has_downloads",
-              "patch": {
-                "properties": {
-                  "has_downloads": null
-                }
-              },
-              "version": "2026-03-10"
-            }
-          ]
         }
       },
       {

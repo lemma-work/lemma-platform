@@ -3,11 +3,12 @@
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
-import { Check, ExternalLink, RefreshCw } from '@/components/ui/icons';
+import { Check, Download, ExternalLink, RefreshCw } from '@/components/ui/icons';
 import type { Account, Connector } from '@/lib/types';
 import { ConnectorIcon } from './connector-icon';
 import {
-    getAccountStatusMeta,
+    getAccountStateMeta,
+    INSTALL_STATE,
     getPrimaryKindSpec,
     usesDirectCredentials,
 } from './connector-utils';
@@ -120,6 +121,7 @@ export function ConnectedAccountRow({
     isBusy,
     onReconnect,
     onDisconnect,
+    onInstall,
 }: {
     account: Account;
     /**
@@ -131,8 +133,22 @@ export function ConnectedAccountRow({
     isBusy: boolean;
     onReconnect: (account: Account) => void;
     onDisconnect: (account: Account) => void;
+    /**
+     * Finish an installation. Separate from reconnecting because the
+     * credential is fine: what is missing is the app's access to any
+     * repository, and "Reconnect" sends the person round a loop that cannot
+     * fix it.
+     */
+    onInstall?: (account: Account) => void;
 }) {
-    const status = getAccountStatusMeta(account.status);
+    const status = getAccountStateMeta(account.status, account.install_state);
+    const installState = account.install_state;
+    const needsInstall =
+        installState === INSTALL_STATE.INSTALL_REQUIRED
+        || installState === INSTALL_STATE.CHOOSE_INSTALL;
+    // Nothing the person can do until an organisation owner acts, so the badge
+    // says so and no button offers work that would fail.
+    const waitingOnSomeoneElse = installState === INSTALL_STATE.PENDING_APPROVAL;
     const appName = label || account.connector?.title || account.connector?.name || 'Unknown app';
     // Sitting under "Your accounts" already says connected — only the exceptions
     // earn a status badge, so a healthy account reads as a name and nothing else.
@@ -164,20 +180,32 @@ export function ConnectedAccountRow({
                     <Badge variant={status.variant} title={status.hint} className="shrink-0">
                         {status.label}
                     </Badge>
-                    <Button
-                        variant="secondary"
-                        size="sm"
-                        className="h-8 shrink-0"
-                        onClick={() => onReconnect(account)}
-                        disabled={isBusy}
-                    >
-                        {isBusy ? (
-                            <StepLoader size="xs" className="mr-1.5" />
-                        ) : (
-                            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                        )}
-                        Reconnect
-                    </Button>
+                    {waitingOnSomeoneElse ? null : (
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            className="h-8 shrink-0"
+                            onClick={() =>
+                                needsInstall && onInstall
+                                    ? onInstall(account)
+                                    : onReconnect(account)
+                            }
+                            disabled={isBusy}
+                        >
+                            {isBusy ? (
+                                <StepLoader size="xs" className="mr-1.5" />
+                            ) : needsInstall ? (
+                                <Download className="mr-1.5 h-3.5 w-3.5" />
+                            ) : (
+                                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                            )}
+                            {needsInstall
+                                ? installState === INSTALL_STATE.CHOOSE_INSTALL
+                                    ? 'Choose'
+                                    : 'Install'
+                                : 'Reconnect'}
+                        </Button>
+                    )}
                 </>
             ) : null}
 

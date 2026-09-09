@@ -34,6 +34,7 @@ from app.modules.agent.tools.workspace_cli.models import (
 )
 from app.modules.agent.tools.workspace_cli.github_credential_bridge import (
     looks_like_git_command,
+    source_may_use_git,
 )
 from app.modules.agent.tools.workspace_cli.github_project import (
     prepare_project_directory,
@@ -460,7 +461,10 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
         )
         async with workspace_session:
             project_notice = await prepare_project_directory(
-                ctx, workspace_session, wanted=ctx.workspace_repo is not None
+                ctx,
+                workspace_session,
+                wanted=ctx.workspace_repo is not None
+                or source_may_use_git(request.code),
             )
             result = await workspace_session.execute_code(
                 request.code, request.timeout_seconds

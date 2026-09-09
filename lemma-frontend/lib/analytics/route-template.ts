@@ -39,6 +39,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/loading-preview",
     "/login",
     "/logout",
+    "/oauth/complete",
     "/organizations/[id]/settings/agent-runtimes",
     "/organizations/[id]/settings/members",
     "/organizations/[id]/settings/usage",

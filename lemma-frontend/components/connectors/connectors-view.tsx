@@ -4,7 +4,10 @@ import {
     useAccounts,
     useConnectors,
     useAuthConfigs,
+    useAccountInstallations,
+    useBindAccountInstallation,
     useCreateConnectRequest,
+    useCreateInstallRequest,
     useCreateConnectorAccount,
     useDeleteAccount,
     useDeleteAuthConfig,
@@ -17,9 +20,10 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { Input } from '@/components/ui/input';
 import { Plug, Search } from '@/components/ui/icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { Account, AuthConfig, Connector } from '@/lib/types';
+import type { InstallationChoiceSchema } from 'lemma-sdk';
 import { useOrganization } from '@/components/dashboard/org-context';
 import { ResourceCardGridSkeleton } from '@/components/shared/loading';
 import { ResourceFeedbackBanner } from '@/components/shared/resource-feedback';
@@ -30,12 +34,14 @@ import { AddYourOwnRow, ConnectionRow } from './connection-rows';
 import { ConnectAccountDialog, type CredentialTarget } from './connect-account-dialog';
 import { AddConnectionDialog, type ConnectionSubmission, type ConnectionTarget } from './add-connection-dialog';
 import { AdvancedConfigDialog, type AdvancedEnablePayload } from './advanced-config';
+import { InstallChoiceDialog } from './install-choice-dialog';
 import type { AuthConfigMode } from './connector-utils';
 import {
     canConnectWithDefaults,
     describeConnectorError,
     findAuthConfigForAccount,
     getAccountStatusMeta,
+    INSTALL_STATE,
     getAppLabel,
     getInstallLabel,
     getPrimaryKindSpec,
@@ -55,8 +61,37 @@ interface ConnectorsViewProps {
     showHeader?: boolean;
 }
 
+/** Where a popup round trip comes back to. See `app/oauth/complete`. */
+export const OAUTH_COMPLETE_PATH = '/oauth/complete';
+
+/**
+ * Where the provider should send the browser back to, and what to do if there
+ * turned out to be no opener. `from` is the page in progress, so a tab that
+ * cannot report home still ends up back where it started.
+ */
+const completionPath = () =>
+    `${OAUTH_COMPLETE_PATH}?from=${encodeURIComponent(window.location.pathname)}`;
+
+/**
+ * Open the provider in a new tab, as before — minus `noopener`, which is the
+ * only thing that changes here.
+ *
+ * `noopener` makes `window.opener` null in the new tab, so the result could
+ * never be handed back and completion was guessed at by polling this page every
+ * 2.5 seconds. Dropping it lets the completion page post the outcome home and
+ * close itself, which is what removes the polling.
+ *
+ * The cost is that the opened page can reach `window.opener`. That page is
+ * GitHub, over https, at a URL this app just built — the standard trade every
+ * OAuth tab makes.
+ */
 const openAuthorization = (url?: string | null) => {
-    if (url) window.open(url, '_blank', 'noopener,noreferrer');
+    if (!url) return;
+    // A new tab, as it always was. No window features, so the browser opens a
+    // tab rather than a window.
+    const opened = window.open(url, '_blank');
+    // Only if the browser refused outright, so the flow still finishes.
+    if (!opened) window.location.assign(url);
 };
 
 export function ConnectorsView({ organizationId, organizationName, embedded = false, showHeader = true }: ConnectorsViewProps) {
@@ -73,6 +108,9 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     const deleteAccount = useDeleteAccount(effectiveOrganizationId);
     const enableConnector = useEnableConnector(effectiveOrganizationId);
     const createConnectRequest = useCreateConnectRequest(effectiveOrganizationId);
+    const createInstallRequest = useCreateInstallRequest(effectiveOrganizationId);
+    const refreshInstallations = useAccountInstallations(effectiveOrganizationId);
+    const bindInstallation = useBindAccountInstallation(effectiveOrganizationId);
     const createConnectorAccount = useCreateConnectorAccount(effectiveOrganizationId);
     const updateAuthConfig = useUpdateAuthConfig(effectiveOrganizationId);
     const deleteAuthConfig = useDeleteAuthConfig(effectiveOrganizationId);
@@ -87,11 +125,10 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     const [isEnabling, setIsEnabling] = useState(false);
     const [credentialTarget, setCredentialTarget] = useState<CredentialTarget | null>(null);
     const [isSubmittingCredentials, setIsSubmittingCredentials] = useState(false);
-    const [pendingOAuth, setPendingOAuth] = useState<{
-        connectorId: string;
-        baselineStatuses: Record<string, string>;
-        startedAt: number;
-    } | null>(null);
+    // Only "a redirect is on its way": the connect request round trip happens
+    // before we can navigate, and a row that looks inert in the meantime reads
+    // as a click that did nothing.
+    const [pendingOAuth, setPendingOAuth] = useState<{ connectorId: string } | null>(null);
     const [accountPendingDisconnect, setAccountPendingDisconnect] = useState<{
         id: string;
         appName: string;
@@ -103,6 +140,12 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     const [busyInstallName, setBusyInstallName] = useState<string | null>(null);
     const [installPendingDelete, setInstallPendingDelete] = useState<AuthConfig | null>(null);
     const [handledInstallParam, setHandledInstallParam] = useState(false);
+    const [handledConnectResult, setHandledConnectResult] = useState(false);
+    const [installingAccountId, setInstallingAccountId] = useState<string | null>(null);
+    const [installChoices, setInstallChoices] = useState<{
+        account: Account;
+        choices: InstallationChoiceSchema[];
+    } | null>(null);
     const [advancedMode, setAdvancedMode] = useState<AuthConfigMode | undefined>(undefined);
 
     /**
@@ -130,36 +173,155 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         }
     }, [connectors, handledInstallParam]);
 
+    /**
+     * What the round trip established, however it got back here.
+     *
+     * Two ways in, one handler: a popup posts the outcome to its opener, and a
+     * full navigation (popup blocked, or somebody following the link directly)
+     * arrives with the same values in the query string.
+     */
+    /**
+     * Ask GitHub about every account that has nothing recorded yet.
+     *
+     * Used when an installation arrived without naming an account -- installed
+     * from GitHub's own page rather than through a link this app minted.
+     */
+    const reconcileUnboundAccounts = useCallback(async () => {
+        const current = ((await refetchAccounts()).data ?? []) as Account[];
+        const unbound = current.filter(
+            (account) =>
+                account.connector_id === 'github'
+                && account.install_state !== INSTALL_STATE.READY,
+        );
+        await Promise.all(
+            unbound.map((account) =>
+                refreshInstallations
+                    .mutateAsync({ accountId: account.id, refresh: true })
+                    .catch(() => undefined),
+            ),
+        );
+    }, [refetchAccounts, refreshInstallations]);
+
+    const reportConnectOutcome = useCallback(
+        (outcome: string | null, accountId?: string | null, reason?: string | null) => {
+            // The round trip is over however it ended, so the row stops saying
+            // "Connecting". This used to be cleared by the polling loop that
+            // watched for the account to change; the loop is gone, and without
+            // this the spinner ran forever after a perfectly successful connect.
+            setPendingOAuth(null);
+            switch (outcome) {
+                case 'connected':
+                    toast.success('Connected');
+                    break;
+                case 'install_required':
+                    // Deliberately not phrased as a failure. The credential is
+                    // fine; what is missing is the app's access to any repository.
+                    toast.info('Almost there — the app still needs installing to reach your repositories.');
+                    if (accountId) void refreshInstallations.mutateAsync({ accountId }).catch(() => undefined);
+                    break;
+                case 'pending_approval':
+                    toast.info('Requested. An owner of that organisation has to approve the app before it can be installed.');
+                    break;
+                case 'install_received':
+                    // An install started from GitHub's own page, so there was no
+                    // request here to complete and no account named on the way
+                    // back. Nothing is wrong -- but nothing has been recorded
+                    // either, and `install_state` is derived locally, so a plain
+                    // refetch would leave the row still saying "Install
+                    // required". Ask GitHub, for whichever accounts are unbound.
+                    toast.success('Installation received');
+                    void reconcileUnboundAccounts();
+                    break;
+                case 'error':
+                    toast.error(reason || 'The account was not connected.');
+                    break;
+                default:
+                    return;
+            }
+            void refetchAccounts();
+        },
+        [reconcileUnboundAccounts, refetchAccounts, refreshInstallations],
+    );
+
+    /**
+     * A trip that never reports back — the tab was closed on the provider's
+     * page, or the browser lost the opener. Nothing has gone wrong that we can
+     * name, but the row must stop claiming to be mid-flight.
+     */
     useEffect(() => {
         if (!pendingOAuth) return;
-        let cancelled = false;
-        const poll = window.setInterval(() => {
-            void refetchAccounts().then((result) => {
-                if (cancelled) return;
-                const current = (result.data ?? []) as Account[];
-                const completed = current.find((account) => {
-                    if (account.connector_id !== pendingOAuth.connectorId) return false;
-                    const previousStatus = pendingOAuth.baselineStatuses[account.id];
-                    return previousStatus === undefined || (previousStatus !== account.status && account.status === 'CONNECTED');
-                });
-                if (completed) {
-                    window.clearInterval(poll);
-                    setPendingOAuth(null);
-                    toast.success(`${getAppLabel(completed.connector as Connector)} connected`);
-                    return;
-                }
-                if (Date.now() - pendingOAuth.startedAt > 120_000) {
-                    window.clearInterval(poll);
-                    setPendingOAuth(null);
-                    toast.info('Connection is still pending. You can retry from this page.');
-                }
-            });
-        }, 2500);
-        return () => {
-            cancelled = true;
-            window.clearInterval(poll);
+        const timer = window.setTimeout(() => setPendingOAuth(null), 5 * 60_000);
+        return () => window.clearTimeout(timer);
+    }, [pendingOAuth]);
+
+    /** The opened tab handing its result back before it closes. */
+    useEffect(() => {
+        const onMessage = (event: MessageEvent) => {
+            // Origin first, always: this listener is reachable by any window
+            // that holds a handle to this one.
+            if (event.origin !== window.location.origin) return;
+            const data = event.data;
+            if (!data || typeof data !== 'object' || data.source !== 'lemma-connect') return;
+            reportConnectOutcome(data.connect ?? null, data.account ?? null, data.reason ?? null);
         };
-    }, [pendingOAuth, refetchAccounts]);
+        window.addEventListener('message', onMessage);
+        return () => window.removeEventListener('message', onMessage);
+    }, [reportConnectOutcome]);
+
+    /**
+     * The same outcome arriving as a query string, when there was no popup to
+     * report it. Read once and stripped: a reload is not a second connection.
+     */
+    useEffect(() => {
+        if (handledConnectResult) return;
+        const params = new URLSearchParams(window.location.search);
+        const outcome = params.get('connect');
+        if (!outcome) return;
+        setHandledConnectResult(true);
+
+        const accountId = params.get('account');
+        const reason = params.get('reason');
+        for (const key of ['connect', 'connector', 'account', 'code', 'reason']) params.delete(key);
+        const query = params.toString();
+        window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+
+        reportConnectOutcome(outcome, accountId, reason);
+    }, [handledConnectResult, reportConnectOutcome]);
+
+    /**
+     * Finish an installation, or settle which one an account speaks for.
+     *
+     * Asking first is what makes this cheap for the commonest case by far:
+     * somebody who installed the App on GitHub and came back without following
+     * a link we minted is already done, and telling them to install it again
+     * would be wrong.
+     */
+    const handleInstall = async (account: Account) => {
+        setInstallingAccountId(account.id);
+        try {
+            const found = await refreshInstallations.mutateAsync({
+                accountId: account.id,
+                refresh: true,
+            });
+            if (found.install_state === INSTALL_STATE.READY) {
+                toast.success('Installation found');
+                return;
+            }
+            if (found.install_state === INSTALL_STATE.CHOOSE_INSTALL) {
+                setInstallChoices({ account, choices: found.choices ?? [] });
+                return;
+            }
+            const request = await createInstallRequest.mutateAsync({
+                accountId: account.id,
+                returnTo: completionPath(),
+            });
+            openAuthorization(request.authorization_url);
+        } catch (error) {
+            toast.error(describeConnectorError(error, 'Could not start the installation.'));
+        } finally {
+            setInstallingAccountId(null);
+        }
+    };
 
     const connectorsById = useMemo(
         () => new Map((connectors || []).map((connector) => [connector.id, connector])),
@@ -315,13 +477,13 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
     // OAuth needs a round-trip to fetch the authorization URL before we can act.
     const startOAuth = async (connectorId: string, authConfigId: string) => {
-        const response = await createConnectRequest.mutateAsync({ connectorId, authConfigId });
+        const response = await createConnectRequest.mutateAsync({
+            connectorId,
+            authConfigId,
+            returnTo: completionPath(),
+        });
         if (response.authorization_url) {
-            setPendingOAuth({
-                connectorId,
-                baselineStatuses: Object.fromEntries((accounts || []).map((account) => [account.id, account.status])),
-                startedAt: Date.now(),
-            });
+            setPendingOAuth({ connectorId });
             openAuthorization(response.authorization_url);
         }
     };
@@ -804,8 +966,10 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                                     reconnectAccountId === account.id
                                     || deletingAccountId === account.id
                                     || pendingOAuth?.connectorId === account.connector_id
+                                    || installingAccountId === account.id
                                 }
                                 onReconnect={handleReconnect}
+                                onInstall={handleInstall}
                                 onDisconnect={(acc) =>
                                     setAccountPendingDisconnect({
                                         id: acc.id,
@@ -886,6 +1050,32 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                     }
                 }}
                 onEnable={handleAdvancedEnable}
+            />
+
+            <InstallChoiceDialog
+                choices={installChoices?.choices ?? null}
+                accountLabel={
+                    installChoices?.account.display_name
+                    || installChoices?.account.email
+                    || 'This account'
+                }
+                isSubmitting={bindInstallation.isPending}
+                onOpenChange={(open) => {
+                    if (!open) setInstallChoices(null);
+                }}
+                onChoose={async (installationId) => {
+                    if (!installChoices) return;
+                    try {
+                        await bindInstallation.mutateAsync({
+                            accountId: installChoices.account.id,
+                            installationId,
+                        });
+                        setInstallChoices(null);
+                        toast.success('Connected');
+                    } catch (error) {
+                        toast.error(describeConnectorError(error, 'Could not use that installation.'));
+                    }
+                }}
             />
 
             <ConnectAccountDialog

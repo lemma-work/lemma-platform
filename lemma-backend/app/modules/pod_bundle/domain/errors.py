@@ -116,9 +116,25 @@ class GithubRepositoryExistsError(PodBundleDomainError):
 
 
 class GithubRepositoryNotFoundError(PodBundleDomainError):
-    def __init__(self, repo_name: str):
+    """The repository to publish into is not there, or not reachable.
+
+    Both readings matter and the message cannot tell them apart, because GitHub
+    cannot: an App that is not installed on an owner gets the same 404 for a
+    repository that exists as for one that does not. Naming both is what turns
+    it from a dead end into a next step.
+
+    Lemma does not create the repository itself, and that is a property of the
+    GitHub App rather than a gap: creating one goes through `POST /user/repos`,
+    which needs the OAuth `repo` scope, and App user tokens carry no scopes at
+    all. Neither identity the App has can call it.
+    """
+
+    def __init__(self, repo_name: str, *, install_url: str | None = None):
+        where = f" Then check it is covered by the app's installation{f': {install_url}' if install_url else ''}."
         super().__init__(
-            f"GitHub repository '{repo_name}' does not exist. Choose Create mode first.",
+            f"Cannot reach the GitHub repository '{repo_name}'. Create it at "
+            "https://github.com/new if it does not exist yet, then publish "
+            "again." + where,
             code="POD_BUNDLE_REPOSITORY_NOT_FOUND",
             status_code=404,
         )
