@@ -29,6 +29,7 @@ export async function launchSplash(browser, t, {
   colorScheme = 'light',
   logs = null,
   recoveryOptions = null,
+  requests = null,
 } = {}) {
   const context = await browser.newContext({
     viewport,
@@ -39,6 +40,10 @@ export async function launchSplash(browser, t, {
   });
   t.after(() => context.close());
   const page = await context.newPage();
+  // Every request the splash makes, from before the first navigation, so a
+  // test can assert about what it did *not* fetch. Attaching this in the test
+  // would be too late: the module scripts are requested by the first load.
+  if (requests) page.on('request', request => requests.push(request.url()));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, []));

@@ -245,3 +245,31 @@ test('a connection failure keeps recovery readable and retries without offering 
   await page.getByRole('button', { name: 'Try again', exact: true }).click();
   assert.deepEqual((await deploymentCalls(page)).map(call => call.command), ['set_connection_mode', 'start']);
 });
+
+/// Reduced motion does not pay for an animation it will never see.
+///
+/// three.js is 356 KB of JavaScript, and it was imported at the top of the
+/// splash's module — so it was fetched and parsed before anything else in that
+/// file ran, on the one screen whose whole job is to appear immediately. The
+/// check that decides whether an orb is drawn at all comes after it, which
+/// means someone who had told their computer they do not want motion paid the
+/// entire cost for nothing.
+test('reduced motion never fetches the animation library', async t => {
+  const requests = [];
+  const page = await onboarding(t, {
+    requests,
+    initialState: { mode: 'local', phaseKey: 'boot', running: true },
+  });
+  await page.locator('#line').waitFor();
+
+  assert.deepEqual(
+    requests.filter(url => url.includes('three.module')),
+    [],
+    'the splash asked for an animation library it had already decided not to use',
+  );
+  // And the page is not merely quiet: it did load, and it did decide against
+  // the orb, so the absence above is a decision rather than a page that never
+  // got started.
+  assert.equal(await page.locator('#orb canvas').count(), 0);
+  assert.ok(requests.some(url => url.includes('/index.html')), 'the splash loaded');
+});
