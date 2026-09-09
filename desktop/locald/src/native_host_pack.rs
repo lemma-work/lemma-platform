@@ -252,7 +252,7 @@ fn build(
     // still the pinned ones, borrowed from an installed release.
     let (bindings, release_path) = match source {
         Some(layout) => {
-            let root = layout.root.canonicalize().map_err(|error| {
+            let root = canonicalize_for_children(&layout.root).map_err(|error| {
                 io::Error::new(
                     error.kind(),
                     format!(
@@ -264,7 +264,7 @@ fn build(
             (source_bindings(&root)?, layout.release_manifest.clone())
         }
         None => {
-            let root = pack_root.canonicalize().map_err(|error| {
+            let root = canonicalize_for_children(pack_root).map_err(|error| {
                 io::Error::new(
                     error.kind(),
                     format!(
@@ -839,14 +839,14 @@ fn resolve_on_path(tool: &str) -> io::Result<PathBuf> {
             invalid(format!(
                 "source mode needs {tool} on PATH; it runs the checkout directly"
             ))
-        })?
-        .canonicalize()
+        })
+        .and_then(|candidate| canonicalize_for_children(&candidate))
 }
 
 fn required_dir(root: &Path, label: &str, relative: &str) -> io::Result<PathBuf> {
     let candidate = root.join(relative);
     if candidate.is_dir() {
-        return candidate.canonicalize();
+        return canonicalize_for_children(&candidate);
     }
     Err(invalid(format!(
         "source checkout is missing {label}: {}",
@@ -858,7 +858,7 @@ fn required_file(root: &Path, label: &str, candidates: &[&str]) -> io::Result<Pa
     for relative in candidates {
         let candidate = root.join(relative);
         if candidate.is_file() {
-            return candidate.canonicalize();
+            return canonicalize_for_children(&candidate);
         }
     }
     Err(io::Error::new(
@@ -1036,6 +1036,52 @@ fn validate_hex_secret(label: &str, value: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// Take Windows' extended-length prefix back off a path, when it is safe to.
+///
+/// `\\?\C:\...` is what `canonicalize` returns on Windows. Rust handles it
+/// and so does `CreateProcess`, which is why it went unnoticed -- but these
+/// paths are handed to *other programs*, and the prefix is not universal.
+/// Node's module resolver reads `\\?\C:\Users\...` as a UNC path: server
+/// `?`, share `C:`. It then calls `lstat` on `C:` and dies with
+/// `EISDIR: illegal operation on a directory`. That is the whole of why the
+/// frontend could not start on Windows, on a machine where everything else in
+/// the stack had come up.
+///
+/// Only a plain drive path is stripped. `\\?\UNC\server\share` is a real
+/// UNC path and keeps its prefix, and so does anything the caller finds does
+/// not resolve without it -- a path long enough to need it is not decoration.
+fn without_verbatim_prefix(text: &str) -> Option<&str> {
+    let rest = text.strip_prefix(r"\\?\")?;
+    let bytes = rest.as_bytes();
+    // A drive path, not `UNC\...`: exactly `<letter>:` and then a separator.
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'\\' {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
+/// `canonicalize`, in a form the programs this spawns can read.
+///
+/// Every path in the generated manifest descends from one of these roots, so
+/// the prefix removed here is removed from all of them.
+fn canonicalize_for_children(path: &Path) -> io::Result<PathBuf> {
+    let canonical = path.canonicalize()?;
+    let Some(text) = canonical.to_str() else {
+        return Ok(canonical);
+    };
+    let Some(plain) = without_verbatim_prefix(text) else {
+        return Ok(canonical);
+    };
+    let plain = PathBuf::from(plain);
+    // Keep the prefix if the path genuinely needs it to resolve.
+    if plain.exists() {
+        Ok(plain)
+    } else {
+        Ok(canonical)
+    }
+}
+
 fn path_text(path: &Path) -> io::Result<String> {
     path.to_str().map(str::to_owned).ok_or_else(|| {
         invalid(format!(
@@ -1089,6 +1135,68 @@ fn invalid(message: impl Into<String>) -> io::Error {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// Every path that reaches the manifest goes through the stripper.
+    ///
+    /// The first attempt at this fixed the two roots and missed the leaves:
+    /// `required_file` ended in `candidate.canonicalize()`, which put the
+    /// prefix straight back on node.exe, the launcher and server.js. The
+    /// build looked fixed and the frontend failed exactly as before.
+    ///
+    /// A source assertion rather than a behavioural one, because the property
+    /// is "nobody adds another bare canonicalize", and the only way to observe
+    /// it otherwise is on Windows with a real pack.
+    #[test]
+    fn nothing_here_canonicalizes_a_path_without_stripping_the_prefix() {
+        let source = include_str!("native_host_pack.rs").replace("\r\n", "\n");
+        // The shipping half only: this test names the string it looks for, and
+        // would otherwise find itself.
+        let shipped = source
+            .split_once("#[cfg(test)]")
+            .map_or(source.as_str(), |(before, _)| before);
+        let bare: Vec<&str> = shipped
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.contains(".canonicalize()"))
+            .filter(|line| !line.starts_with("//"))
+            .collect();
+        assert_eq!(
+            bare,
+            ["let canonical = path.canonicalize()?;"],
+            "paths from here are handed to other programs, so they go through \
+             `canonicalize_for_children`; the only bare call is the one inside it"
+        );
+    }
+
+    /// Node reads `\\?\C:\...` as a UNC path and dies on `lstat 'C:'`.
+    ///
+    /// `canonicalize` returns that prefix on Windows, every path in the
+    /// generated manifest descends from a canonicalized root, and those paths
+    /// are handed to other programs. Rust and `CreateProcess` both accept it,
+    /// which is why it went unnoticed until a Windows machine tried to start
+    /// the frontend and Node reported
+    /// `EISDIR: illegal operation on a directory, lstat 'C:'` -- server `?`,
+    /// share `C:`.
+    ///
+    /// String-level, so it is tested on every platform rather than only on the
+    /// one where it matters.
+    #[test]
+    fn a_drive_path_loses_the_prefix_and_a_real_unc_path_keeps_it() {
+        assert_eq!(
+            super::without_verbatim_prefix(r"\\?\C:\Users\a\frontend-launcher.mjs"),
+            Some(r"C:\Users\a\frontend-launcher.mjs"),
+        );
+        // A genuine UNC path: the prefix is not decoration there.
+        assert_eq!(
+            super::without_verbatim_prefix(r"\\?\UNC\server\share\file"),
+            None,
+        );
+        // Already plain, or not a prefix at all.
+        assert_eq!(super::without_verbatim_prefix(r"C:\Users\a"), None);
+        assert_eq!(super::without_verbatim_prefix("/usr/local/bin/node"), None);
+        // A drive letter with nothing after it is not a path to hand anyone.
+        assert_eq!(super::without_verbatim_prefix(r"\\?\C:"), None);
+    }
 
     /// Every path this file probes for is one the contract names.
     ///

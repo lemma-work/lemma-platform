@@ -526,6 +526,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'dependency.degraded': EventSpec('warning', frozenset({'dependency', 'error_type', 'failure_count', 'incident_duration_ms'})),
     'dependency.recovered': EventSpec('info', frozenset({'dependency', 'failure_count', 'incident_duration_ms'})),
     'email.send.failed': EventSpec('error', frozenset()),
+    'embeddings.local_embedder.backend_import_failed.degraded': EventSpec('warning', frozenset()),
     'embeddings.provider.retrying.degraded': EventSpec('warning', frozenset({'attempt', 'delay_seconds', 'error_type', 'max_attempts'})),
     'events.quarantine.counter_unavailable': EventSpec('debug', frozenset()),
     'events.quarantine.dead_letter_write_failed': EventSpec('error', frozenset({'error_type', 'message_id', 'original_stream'})),

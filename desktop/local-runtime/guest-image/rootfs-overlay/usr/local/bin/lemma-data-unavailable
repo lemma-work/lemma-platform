@@ -1,0 +1,19 @@
+#!/bin/sh
+# Report the one data-disk failure `lemma-mount-data` cannot report itself.
+#
+# `AssertPathExists=/dev/nvme0n1` fails lemma-data.service *before* ExecStart
+# runs, so the script never reaches a `needs-repair:` line -- and that line is
+# the host's only detector. Without this the host waits out its whole readiness
+# budget and reports "did not become ready", which names nothing and suggests
+# nothing, for a failure it could have named in a second.
+#
+# Guarded on the device rather than printed unconditionally, because
+# `OnFailure=` also fires when `lemma-mount-data` itself failed -- and there it
+# has already printed a more specific reason. The host reads the *last* marker
+# on the console, so an unconditional line here would replace a precise
+# diagnosis ("holds a vfat filesystem") with a vague one.
+set -eu
+
+if [ ! -e /dev/nvme0n1 ]; then
+  printf 'lemma-data: needs-repair: the data disk never appeared in the guest\n'
+fi
