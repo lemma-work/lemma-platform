@@ -820,13 +820,17 @@ jobs:
           npm ci --prefix lemma-typescript
           npm ci --prefix lemma-frontend
           npm ci --prefix desktop/ui-tests
-          # Retried, because `--with-deps` runs apt, and apt fetches Google's
-          # Chrome repository index over the network. A "Hash Sum mismatch"
-          # there -- a mirror caught mid-update, which is nobody's bug and
-          # nothing this repository controls -- exits 100 and takes the whole
-          # lane down after every Rust test in it has already passed. Measured
-          # once on this job; the second attempt costs seconds and the failure
-          # it absorbs costs a re-run of everything.
+          # `--with-deps` runs apt, and apt fetches Google's Chrome repository
+          # index. "Hash Sum mismatch" there exits 100 and takes the whole lane
+          # down after every Rust test in it has already passed.
+          #
+          # The retry throws the index away first, which is the part that
+          # matters. A mismatch is apt saying its cached index does not agree
+          # with what the server just served -- so repeating the same fetch
+          # reproduces it exactly, which is what the first version of this
+          # retry did: three attempts, three identical failures, measured on
+          # this job. Clearing `/var/lib/apt/lists` is what makes the next
+          # attempt a different question.
           for attempt in 1 2 3; do
             npm exec --prefix desktop/ui-tests -- \
               playwright install --with-deps chromium && break
@@ -834,8 +838,9 @@ jobs:
               echo "playwright install failed three times; this is not transient"
               exit 1
             fi
-            echo "playwright install failed (attempt $attempt); retrying"
-            sleep 15
+            echo "playwright install failed (attempt $attempt); refetching the apt index"
+            sudo rm -rf /var/lib/apt/lists/*
+            sudo apt-get update || true
           done
 
       - name: Chat UI with JSON ACP agents
