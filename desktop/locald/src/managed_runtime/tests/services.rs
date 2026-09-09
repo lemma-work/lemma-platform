@@ -168,6 +168,7 @@ fn host_processes_use_private_guest_services_without_published_infra_ports() {
             active_sandboxes: 0,
             balloon_state: None,
             balloon_target_bytes: None,
+            data_disk: None,
         })),
     };
 

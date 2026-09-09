@@ -1,6 +1,7 @@
 //! Whether this guest is well enough to be asked for anything.
 
 use super::*;
+use crate::capacity::data_disk_space;
 
 impl<E: Engine + 'static> GuestService<E> {
     pub(crate) fn health(&self) -> Result<Value, GuestError> {
@@ -42,6 +43,13 @@ impl<E: Engine + 'static> GuestService<E> {
             },
             "host_gateway": self.host_gateway,
             "active_sandboxes": active_sandboxes,
+            // What is left of the disk everything in the guest shares. Absent
+            // on a guest too old to report it, and absent rather than guessed
+            // when the filesystem cannot be measured.
+            "data_disk": data_disk_space(&self.state_root).map(|(free, total)| json!({
+                "free_bytes": free,
+                "total_bytes": total,
+            })),
             // Reported on every health call so a drifting guest clock is
             // visible to whoever is already asking whether the guest is well,
             // rather than only to whoever thinks to ask about time.

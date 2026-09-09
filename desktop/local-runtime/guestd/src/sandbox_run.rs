@@ -3,6 +3,14 @@
 
 use super::*;
 
+/// How much log one sandbox may keep, per file and in total.
+///
+/// Split rather than one big file so rotation actually frees space: a single
+/// capped file is truncated, which loses everything, while three rotated ones
+/// keep the recent past and drop the distant one.
+const SANDBOX_LOG_FILE_MIB: u32 = 16;
+const SANDBOX_LOG_FILES: u32 = 3;
+
 pub(crate) fn build_run_arguments(
     parameters: &EnsureParameters,
     workspace: Option<&Path>,
@@ -41,6 +49,20 @@ pub(crate) fn build_run_arguments(
         env_file.display().to_string(),
         "--add-host".into(),
         format!("host.lemma.internal:{host_gateway}"),
+        // Bounded, because these write to the guest's data disk and that disk
+        // is a fixed size. A sandbox with a chatty loop in it -- an agent
+        // retrying, a dependency printing a warning per file -- had nothing
+        // stopping its log from growing until the disk was full, and a full
+        // data disk is not a lost sandbox: it is Postgres and everything else
+        // in the guest stopping too.
+        //
+        // Enough to debug a failure with, not enough to be a problem: three
+        // files at 16 MiB is 48 MiB per container, and the newest is always
+        // the one being written.
+        "--log-opt".into(),
+        format!("max-size={SANDBOX_LOG_FILE_MIB}m"),
+        "--log-opt".into(),
+        format!("max-file={SANDBOX_LOG_FILES}"),
     ];
     match parameters.workload_kind {
         WorkloadKind::Workspace => {

@@ -129,6 +129,21 @@ pub struct ManagedRuntimeStatus {
     pub balloon_state: Option<String>,
     #[serde(default)]
     pub balloon_target_bytes: Option<u64>,
+    /// What is left of the disk everything in the guest shares.
+    ///
+    /// Absent on a guest too old to report it, and absent rather than guessed
+    /// when the filesystem could not be measured -- so a caller that finds
+    /// nothing here knows it has not been told, rather than being told a
+    /// number nobody stood behind.
+    #[serde(default)]
+    pub data_disk: Option<GuestDiskSpace>,
+}
+
+/// The guest's data disk, as the guest measured it.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct GuestDiskSpace {
+    pub free_bytes: u64,
+    pub total_bytes: u64,
 }
 
 pub struct ManagedRuntime {
