@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, date
+from itertools import count
 from uuid import UUID
 from sqlalchemy import event, text
 from sqlalchemy.pool import NullPool
@@ -11,9 +12,16 @@ from app.core.observability.connection_scope import attach_connection_scope_moni
 from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
-# Set once if the pool-utilization probe below ever raises, so a broken
-# diagnostic is reported a single time instead of on every checkout.
-_pool_probe_failed = False
+# Counts failures of the pool-utilization probe below, so a broken diagnostic is
+# reported once rather than on every checkout. A counter rather than a flag
+# because checkout runs on whichever thread borrowed the connection, and a
+# read-then-set flag lets two of them both see the unset value and both warn.
+# `itertools.count.__next__` is a single C call, so incrementing it cannot be
+# interleaved -- the same reason the stdlib's own `threading` module numbers
+# threads with `_count().__next__` instead of taking a lock. A lock would also
+# work, but this handler is on the checkout path and must not add contention
+# there to buy one log line.
+_pool_probe_failures = count()
 _pool_pressure_incident = DependencyIncident(
     "database_pool_capacity",
     logger=logger,
@@ -79,9 +87,7 @@ def _log_pool_utilization(dbapi_conn, connection_record, proxy=None):
         # gone, and pool exhaustion goes back to arriving as an unexplained
         # `TimeoutError`. Warned once, not per checkout: the second occurrence
         # says nothing the first did not, and there can be thousands a second.
-        global _pool_probe_failed
-        if not _pool_probe_failed:
-            _pool_probe_failed = True
+        if next(_pool_probe_failures) == 0:
             logger.warning(
                 "db.session.pool_utilization_probe_failed",
                 error_type=type(exc).__name__,

@@ -724,10 +724,16 @@ def test_scaffold_comments_list_every_enum_value(tmp_path: Path):
     for platform in enums.SURFACE_PLATFORMS:
         assert platform in surface
     # The schedule comment annotates each type ("TIME (cron)"), so it is prose
-    # rather than a rendered join -- this is what keeps the prose honest.
+    # rather than a rendered join -- this is what keeps the prose honest. Only
+    # the comment text counts: `"schedule_type": "TIME"` is a value in the JSON
+    # body, so searching the whole file would pass for TIME even after the
+    # comment stopped naming it -- which is the drift this is here to catch.
     schedule = (init_resource("schedule", "daily", root=tmp_path).files[0]).read_text()
+    schedule_comments = "\n".join(
+        line.split("//", 1)[1] for line in schedule.splitlines() if "//" in line
+    )
     for schedule_type in enums.SCHEDULE_TYPES:
-        assert schedule_type in schedule
+        assert schedule_type in schedule_comments
 
 
 # --------------------------------------------------------------------------- #
