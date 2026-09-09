@@ -36,7 +36,23 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const CONTAINER_PREFIX: &str = "lemma-sandbox-";
 const MANAGED_LABEL: &str = "app.kubernetes.io/name=lemma-sandbox";
 const ENGINE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
-const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long one image pull may take before it is treated as wedged.
+///
+/// Five minutes was not a limit on a hung pull, it was a limit on a slow one.
+/// A first install pulls roughly a gigabyte of PostgreSQL, Redis and
+/// SuperTokens, and on a connection that manages half a megabyte a second that
+/// is half an hour. Measured on a real Windows machine: two attempts, ten
+/// minutes, 317 MB in the content store and not one image completed --
+/// progress every time, and failure every time, for ever.
+///
+/// An hour is still a bound: a pull that is genuinely stuck ends, and one
+/// that is merely slow finishes. Measured on that machine, the rate had
+/// dropped to about a third of a megabyte a second -- a gigabyte at that rate
+/// is fifty minutes. The nested budget on the host side has to
+/// be larger than this or it gives up first, which is a worse failure because
+/// the guest carries on pulling into a request nobody is waiting on any more --
+/// see `guest_request_budget` in the runtime manager.
+const ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const CACHE_REPAIR_RESPONSE_GRACE: Duration = Duration::from_secs(10);
 
 /// How long one `sandbox.ensure` may wait for a sandbox to start serving.
@@ -442,8 +458,14 @@ fn run_bounded_engine_command(
                 libc::kill(process_group, libc::SIGKILL);
             }
             let _ = child.wait();
+            // Naming the verb, because "engine command" is true of pulling a
+            // gigabyte of images and of listing containers, and those are not
+            // the same problem to the person reading it.
+            let verb = arguments.first().map_or("command", String::as_str);
             return Err(format!(
-                "managed container engine command timed out after {}s",
+                "managed container engine `{verb}` timed out after {}s. \
+                 If this was a first install, it was downloading images, and \
+                 the download is bounded by this computer's connection.",
                 timeout.as_secs()
             ));
         }
@@ -664,9 +686,13 @@ impl<E: Engine + 'static> GuestService<E> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             )
         };
+        if !is_observation(&request.operation) {
+            refuse_unbound_data()?;
+        }
         match request.operation.as_str() {
             "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
+            "diagnostics.guest" => Ok(guest_diagnostics()),
             "diagnostics.sandbox" => self.sandbox_diagnostics(request.parameters),
             "system.shutdown" => self.shutdown(),
             "system.clock" => self.set_clock(request.parameters),
@@ -3530,6 +3556,105 @@ fn callback_failure_message(last_error: Option<&str>, guest_egress_ok: bool) -> 
     format!("sandbox cannot reach the Lemma API callback: {cause}. {egress}.")
 }
 
+/// What a failed start collects from inside the guest.
+///
+/// The same text the Windows host runs through `wsl.exe --exec`, from the same
+/// file, because a VZ guest has no exec channel and macOS otherwise collected
+/// nothing whatsoever. Compiled in rather than accepted from the host: a host
+/// that could post a shell script here would have a general-purpose exec
+/// channel into the guest wearing a diagnostics label. The cost is that an
+/// older guest collects with an older script, which is the right way round --
+/// the guest decides what may run in it.
+const GUEST_DIAGNOSTICS: &str = include_str!("../../guest-diagnostics.sh");
+
+/// How long the guest gives its own collection before killing it.
+///
+/// Bounded here as well as by the host's request deadline, because the two
+/// limits do different things: the host's stops waiting and returns nothing,
+/// this one stops collecting and returns everything printed so far. `nerdctl
+/// ps` against a wedged containerd is exactly the case that needs the
+/// difference, and it is also the case someone is most likely collecting for.
+const DIAGNOSTICS_TIMEOUT: &str = "20s";
+
+/// Kept to the tail, matching what the host writes to `logs/guest.log`.
+const MAX_DIAGNOSTICS_BYTES: usize = 128 * 1024;
+
+/// Refuse to write anything while the data is not on the storage that keeps it.
+///
+/// A WSL guest can be brought up by anything that runs a command in it: the
+/// bridge does exactly that for every request, and WSL restarts a terminated
+/// distribution to serve one. Nothing in that path runs
+/// `lemma-runtime-init`, so a distribution restarted that way has no binds --
+/// and `/var/lib/lemma` is then an ordinary directory on the runtime
+/// distribution's own disk, which the next upgrade deletes.
+///
+/// That is the failure the data holder exists to prevent, arriving by the one
+/// door the holder does not stand in. So: if this guest has a holder at all,
+/// the binds are not optional, and a mutation that would write outside them is
+/// refused rather than quietly misplaced.
+///
+/// Retryable, because it is: the host's start path runs the init that fixes
+/// it. Scoped to guests that have a holder, so it says nothing at all on macOS
+/// or in a test, where `/mnt/wsl` does not exist.
+fn refuse_unbound_data() -> Result<(), GuestError> {
+    // `/mnt/wsl` is the tmpfs WSL mounts in every distribution, and nothing
+    // else has it, so it is what "this guest is WSL" means here.
+    //
+    // The holder's own path is not that, and scoping on it was a hole in the
+    // exact case this guard exists for: a share that was never published
+    // leaves no directory, so the check said "no holder, nothing to protect"
+    // and let the mutation through to write on the disk the next upgrade
+    // deletes. Absent is not "not applicable", it is the failure.
+    if !Path::new("/mnt/wsl").is_dir() {
+        return Ok(());
+    }
+    if is_mountpoint(Path::new("/var/lib/lemma")) {
+        return Ok(());
+    }
+    Err(GuestError {
+        code: "guest_data_unbound".into(),
+        message: "Lemma's private runtime is not holding your data yet; it is \
+                  still starting."
+            .into(),
+        retryable: true,
+        status_code: 503,
+    })
+}
+
+fn is_mountpoint(path: &Path) -> bool {
+    Command::new("/usr/bin/mountpoint")
+        .arg("-q")
+        .arg(path)
+        .stdin(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn guest_diagnostics() -> Value {
+    let output = Command::new("/usr/bin/timeout")
+        .args([
+            "--signal=KILL",
+            DIAGNOSTICS_TIMEOUT,
+            "/bin/sh",
+            "-c",
+            GUEST_DIAGNOSTICS,
+        ])
+        .stdin(Stdio::null())
+        .output();
+    let text = match output {
+        // The exit status is ignored on purpose, killed-at-the-limit included.
+        // The script runs under `set +e` precisely so that one collector
+        // failing does not stop the next, and what it printed before giving up
+        // is the reason anyone asked.
+        Ok(output) => {
+            let start = output.stdout.len().saturating_sub(MAX_DIAGNOSTICS_BYTES);
+            String::from_utf8_lossy(&output.stdout[start..]).into_owned()
+        }
+        Err(error) => format!("guest diagnostics could not run: {error}\n"),
+    };
+    json!({ "text": text })
+}
+
 fn network_diagnostics() -> Value {
     let dns = Command::new("/usr/bin/timeout")
         .args([
@@ -4952,6 +5077,75 @@ mod tests {
         );
     }
 
+    /// macOS had no way to ask the guest what it saw.
+    ///
+    /// Windows drives `guest-diagnostics.sh` through `wsl.exe --exec`. A VZ
+    /// guest has no exec channel of any kind, so the same collection has to be
+    /// reachable as an operation -- and until it was, a macOS start that
+    /// failed with the guest up and its services broken left the serial
+    /// console as the only record, which says nothing about services.
+    #[test]
+    fn a_failed_start_can_ask_the_guest_what_it_saw() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(Vec::new()),
+            root.path().into(),
+            Some("192.168.64.2".into()),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let response = service.handle(GuestRequest {
+            version: 1,
+            operation: "diagnostics.guest".into(),
+            parameters: json!({}),
+            capability: None,
+        });
+
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.unwrap();
+        assert!(
+            result["text"].is_string(),
+            "the host appends this to logs/guest.log as it stands: {result}"
+        );
+    }
+
+    /// Collecting must not queue behind the thing that is stuck.
+    ///
+    /// Diagnostics are asked for while a mutation is wedged. Serialising them
+    /// behind that mutation would make the collector wait for exactly the
+    /// operation it was called to explain.
+    #[test]
+    fn collecting_diagnostics_does_not_wait_on_the_mutation_lock() {
+        assert!(is_observation("diagnostics.guest"));
+    }
+
+    /// One script, included by both ends, so they cannot drift.
+    ///
+    /// The addresses line is the load-bearing one: `discover_guest_ip` reads
+    /// `ip -4 -o addr show`, and this collection is the only thing that can
+    /// say what the guest actually answered when that discovery picked wrong.
+    #[test]
+    fn the_guest_collects_what_the_windows_host_collects() {
+        for fragment in [
+            "ip -4 -o addr show",
+            "ip -4 route show",
+            "/usr/local/bin/nerdctl ps -a",
+            "/var/log/lemma/",
+            "set +e",
+        ] {
+            assert!(
+                GUEST_DIAGNOSTICS.contains(fragment),
+                "guest-diagnostics.sh stopped collecting {fragment}"
+            );
+        }
+        assert!(
+            !GUEST_DIAGNOSTICS.contains("journalctl"),
+            "the guest runs with systemd=false, so there is no journal to read"
+        );
+    }
+
     #[test]
     fn sandbox_diagnostics_exposes_only_sanitized_runtime_state() {
         let root = tempdir().unwrap();
@@ -5587,15 +5781,17 @@ mod tests {
     #[test]
     fn immutable_guest_routes_temporary_and_network_state_to_writable_mounts() {
         let fstab = include_str!("../../guest-image/rootfs-overlay/etc/fstab");
-        let mount_data =
-            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        // The binds moved into the script both platforms share; see
+        // `both_platforms_bind_the_data_through_the_same_script`.
+        let bind_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
         let guest_service = include_str!(
             "../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-guest-service"
         );
 
         assert!(fstab.contains("tmpfs /tmp tmpfs"));
-        assert!(mount_data.contains("$data_root/cni/net.d"));
-        assert!(mount_data.contains("/etc/cni/net.d"));
+        assert!(bind_data.contains("$data_root/cni/net.d"));
+        assert!(bind_data.contains("/etc/cni/net.d"));
         assert!(guest_service.contains("HOME=/var/lib/lemma/home"));
         assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
@@ -5610,9 +5806,19 @@ mod tests {
     /// connection timed out -- while the services it wanted were listening on
     /// `eth0` and, through WSL's own forwarding, on the host's `127.0.0.1`.
     ///
-    /// Both fixtures are verbatim from real machines: the first from the
-    /// Windows guest as it failed, the second from the VZ guest, where the
-    /// old code was right and has to stay right.
+    /// The Windows fixture is verbatim from that guest as it failed. The
+    /// macOS one is not a capture: a VZ guest has no exec channel, so it was
+    /// assembled, and then checked line by line against the guest it stands
+    /// for. Its field values -- `enp0s1`, index 2, `/24`, the broadcast, the
+    /// global scope, the DHCP lease that makes it `dynamic`, and that `lo`
+    /// carries no global IPv4 so cannot appear -- were read off the running
+    /// guest through the one namespace reachable from the host. Its exact
+    /// bytes, which are a property of iproute2 rather than of the guest --
+    /// four spaces after the name, the `\` and the seven that follow it --
+    /// were reproduced by running the same iproute2 the guest ships, from the
+    /// same Ubuntu 24.04, over a dummy `enp0s1` given that address and lease.
+    /// The two agree character for character apart from the index, and the
+    /// index is the part that was read from the guest.
     #[test]
     fn the_guest_reports_an_address_the_host_can_actually_reach() {
         let wsl = "\
@@ -5702,6 +5908,225 @@ mod tests {
     /// `Assert*` fails the unit instead, and that failure propagates through
     /// those `Requires` and stops the services that would have written to the
     /// wrong disk.
+    /// The holder does not stand in every door into the guest.
+    ///
+    /// Anything that runs a command in a WSL distribution starts it, and the
+    /// bridge does exactly that for every request. Nothing on that path runs
+    /// `lemma-runtime-init`, so a distribution restarted that way has no binds
+    /// and `/var/lib/lemma` is an ordinary directory on the disk the next
+    /// upgrade deletes. A mutation served through that door would put work
+    /// somewhere it will not survive, and report success.
+    #[test]
+    fn a_guest_whose_data_is_not_bound_refuses_to_write() {
+        // Says nothing off WSL -- macOS, and this test host.
+        refuse_unbound_data().expect("not a WSL guest, nothing to be wrong about");
+
+        // Scoped on `/mnt/wsl`, which every WSL distribution has, and not on
+        // the share itself. Scoping on the share was a hole in the exact case
+        // the guard exists for: one that was never published leaves no
+        // directory, so the check read as "no holder, not applicable" and let
+        // the write through to the disk the next upgrade deletes.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let guard_body = &source[source
+            .find("fn refuse_unbound_data")
+            .expect("the guard exists")..];
+        let guard_body = &guard_body[..guard_body.find("\n}\n").expect("it ends")];
+        assert!(
+            guard_body.contains("Path::new(\"/mnt/wsl\").is_dir()"),
+            "the platform check has to be /mnt/wsl, not the share:\n{guard_body}"
+        );
+        assert!(
+            !guard_body.contains("Path::new(\"/mnt/wsl/lemma-data\")"),
+            "an absent share is the failure, not a reason to skip:\n{guard_body}"
+        );
+
+        // The guard is only worth having if it runs before the work, so this
+        // pins where it sits rather than only that it exists.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let dispatch = source
+            .find("match request.operation.as_str()")
+            .expect("the dispatch exists");
+        let guard = source
+            .find("refuse_unbound_data()?")
+            .expect("mutations are guarded");
+        assert!(
+            guard < dispatch,
+            "the guard has to run before the operation it is guarding"
+        );
+
+        let observation_only = source[guard.saturating_sub(200)..guard]
+            .contains("!is_observation(&request.operation)");
+        assert!(
+            observation_only,
+            "reads have to keep answering: health is how the host learns the \
+             guest is still coming up, and refusing it would turn a starting \
+             runtime into a dead one"
+        );
+    }
+
+    /// On Windows the data used to live inside the replaceable distribution.
+    ///
+    /// Everything durable -- workspaces, databases, the container store -- sat
+    /// on the runtime distribution's own ext4.vhdx, which every upgrade
+    /// replaces wholesale. The upgrade could therefore only refuse, and did,
+    /// which pinned Windows users to whichever release they installed first.
+    /// The data now lives in a second distribution that publishes it into the
+    /// WSL VM's shared namespace, and this is the init that consumes it.
+    ///
+    /// Refusing when the share is absent is the load-bearing half. Carrying on
+    /// would put the data back inside the distribution the next upgrade
+    /// deletes, and every run until that upgrade would look perfectly healthy.
+    #[test]
+    fn windows_will_not_start_without_the_data_holder() {
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+
+        // A mountpoint, not a directory: `/mnt/wsl` is a tmpfs, so a publish
+        // that made the path and then failed to bind leaves a real directory
+        // on storage the VM discards, and binding the data out of *that*
+        // passes every check below while losing the work.
+        let check = init
+            .find("if ! /usr/bin/mountpoint -q \"$LEMMA_DATA_SHARE\"")
+            .expect("it checks the share is really the published bind");
+        let bind = init
+            .find("/usr/local/bin/lemma-bind-data")
+            .expect("it binds the data from the share");
+        let containerd = init
+            .find("mkdir -p /run/containerd")
+            .expect("it starts containerd");
+
+        assert!(
+            check < bind && bind < containerd,
+            "the share is checked, then bound, and only then does anything \
+             start that writes to it: {init}"
+        );
+        assert!(
+            init.contains("lemma-data: needs-repair:"),
+            "the refusal has to reach the host's own detector: {init}"
+        );
+    }
+
+    /// One implementation of the binds, for both platforms.
+    ///
+    /// The last thing that script does is the gate that says the data is not
+    /// where it must be. A second copy of it that drifted would be a guest
+    /// that looks healthy while throwing work away, on whichever platform got
+    /// the stale one -- so the two reach a data root differently and then run
+    /// exactly the same code.
+    #[test]
+    fn both_platforms_bind_the_data_through_the_same_script() {
+        let mount = include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        let bind = include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+
+        for (name, script) in [("lemma-mount-data", mount), ("lemma-runtime-init", init)] {
+            assert!(
+                script.contains("/usr/local/bin/lemma-bind-data"),
+                "{name} has to hand over rather than keep its own copy"
+            );
+            assert!(
+                !script.contains("mount --bind"),
+                "{name} still binds the data itself, which is the second copy: {script}"
+            );
+        }
+        for required in [
+            "/var/lib/lemma",
+            "/var/lib/containerd",
+            "/var/lib/nerdctl",
+            "/etc/cni/net.d",
+        ] {
+            assert!(
+                bind.contains(required),
+                "the shared script has to bind {required}"
+            );
+        }
+        assert!(
+            bind.contains("lemma-data: needs-repair:"),
+            "and it has to keep the gate that says the data did not land"
+        );
+    }
+
+    /// A diagnosis written where the host cannot read it is not a diagnosis.
+    ///
+    /// The host's `guest_needs_data_repair` greps the serial console for
+    /// `lemma-data: needs-repair:`, and that verdict is what turns a failed
+    /// start into a named cause and an offer to reset. Under systemd's default
+    /// `StandardOutput=journal` every one of those lines went to the guest's
+    /// journal instead, which nothing on the host reads: the VZ kernel command
+    /// line sets no `forward_to_console`, and the Windows guest runs with
+    /// systemd off entirely. So the detector could not fire, and the host
+    /// waited out its full readiness budget and said "did not become ready"
+    /// for failures the guest had already diagnosed precisely.
+    ///
+    /// Confirmed on a real VZ guest before this was fixed: its console log
+    /// holds systemd's own "Finished lemma-data.service" line and not one byte
+    /// of the `mkfs.ext4` that same unit had just run.
+    #[test]
+    fn a_repair_verdict_has_to_reach_the_channel_the_host_reads() {
+        const MARKER: &str = "lemma-data: needs-repair:";
+        const CONSOLE: &str = "StandardOutput=journal+console";
+        for (name, script, unit) in [
+            (
+                "lemma-mount-data",
+                include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data"),
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service"
+                ),
+            ),
+            (
+                "lemma-data-unavailable",
+                include_str!(
+                    "../../guest-image/rootfs-overlay/usr/local/bin/lemma-data-unavailable"
+                ),
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data-unavailable.service"
+                ),
+            ),
+        ] {
+            assert!(
+                script.contains(MARKER),
+                "{name} is only listed here because it prints the marker"
+            );
+            assert!(
+                unit.lines().any(|line| line.trim() == CONSOLE),
+                "{name} prints a verdict the host reads off the console, so its                  unit has to write there: {unit}"
+            );
+        }
+    }
+
+    /// The one failure the mount script cannot report is its own absence.
+    ///
+    /// `AssertPathExists` fails the unit before `ExecStart`, so no
+    /// `needs-repair:` line is ever printed and the host falls back to a flat
+    /// 120-second timeout. `OnFailure=` is the only hook that still runs.
+    #[test]
+    fn a_data_disk_that_never_appeared_is_named_rather_than_timed_out() {
+        let unit =
+            include_str!("../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service");
+        assert!(
+            unit.lines()
+                .any(|line| line.trim() == "OnFailure=lemma-data-unavailable.service"),
+            "nothing else runs when the assertion fails: {unit}"
+        );
+
+        let notice =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-data-unavailable");
+        assert!(
+            notice.contains("[ ! -e /dev/nvme0n1 ]"),
+            "OnFailure also fires for failures the mount script already                  diagnosed, and the host reads the last marker -- so this must not                  print over a precise reason: {notice}"
+        );
+
+        // An overlay file arrives without its executable bit; the Dockerfile
+        // grants it. A notice that cannot run leaves exactly the silence it
+        // was added to break.
+        let dockerfile = include_str!("../../guest-image/Dockerfile");
+        assert!(
+            dockerfile.contains("/usr/local/bin/lemma-data-unavailable"),
+            "the notice has to be made executable in the image: {dockerfile}"
+        );
+    }
+
     #[test]
     fn a_missing_data_disk_fails_the_guest_rather_than_being_skipped() {
         let unit =
@@ -5759,7 +6184,7 @@ mod tests {
     #[test]
     fn the_guest_refuses_to_finish_mounting_with_the_binds_missing() {
         let mount_data =
-            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
         let verification = mount_data
             .rfind("for required in")
             .expect("the mount script must verify its bind mounts before exiting");

@@ -34,7 +34,6 @@ logger = get_logger(__name__)
 _MAX_REDIRECTS = 3
 _MAX_FILE_BYTES = 100 * 1024 * 1024
 _DEFAULT_USER_AGENT = "lemma-connectors"
-_DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
 class OpenApiHttpExecutionError(Exception):
