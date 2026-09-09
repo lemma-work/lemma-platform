@@ -169,3 +169,46 @@ def test_expensive_security_jobs_are_change_scoped() -> None:
     assert "if: needs.changes.outputs.javascript == 'true'" in workflow
     assert "if: needs.changes.outputs.python_dependencies == 'true'" in workflow
     assert "if: needs.changes.outputs.backend_image == 'true'" in workflow
+
+
+def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
+    """Chromium is downloaded once per Playwright version, not once per run.
+
+    It is ~150 MB and byte-identical between runs, so three desktop jobs were
+    each fetching it on every push. The cache has to sit *before* the install
+    in the same job -- a restore afterwards is a restore of nothing -- and it
+    has to be keyed on the lockfile, because that is the file a Playwright
+    version bump changes.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    installing = set()
+    for name, job in workflow["jobs"].items():
+        for index, step in enumerate(job.get("steps", [])):
+            if "playwright install" not in str(step.get("run", "")):
+                continue
+            installing.add(name)
+            cache = [
+                earlier
+                for earlier in job["steps"][:index]
+                if earlier.get("uses", "").startswith("actions/cache@")
+                and "ms-playwright" in str(earlier.get("with", {}).get("path", ""))
+            ]
+            assert cache, f"{name} downloads a browser it never restores"
+            key = cache[-1]["with"]["key"]
+            assert "desktop/ui-tests/package-lock.json" in key, (
+                f"{name} keys its browser cache on something other than the "
+                "lockfile a version bump changes"
+            )
+            paths = cache[-1]["with"]["path"]
+            # One step for three runners: the browser lives somewhere different
+            # on each, and a path that does not exist is skipped rather than
+            # failing.
+            for expected in (
+                "~/.cache/ms-playwright",
+                "~/Library/Caches/ms-playwright",
+                "~/AppData/Local/ms-playwright",
+            ):
+                assert expected in paths, f"{name} misses {expected}"
+    assert installing, "no job installs a browser; this contract found nothing"

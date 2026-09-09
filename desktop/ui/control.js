@@ -88,8 +88,12 @@ function setPage(page) {
   $("page-subtitle").textContent = titles[page][1];
   document.querySelector(".content").scrollTo({ top: 0, behavior: "instant" });
   // Only poll while the logs are actually on screen.
-  if (page === "diagnostics") startLogPolling();
-  else stopLogPolling();
+  if (page === "diagnostics") {
+    startLogPolling();
+    loadTelemetry();
+  } else {
+    stopLogPolling();
+  }
 }
 
 /* ---------------------------------------------------------------- logs ---
@@ -938,6 +942,42 @@ function render() {
   }
   renderAgentHost(snapshot.agent_host || {});
   renderSharing(sharing);
+}
+
+// The anonymous install-health switch.
+//
+// Read once, when Local settings opens. It is not part of the operator config
+// -- it is a choice about this installation, stored beside the install id --
+// so it neither joins the dirty-section machinery nor waits for a save.
+let telemetryLoaded = false;
+async function loadTelemetry() {
+  if (telemetryLoaded) return;
+  telemetryLoaded = true;
+  let status;
+  try {
+    status = await invoke("telemetry_status");
+  } catch {
+    // A build that cannot answer offers nothing rather than a dead switch.
+    return;
+  }
+  if (!status?.available) return;
+  const panel = $("telemetry-panel");
+  const box = $("telemetry-enabled");
+  panel.hidden = false;
+  box.checked = Boolean(status.enabled);
+  $("telemetry-detail").textContent =
+    `Sent to ${status.host}, identified only by a random id for this installation`
+    + (status.install_id ? ` (${status.install_id.slice(0, 8)}…).` : ".")
+    + " Turning this off is remembered, and nothing is sent again.";
+  box.addEventListener("change", async () => {
+    const wanted = box.checked;
+    try {
+      await invoke("set_telemetry_enabled", { enabled: wanted });
+    } catch (error) {
+      box.checked = !wanted;
+      toast(String(error), "bad");
+    }
+  });
 }
 
 // Matches `formatUptime` in the workspace's own This computer card, which is

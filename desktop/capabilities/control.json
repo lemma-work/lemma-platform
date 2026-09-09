@@ -17,6 +17,8 @@
     "allow-repair-runtime",
     "allow-control-snapshot",
     "allow-agent-host-action",
+    "allow-telemetry-status",
+    "allow-set-telemetry-enabled",
     "allow-apply-operator-config",
     "allow-discover-provider-models",
     "allow-configure-ai-provider",
