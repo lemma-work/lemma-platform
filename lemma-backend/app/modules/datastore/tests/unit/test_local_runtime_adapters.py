@@ -382,3 +382,72 @@ def test_onnx_thread_count_is_pinned_to_the_configured_allocation():
     # 0 means "let ONNX decide", which is only right when we own the machine.
     with patch.object(settings, "local_embedding_threads", 0):
         assert embedder._threading_kwargs() == {}
+
+
+def test_the_embedding_backend_is_imported_only_where_it_will_be_used(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.core.embeddings import local_embedder
+
+    for provider, expected in (("openai", []), ("local", [local_embedder._BACKEND_MODULE])):
+        imported: list[str] = []
+        monkeypatch.setattr(local_embedder, "_backend_loaded", False)
+        monkeypatch.setattr(
+            type(local_embedder.settings),
+            "effective_embedding_provider",
+            lambda _self, provider=provider: provider,
+        )
+        monkeypatch.setattr(
+            local_embedder.importlib,
+            "import_module",
+            lambda name: imported.append(name),
+        )
+
+        local_embedder.load_extension_modules_if_local()
+
+        assert imported == expected, f"{provider} imported {imported}"
+
+
+def test_a_missing_embedding_backend_still_lets_the_process_start(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Degraded local search beats a backend that will not boot."""
+    from app.core.embeddings import local_embedder
+
+    monkeypatch.setattr(local_embedder, "_backend_loaded", False)
+    monkeypatch.setattr(
+        type(local_embedder.settings),
+        "effective_embedding_provider",
+        lambda _self: "local",
+    )
+
+    def explode(name: str) -> None:
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr(local_embedder.importlib, "import_module", explode)
+
+    local_embedder.load_extension_modules_if_local()
+
+
+def test_the_managed_local_entrypoint_imports_the_backend_before_building_the_app():
+    """The timing is the fix, so the order in the entrypoint is the thing to pin.
+
+    Imported any later this does not finish on Windows: lazily on first use,
+    on a worker thread or on the loop thread, and even from this same file when
+    the call sat four lines further down, after `app.app`. Every one of those
+    starts failed its health gate with nothing ever listening. From the top of
+    the entrypoint it costs 0.8s and the stack reaches ready in sixteen
+    seconds, which is why the position rather than the call is what is pinned.
+    """
+    # This repository's copy, deliberately, not whatever `local_app` resolves
+    # to: the backend is also installed into the venv as a path dependency, and
+    # that copy is not the one the source tree ships.
+    entrypoint = Path(__file__).parents[5] / "local_app.py"
+    source = entrypoint.read_text()
+
+    assert source.index("\nload_extension_modules_if_local()") < source.index(
+        "from app.app import"
+    ), (
+        "the backend has to be imported before the application package, not "
+        "merely before the event loop -- after `app.app` it does not finish"
+    )
