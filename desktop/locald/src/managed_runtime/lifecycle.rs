@@ -200,20 +200,24 @@ impl ManagedRuntimeController {
         // inherit a thread that never ends.
         self.cancel_pending_requests();
         self.stop_clock_keeper();
-        if let Some(auth) = self
+        // Taken out under each lock; joined outside them. Joining a thread
+        // while holding the mutex that thread may itself want is how a
+        // shutdown turns into a deadlock, and at best it makes every reader of
+        // these two wait for work that is finishing anyway.
+        let auth = self
             .pending_auth
             .lock()
             .expect("pending auth lock poisoned")
-            .take()
-        {
+            .take();
+        if let Some(auth) = auth {
             let _ = auth.join();
         }
-        if let Some(images) = self
+        let images = self
             .pending_images
             .lock()
             .expect("pending images lock poisoned")
-            .take()
-        {
+            .take();
+        if let Some(images) = images {
             let _ = images.join();
         }
         self.clear_forwarders();

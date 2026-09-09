@@ -1082,10 +1082,13 @@ desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
 		echo "→ Adding the Windows target…"; \
 		rustup target add x86_64-pc-windows-msvc)
-	@echo "→ Windows compile check (locald, runtime manager, bridge, process)…"
+	@echo "→ Windows compile check (locald, runtime manager, bridge, process, job object)…"
+	# lemma-agent-host is deliberately absent: it depends on libsqlite3-sys,
+	# which needs a Windows C toolchain to cross-compile. CI's windows-latest
+	# job builds and tests it, and that is the only place it can be checked.
 	@cd $(DESKTOP_DIR) && cargo clippy \
 		-p lemma-locald -p lemma-runtime-manager \
-		-p lemma-runtime -p lemma-desktop-process \
+		-p lemma-runtime -p lemma-desktop-process -p lemma-job-object \
 		--target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
 	@echo "  ✓ the Windows code paths compile and lint"
 
