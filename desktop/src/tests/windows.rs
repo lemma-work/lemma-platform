@@ -69,7 +69,7 @@ fn a_replaced_window_is_measured_before_it_is_destroyed() {
     //
     // Asserted on the source for the same reason as the wait below: reaching
     // the real path needs a running event loop.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../windowing.rs").replace("\r\n", "\n");
     let body = {
         let start = source
             .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
@@ -199,7 +199,7 @@ fn a_window_smaller_than_the_app_allows_is_not_restored() {
 /// introduced to fix.
 #[test]
 fn a_rebuild_keeps_the_window_where_it_is_rather_than_where_it_once_was() {
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     assert!(
         source.contains("let placement = placement.or_else(|| remembered_placement(handle));"),
         "the caller's placement has to take precedence",
@@ -217,7 +217,7 @@ fn the_window_swap_waits_between_destroying_and_rebuilding() {
     //
     // Asserted on the source because reaching the real path needs a running
     // event loop; `wait_until_label_released` itself is tested above.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../windowing.rs").replace("\r\n", "\n");
     let body = {
         let start = source
             .find("fn rebuild_main_window_for_mode(app: &AppHandle, mode: &str)")
@@ -308,7 +308,7 @@ fn explicit_new_windows_keep_the_browser_policy() {
 /// is an ordinary app, and it opens in this window now.
 #[test]
 fn the_pod_app_window_can_download_what_an_app_offers() {
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../pod_windows.rs").replace("\r\n", "\n");
     let start = source
         .find("fn open_pod_app_window(")
         .expect("the app window builder exists");

@@ -90,7 +90,7 @@ fn a_refused_stop_leaves_no_splash_behind() {
     // The splash used to go up before the stop was sent, so a refusal left
     // a "stopping Lemma" screen in front of a stack nobody had asked to
     // stop, with no way back.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     let body = function_body(&source, "fn stop_impl(");
     let sent = body.find("send_local_operation").expect("stop_impl sends");
     let splash = body
@@ -144,7 +144,7 @@ fn the_window_layer_is_painted_in_both_appearances() {
 /// visible, un-⌘-tabbable, and owned by an app the Dock says is not running.
 #[test]
 fn the_dock_follows_what_is_actually_on_screen() {
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../windowing.rs").replace("\r\n", "\n");
     let start = source
         .find("fn settle_dock_presence(")
         .expect("the dock helper exists");

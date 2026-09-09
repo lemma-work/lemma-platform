@@ -7,7 +7,7 @@ fn no_lock_is_held_across_the_runtime_install() {
     // heartbeat takes the same path, so opening settings during a first
     // install blocked for the whole install. The install has its own
     // single-flight now, and it must come first.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     let body = function_body(&source, "fn ensure_locald(app: &AppHandle)");
     let install = body
         .find("ensure_runtime_artifacts(app)")
@@ -97,7 +97,7 @@ fn nothing_in_setup_installs_the_runtime_on_the_main_thread() {
     // came to sit on "Starting Lemma." with no progress for minutes.
     //
     // Both launch paths, resume and cold start, must hand that to a worker.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     let setup = {
         let start = source.find(".setup(move |app| {").expect("setup exists");
         let end = source[start..]

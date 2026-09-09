@@ -29,7 +29,7 @@ fn every_command_that_is_not_pure_ui_is_async() {
     // Normalised, because the Windows runner checks out CRLF and the
     // patterns below are written with \n -- which is how this test passed on
     // macOS and failed on Windows against identical source.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     let source = source.as_str();
     let handlers = {
         let start = source
@@ -38,11 +38,14 @@ fn every_command_that_is_not_pure_ui_is_async() {
         let end = source[start..].find("])").expect("the handler list closes") + start;
         &source[start..end]
     };
+    // The handler list names each command by its module path now, and the
+    // property below is about the function, not where it lives.
     let registered: Vec<&str> = handlers
         .lines()
         .skip(1)
         .map(|line| line.trim().trim_end_matches(','))
         .filter(|name| !name.is_empty() && !name.starts_with("//"))
+        .map(|name| name.rsplit("::").next().expect("a command name"))
         .collect();
     assert!(
         registered.len() > 20,
@@ -53,7 +56,8 @@ fn every_command_that_is_not_pure_ui_is_async() {
     for name in registered {
         if PURE_UI.contains(&name) {
             assert!(
-                source.contains(&format!("\nfn {name}(")),
+                source.contains(&format!("\nfn {name}("))
+                    || source.contains(&format!("\npub(crate) fn {name}(")),
                 "{name} is on the pure-UI allowlist but is async; either it \
                  waits on something and should come off the list, or the list \
                  is stale"
@@ -62,7 +66,13 @@ fn every_command_that_is_not_pure_ui_is_async() {
         }
         assert!(
             source.contains(&format!("async fn {name}("))
-                || source.contains(&format!("#[tauri::command(async)]\nfn {name}(")),
+                || source.contains(&format!("#[tauri::command(async)]\nfn {name}("))
+                // `pub(crate)` since the shell became modules; the property
+                // this asserts -- dispatched off the main thread -- is the
+                // attribute, not the visibility.
+                || source.contains(&format!(
+                    "#[tauri::command(async)]\npub(crate) fn {name}("
+                )),
             "{name} is dispatched on the main thread. Either make it an async \
              command that hands its work to spawn_blocking, or add it to \
              PURE_UI with a reason."
@@ -314,7 +324,7 @@ fn native_copy_does_not_name_the_wrong_hardware() {
     // The two highest-stakes strings in the app -- what is about to be
     // deleted -- were the ones this test did not reach. Both shipped in the
     // Windows build naming hardware that build's users do not have.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     for name in ["fn reset_local_data_impl(", "fn reset_full_reinstall_impl("] {
         let start = source.find(name).unwrap_or_else(|| panic!("{name} exists"));
         let body = &source[start..start + 1200];
@@ -337,7 +347,7 @@ fn native_copy_does_not_name_the_wrong_hardware() {
 /// A web inspector does not ship enabled in the top-level menus.
 #[test]
 fn developer_tools_are_a_development_build_affordance() {
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     for block in source.split("\"devtools\",").skip(1) {
         let head = &block[..block.len().min(200)];
         assert!(

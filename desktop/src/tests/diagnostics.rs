@@ -1,4 +1,5 @@
 use super::*;
+use crate::diagnostics::*;
 
 /// Diagnostics masks the secrets it has never seen.
 ///
@@ -109,7 +110,7 @@ fn a_growing_log_keeps_its_identity_so_the_tail_cursor_survives() {
     let path = directory.path().join("backend.log");
     std::fs::write(&path, b"first\n").expect("seed the log");
 
-    let before = super::diagnostic_file_identity(&File::open(&path).expect("open"));
+    let before = diagnostic_file_identity(&File::open(&path).expect("open"));
     assert_ne!(
         before, "",
         "the identity should be readable on this platform"
@@ -123,7 +124,7 @@ fn a_growing_log_keeps_its_identity_so_the_tail_cursor_survives() {
     appended.flush().expect("flush");
     drop(appended);
 
-    let after = super::diagnostic_file_identity(&File::open(&path).expect("reopen"));
+    let after = diagnostic_file_identity(&File::open(&path).expect("reopen"));
     assert_eq!(before, after, "appending to a log must not re-identify it");
 }
 
@@ -132,12 +133,12 @@ fn replacing_a_log_changes_its_identity_so_a_stale_cursor_is_dropped() {
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("backend.log");
     std::fs::write(&path, b"old\n").expect("seed the log");
-    let rotated = super::diagnostic_file_identity(&File::open(&path).expect("open"));
+    let rotated = diagnostic_file_identity(&File::open(&path).expect("open"));
 
     std::fs::rename(&path, directory.path().join("backend.log.1")).expect("rotate");
     std::fs::write(&path, b"new\n").expect("fresh log");
 
-    let fresh = super::diagnostic_file_identity(&File::open(&path).expect("reopen"));
+    let fresh = diagnostic_file_identity(&File::open(&path).expect("reopen"));
     assert_ne!(
         rotated, fresh,
         "a rotated log is a different file and must reset the cursor"

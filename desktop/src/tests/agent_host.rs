@@ -11,7 +11,7 @@ fn a_menu_verb_runs_once() {
     // for finds itself, which is how the first two versions of this failed
     // on the fix they were written to protect.
     let needle = concat!("on_menu_event", "(|app, event|");
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     assert_eq!(
         source.matches(needle).count(),
         1,
@@ -25,7 +25,7 @@ fn the_tray_lock_is_not_held_across_main_thread_round_trips() {
     // this runs on the locald reader thread -- so holding the lock across
     // them stopped daemon events being read whenever the main thread was
     // busy. Progress froze and `ready` was never handled.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     let body = function_body(&source, "fn refresh_agent_host_tray(");
     let guard_end = body
         .find("guard.clone()")
@@ -90,7 +90,7 @@ fn choosing_a_connection_mode_re_enables_the_menus_it_gates() {
     // Asserted on the source because the alternative needs a running
     // AppHandle, and the thing worth pinning is that the one function every
     // mode change goes through is what rebuilds them.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../connection.rs").replace("\r\n", "\n");
     let set_mode = {
         let start = source
             .find("fn set_mode(app: &AppHandle, mode: &str)")
@@ -115,15 +115,14 @@ fn the_menu_bar_speaks_the_products_language() {
     // Scoped to the two menu builders rather than the whole file, because
     // a test that scans its own source matches the very strings it is
     // asserting are gone.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../menus.rs").replace("\r\n", "\n");
     let menus = {
         let start = source
             .find("fn build_app_menu")
             .expect("the app menu builder exists");
-        let end = source
-            .find("fn disconnect_locald")
-            .expect("tray builder ends");
-        &source[start..end]
+        // The whole module: both builders live here now, and it holds
+        // nothing else.
+        &source[start..]
     };
 
     assert!(menus

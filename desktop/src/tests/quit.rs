@@ -23,7 +23,7 @@ fn shutdown_keeps_its_progress_when_a_background_health_probe_fails() {
 fn giving_up_on_quit_says_so() {
     // Confirming "Stop and Quit" and then getting neither, silently, is the
     // failure this guards.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     let body = function_body(&source, "fn stop_then_quit(");
     assert!(
         body.contains("report_action_failure"),

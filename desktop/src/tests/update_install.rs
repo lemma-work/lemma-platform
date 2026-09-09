@@ -8,7 +8,7 @@ fn a_resume_that_did_not_pan_out_stops_claiming_the_workspace_is_ready() {
     // error -- so every path that gives up and shows the splash has to
     // clear `ready` first, or the two bounce the user between a splash and
     // a dead workspace.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = shell_source();
     let setup = {
         let start = source.find(".setup(move |app| {").expect("setup exists");
         let end = source[start..]
@@ -83,11 +83,8 @@ fn a_released_build_updates_itself_and_an_unstamped_one_does_not() {
 /// failure, for an update that never began.
 #[test]
 fn an_update_is_downloaded_and_verified_before_the_stack_is_stopped() {
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
-    let start = source
-        .find("async fn install_app_update(")
-        .expect("install_app_update exists");
-    let body = &source[start..start + 4200];
+    let source = shell_source();
+    let body = function_body(&source, "async fn install_app_update(");
 
     let downloaded = body.find(".download(").expect("it downloads");
     let stopped = body
@@ -121,7 +118,22 @@ fn an_update_is_downloaded_and_verified_before_the_stack_is_stopped() {
 /// the release behaviour by calling the function.
 #[test]
 fn a_release_build_ignores_every_runtime_redirecting_env_var() {
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    // `local_artifacts_enabled` reads the manifest variable too, and is the
+    // one place that may: it does not redirect anything, it compares the
+    // configured path against the manifest already in hand, and only after
+    // `LEMMA_DESKTOP_ALLOW_LOCAL_ARTIFACTS` was set to 1 on purpose. Cut it
+    // out by name rather than narrowing the scan, so the exception is visible
+    // here instead of being a file this test quietly never looked at.
+    let all = shell_source();
+    let source = match (
+        all.find("fn local_artifacts_enabled"),
+        all.find("fn download_client"),
+    ) {
+        (Some(start), Some(end)) if start < end => {
+            format!("{}{}", &all[..start], &all[end..])
+        }
+        _ => panic!("the local-artifacts exception moved; re-check it still is one"),
+    };
     for name in [
         "LEMMA_DESKTOP_HOST_PACK_ROOT",
         "LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT",
@@ -247,7 +259,7 @@ fn every_daemon_redirect_variable_is_stripped_from_a_release_build() {
 
     // And the stripping is actually wired, before the deliberate ones are
     // set -- `env` after `env_remove` is what makes those still win.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../locald_process.rs").replace("\r\n", "\n");
     let start = source
         .find("fn spawn_locald()")
         .expect("spawn_locald exists");

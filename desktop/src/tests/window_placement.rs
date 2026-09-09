@@ -40,7 +40,7 @@ fn a_placement_this_build_would_not_have_written_is_ignored() {
 /// launches where coming back at the wrong size is most irritating.
 #[test]
 fn window_geometry_survives_a_launch_that_was_never_a_clean_quit() {
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../windowing.rs").replace("\r\n", "\n");
     let start = source
         .find("fn build_main_window_at(")
         .expect("build_main_window_at exists");
@@ -59,7 +59,7 @@ fn a_replacement_window_is_never_left_invisible() {
     // Hidden-until-painted is only safe because something shows it anyway.
     // A window that never paints and never appears is an app with no
     // interface, which is the failure the label wait already guards.
-    let source = include_str!("../main.rs").replace("\r\n", "\n");
+    let source = include_str!("../windowing.rs").replace("\r\n", "\n");
     let start = source
         .find("fn build_main_window_at(")
         .expect("build_main_window_at exists");
