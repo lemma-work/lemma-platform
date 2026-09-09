@@ -180,3 +180,34 @@ impl<E: Engine + 'static> GuestService<E> {
         Ok(container_ids.len())
     }
 }
+
+/// How much room is left where the guest keeps its data.
+///
+/// Reported on every health call, because nothing reported it at all and the
+/// disk it describes is a fixed size. Everything the guest holds shares it --
+/// container images, the unpacked snapshots, every workspace, the database --
+/// and the first sign that it had run out was whatever broke first, which is
+/// usually Postgres refusing to write.
+///
+/// `None` rather than a guess when the filesystem cannot be measured. A
+/// fabricated zero reads as "full" and a fabricated large number reads as
+/// "fine"; both are worse than saying nothing, and the host already treats an
+/// absent field as an older guest.
+pub(crate) fn data_disk_space(root: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(root.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `statvfs` only writes the struct it is handed, and the path is a
+    // NUL-terminated string that outlives the call. The return value is checked.
+    let mut measured: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut measured) } != 0 {
+        return None;
+    }
+    // `f_bavail`, not `f_bfree`: the blocks an unprivileged process may
+    // actually use. The containers writing here are not root on the host
+    // filesystem, and reserved blocks are not space they can have.
+    let block = u64::from(measured.f_frsize as u32);
+    Some((
+        u64::from(measured.f_bavail as u32).saturating_mul(block),
+        u64::from(measured.f_blocks as u32).saturating_mul(block),
+    ))
+}
