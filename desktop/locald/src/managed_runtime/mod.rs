@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self};
+use std::io::{self};
 #[cfg(any(not(target_os = "macos"), test))]
 use std::net::TcpStream;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 
 use lemma_runtime_manager::{
     ManagedRuntime, ManagedRuntimeConfig, ManagedRuntimeStatus, DEFAULT_WSL_DISTRIBUTION,
