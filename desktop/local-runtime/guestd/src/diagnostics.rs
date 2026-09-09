@@ -44,15 +44,13 @@ pub(crate) const MAX_DIAGNOSTICS_BYTES: usize = 128 * 1024;
 /// it. Scoped to guests that have a holder, so it says nothing at all on macOS
 /// or in a test, where `/mnt/wsl` does not exist.
 pub(crate) fn refuse_unbound_data() -> Result<(), GuestError> {
-    // `/mnt/wsl` is the tmpfs WSL mounts in every distribution, and nothing
-    // else has it, so it is what "this guest is WSL" means here.
-    //
-    // The holder's own path is not that, and scoping on it was a hole in the
-    // exact case this guard exists for: a share that was never published
-    // leaves no directory, so the check said "no holder, nothing to protect"
-    // and let the mutation through to write on the disk the next upgrade
-    // deletes. Absent is not "not applicable", it is the failure.
-    if !Path::new("/mnt/wsl").is_dir() {
+    // The holder's own path is not what makes a guest WSL, and scoping on it
+    // was a hole in the exact case this guard exists for: a share that was
+    // never published leaves no directory, so the check said "no holder,
+    // nothing to protect" and let the mutation through to write on the disk
+    // the next upgrade deletes. Absent is not "not applicable", it is the
+    // failure.
+    if !crate::host_control::guest_is_wsl() {
         return Ok(());
     }
     if is_mountpoint(Path::new("/var/lib/lemma")) {

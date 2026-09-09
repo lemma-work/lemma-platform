@@ -1,6 +1,7 @@
 //! Kernel faults, and explaining an exit from the log.
 
 use super::*;
+use crate::lifecycle::needs_repair_reason;
 
 #[cfg(target_os = "macos")]
 #[test]
@@ -65,4 +66,50 @@ fn a_log_of_only_boot_retries_explains_nothing_and_says_so() {
         last_diagnostic(log, "the runtime log holds no explanation"),
         "the runtime log holds no explanation"
     );
+}
+
+/// The guest names this failure the same way on both platforms.
+///
+/// `lemma-mount-data` and its siblings print `lemma-data: needs-repair:
+/// <reason>`, and only macOS was listening for it -- on Windows a guest that
+/// had already said exactly what was wrong spent the host's whole two-minute
+/// budget and arrived as "did not become ready".
+#[test]
+fn the_reason_a_guest_gives_for_needing_repair_is_read_wherever_it_says_it() {
+    let console = "\
+lemma-runtime: wsl.exe --distribution LemmaRuntime --exec /usr/local/bin/lemma-runtime-init -> exit code: 1
+  stdout: lemma-data: needs-repair: no filesystem signature on /dev/sdc
+  stderr: lemma-runtime-init: giving up
+";
+    assert_eq!(
+        needs_repair_reason(console).as_deref(),
+        Some("no filesystem signature on /dev/sdc"),
+    );
+}
+
+/// The newest reason wins.
+///
+/// A guest that failed, was repaired, and failed again for a different reason
+/// should report what it is stuck on now rather than what it got past.
+#[test]
+fn the_last_reason_is_the_one_that_is_reported() {
+    let console = "\
+  stdout: lemma-data: needs-repair: the data disk never appeared in the guest
+  stdout: lemma-data: mounted
+  stdout: lemma-data: needs-repair: /var/lib/lemma is not on the data disk
+";
+    assert_eq!(
+        needs_repair_reason(console).as_deref(),
+        Some("/var/lib/lemma is not on the data disk"),
+    );
+}
+
+/// And an ordinary boot says nothing.
+#[test]
+fn a_guest_that_came_up_reports_no_reason() {
+    assert!(needs_repair_reason("lemma-data: mounted\nlemma-guestd: listening\n").is_none());
+    assert!(needs_repair_reason("").is_none());
+    // The marker with nothing after it is not a reason; reporting an empty
+    // one would put "needs repair: " in front of a person with no cause.
+    assert!(needs_repair_reason("lemma-data: needs-repair:   \n").is_none());
 }
