@@ -15,6 +15,7 @@ mod quit;
 mod quit_prompt;
 mod runtime;
 mod splash;
+mod telemetry_privacy;
 mod update_install;
 mod window_placement;
 mod windows;

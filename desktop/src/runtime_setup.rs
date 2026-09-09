@@ -177,10 +177,23 @@ pub(crate) fn ensure_runtime_artifacts_inner(
         });
         detail
     })?;
-    stop_locald_for_runtime_maintenance(app).map_err(|error| {
-        format!("could not stop the previous local runtime before activation: {error}")
-    })?;
-    activate_installed_runtime(&installed)?;
+    // Reported the same way as the install itself. These two run *after*
+    // `RuntimeInstallStarted`, so a failure here used to end the attempt with
+    // no terminal event at all -- an install that started and, as far as the
+    // numbers went, never finished. Install health is the one thing this
+    // telemetry is for, so the funnel has to close on every path out of it.
+    let activation = stop_locald_for_runtime_maintenance(app)
+        .map_err(|error| {
+            format!("could not stop the previous local runtime before activation: {error}")
+        })
+        .and_then(|()| activate_installed_runtime(&installed));
+    if let Err(detail) = activation {
+        telemetry::note(telemetry::InstallEvent::RuntimeInstallFailed {
+            step: "activate",
+            class: runtime_install_failure_class(&detail),
+        });
+        return Err(detail);
+    }
     emit_runtime_install_progress(
         app,
         "activate",

@@ -20,6 +20,7 @@ use std::fs;
 #[cfg(unix)]
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -193,10 +194,35 @@ pub fn note(event: InstallEvent) {
 }
 
 /// The Local settings toggle writes through here.
-pub fn set_enabled(root: &Path, enabled: bool) -> std::io::Result<()> {
+/// Every read-modify-write of the telemetry state happens under this.
+///
+/// Atomic file replacement makes each *write* whole; it does nothing about two
+/// of them overlapping. `install_id` and `set_enabled` both read the file,
+/// change one field and write it back, so an opt-out saved between an event's
+/// read and its write was replaced by the state that event had read a moment
+/// earlier -- and telemetry carried on after the user had turned it off. That
+/// is the one bug this file cannot be allowed to have.
+///
+/// Process-wide, which is the scope that matters: the shell is single-instance
+/// and only it writes this file.
+static STATE: Mutex<()> = Mutex::new(());
+
+/// Read the state, change it, and write it back, with nothing in between.
+pub(crate) fn update_state<T>(
+    root: &Path,
+    change: impl FnOnce(&mut TelemetryState) -> T,
+) -> std::io::Result<T> {
+    let _guard = STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut state = load_state(root);
-    state.enabled = Some(enabled);
-    save_state(root, &state)
+    let outcome = change(&mut state);
+    save_state(root, &state)?;
+    Ok(outcome)
+}
+
+pub fn set_enabled(root: &Path, enabled: bool) -> std::io::Result<()> {
+    update_state(root, |state| state.enabled = Some(enabled))
 }
 
 /// A random per-installation id, minted once and kept.
@@ -204,14 +230,19 @@ pub fn set_enabled(root: &Path, enabled: bool) -> std::io::Result<()> {
 /// Random on purpose — never derived from hostname, MAC or machine id, which
 /// identify a person's computer rather than an installation of this app.
 pub fn install_id(root: &Path) -> String {
-    let mut state = load_state(root);
-    if let Some(existing) = state.install_id.as_ref().filter(|id| !id.is_empty()) {
-        return existing.clone();
-    }
-    let minted = random_hex();
-    state.install_id = Some(minted.clone());
-    let _ = save_state(root, &state);
-    minted
+    // Under the same lock as every other change, so minting an id cannot write
+    // back an `enabled` this call read before the user changed it.
+    let minted = update_state(root, |state| {
+        if let Some(existing) = state.install_id.as_ref().filter(|id| !id.is_empty()) {
+            return existing.clone();
+        }
+        let minted = random_hex();
+        state.install_id = Some(minted.clone());
+        minted
+    });
+    // A state file that cannot be written is not a reason to lose the turn:
+    // the id is still usable for this process, and the next start mints one.
+    minted.unwrap_or_else(|_| random_hex())
 }
 
 fn random_hex() -> String {
@@ -277,6 +308,35 @@ pub fn is_enabled(root: &Path) -> bool {
 }
 
 /// Fire and forget. Returns immediately; delivery happens on a detached thread.
+/// Whether a development override may be posted to.
+///
+/// HTTPS anywhere, or plain HTTP only to this machine. The override exists so
+/// a developer can point the app at a collector they are running locally, and
+/// that collector is `http://127.0.0.1:port` -- refusing it outright would
+/// remove the only thing the variable is for. Refusing cleartext to anywhere
+/// *else* is the part worth keeping: the payload carries the ingestion key and
+/// the install id.
+///
+/// A release build never reaches this. `record` reads the variable only under
+/// `debug_assertions`, because a baked-in key plus a settable destination is an
+/// exfiltration primitive rather than a configuration option.
+pub(crate) fn destination_is_safe(host: &str) -> bool {
+    let host = host.trim();
+    if let Some(rest) = host.strip_prefix("https://") {
+        return !rest.is_empty();
+    }
+    let Some(rest) = host.strip_prefix("http://") else {
+        return false;
+    };
+    // The authority only: a path or a query is somebody else's host smuggled
+    // past a loopback prefix.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let name = authority
+        .rsplit_once(':')
+        .map_or(authority, |(name, _)| name);
+    matches!(name, "127.0.0.1" | "localhost" | "[::1]")
+}
+
 pub fn record(root: &Path, event: InstallEvent) {
     if !is_enabled(root) {
         return;
@@ -294,7 +354,10 @@ pub fn record(root: &Path, event: InstallEvent) {
     // clear, wherever you like. Redirecting it stays available for development,
     // which is the only place it was ever for.
     let host = if cfg!(debug_assertions) {
-        std::env::var(HOST_ENV).unwrap_or_else(|_| DEFAULT_HOST.to_string())
+        std::env::var(HOST_ENV)
+            .ok()
+            .filter(|host| destination_is_safe(host))
+            .unwrap_or_else(|| DEFAULT_HOST.to_string())
     } else {
         DEFAULT_HOST.to_string()
     };
@@ -309,6 +372,13 @@ pub fn record(root: &Path, event: InstallEvent) {
     std::thread::spawn(move || {
         let client = match reqwest::blocking::Client::builder()
             .timeout(TIMEOUT)
+            // A telemetry post has no reason to follow a redirect, and one
+            // reason not to: reqwest follows HTTPS to HTTP by default, so a
+            // redirect at the far end would put the ingestion key and the
+            // install id on the wire in the clear. This applies to the built-in
+            // destination too, which is the half of that risk a shipped build
+            // has.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
         {
             Ok(client) => client,
