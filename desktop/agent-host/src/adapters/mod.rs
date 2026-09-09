@@ -23,10 +23,12 @@ use crate::protocol::{ConfigOption, HarnessCapabilities, HarnessHealth, HarnessS
 mod cache;
 mod discovery;
 mod manifest;
+mod node;
 mod snapshots;
 
 pub use cache::*;
 pub(crate) use discovery::*;
+pub(crate) use node::*;
 pub use snapshots::*;
 
 #[cfg(test)]
