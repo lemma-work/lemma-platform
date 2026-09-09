@@ -29,7 +29,7 @@
  *   docker run ... -e MAX_STREAMERS=100 ...
  */
 
-import { check, sleep } from "k6";
+import { sleep } from "k6";
 import http from "k6/http";
 import { Counter, Gauge, Rate, Trend } from "k6/metrics";
 
@@ -60,7 +60,6 @@ const HEADERS = {
 // --------------------------------------------------------------------------
 
 const sseConnectDuration = new Trend("sse_connect_duration_ms", true);
-const sseEventsReceived  = new Counter("sse_events_received");
 const sseErrors          = new Counter("sse_errors");
 const sseLiveStreams     = new Gauge("sse_live_streams");
 const writeSuccessRate   = new Rate("write_success_rate");
