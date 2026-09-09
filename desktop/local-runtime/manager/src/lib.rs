@@ -2247,6 +2247,42 @@ mod tests {
         assert!(validate_macos_release(&release).is_err());
     }
 
+    /// The uninstaller names the distributions; nothing else knows them.
+    ///
+    /// When `reset` cannot run -- an installation too damaged to reset is
+    /// still one somebody asked to remove -- the uninstaller falls back to
+    /// telling them what to unregister by hand. That text is the only place
+    /// those names appear outside this file, and the one that matters is the
+    /// holder: the runtime distribution is replaced by every upgrade, so
+    /// naming only it would say "delete the disposable half and keep the
+    /// several gigabytes you were trying to remove".
+    #[test]
+    fn the_uninstaller_names_the_distribution_that_holds_the_data() {
+        let hooks = include_str!("../../../installer/hooks.nsh").replace("\r\n", "\n");
+        let root = tempdir().unwrap();
+        let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            #[cfg(target_os = "macos")]
+            vz_executable: root.path().join("lemma-vz"),
+            #[cfg(windows)]
+            wsl_executable: PathBuf::from("wsl.exe"),
+        })
+        .unwrap();
+
+        // Derived the same way the running code derives it, so a rename here
+        // fails rather than silently leaving the installer pointing at a name
+        // that no longer exists.
+        let holder = format!("{}Data", runtime.wsl_distribution());
+        assert!(
+            hooks.contains(&holder),
+            "the manual fallback has to name {holder}, or it sends people to \
+             delete the wrong one:\n{hooks}"
+        );
+    }
+
     /// Two releases can ship archives of exactly the same size.
     ///
     /// `tar` pads every member to a 512-byte block and the archive to the
