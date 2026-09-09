@@ -57,6 +57,15 @@ pub(crate) fn structured_block(value: &Value) -> Option<ContentBlock> {
 pub enum SessionOrigin {
     New,
     Loaded,
+    /// Lemma asked for a session the provider no longer has.
+    ///
+    /// Distinct from `New`, which the fresh session it left us with would
+    /// otherwise be indistinguishable from, and the difference is what the
+    /// turn is missing. Lemma leaves the conversation's history out of the
+    /// prompt precisely when it expects a resume to supply it -- so this is
+    /// the one case where the agent is asked to continue a conversation
+    /// neither it nor the prompt has any record of.
+    Recovered,
 }
 
 impl SessionOrigin {
@@ -64,7 +73,13 @@ impl SessionOrigin {
         match self {
             Self::New => "new",
             Self::Loaded => "loaded",
+            Self::Recovered => "recovered",
         }
+    }
+
+    /// Whether this session has never been told anything by Lemma.
+    pub(crate) fn is_fresh(self) -> bool {
+        matches!(self, Self::New | Self::Recovered)
     }
 }
 
@@ -83,8 +98,27 @@ impl SessionOrigin {
 /// when the instructions have changed since the session was told them, because
 /// a user can edit an agent mid-conversation.
 pub(crate) fn sends_instructions(spec: &RunSpec, origin: SessionOrigin) -> bool {
-    origin == SessionOrigin::New || spec.instructions_every_turn()
+    origin.is_fresh() || spec.instructions_every_turn()
 }
+
+/// What an agent is told when the conversation it is continuing is gone.
+///
+/// Said out loud rather than papered over. Lemma omits the conversation's
+/// history from the prompt exactly when it expects `session/load` to supply
+/// it, so a load that failed leaves the agent holding this turn's words and
+/// nothing else -- and, told nothing, it answers as though it remembers. The
+/// user gets a confident reply to a question that referred to something the
+/// agent has never seen, with no sign anything went wrong.
+///
+/// This is the same trade the model-unavailable path makes a few lines further
+/// on: report it and answer anyway, because the answer is still worth having.
+/// The difference is that this one degrades what the answer can be, so the
+/// agent is the one that has to say so.
+pub(crate) const LOST_CONVERSATION_NOTE: &str = "<conversation-recovered>\n    The earlier messages in this conversation could not be recovered: the \
+    provider no longer has the session they were in. You are seeing this \
+    turn's message and nothing before it. If answering needs that earlier \
+    context, say so plainly and ask for what you need rather than guessing at \
+    it.\n</conversation-recovered>";
 
 pub(crate) fn render_prompt(spec: &RunSpec, origin: SessionOrigin) -> String {
     let mut sections = Vec::new();
@@ -93,6 +127,11 @@ pub(crate) fn render_prompt(spec: &RunSpec, origin: SessionOrigin) -> String {
             "<system>\n{}\n</system>",
             spec.system_prompt.trim()
         ));
+    }
+    // After the instructions and before the user's words: it is a fact about
+    // this turn, not part of who the agent is.
+    if origin == SessionOrigin::Recovered {
+        sections.push(LOST_CONVERSATION_NOTE.to_owned());
     }
     let prompt = spec
         .prompt
