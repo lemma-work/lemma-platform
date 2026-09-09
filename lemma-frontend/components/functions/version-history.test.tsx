@@ -12,14 +12,20 @@ const state = vi.hoisted(() => ({
     setRunId: vi.fn(), refresh: vi.fn(),
     old: { id: 'old', revision_number: 1, revision_hash: 'sha256:abc', is_live: false,
         input_schema: { type: 'object', properties: { historical: { type: 'string' } } } },
+    releases: undefined as undefined | Record<string, unknown>[],
 }));
+
+const release = (previewUrl: string | null) => ({
+    id: 'rel', release_number: 7, version: 'sha256:abc', is_live: false,
+    has_source: true, preview_url: previewUrl,
+});
 vi.mock('@/lib/hooks/use-function-revisions', () => ({
     useFunctionRevisions: () => ({ data: state.listError ? undefined : [state.old], isError: state.listError, isLoading: false, refetch: state.retry }),
     useFunctionRevision: () => ({ data: undefined, isLoading: false, isError: state.codeError, refetch: state.retryCode }),
     usePromoteFunctionRevision: () => ({ mutateAsync: state.promote, isPending: false }),
 }));
 vi.mock('@/lib/hooks/use-app-releases', () => ({
-    useAppReleases: () => ({ data: undefined, isError: state.listError, isLoading: false, refetch: state.retry }),
+    useAppReleases: () => ({ data: state.releases, isError: state.listError, isLoading: false, refetch: state.retry }),
     usePromoteAppRelease: () => ({ mutateAsync: state.promote, isPending: false }),
 }));
 vi.mock('@/lib/hooks/use-functions', () => ({ useFunction: () => ({ data: { name: 'score', input_schema: { properties: { current: { type: 'string' } } } } }) }));
@@ -34,7 +40,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 
 afterEach(cleanup);
 beforeEach(() => {
-    vi.clearAllMocks(); state.listError = false; state.codeError = false;
+    vi.clearAllMocks(); state.listError = false; state.codeError = false; state.releases = undefined;
     state.start.mockResolvedValue({ id: 'new-run' });
     state.promote.mockResolvedValue({ schema_changed: false });
 });
@@ -46,6 +52,22 @@ describe('Version history recovery and permissions', () => {
         expect(screen.queryByText('No versions yet')).toBeNull();
         await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
         expect(state.retry).toHaveBeenCalledOnce();
+    });
+    it('withholds preview where the stack serves no app host', async () => {
+        // `preview_url` is null on Desktop and any single-origin stack. The
+        // button used to be offered anyway, and pointed the frame at nothing:
+        // it fell back to the live release under a banner announcing v7.
+        state.releases = [release(null)];
+        render(<AppVersionsPanel podId="pod" appName="app" open onOpenChange={vi.fn()} onPreview={vi.fn()} />);
+        expect(screen.getByText('v7')).toBeDefined();
+        expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    });
+    it('offers preview once a release host exists', async () => {
+        const onPreview = vi.fn();
+        state.releases = [release('https://orders--r7.apps.example.com')];
+        render(<AppVersionsPanel podId="pod" appName="app" open onOpenChange={vi.fn()} onPreview={onPreview} />);
+        await userEvent.click(screen.getByRole('button', { name: 'Preview' }));
+        expect(onPreview).toHaveBeenCalledOnce();
     });
     it('shows a retriable function list error', async () => {
         state.listError = true;

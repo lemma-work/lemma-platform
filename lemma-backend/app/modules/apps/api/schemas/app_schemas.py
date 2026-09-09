@@ -91,12 +91,18 @@ class AppReleaseResponse(BaseModel):
         ),
     )
 
-    @computed_field(return_type=str)
+    @computed_field(return_type=str | None)
     @property
-    def preview_url(self) -> str:
+    def preview_url(self) -> str | None:
         # Through `public_app_url`, not a second copy of the scheme-and-domain
         # rule: a preview host is the live host with the release in its label,
         # so the two must never be able to disagree about the rest of it.
+        #
+        # None where no app host is served -- the same real state `public_app_url`
+        # documents, and the reason this is not annotated `str`. It was, and the
+        # schema then promised a string on exactly the stacks (Desktop, a tunnel)
+        # that send null, so the client believed it held a URL and previewed the
+        # live release while announcing a preview of an older one.
         return public_app_url(f"{self.app_public_slug}--r{self.release_number}")
 
     # Carried so `preview_url` can be computed without a second app lookup.
