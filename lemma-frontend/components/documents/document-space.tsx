@@ -1232,9 +1232,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                     <span className="text-sm text-[var(--text-secondary)]">
                                         {isFolderBlank
                                             ? activeSection.emptyLine
-                                            : isStockedSkillShelf
-                                                ? 'Drop a skill folder here, or click to browse'
-                                                : 'Drop files here, or click to browse'}
+                                            : 'Drop files here, or click to browse'}
                                     </span>
                                 </span>
                                 {isStockedSkillShelf ? null : (
