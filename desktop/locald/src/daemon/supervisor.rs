@@ -68,8 +68,23 @@ impl Daemon {
     }
 
     pub(super) fn ensure_supervisor(self: &Arc<Self>) -> io::Result<()> {
-        if self.supervisor_running() {
-            return Ok(());
+        // The lock is held across the spawn, not just the check.
+        //
+        // This used to ask `supervisor_running()`, which takes this lock and
+        // gives it straight back, and take it again only to record the child.
+        // `send_to_supervisor` runs on one thread per client connection, so
+        // two of them could both find no supervisor and both start one. The
+        // second assignment dropped the first `Child` -- and dropping a
+        // `Child` neither kills nor reaps it, so the first supervisor kept
+        // running untracked, its reader threads kept broadcasting events, and
+        // the exit the daemon later reported was for a process it no longer
+        // owned.
+        let mut guard = self.supervisor.lock().expect("supervisor lock poisoned");
+        if let Some(process) = guard.as_mut() {
+            match process.child.try_wait() {
+                Ok(None) => return Ok(()),
+                Ok(Some(_)) | Err(_) => *guard = None,
+            }
         }
 
         let mut command = supervisor_command()?;
@@ -100,8 +115,9 @@ impl Daemon {
             .take()
             .ok_or_else(|| io::Error::other("supervisor stderr was not piped"))?;
 
-        *self.supervisor.lock().expect("supervisor lock poisoned") =
-            Some(SupervisorProcess { child, stdin });
+        *guard = Some(SupervisorProcess { child, stdin });
+        // Before the reader threads, which take this lock themselves.
+        drop(guard);
 
         let daemon = Arc::clone(self);
         thread::spawn(move || {

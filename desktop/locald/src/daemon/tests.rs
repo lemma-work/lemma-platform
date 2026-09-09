@@ -516,3 +516,83 @@ fn sharing_commands_refuse_before_they_take_the_lock_a_start_needs() {
         daemon.lifecycle.finish();
     }
 }
+
+/// The body of one function in this directory, for the properties that are
+/// about the shape of the code rather than a value it returns.
+///
+/// Named by module rather than scanned across the directory, deliberately: if
+/// the function moves, this fails loudly on the `expect` instead of quietly
+/// finding nothing.
+fn function_body<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source.find(signature).expect("the function exists");
+    let after = start + signature.len();
+    let end = source[after..]
+        .find("\n    }\n")
+        .map_or(source.len(), |offset| after + offset);
+    &source[start..end]
+}
+
+/// Nothing after the exposure is live may fail without rolling it back.
+///
+/// `enable_sharing_transaction` restarts the stack against the shared origin
+/// and only then records it. Recording used to end in `?`, which returned
+/// past the whole rollback below it: a state file that could not be written
+/// left sharing serving, the sharing controller stuck in `prepared`, and the
+/// client told only that enabling had failed.
+///
+/// Asserted on the source because reaching the line needs a live tunnel, a
+/// running backend and a frontend; the property is "this failure takes the
+/// rollback path", which is a shape.
+#[test]
+fn recording_a_live_share_cannot_fail_without_rolling_it_back() {
+    let source = include_str!("sharing_ops.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "fn enable_sharing_transaction(");
+    let activation = body
+        .find("let activate = manager")
+        .expect("activation is where the exposure goes live");
+    let after = &body[activation..];
+    assert!(
+        !after.contains("state.persist(&self.paths.state)?"),
+        "a failure after the share is live must reach the rollback, not \
+         return past it:\n{after}"
+    );
+    assert!(
+        after.contains("rollback_enable"),
+        "the rollback is what this is protecting:\n{after}"
+    );
+}
+
+/// One supervisor, however many clients ask for one at once.
+///
+/// `send_to_supervisor` runs on one thread per client connection, and a
+/// desktop launch has several arriving together. `ensure_supervisor` used to
+/// ask `supervisor_running()` -- which takes the lock and gives it straight
+/// back -- and take the lock again only to record the child, so two threads
+/// could both find no supervisor and both start one. The second assignment
+/// dropped the first `Child`, and dropping a `Child` neither kills nor reaps
+/// it: the first supervisor kept running untracked.
+///
+/// Asserted on the source. The failure is a race, and a test that loses it
+/// on purpose is a test that passes by luck on a quiet machine; what can be
+/// stated exactly is that the check and the spawn happen under one guard.
+#[test]
+fn a_supervisor_is_spawned_under_the_lock_that_records_it() {
+    let source = include_str!("supervisor.rs").replace("\r\n", "\n");
+    let body = function_body(&source, "fn ensure_supervisor(");
+    let taken = body
+        .find("self.supervisor.lock()")
+        .expect("it takes the supervisor lock");
+    let spawned = body
+        .find("command.spawn()")
+        .expect("it spawns a supervisor");
+    assert!(
+        taken < spawned,
+        "the lock has to be held before the spawn, or two clients start two \
+         supervisors:\n{body}"
+    );
+    assert!(
+        !body.contains("self.supervisor_running()"),
+        "checking through a helper gives the lock back between the check and \
+         the spawn, which is the race itself:\n{body}"
+    );
+}

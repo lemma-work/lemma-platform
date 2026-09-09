@@ -61,14 +61,25 @@ def check() -> int:
         )
         return 1
 
-    shrunk = sorted(set(baseline) - set(current))
-    if shrunk:
-        print(
-            f"✓ Rust file size: {len(current)} over {MAX_FILE_LINES} lines "
-            f"({len(shrunk)} baselined file(s) now under it — "
-            "run --update-baseline to lock that in)"
-        )
-        return 0
+    # A reduction has to be recorded, or it is not a ratchet.
+    #
+    # Only files that fell *below* the limit used to be noticed, and only as a
+    # suggestion. A file that went from 1,000 lines to 700 kept its 1,000-line
+    # baseline, so the next change could put 299 lines back and pass -- which
+    # is the whole thing this gate exists to stop, arriving in instalments.
+    unrecorded = {
+        path: (baseline[path], current.get(path, 0))
+        for path in baseline
+        if current.get(path, 0) < baseline[path]
+    }
+    if unrecorded:
+        print("Rust file-size ratchet: these shrank and the baseline still has the old size.")
+        for path, (was, now) in sorted(unrecorded.items()):
+            under = f" (now under {MAX_FILE_LINES})" if now == 0 else ""
+            print(f"- {path}: {was} -> {now or 'under the limit'}{under}")
+        print("\nRun with --update-baseline to record it, or the room stays available.")
+        return 1
+
     print(f"✓ Rust file size: no growth ({len(current)} baselined over {MAX_FILE_LINES})")
     return 0
 

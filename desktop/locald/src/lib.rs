@@ -132,19 +132,58 @@ const DAEMON_SOURCES: &[(&str, &str)] = &[
     ("daemon/tests.rs", include_str!("daemon/tests.rs")),
 ];
 
+/// Every `.rs` file under a directory, at any depth, named relative to it.
+///
+/// Recursive on purpose. `read_dir` sees direct children only, so the moment
+/// one of these modules becomes a directory of its own -- which is how every
+/// file in this crate over 600 lines will end up -- its contents leave the
+/// scan without anything saying so.
+#[cfg(test)]
+fn rust_files_under(directory: &std::path::Path, prefix: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut pending = vec![(directory.to_path_buf(), prefix.to_owned())];
+    while let Some((next, at)) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&next) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push((path, format!("{at}{name}/")));
+            } else if name.ends_with(".rs") {
+                found.push(format!("{at}{name}"));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// A module in a subdirectory is one the scan would otherwise not see.
+#[cfg(test)]
+#[test]
+fn a_daemon_module_one_directory_deeper_is_still_found() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    std::fs::write(root.path().join("top.rs"), "").expect("a top-level module");
+    std::fs::create_dir(root.path().join("nested")).expect("a nested directory");
+    std::fs::write(root.path().join("nested/inner.rs"), "").expect("a nested module");
+    std::fs::write(root.path().join("nested/notes.txt"), "").expect("a non-module file");
+    assert_eq!(
+        rust_files_under(root.path(), "daemon/"),
+        vec![
+            "daemon/nested/inner.rs".to_string(),
+            "daemon/top.rs".to_string()
+        ],
+    );
+}
+
 /// A daemon module nobody scans is a rule nobody enforces.
 #[cfg(test)]
 #[test]
 fn every_daemon_source_is_scanned() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/daemon");
-    let mut on_disk: Vec<String> = std::fs::read_dir(&directory)
-        .expect("the daemon module directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".rs"))
-        .map(|name| format!("daemon/{name}"))
-        .collect();
-    on_disk.sort();
+    let on_disk = rust_files_under(&directory, "daemon/");
     let mut listed: Vec<String> = DAEMON_SOURCES
         .iter()
         .map(|(name, _)| (*name).to_owned())

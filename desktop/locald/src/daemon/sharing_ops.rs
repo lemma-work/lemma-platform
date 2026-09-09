@@ -245,13 +245,19 @@ impl Daemon {
             };
         }
 
-        {
+        // Recording the new origin and committing it are one step, because
+        // the exposure is already live by the time either runs. `persist`
+        // used to propagate with `?`, which skipped every line below: a state
+        // file that could not be written left sharing serving, the sharing
+        // controller stuck in `prepared`, and the client told only that
+        // enabling had failed.
+        let recorded = {
             let mut state = self.state.lock().expect("state lock poisoned");
             state.url = prepared.origin.clone();
             state.api_url = format!("{}/_lemma/api", prepared.origin.trim_end_matches('/'));
-            state.persist(&self.paths.state)?;
-        }
-        if let Err(error) = sharing.commit_enable(request) {
+            state.persist(&self.paths.state)
+        };
+        if let Err(error) = recorded.and_then(|()| sharing.commit_enable(request)) {
             manager.replace_service_environment("backend", previous_backend);
             manager.replace_service_environment("frontend", previous_frontend);
             let rollback = manager.restart_all();
@@ -259,10 +265,10 @@ impl Daemon {
             self.restore_local_canonical_state()?;
             return match rollback {
                 Ok(()) => Err(io::Error::other(format!(
-                    "sharing preferences could not be saved and activation was rolled back: {error}"
+                    "sharing could not be recorded and activation was rolled back: {error}"
                 ))),
                 Err(rollback_error) => Err(io::Error::other(format!(
-                    "sharing preferences could not be saved: {error}; rollback also failed: {rollback_error}"
+                    "sharing could not be recorded: {error}; rollback also failed: {rollback_error}"
                 ))),
             };
         }
