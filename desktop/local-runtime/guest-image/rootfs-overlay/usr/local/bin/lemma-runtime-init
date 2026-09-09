@@ -24,8 +24,12 @@ fi
 # Failing here is the point. Continuing without it would put workspaces,
 # databases and volumes inside a distribution the next upgrade throws away,
 # and every run before that upgrade would look perfectly healthy.
+# A mountpoint, not a directory. `/mnt/wsl` is a tmpfs, so a publish that
+# created the path and then failed to bind leaves an ordinary directory on
+# throwaway storage -- and binding /var/lib/lemma from there would satisfy
+# every check below while putting the data somewhere the VM discards.
 LEMMA_DATA_SHARE=/mnt/wsl/lemma-data
-if [ ! -d "$LEMMA_DATA_SHARE" ]; then
+if ! /usr/bin/mountpoint -q "$LEMMA_DATA_SHARE"; then
   printf 'lemma-data: needs-repair: %s was not published by the data distribution\n' \
     "$LEMMA_DATA_SHARE"
   exit 1

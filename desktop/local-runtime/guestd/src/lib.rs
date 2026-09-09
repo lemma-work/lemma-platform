@@ -3597,8 +3597,15 @@ const MAX_DIAGNOSTICS_BYTES: usize = 128 * 1024;
 /// it. Scoped to guests that have a holder, so it says nothing at all on macOS
 /// or in a test, where `/mnt/wsl` does not exist.
 fn refuse_unbound_data() -> Result<(), GuestError> {
-    let holder = Path::new("/mnt/wsl/lemma-data");
-    if !holder.is_dir() {
+    // `/mnt/wsl` is the tmpfs WSL mounts in every distribution, and nothing
+    // else has it, so it is what "this guest is WSL" means here.
+    //
+    // The holder's own path is not that, and scoping on it was a hole in the
+    // exact case this guard exists for: a share that was never published
+    // leaves no directory, so the check said "no holder, nothing to protect"
+    // and let the mutation through to write on the disk the next upgrade
+    // deletes. Absent is not "not applicable", it is the failure.
+    if !Path::new("/mnt/wsl").is_dir() {
         return Ok(());
     }
     if is_mountpoint(Path::new("/var/lib/lemma")) {
@@ -5911,8 +5918,27 @@ mod tests {
     /// somewhere it will not survive, and report success.
     #[test]
     fn a_guest_whose_data_is_not_bound_refuses_to_write() {
-        // Says nothing where there is no holder -- macOS, and this test host.
-        refuse_unbound_data().expect("no holder, nothing to be wrong about");
+        // Says nothing off WSL -- macOS, and this test host.
+        refuse_unbound_data().expect("not a WSL guest, nothing to be wrong about");
+
+        // Scoped on `/mnt/wsl`, which every WSL distribution has, and not on
+        // the share itself. Scoping on the share was a hole in the exact case
+        // the guard exists for: one that was never published leaves no
+        // directory, so the check read as "no holder, not applicable" and let
+        // the write through to the disk the next upgrade deletes.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let guard_body = &source[source
+            .find("fn refuse_unbound_data")
+            .expect("the guard exists")..];
+        let guard_body = &guard_body[..guard_body.find("\n}\n").expect("it ends")];
+        assert!(
+            guard_body.contains("Path::new(\"/mnt/wsl\").is_dir()"),
+            "the platform check has to be /mnt/wsl, not the share:\n{guard_body}"
+        );
+        assert!(
+            !guard_body.contains("Path::new(\"/mnt/wsl/lemma-data\")"),
+            "an absent share is the failure, not a reason to skip:\n{guard_body}"
+        );
 
         // The guard is only worth having if it runs before the work, so this
         // pins where it sits rather than only that it exists.
@@ -5955,9 +5981,13 @@ mod tests {
         let init =
             include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
 
+        // A mountpoint, not a directory: `/mnt/wsl` is a tmpfs, so a publish
+        // that made the path and then failed to bind leaves a real directory
+        // on storage the VM discards, and binding the data out of *that*
+        // passes every check below while losing the work.
         let check = init
-            .find("if [ ! -d \"$LEMMA_DATA_SHARE\" ]")
-            .expect("it checks the share is published");
+            .find("if ! /usr/bin/mountpoint -q \"$LEMMA_DATA_SHARE\"")
+            .expect("it checks the share is really the published bind");
         let bind = init
             .find("/usr/local/bin/lemma-bind-data")
             .expect("it binds the data from the share");
