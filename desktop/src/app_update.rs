@@ -185,12 +185,72 @@ pub(crate) async fn check_for_app_update(
     Ok(status)
 }
 
+/// Whether the feed is still offering the version the user agreed to install.
+///
+/// Its own function because it is the whole of the consent check and the rest
+/// of `install_app_update` needs a live updater to reach. An empty expectation
+/// is refused rather than waved through: it means the caller had nothing to
+/// show the user, and "install whatever is there" is not something anyone
+/// agreed to.
+pub(crate) fn offered_is_what_was_agreed(offered: &str, expected: &str) -> Result<(), String> {
+    if expected.is_empty() {
+        return Err(
+            "Check for updates before installing one, so you can see what it changes.".into(),
+        );
+    }
+    if offered != expected {
+        return Err(format!(
+            "The available update changed while you were deciding: it now offers \
+             {offered} rather than {expected}. Check for updates again and read what \
+             it says before installing."
+        ));
+    }
+    Ok(())
+}
+
+/// One installation at a time, for the life of this process.
+///
+/// Two of them are not two updates, they are two downloads of the same bytes
+/// racing to replace the same application while each stops the daemon the
+/// other is relying on. There is nothing here that makes the second attempt
+/// wait usefully -- the first is already doing the only work there is -- so it
+/// is refused, and refused in words the user can act on.
+static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+/// Held for the length of one installation, released however it ends.
+pub(crate) struct InstallInFlight;
+
+impl InstallInFlight {
+    pub(crate) fn claim() -> Result<Self, String> {
+        if INSTALLING.swap(true, Ordering::SeqCst) {
+            return Err("An update is already being installed. Wait for it to finish.".into());
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for InstallInFlight {
+    fn drop(&mut self) {
+        INSTALLING.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Download and install a newer Lemma, then offer to restart.
+///
+/// `expected_version` is the version the user was actually shown and agreed
+/// to. This command has to ask the feed again -- an `Update` is a live handle
+/// on a download and does not survive the trip back to the webview -- and
+/// between the two questions the feed can answer differently: a release is
+/// published, a bad one is pulled. Without this the user consented to one
+/// version and installed whichever the feed happened to be offering a moment
+/// later, including a *downgrade*, and the only sign was the version in the
+/// restart dialog.
 #[tauri::command]
 pub(crate) async fn install_app_update(
     window: Webview,
     app: AppHandle,
     reset_data: bool,
+    expected_version: String,
 ) -> Result<(), String> {
     require_control_window(&window)?;
     if !updates_enabled() {
@@ -198,6 +258,7 @@ pub(crate) async fn install_app_update(
             "this build does not update itself; download the current release instead".into(),
         );
     }
+    let _in_flight = InstallInFlight::claim()?;
     let update = app
         .updater_builder()
         .endpoints(parsed_updater_endpoints())
@@ -208,6 +269,7 @@ pub(crate) async fn install_app_update(
         .await
         .map_err(|error| format!("could not check for updates: {error}"))?
         .ok_or("Lemma is already up to date")?;
+    offered_is_what_was_agreed(&update.version.to_string(), &expected_version)?;
 
     ensure_update_preserves_data(
         reset_data,
@@ -272,16 +334,26 @@ pub(crate) async fn install_app_update(
         return Ok(());
     }
 
-    let restart = confirm_destructive_action_impl(
-        app.clone(),
-        "Restart to finish updating?".into(),
-        format!(
-            "Lemma {} is installed. Restarting now finishes the update; it downloads \
-             its runtime once afterwards.",
-            update.version
-        ),
-        "Restart Now".into(),
-    )?;
+    // Off the async runtime. `confirm_destructive_action_impl` waits on a
+    // channel until the user answers, and the user may never answer -- so
+    // calling it from this async command parked a tokio worker on a dialog for
+    // as long as the window was left open.
+    let message = format!(
+        "Lemma {} is installed. Restarting now finishes the update; it downloads \
+         its runtime once afterwards.",
+        update.version
+    );
+    let handle = app.clone();
+    let restart = tauri::async_runtime::spawn_blocking(move || {
+        confirm_destructive_action_impl(
+            handle,
+            "Restart to finish updating?".into(),
+            message,
+            "Restart Now".into(),
+        )
+    })
+    .await
+    .map_err(|join| join.to_string())??;
     if restart {
         app.restart();
     }

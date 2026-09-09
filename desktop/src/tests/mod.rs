@@ -9,6 +9,7 @@ mod agent_host;
 mod config;
 mod diagnostics;
 mod locald;
+mod locald_writer;
 mod misc;
 mod navigation;
 mod quit;
@@ -16,6 +17,7 @@ mod quit_prompt;
 mod runtime;
 mod splash;
 mod update_install;
+mod update_single_flight;
 mod window_placement;
 mod windows;
 

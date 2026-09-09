@@ -75,7 +75,19 @@ pub(crate) struct DiagnosticLogSnapshot {
 
 pub(crate) struct Shell {
     pub(crate) ui: Mutex<UiState>,
-    pub(crate) locald_writer: Mutex<Option<SendHalf>>,
+    /// Where a message to the daemon is handed off, not written.
+    ///
+    /// It used to be the socket itself, written to under this lock. A daemon
+    /// that stops reading -- wedged, paused, mid-crash -- fills the socket
+    /// buffer, and the `write` that fills it blocks. Holding the lock, so
+    /// every other caller blocks behind it: the tray, the quit path, the
+    /// status poll, all of them waiting on a process that is never going to
+    /// read again.
+    ///
+    /// The channel is bounded, so a daemon that has stopped reading is
+    /// reported rather than absorbed. `Some` still means connected, which is
+    /// what the rest of the shell asks this field.
+    pub(crate) locald_writer: Mutex<Option<mpsc::SyncSender<String>>>,
     pub(crate) locald_connect: Mutex<()>,
     /// Installing the runtime is single-flighted separately from connecting
     /// to the daemon. It used to share `locald_connect`, which meant one

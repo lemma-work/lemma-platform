@@ -808,7 +808,12 @@ async function runDesktopAction(button) {
       if (appUpdate?.dataCompatibility !== "compatible") {
         throw new Error("This update has no supported data-preserving migration. Your current version and data have been kept.");
       }
-      await invoke("install_app_update", { resetData: false });
+      // The version the user is looking at, so the command can refuse if the
+      // feed has moved on since they were shown it.
+      await invoke("install_app_update", {
+        resetData: false,
+        expectedVersion: appUpdate?.availableVersion ?? "",
+      });
       await loadAppUpdate();
     }
     if (action === "retry-snapshot") {
