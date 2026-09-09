@@ -689,6 +689,7 @@ impl<E: Engine + 'static> GuestService<E> {
         match request.operation.as_str() {
             "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
+            "diagnostics.guest" => Ok(guest_diagnostics()),
             "diagnostics.sandbox" => self.sandbox_diagnostics(request.parameters),
             "system.shutdown" => self.shutdown(),
             "system.clock" => self.set_clock(request.parameters),
@@ -3552,6 +3553,54 @@ fn callback_failure_message(last_error: Option<&str>, guest_egress_ok: bool) -> 
     format!("sandbox cannot reach the Lemma API callback: {cause}. {egress}.")
 }
 
+/// What a failed start collects from inside the guest.
+///
+/// The same text the Windows host runs through `wsl.exe --exec`, from the same
+/// file, because a VZ guest has no exec channel and macOS otherwise collected
+/// nothing whatsoever. Compiled in rather than accepted from the host: a host
+/// that could post a shell script here would have a general-purpose exec
+/// channel into the guest wearing a diagnostics label. The cost is that an
+/// older guest collects with an older script, which is the right way round --
+/// the guest decides what may run in it.
+const GUEST_DIAGNOSTICS: &str = include_str!("../../guest-diagnostics.sh");
+
+/// How long the guest gives its own collection before killing it.
+///
+/// Bounded here as well as by the host's request deadline, because the two
+/// limits do different things: the host's stops waiting and returns nothing,
+/// this one stops collecting and returns everything printed so far. `nerdctl
+/// ps` against a wedged containerd is exactly the case that needs the
+/// difference, and it is also the case someone is most likely collecting for.
+const DIAGNOSTICS_TIMEOUT: &str = "20s";
+
+/// Kept to the tail, matching what the host writes to `logs/guest.log`.
+const MAX_DIAGNOSTICS_BYTES: usize = 128 * 1024;
+
+fn guest_diagnostics() -> Value {
+    let output = Command::new("/usr/bin/timeout")
+        .args([
+            "--signal=KILL",
+            DIAGNOSTICS_TIMEOUT,
+            "/bin/sh",
+            "-c",
+            GUEST_DIAGNOSTICS,
+        ])
+        .stdin(Stdio::null())
+        .output();
+    let text = match output {
+        // The exit status is ignored on purpose, killed-at-the-limit included.
+        // The script runs under `set +e` precisely so that one collector
+        // failing does not stop the next, and what it printed before giving up
+        // is the reason anyone asked.
+        Ok(output) => {
+            let start = output.stdout.len().saturating_sub(MAX_DIAGNOSTICS_BYTES);
+            String::from_utf8_lossy(&output.stdout[start..]).into_owned()
+        }
+        Err(error) => format!("guest diagnostics could not run: {error}\n"),
+    };
+    json!({ "text": text })
+}
+
 fn network_diagnostics() -> Value {
     let dns = Command::new("/usr/bin/timeout")
         .args([
@@ -4974,6 +5023,75 @@ mod tests {
         );
     }
 
+    /// macOS had no way to ask the guest what it saw.
+    ///
+    /// Windows drives `guest-diagnostics.sh` through `wsl.exe --exec`. A VZ
+    /// guest has no exec channel of any kind, so the same collection has to be
+    /// reachable as an operation -- and until it was, a macOS start that
+    /// failed with the guest up and its services broken left the serial
+    /// console as the only record, which says nothing about services.
+    #[test]
+    fn a_failed_start_can_ask_the_guest_what_it_saw() {
+        let root = tempdir().unwrap();
+        let service = GuestService::new(
+            FakeEngine::new(Vec::new()),
+            root.path().into(),
+            Some("192.168.64.2".into()),
+            "192.168.64.1".into(),
+            None,
+        )
+        .unwrap();
+
+        let response = service.handle(GuestRequest {
+            version: 1,
+            operation: "diagnostics.guest".into(),
+            parameters: json!({}),
+            capability: None,
+        });
+
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.unwrap();
+        assert!(
+            result["text"].is_string(),
+            "the host appends this to logs/guest.log as it stands: {result}"
+        );
+    }
+
+    /// Collecting must not queue behind the thing that is stuck.
+    ///
+    /// Diagnostics are asked for while a mutation is wedged. Serialising them
+    /// behind that mutation would make the collector wait for exactly the
+    /// operation it was called to explain.
+    #[test]
+    fn collecting_diagnostics_does_not_wait_on_the_mutation_lock() {
+        assert!(is_observation("diagnostics.guest"));
+    }
+
+    /// One script, included by both ends, so they cannot drift.
+    ///
+    /// The addresses line is the load-bearing one: `discover_guest_ip` reads
+    /// `ip -4 -o addr show`, and this collection is the only thing that can
+    /// say what the guest actually answered when that discovery picked wrong.
+    #[test]
+    fn the_guest_collects_what_the_windows_host_collects() {
+        for fragment in [
+            "ip -4 -o addr show",
+            "ip -4 route show",
+            "/usr/local/bin/nerdctl ps -a",
+            "/var/log/lemma/",
+            "set +e",
+        ] {
+            assert!(
+                GUEST_DIAGNOSTICS.contains(fragment),
+                "guest-diagnostics.sh stopped collecting {fragment}"
+            );
+        }
+        assert!(
+            !GUEST_DIAGNOSTICS.contains("journalctl"),
+            "the guest runs with systemd=false, so there is no journal to read"
+        );
+    }
+
     #[test]
     fn sandbox_diagnostics_exposes_only_sanitized_runtime_state() {
         let root = tempdir().unwrap();
@@ -5724,6 +5842,86 @@ mod tests {
     /// `Assert*` fails the unit instead, and that failure propagates through
     /// those `Requires` and stops the services that would have written to the
     /// wrong disk.
+    /// A diagnosis written where the host cannot read it is not a diagnosis.
+    ///
+    /// The host's `guest_needs_data_repair` greps the serial console for
+    /// `lemma-data: needs-repair:`, and that verdict is what turns a failed
+    /// start into a named cause and an offer to reset. Under systemd's default
+    /// `StandardOutput=journal` every one of those lines went to the guest's
+    /// journal instead, which nothing on the host reads: the VZ kernel command
+    /// line sets no `forward_to_console`, and the Windows guest runs with
+    /// systemd off entirely. So the detector could not fire, and the host
+    /// waited out its full readiness budget and said "did not become ready"
+    /// for failures the guest had already diagnosed precisely.
+    ///
+    /// Confirmed on a real VZ guest before this was fixed: its console log
+    /// holds systemd's own "Finished lemma-data.service" line and not one byte
+    /// of the `mkfs.ext4` that same unit had just run.
+    #[test]
+    fn a_repair_verdict_has_to_reach_the_channel_the_host_reads() {
+        const MARKER: &str = "lemma-data: needs-repair:";
+        const CONSOLE: &str = "StandardOutput=journal+console";
+        for (name, script, unit) in [
+            (
+                "lemma-mount-data",
+                include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data"),
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service"
+                ),
+            ),
+            (
+                "lemma-data-unavailable",
+                include_str!(
+                    "../../guest-image/rootfs-overlay/usr/local/bin/lemma-data-unavailable"
+                ),
+                include_str!(
+                    "../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data-unavailable.service"
+                ),
+            ),
+        ] {
+            assert!(
+                script.contains(MARKER),
+                "{name} is only listed here because it prints the marker"
+            );
+            assert!(
+                unit.lines().any(|line| line.trim() == CONSOLE),
+                "{name} prints a verdict the host reads off the console, so its                  unit has to write there: {unit}"
+            );
+        }
+    }
+
+    /// The one failure the mount script cannot report is its own absence.
+    ///
+    /// `AssertPathExists` fails the unit before `ExecStart`, so no
+    /// `needs-repair:` line is ever printed and the host falls back to a flat
+    /// 120-second timeout. `OnFailure=` is the only hook that still runs.
+    #[test]
+    fn a_data_disk_that_never_appeared_is_named_rather_than_timed_out() {
+        let unit =
+            include_str!("../../guest-image/rootfs-overlay/etc/systemd/system/lemma-data.service");
+        assert!(
+            unit.lines()
+                .any(|line| line.trim() == "OnFailure=lemma-data-unavailable.service"),
+            "nothing else runs when the assertion fails: {unit}"
+        );
+
+        let notice =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-data-unavailable");
+        assert!(
+            notice.contains("[ ! -e /dev/nvme0n1 ]"),
+            "OnFailure also fires for failures the mount script already                  diagnosed, and the host reads the last marker -- so this must not                  print over a precise reason: {notice}"
+        );
+
+        // An overlay file arrives without its executable bit; the Dockerfile
+        // grants it. A notice that cannot run leaves exactly the silence it
+        // was added to break.
+        let dockerfile = include_str!("../../guest-image/Dockerfile");
+        assert!(
+            dockerfile.contains("/usr/local/bin/lemma-data-unavailable"),
+            "the notice has to be made executable in the image: {dockerfile}"
+        );
+    }
+
     #[test]
     fn a_missing_data_disk_fails_the_guest_rather_than_being_skipped() {
         let unit =

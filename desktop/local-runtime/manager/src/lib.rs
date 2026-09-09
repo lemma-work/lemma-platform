@@ -158,6 +158,10 @@ fn guest_request_budget(operation: &str) -> Duration {
         // this expired first the guest would keep pulling into a request
         // nobody is waiting on, and the next attempt would contend with it.
         "core.images" | "core.sandbox_images" => Duration::from_secs(75 * 60),
+        // Collected on a failure path, so the wait is added to a start that
+        // has already gone wrong. The guest bounds its own collection well
+        // inside this; the margin is for a guest slow enough to need it.
+        "diagnostics.guest" => Duration::from_secs(45),
         _ => Duration::from_secs(8 * 60),
     }
 }
@@ -335,8 +339,33 @@ impl ManagedRuntime {
     pub fn capture_diagnostics(&self) -> io::Result<()> {
         #[cfg(target_os = "macos")]
         {
-            // The VZ serial console is continuously appended by the helper.
-            Ok(())
+            // The VZ serial console is continuously appended by the helper,
+            // and for a guest that never reached userspace it is the only
+            // record there is. It was also the *only* record macOS ever had:
+            // everything the Windows arm below collects -- addresses, routes,
+            // listening sockets, containers, the guest's own service logs --
+            // was written nowhere at all, so a macOS start that failed with
+            // the guest up and its services half-started left a boot log and
+            // nothing else. That is the failure people actually hit.
+            //
+            // A VZ guest has no exec channel, so the collection cannot be
+            // driven from here the way `wsl.exe --exec` drives it on Windows.
+            // The guest runs the same script itself -- literally the same
+            // file, compiled into `lemma-guestd` -- and hands back the text.
+            //
+            // Allowing failure on purpose, exactly as the Windows arm does:
+            // this runs *because* something has already gone wrong, so the
+            // guest is often too broken to answer, and a guest that cannot
+            // answer still leaves the serial console. Failing here would add
+            // an error about collecting errors.
+            let Ok(result) = self.request("diagnostics.guest", json!({})) else {
+                return Ok(());
+            };
+            let text = result.get("text").and_then(Value::as_str).unwrap_or("");
+            if text.is_empty() {
+                return Ok(());
+            }
+            self.append_guest_log(text.as_bytes())
         }
         #[cfg(windows)]
         {
@@ -358,18 +387,28 @@ impl ManagedRuntime {
                 ],
                 None,
             )?;
-            let log_path = self.config.local_root.join("logs/guest.log");
-            rotate_log(&log_path, 5 * 1024 * 1024)?;
-            let mut log = private_appending_log(&log_path)?;
-            let start = output.stdout.len().saturating_sub(128 * 1024);
-            log.write_all(&output.stdout[start..])?;
-            log.write_all(b"\n")?;
-            Ok(())
+            self.append_guest_log(&output.stdout)
         }
         #[cfg(not(any(target_os = "macos", windows)))]
         {
             Ok(())
         }
+    }
+
+    /// Append one capture to `logs/guest.log`, keeping the tail of it.
+    ///
+    /// The tail rather than the head: a collector that ran long enough to
+    /// produce more than this wrote the service logs last, and those are what
+    /// says why the start failed.
+    #[cfg(any(target_os = "macos", windows))]
+    fn append_guest_log(&self, captured: &[u8]) -> io::Result<()> {
+        let log_path = self.config.local_root.join("logs/guest.log");
+        rotate_log(&log_path, 5 * 1024 * 1024)?;
+        let mut log = private_appending_log(&log_path)?;
+        let start = captured.len().saturating_sub(128 * 1024);
+        log.write_all(&captured[start..])?;
+        log.write_all(b"\n")?;
+        Ok(())
     }
 
     /// Verify both the platform runtime process and the guest control plane.
@@ -1410,7 +1449,13 @@ fn decode_wsl_output(value: &[u8]) -> String {
     decoded.replace('\u{feff}', "")
 }
 
-/// What to collect from a Windows guest that has just failed.
+/// What to collect from a guest that has just failed.
+///
+/// Held in `guest-diagnostics.sh` rather than inline, because both ends need
+/// the same text and neither can import the other: Windows runs it through
+/// `wsl.exe`, and macOS has no exec channel at all, so `lemma-guestd` compiles
+/// the same file in and runs it from inside the guest. One file, included
+/// twice, is the only arrangement where the two cannot drift.
 ///
 /// This used to be `journalctl --lines 300`, and on Windows it collected
 /// nothing at all, ever. The guest ships `/etc/wsl.conf` with
@@ -1425,22 +1470,7 @@ fn decode_wsl_output(value: &[u8]) -> String {
 /// which containers are up. Bounded per file, and `2>&1` throughout, because a
 /// collector that fails halfway is still worth what it printed first.
 #[cfg(any(windows, test))]
-const GUEST_DIAGNOSTICS: &str = "\
-set +e
-echo '--- addresses ---'
-ip -4 -o addr show 2>&1
-echo '--- routes ---'
-ip -4 route show 2>&1
-echo '--- listening ---'
-ss -ltn 2>&1 || cat /proc/net/tcp 2>&1
-echo '--- containers ---'
-/usr/local/bin/nerdctl ps -a 2>&1
-for log in /var/log/lemma/*.log; do
-  [ -f \"$log\" ] || continue
-  echo \"--- $log ---\"
-  tail -n 200 \"$log\" 2>&1
-done
-";
+const GUEST_DIAGNOSTICS: &str = include_str!("../../guest-diagnostics.sh");
 
 /// How long a `wsl.exe` invocation is given before it is killed.
 ///
@@ -1717,6 +1747,48 @@ mod tests {
             fs::read_to_string(runtime.capability_file()).unwrap()
         );
         ensure_private_file(runtime.capability_file()).unwrap();
+    }
+
+    /// A macOS start that failed used to leave nothing but the boot log.
+    ///
+    /// `capture_diagnostics` returned success on macOS having written nothing
+    /// whatsoever -- no addresses, no routes, no listening sockets, no
+    /// containers, and none of the guest's own service logs -- while the
+    /// Windows arm collected all of it. A guest that boots fine and then fails
+    /// to start its services is the common failure, and it is precisely the
+    /// one the serial console cannot explain.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_failed_macos_start_writes_down_what_the_guest_saw() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("artifacts/macos-aarch64")).unwrap();
+        let bridge = root.path().join("lemma-runtime");
+        fs::write(
+            &bridge,
+            "#!/bin/sh\ncat >/dev/null\ncat <<'RESPONSE'\n\
+             {\"ok\":true,\"result\":{\"text\":\"--- addresses ---\\n\
+             2: enp0s1    inet 192.168.64.2/24 scope global\\n\"}}\nRESPONSE\n",
+        )
+        .unwrap();
+        fs::set_permissions(&bridge, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: bridge,
+            vz_executable: root.path().join("lemma-vz"),
+        };
+        let runtime = ManagedRuntime::new(config).unwrap();
+
+        runtime.capture_diagnostics().unwrap();
+
+        let log = fs::read_to_string(root.path().join("local/logs/guest.log")).unwrap();
+        assert!(
+            log.contains("--- addresses ---") && log.contains("192.168.64.2/24"),
+            "the guest's own account of the failure has to reach the log: {log}"
+        );
     }
 
     #[cfg(target_os = "macos")]
