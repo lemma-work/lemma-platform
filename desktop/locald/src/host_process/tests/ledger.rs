@@ -1,0 +1,101 @@
+//! Reclaiming only a process this installation actually started.
+
+// Every guard in this file drives a real process group, so all of them
+// are `#[cfg(unix)]` -- which leaves the module empty on Windows, and an
+// import with nothing to import is an error under `-D warnings`.
+#[cfg(unix)]
+use super::*;
+
+#[cfg(unix)]
+#[test]
+fn process_ledger_reclaims_only_an_exact_owned_process() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let root = tempdir().unwrap();
+    let ledger_path = root.path().join("processes.json");
+    let installation_id = "0123456789abcdef0123456789abcdef";
+    let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let identity = process_identity(child.id()).unwrap();
+    let mut backend = service("backend", &[]);
+    backend.command = vec!["/bin/sleep".into(), "30".into()];
+    let value = manifest(vec![backend, service("frontend", &["backend"])]);
+    write_process_ledger(
+        &ledger_path,
+        &ProcessLedger {
+            schema_version: PROCESS_LEDGER_SCHEMA_VERSION,
+            installation_id: installation_id.into(),
+            entries: vec![ProcessLedgerEntry {
+                service_id: "backend".into(),
+                pid: child.id(),
+                executable: identity.executable,
+                start_identity: identity.start_identity,
+                installation_id: installation_id.into(),
+                runtime_generation: "0123456789abcdef0123456789abcdef".into(),
+            }],
+        },
+    )
+    .unwrap();
+
+    // Reaped in parallel, which is the whole trick.
+    //
+    // `terminate_verified_process` signals, then waits for the PID to stop
+    // existing before escalating. A dead child nobody has reaped is a
+    // zombie, and a zombie still answers `kill(pid, 0)` -- so this test's
+    // process could never be observed to exit, the wait ran its full five
+    // seconds every time, and the assertion that followed was left racing
+    // whatever the runner did next. Production never has this problem: a
+    // reclaimed process belonged to a previous locald and is reaped by
+    // init, so its PID really does go away.
+    //
+    // Reaping here restores that, and the exit status is then an exact
+    // answer rather than a deadline: signalled means reclaimed, and a
+    // process that was missed runs out its own 30 seconds and fails
+    // saying so.
+    let reaper = thread::spawn(move || child.wait().unwrap());
+    reclaim_verified_processes(&ledger_path, installation_id, &value).unwrap();
+    let status = reaper.join().unwrap();
+    assert!(
+        status.signal().is_some(),
+        "the reclaimed process exited on its own rather than being killed: \
+         {status:?}",
+    );
+    assert!(read_process_ledger(&ledger_path)
+        .unwrap()
+        .entries
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn process_ledger_never_kills_a_pid_with_the_wrong_start_identity() {
+    let root = tempdir().unwrap();
+    let ledger_path = root.path().join("processes.json");
+    let installation_id = "0123456789abcdef0123456789abcdef";
+    let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+    let identity = process_identity(child.id()).unwrap();
+    let mut backend = service("backend", &[]);
+    backend.command = vec!["/bin/sleep".into(), "30".into()];
+    let value = manifest(vec![backend, service("frontend", &["backend"])]);
+    write_process_ledger(
+        &ledger_path,
+        &ProcessLedger {
+            schema_version: PROCESS_LEDGER_SCHEMA_VERSION,
+            installation_id: installation_id.into(),
+            entries: vec![ProcessLedgerEntry {
+                service_id: "backend".into(),
+                pid: child.id(),
+                executable: identity.executable,
+                start_identity: "different-process-start".into(),
+                installation_id: installation_id.into(),
+                runtime_generation: "0123456789abcdef0123456789abcdef".into(),
+            }],
+        },
+    )
+    .unwrap();
+
+    reclaim_verified_processes(&ledger_path, installation_id, &value).unwrap();
+
+    assert!(child.try_wait().unwrap().is_none());
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
