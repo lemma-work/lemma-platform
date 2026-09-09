@@ -375,6 +375,55 @@ def enforce_windows_path_budget(pack_root: Path) -> None:
             f"{WINDOWS_PATH_BUDGET}-character Windows path budget",
             flush=True,
         )
+    report_windows_path_headroom(pack_root)
+
+
+# How little headroom is worth saying something about.
+#
+# A dependency update that lands ten characters below the limit has not broken
+# anything, and is one release away from doing so.
+WINDOWS_PATH_HEADROOM_WARNING = 15
+
+
+def report_windows_path_headroom(pack_root: Path) -> None:
+    """Say how close the longest surviving path came.
+
+    The gate above only speaks when something has already crossed the line,
+    which makes every crossing a surprise -- a build that was fine yesterday
+    failing today because a dependency grew a directory level. This is the
+    number that would have made it visible first: a `twilio` file sat nine
+    characters over, and nothing before it had ever reported how much room was
+    left.
+
+    Reported on every build, and loudly when the margin is thin, so the last
+    quiet release before a failure looks different from the ones before it.
+    """
+    longest = max(
+        (
+            (len(installed_path(pack_root, path)), installed_path(pack_root, path))
+            for path in pack_root.rglob("*")
+            if path.is_file()
+        ),
+        default=(0, ""),
+    )
+    length, where = longest
+    headroom = WINDOWS_PATH_BUDGET - length
+    print(
+        f"+ longest installed path is {length} characters, "
+        f"{headroom} below the {WINDOWS_PATH_BUDGET}-character Windows budget",
+        flush=True,
+    )
+    # Negatives included. `enforce_windows_path_budget` raises before this for
+    # a source file over the line, so a negative here means bytecode it dropped
+    # -- still worth saying, and silence would be the wrong answer to the one
+    # number this function exists to report.
+    if headroom < WINDOWS_PATH_HEADROOM_WARNING:
+        print(
+            f"::warning::only {headroom} characters of Windows path budget "
+            f"remain; the next dependency to grow a directory level will fail "
+            f"the build. Longest: {where}",
+            flush=True,
+        )
 
 
 def compile_python_runtime(python_root: Path, executable: Path) -> None:
