@@ -1,6 +1,7 @@
 //! Recovering runs across a restart, and the session that rides them.
 
 use super::*;
+use serde_json::json;
 
 /// What a restarted host reads to find the runs it left mid-flight, and
 /// the only journal method that reads rows while its own cursor is open.
@@ -156,4 +157,63 @@ fn a_run_that_never_opened_a_session_reports_no_session_id() {
     let (_, checkpoints, _) = journal.pending_control(target).unwrap();
     assert_eq!(checkpoints.len(), 1);
     assert!(!checkpoints[0].detail.contains_key("provider_session_id"));
+}
+
+/// A run that finished while the refresh was in flight keeps its terminal spec.
+///
+/// `refresh_run_mcp` read the run, released the journal lock, then wrote --
+/// so a `checkpoint` marking the run terminal in between was overwritten by a
+/// spec belonging to a run that had already ended. Both halves are one
+/// immediate transaction now.
+#[test]
+fn a_terminal_run_is_not_given_a_new_credential() {
+    let (_directory, journal, target, command, spec) = fixture();
+    journal
+        .accept_start(target, &command, &spec, "codex", "1.0")
+        .unwrap();
+    let run_id = spec.agent_run_id;
+
+    // Live: the refresh lands.
+    assert!(
+        journal
+            .refresh_run_mcp(
+                target,
+                run_id,
+                1,
+                &json!({"url": "https://one.example/mcp"})
+            )
+            .unwrap(),
+        "a live run takes a replacement credential"
+    );
+
+    journal
+        .checkpoint(target, run_id, 1, RunState::Succeeded, &JsonMap::new())
+        .unwrap();
+
+    // Terminal: it does not.
+    assert!(
+        !journal
+            .refresh_run_mcp(
+                target,
+                run_id,
+                1,
+                &json!({"url": "https://two.example/mcp"})
+            )
+            .unwrap(),
+        "a finished run must not be given a new credential"
+    );
+    let stored = journal.get_run(target, run_id).unwrap().unwrap();
+    assert_eq!(stored.spec.mcp, json!({"url": "https://one.example/mcp"}));
+
+    // And a superseded lease does not, whatever the state.
+    assert!(
+        !journal
+            .refresh_run_mcp(
+                target,
+                run_id,
+                2,
+                &json!({"url": "https://three.example/mcp"})
+            )
+            .unwrap(),
+    );
 }

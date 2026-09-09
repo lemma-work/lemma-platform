@@ -1,5 +1,7 @@
 //! Printing a run's events to a terminal.
 
+use std::io::Write;
+
 use lemma_agent_host::acp::AcpCallbacks;
 use lemma_agent_host::protocol::{EventType, JsonMap};
 use serde_json::Value;
@@ -44,6 +46,11 @@ impl AcpCallbacks for ConsoleCallbacks {
             && let Some(text) = payload.get("text").and_then(Value::as_str)
         {
             print!("{text}");
+            // Rust line-buffers stdout, and a chunk rarely ends in a newline,
+            // so without this the answer sits in the buffer until one arrives
+            // or the process exits -- which turns streaming into bursts, on
+            // the one surface whose whole point is watching it arrive.
+            let _ = std::io::stdout().flush();
         }
         Ok(())
     }

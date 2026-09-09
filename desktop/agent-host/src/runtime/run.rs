@@ -58,6 +58,10 @@ impl TargetWorker {
                     RunState::Failed,
                     "the start command did not carry a run-scoped MCP configuration",
                 )?;
+                // Like the sibling failure below and the normal exit at the
+                // end. Without it this run's terminal checkpoint waits out the
+                // whole long poll -- the delay the comment above measures.
+                events_ready.notify_one();
                 return Ok(());
             }
             let scratch = match prepare_run_directory(&paths, target_id, &spec) {

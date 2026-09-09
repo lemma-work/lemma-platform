@@ -73,13 +73,51 @@ pub(crate) fn convert_config_option(
     })
 }
 
+/// Whether an option decides what an agent is allowed to do.
+///
+/// Matched on whole words, not on substrings. `"model".contains("mode")` is
+/// true, so an option whose id or category is `model` was classified as a
+/// permission control -- and a harness offering a model named `auto`, which
+/// several do, then had that model removed from its published list, had a
+/// `SetSessionConfigOptionRequest` sent to change away from it, and had every
+/// selection of it refused as `model_unavailable`. The turn ran on the
+/// harness default and nothing said why.
 pub(crate) fn is_policy_bearing_option(option_id: &str, category: &str) -> bool {
+    const MARKERS: [&str; 4] = ["mode", "permission", "approval", "sandbox"];
     [option_id, category].iter().any(|value| {
-        let normalized = value.to_ascii_lowercase();
-        ["mode", "permission", "approval", "sandbox"]
-            .iter()
-            .any(|marker| normalized.contains(marker))
+        words(value).any(|word| {
+            MARKERS
+                .iter()
+                .any(|marker| word == *marker || word == format!("{marker}s"))
+        })
     })
+}
+
+/// The words in an identifier, however it spells them.
+///
+/// `permission_mode`, `permissionMode`, `permission-mode` and `Permission Mode`
+/// are the same two words; an id arrives in whichever shape its harness
+/// prefers.
+fn words(value: &str) -> impl Iterator<Item = String> + '_ {
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for character in value.chars() {
+        if !character.is_alphanumeric() {
+            if !current.is_empty() {
+                out.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        // A capital starts a new word, so `permissionMode` is two.
+        if character.is_uppercase() && !current.is_empty() {
+            out.push(std::mem::take(&mut current));
+        }
+        current.extend(character.to_lowercase());
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out.into_iter()
 }
 
 pub(crate) fn is_disallowed_policy_value(value: &Value) -> bool {

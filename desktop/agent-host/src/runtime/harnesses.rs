@@ -12,7 +12,19 @@ use super::{
 /// that was rejected for naming the wrong one needs to see *that* they differ,
 /// not which bytes.
 pub(crate) fn short_revision(revision: &str) -> &str {
-    &revision[..revision.len().min(8)]
+    // Cut on a character boundary, not at byte eight. The revision arrives in
+    // a start command's payload, so it is not ours to assume is hex: a
+    // multi-byte character crossing the boundary panicked here, and a panic
+    // here ends the target worker -- taking every other run on that target
+    // with it, to shorten a log line.
+    let end = revision
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(revision.len()))
+        .take_while(|index| *index <= 8)
+        .last()
+        .unwrap_or(0);
+    &revision[..end]
 }
 
 /// How many models a probe came back with, for the probe log line.

@@ -208,9 +208,11 @@ impl AdapterManifest {
     ///
     /// One thread per adapter, because resolving one means *spawning* it.
     ///
-    /// `probe_version` waits up to five seconds for an agent to answer, and an
-    /// agent that is not installed spends the whole five. In sequence that was
-    /// four timeouts end to end before the list could say anything; concurrently
+    /// `probe_version` waits up to `VERSION_PROBE_TIMEOUT` for an agent to
+    /// answer -- thirty seconds, and its own doc says why five was not enough
+    /// -- and an agent that is not installed spends the whole budget. In
+    /// sequence that was four timeouts end to end before the list could say
+    /// anything; concurrently
     /// the slowest adapter sets the floor and the rest are free.
     ///
     /// This is also the step that raises the macOS file-access prompt, since it

@@ -524,3 +524,74 @@ fn process_exists(pid: u32) -> bool {
         .status()
         .is_ok_and(|status| status.success())
 }
+
+/// `"model".contains("mode")`, which is why a model called `auto` disappeared.
+///
+/// `is_policy_bearing_option` matched markers as substrings, so an option
+/// whose id or category is `model` was classified as a permission control.
+/// Several harnesses offer a model named `auto`, and `auto` is on the
+/// disallowed-policy list -- so that model was struck from the published
+/// options, a `SetSessionConfigOptionRequest` was sent to move off it, and
+/// every selection of it came back `model_unavailable`. The turn ran on the
+/// harness default and nothing said why.
+#[test]
+fn a_model_option_is_not_a_permission_control() {
+    for (id, category) in [
+        ("model", "model"),
+        ("model", ""),
+        ("", "model"),
+        ("modelId", "selection"),
+        ("default_model", ""),
+    ] {
+        assert!(
+            !is_policy_bearing_option(id, category),
+            "{id:?}/{category:?} is about which model, not about what it may do",
+        );
+    }
+
+    // And the ones that are, however their harness spells them.
+    for (id, category) in [
+        ("mode", ""),
+        ("permissionMode", ""),
+        ("permission_mode", ""),
+        ("permission-mode", ""),
+        ("", "sandbox"),
+        ("approvalPolicy", ""),
+        ("", "Approval Policy"),
+        ("modes", ""),
+    ] {
+        assert!(
+            is_policy_bearing_option(id, category),
+            "{id:?}/{category:?} decides what the agent may do",
+        );
+    }
+}
+
+/// A model named `auto` survives the conversion whole.
+#[test]
+fn a_harness_offering_an_auto_model_keeps_it() {
+    let option: SessionConfigOption = serde_json::from_value(serde_json::json!({
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "auto",
+        "options": [
+            {"value": "auto", "name": "Auto"},
+            {"value": "sonnet", "name": "Sonnet"}
+        ]
+    }))
+    .expect("the option parses");
+    let converted = convert_config_option("claude-code", &option).expect("it is published");
+    assert_eq!(converted.current_value, serde_json::json!("auto"));
+    assert_eq!(
+        converted.options.len(),
+        2,
+        "no value was filtered as a policy the host disallows"
+    );
+    assert!(
+        !converted.metadata.contains_key("hostPolicyDefaultOverride"),
+        "nothing was rewritten under the user"
+    );
+    assert!(selection_is_allowed(&converted, &serde_json::json!("auto")));
+}

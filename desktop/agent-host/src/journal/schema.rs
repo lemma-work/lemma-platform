@@ -50,6 +50,38 @@ pub(crate) const EXPECTED_COLUMNS: &[(&str, &[&str])] = &[
             "created_at",
         ],
     ),
+    // The table this check was written for and did not cover. `runs` gained
+    // `provider_session_id`, `prompt_dispatched`, `next_sequence`,
+    // `checkpoint_detail` and `checkpoint_pending`, and a file predating any of
+    // them passed `discard_if_incompatible`, survived
+    // `CREATE TABLE IF NOT EXISTS`, and then failed on every access -- which is
+    // exactly the silent failure the comment above describes, on the one table
+    // it was not looking at.
+    (
+        "runs",
+        &[
+            "target_id",
+            "run_id",
+            "lease_epoch",
+            "command_id",
+            "harness_key",
+            "adapter_version",
+            "state",
+            "checkpoint",
+            "checkpoint_detail",
+            "checkpoint_pending",
+            "spec_json",
+            "provider_session_id",
+            "prompt_dispatched",
+            "next_sequence",
+            "created_at",
+            "updated_at",
+        ],
+    ),
+    (
+        "command_rejections",
+        &["target_id", "command_id", "rejection_json", "created_at"],
+    ),
 ];
 
 /// Free rather than a method, so callers already holding the connection guard
@@ -144,18 +176,10 @@ impl Journal {
         Ok(journal)
     }
 
-    /// Rebuild the journal when the file on disk has a different shape.
+    /// Where this journal is on disk.
     ///
-    /// `initialize` is all `CREATE TABLE IF NOT EXISTS`, so an older table
-    /// survives untouched. That is not theoretical: `event_outbox` once had a
-    /// NOT NULL `event_id` column, and a host carrying it failed *every* event
-    /// insert with a constraint error — accepting runs, renewing their leases,
-    /// and delivering nothing, so conversations hung on "thinking" forever with
-    /// no failure anyone could see.
-    ///
-    /// This is a local outbox for crash recovery, not a source of truth: the
-    /// server holds the run leases and re-drives what it needs. Losing
-    /// undelivered events is strictly better than never delivering again.
+    /// Read by the MCP bridge, which is a separate process and finds the
+    /// journal from here.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path

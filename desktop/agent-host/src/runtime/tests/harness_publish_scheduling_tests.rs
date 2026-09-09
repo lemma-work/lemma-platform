@@ -185,3 +185,22 @@ fn a_failed_publish_is_retried_in_seconds_not_a_quarter_of_an_hour() {
         "a command's wait must cover at least one retry",
     );
 }
+
+/// A revision is not ours to assume is hex.
+///
+/// `short_revision` sliced at byte eight. The value arrives in a start
+/// command's payload, so a multi-byte character crossing that boundary
+/// panicked -- and a panic here ends the target worker, taking every other run
+/// on that target with it, to shorten a log line.
+#[test]
+fn a_revision_is_shortened_on_a_character_boundary() {
+    use crate::runtime::short_revision;
+
+    assert_eq!(short_revision("a1a1a1a1cafef00d"), "a1a1a1a1");
+    assert_eq!(short_revision("short"), "short");
+    assert_eq!(short_revision(""), "");
+    // Four-byte characters: the boundary at byte eight falls between them.
+    assert_eq!(short_revision("🧪🧪🧪"), "🧪🧪");
+    // And one that straddles it.
+    assert_eq!(short_revision("abcdef🧪x"), "abcdef");
+}

@@ -208,7 +208,14 @@ impl Journal {
     /// delivery mechanism.
     ///
     /// Fenced on the lease epoch, so a credential minted for a superseded
-    /// dispatch cannot overwrite the current one.
+    /// dispatch cannot overwrite the current one -- and on the terminal state,
+    /// in the same transaction as the write.
+    ///
+    /// The read used to take the lock and give it back before the update, so
+    /// `checkpoint` could mark the run terminal in between and this would
+    /// rewrite the spec of a run that had already finished. Both halves are one
+    /// immediate transaction now: SQLite takes the write lock at `BEGIN`, so
+    /// nothing can land between the check and the write it guards.
     pub fn refresh_run_mcp(
         &self,
         target_id: Uuid,
@@ -216,7 +223,9 @@ impl Journal {
         lease_epoch: u32,
         mcp: &Value,
     ) -> Result<bool, JournalError> {
-        let Some(run) = self.get_run(target_id, run_id)? else {
+        let mut connection = self.connection();
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let Some(run) = read_run(&transaction, target_id, run_id)? else {
             return Ok(false);
         };
         if run.lease_epoch != lease_epoch || run.state.is_terminal() {
@@ -224,17 +233,18 @@ impl Journal {
         }
         let mut spec = run.spec;
         spec.mcp = mcp.clone();
-        let connection = self.connection();
-        let updated = connection.execute(
-            "UPDATE runs SET spec_json=?3, updated_at=?4 \
-             WHERE target_id=?1 AND run_id=?2",
+        let updated = transaction.execute(
+            "UPDATE runs SET spec_json=?4, updated_at=?5 \
+             WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3",
             params![
                 target_id.to_string(),
                 run_id.to_string(),
+                lease_epoch,
                 serde_json::to_string(&spec)?,
                 Utc::now().to_rfc3339(),
             ],
         )?;
+        transaction.commit()?;
         Ok(updated > 0)
     }
 
