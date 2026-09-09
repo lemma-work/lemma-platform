@@ -5750,9 +5750,19 @@ mod tests {
     /// connection timed out -- while the services it wanted were listening on
     /// `eth0` and, through WSL's own forwarding, on the host's `127.0.0.1`.
     ///
-    /// Both fixtures are verbatim from real machines: the first from the
-    /// Windows guest as it failed, the second from the VZ guest, where the
-    /// old code was right and has to stay right.
+    /// The Windows fixture is verbatim from that guest as it failed. The
+    /// macOS one is not a capture: a VZ guest has no exec channel, so it was
+    /// assembled, and then checked line by line against the guest it stands
+    /// for. Its field values -- `enp0s1`, index 2, `/24`, the broadcast, the
+    /// global scope, the DHCP lease that makes it `dynamic`, and that `lo`
+    /// carries no global IPv4 so cannot appear -- were read off the running
+    /// guest through the one namespace reachable from the host. Its exact
+    /// bytes, which are a property of iproute2 rather than of the guest --
+    /// four spaces after the name, the `\` and the seven that follow it --
+    /// were reproduced by running the same iproute2 the guest ships, from the
+    /// same Ubuntu 24.04, over a dummy `enp0s1` given that address and lease.
+    /// The two agree character for character apart from the index, and the
+    /// index is the part that was read from the guest.
     #[test]
     fn the_guest_reports_an_address_the_host_can_actually_reach() {
         let wsl = "\

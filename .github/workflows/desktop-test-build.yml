@@ -212,14 +212,25 @@ jobs:
         shell: bash
         run: echo "TAURI_CLI=@tauri-apps/cli@$(tr -d '[:space:]' < desktop/scripts/tauri-cli-version.txt)" >> "$GITHUB_ENV"
 
-      # Unsigned. This is a build to try on a machine you control, not one to
-      # hand to anybody else: Windows will show SmartScreen and macOS will ask
-      # on first open.
+      # Not signed with a Developer ID. This is a build to try on a machine you
+      # control, not one to hand to anybody else: Windows will show SmartScreen
+      # and macOS will ask on first open.
+      #
+      # `APPLE_SIGNING_IDENTITY: "-"` is not nothing, though, and leaving it
+      # unset was. Without it Tauri does not codesign the bundle at all, and
+      # what came out carried only the linker's signature: `Sealed
+      # Resources=none`, `Info.plist=not bound`, and `codesign --verify --deep
+      # --strict` refusing it outright. That is a different thing from
+      # "unsigned" -- an unsealed bundle is one Gatekeeper declines rather than
+      # prompts for, which would make this workflow's whole purpose, trying a
+      # branch on a real Mac, fail at the first double-click. Ad-hoc is what
+      # `make desktop-dmg` does locally, and this now matches it.
       - name: Bundle the self-contained installer
         working-directory: desktop
         shell: bash
         env:
           LEMMA_BUILD_SHA: ${{ github.sha }}
+          APPLE_SIGNING_IDENTITY: "-"
         run: |
           set -euo pipefail
           if [ "${{ inputs.platform }}" = "windows" ]; then
@@ -227,6 +238,24 @@ jobs:
           else
             npx -y "${TAURI_CLI}" build --config tauri.dist.conf.json --bundles dmg
           fi
+
+      # The check that would have caught the bundle above being unsealed, run
+      # where the bundle is made rather than by whoever downloads it.
+      - name: The bundle has to be sealed
+        if: inputs.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$(find desktop/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)"
+          test -n "${app}" || { echo "::error::no .app was built"; exit 1; }
+          codesign --verify --deep --strict "${app}"
+          # The VZ helper ships pre-signed with its own entitlement, and
+          # Virtualization.framework checks the signature of whoever creates
+          # the VM. A bundle that seals but loses this starts and then cannot
+          # boot a guest, which is a worse failure than not building.
+          codesign -d --entitlements - "${app}/Contents/Resources/lemma-vz" 2>&1 \
+            | grep -q "com.apple.security.virtualization" \
+            || { echo "::error::the virtualization helper lost its entitlement"; exit 1; }
 
       - name: Refuse to hand back something that cannot install
         shell: bash

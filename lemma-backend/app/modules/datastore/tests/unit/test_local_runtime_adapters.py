@@ -389,7 +389,10 @@ def test_the_embedding_backend_is_imported_only_where_it_will_be_used(
 ):
     from app.core.embeddings import local_embedder
 
-    for provider, expected in (("openai", []), ("local", [local_embedder._BACKEND_MODULE])):
+    for provider, expected in (
+        ("openai", []),
+        ("local", [local_embedder._BACKEND_MODULE]),
+    ):
         imported: list[str] = []
         monkeypatch.setattr(local_embedder, "_backend_loaded", False)
         monkeypatch.setattr(
