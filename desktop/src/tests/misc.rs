@@ -188,6 +188,23 @@ fn every_command_is_granted_to_exactly_the_surfaces_that_call_it() {
                 "{capability} calls {command} but its capability lacks {permission}",
             );
         }
+        // And the other direction, which nothing checked. A grant outlives the
+        // code that needed it: the control window could still reach
+        // `configure_ai_provider` and `local_recovery_options` long after its
+        // own UI stopped calling either, and `installer_log` was granted to a
+        // page that had never called it at all -- a second door to a file
+        // `diagnostic_logs` already serves. None of that is exploitable on its
+        // own; it is the surface being wider than the thing it exists for,
+        // which is how the next one stops being noticed.
+        let invoked = invoked_commands(script);
+        for permission in grants.iter().filter(|grant| grant.starts_with("allow-")) {
+            let command = permission.trim_start_matches("allow-").replace('-', "_");
+            assert!(
+                invoked.contains(&command),
+                "{capability} is granted {permission} and never calls {command}; \
+                 remove the grant, or the command with it",
+            );
+        }
     }
 }
 

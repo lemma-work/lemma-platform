@@ -52,7 +52,6 @@ pub(crate) fn run() {
             stack_control::restart,
             stack_control::open_app,
             stack_control::open_logs,
-            diagnostics::installer_log,
             diagnostics::diagnostic_logs,
             connection::choose_connection_mode,
             connection::set_connection_mode,
