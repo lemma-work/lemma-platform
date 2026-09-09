@@ -28,14 +28,48 @@
   ; uninstall hook gives: narrowing it needs the process path, which NSIS
   ; cannot filter on without a PowerShell round trip that nothing here can
   ; test. Installing is explicit and rare.
-  nsExec::ExecToLog 'taskkill /F /T /IM lemma-locald.exe'
+  ;
+  ; Waited for rather than slept over. `taskkill /F` returns once termination
+  ; has been *requested*, and a file whose last handle closes a moment later is
+  ; still open when the copy starts -- so a fixed pause was a guess about a
+  ; machine we are not on, and being wrong leaves the previous binaries in
+  ; place under an installer that reports success.
+  ;
+  ; taskkill is its own probe: it exits non-zero when there is no such image,
+  ; so "both refused" is "both are gone", and a service that respawned between
+  ; iterations is killed again rather than missed.
+  ;
+  ; The template's own registers, borrowed and given back: this hook runs
+  ; inside its install section, not beside it.
+  Push $0
+  Push $1
+  Push $2
+  StrCpy $1 0
+  ${Do}
+    nsExec::ExecToLog 'taskkill /F /T /IM lemma-locald.exe'
+    Pop $0
+    nsExec::ExecToLog 'taskkill /F /T /IM lemma-agent-host.exe'
+    Pop $2
+    ${If} $0 <> 0
+    ${AndIf} $2 <> 0
+      ${ExitDo}
+    ${EndIf}
+    Sleep 250
+    IntOp $1 $1 + 1
+  ${LoopUntil} $1 >= 40
+  ${If} $0 == 0
+  ${OrIf} $2 == 0
+    ; Ten seconds of `/F` and still answering. Said out loud rather than
+    ; aborted: nothing has been written yet, so this install is still
+    ; recoverable either way, and the handshake stamp this release adds is what
+    ; catches the daemon that survives -- the app refuses to adopt a binary
+    ; that is not the one it ships, instead of running the new shell against
+    ; the old runtime and reporting the same version on both sides.
+    DetailPrint "Lemma is still running. Close it and run this installer again if the new version does not start."
+  ${EndIf}
+  Pop $2
+  Pop $1
   Pop $0
-  nsExec::ExecToLog 'taskkill /F /T /IM lemma-agent-host.exe'
-  Pop $0
-  ; Give the handles time to close. `taskkill /F` returns once the kill is
-  ; requested, not once the process is gone, and a file whose last handle
-  ; closes a moment later is still in use when the copy starts.
-  Sleep 1500
 !macroend
 
 ; Tauri's uninstaller offers to delete application data, and what it deletes is

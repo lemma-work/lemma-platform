@@ -901,7 +901,20 @@ jobs:
       - name: Verify Authenticode signatures
         if: env.WINDOWS_SIGNING_AVAILABLE == 'true'
         shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
         run: |
+          # Whose signature, not merely that there is one. `Status -eq "Valid"`
+          # says the chain checks out against the machine's trust store, which
+          # every certificate a GitHub runner already trusts also satisfies --
+          # so a binary signed by anyone at all passed this step. The
+          # thumbprint is the same one the signing step passed to signtool, so
+          # a mismatch means something other than our certificate signed a
+          # file we are about to ship.
+          $expected = $env:CERTIFICATE_THUMBPRINT
+          if ([string]::IsNullOrWhiteSpace($expected)) {
+            throw "Signing is available but no publisher thumbprint was published to verify against"
+          }
           $paths = @(
             "desktop/target/release/lemma-desktop.exe",
             "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
@@ -923,6 +936,10 @@ jobs:
             $signature = Get-AuthenticodeSignature $path
             if ($signature.Status -ne "Valid") {
               throw "Invalid Authenticode signature for $path`: $($signature.StatusMessage)"
+            }
+            $signer = $signature.SignerCertificate.Thumbprint
+            if ($signer -ne $expected) {
+              throw "Unexpected Authenticode signer for $path`: $signer, expected $expected"
             }
           }
 

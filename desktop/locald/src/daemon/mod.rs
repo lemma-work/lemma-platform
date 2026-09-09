@@ -68,12 +68,23 @@ pub struct Daemon {
     /// State this daemon had to repair before it could start, in the operator's
     /// words rather than serde's. Empty on every healthy launch.
     healed: Vec<String>,
+    /// The size and modification time of the binary this daemon started from.
+    ///
+    /// Measured once, here, and not again. The case it exists for is a Windows
+    /// in-place update, which replaces the file at `current_exe()` under a
+    /// daemon that is still running -- so a stamp read at handshake time is a
+    /// measurement of the build that just replaced this one, handed to a shell
+    /// that then adopts the daemon the update was meant to retire. It is also
+    /// two metadata reads off every connection, which is two more than a value
+    /// that cannot change needs.
+    executable_stamp: Option<(u64, u128)>,
 }
 
 mod agent_host_ops;
 mod config_ops;
 mod dispatch;
 mod environment;
+mod handshake;
 mod monitors;
 mod reset_ops;
 mod sharing_ops;
@@ -221,6 +232,10 @@ impl Daemon {
             shutdown_running: AtomicBool::new(false),
             agent_host,
             healed,
+            // Before `serve` binds the socket, which is the whole point: after
+            // that a Windows installer can replace this file while this
+            // process is still answering on it.
+            executable_stamp: executable_stamp(),
         }))
     }
 
@@ -297,49 +312,7 @@ impl Daemon {
             }
         });
 
-        self.send_direct(
-            &sender,
-            json!({
-                "v": PROTOCOL_VERSION,
-                "event": "hello",
-                "protocol": PROTOCOL_VERSION,
-                "daemon_version": DAEMON_VERSION,
-                "daemon_api_revision": DAEMON_API_REVISION,
-                "pid": std::process::id(),
-                // Which binary is actually serving this socket, resolved through
-                // the filesystem rather than argv. A replaced app bundle keeps
-                // running from wherever its executable went — ~/.Trash, in the
-                // case this was written for — and the shell has no other way to
-                // tell that the daemon answering it is not the one it ships.
-                // Same version, same API revision, different build.
-                "executable": std::env::current_exe()
-                    .and_then(|path| std::fs::canonicalize(&path).or(Ok(path)))
-                    .ok()
-                    .map(|path| path.to_string_lossy().into_owned()),
-                // And which build is at that path. On Windows an in-place
-                // update writes to the *same* path, so the path alone says
-                // nothing: a daemon from the previous version answers with an
-                // identical one and gets adopted by the new shell, which then
-                // supervises the old runtime with the same version reported on
-                // both sides. Size and mtime, because an installer that writes
-                // a new file changes both and reading the whole binary on every
-                // handshake to learn the same thing is not worth it.
-                "executable_size": executable_stamp().map(|(size, _)| size),
-                "executable_modified_ms": executable_stamp()
-                    .map(|(_, modified)| modified)
-                    .map(|modified| modified.to_string()),
-                "compatibility_supervisor": self.managed_runtime.is_none(),
-                "mode": if self.managed_runtime.is_some() {
-                    "managed-local"
-                } else if self.host_processes.is_some() {
-                    "host-packs"
-                } else {
-                    "compatibility"
-                },
-                "host_pack_release": self.host_processes.as_ref().map(|manager| manager.release()),
-                "host_pack_root": self.host_pack_root.as_deref(),
-            }),
-        );
+        self.send_direct(&sender, self.hello_event());
         self.send_direct(
             &sender,
             self.state.lock().expect("state lock poisoned").event(None),
