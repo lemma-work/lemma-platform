@@ -4,6 +4,11 @@ use super::*;
 
 #[cfg(target_os = "linux")]
 pub fn serve_vsock<E: Engine + 'static>(service: &GuestService<E>) -> io::Result<()> {
+    // Named rather than reached through the crate root: this is the only
+    // caller outside `protocol`, and only on Linux, so a re-export at the
+    // root would be dead code on every other host -- which `-D warnings`
+    // makes an error rather than a warning.
+    use crate::protocol::handle_stream;
     use std::mem::{size_of, zeroed};
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::sync::atomic::{AtomicUsize, Ordering};
