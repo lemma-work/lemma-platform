@@ -686,6 +686,9 @@ impl<E: Engine + 'static> GuestService<E> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             )
         };
+        if !is_observation(&request.operation) {
+            refuse_unbound_data()?;
+        }
         match request.operation.as_str() {
             "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
@@ -3576,6 +3579,50 @@ const DIAGNOSTICS_TIMEOUT: &str = "20s";
 /// Kept to the tail, matching what the host writes to `logs/guest.log`.
 const MAX_DIAGNOSTICS_BYTES: usize = 128 * 1024;
 
+/// Refuse to write anything while the data is not on the storage that keeps it.
+///
+/// A WSL guest can be brought up by anything that runs a command in it: the
+/// bridge does exactly that for every request, and WSL restarts a terminated
+/// distribution to serve one. Nothing in that path runs
+/// `lemma-runtime-init`, so a distribution restarted that way has no binds --
+/// and `/var/lib/lemma` is then an ordinary directory on the runtime
+/// distribution's own disk, which the next upgrade deletes.
+///
+/// That is the failure the data holder exists to prevent, arriving by the one
+/// door the holder does not stand in. So: if this guest has a holder at all,
+/// the binds are not optional, and a mutation that would write outside them is
+/// refused rather than quietly misplaced.
+///
+/// Retryable, because it is: the host's start path runs the init that fixes
+/// it. Scoped to guests that have a holder, so it says nothing at all on macOS
+/// or in a test, where `/mnt/wsl` does not exist.
+fn refuse_unbound_data() -> Result<(), GuestError> {
+    let holder = Path::new("/mnt/wsl/lemma-data");
+    if !holder.is_dir() {
+        return Ok(());
+    }
+    if is_mountpoint(Path::new("/var/lib/lemma")) {
+        return Ok(());
+    }
+    Err(GuestError {
+        code: "guest_data_unbound".into(),
+        message: "Lemma's private runtime is not holding your data yet; it is \
+                  still starting."
+            .into(),
+        retryable: true,
+        status_code: 503,
+    })
+}
+
+fn is_mountpoint(path: &Path) -> bool {
+    Command::new("/usr/bin/mountpoint")
+        .arg("-q")
+        .arg(path)
+        .stdin(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn guest_diagnostics() -> Value {
     let output = Command::new("/usr/bin/timeout")
         .args([
@@ -5854,6 +5901,43 @@ mod tests {
     /// `Assert*` fails the unit instead, and that failure propagates through
     /// those `Requires` and stops the services that would have written to the
     /// wrong disk.
+    /// The holder does not stand in every door into the guest.
+    ///
+    /// Anything that runs a command in a WSL distribution starts it, and the
+    /// bridge does exactly that for every request. Nothing on that path runs
+    /// `lemma-runtime-init`, so a distribution restarted that way has no binds
+    /// and `/var/lib/lemma` is an ordinary directory on the disk the next
+    /// upgrade deletes. A mutation served through that door would put work
+    /// somewhere it will not survive, and report success.
+    #[test]
+    fn a_guest_whose_data_is_not_bound_refuses_to_write() {
+        // Says nothing where there is no holder -- macOS, and this test host.
+        refuse_unbound_data().expect("no holder, nothing to be wrong about");
+
+        // The guard is only worth having if it runs before the work, so this
+        // pins where it sits rather than only that it exists.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let dispatch = source
+            .find("match request.operation.as_str()")
+            .expect("the dispatch exists");
+        let guard = source
+            .find("refuse_unbound_data()?")
+            .expect("mutations are guarded");
+        assert!(
+            guard < dispatch,
+            "the guard has to run before the operation it is guarding"
+        );
+
+        let observation_only = source[guard.saturating_sub(200)..guard]
+            .contains("!is_observation(&request.operation)");
+        assert!(
+            observation_only,
+            "reads have to keep answering: health is how the host learns the \
+             guest is still coming up, and refusing it would turn a starting \
+             runtime into a dead one"
+        );
+    }
+
     /// On Windows the data used to live inside the replaceable distribution.
     ///
     /// Everything durable -- workspaces, databases, the container store -- sat
