@@ -836,28 +836,27 @@ jobs:
           npm ci --prefix lemma-typescript
           npm ci --prefix lemma-frontend
           npm ci --prefix desktop/ui-tests
-          # `--with-deps` runs apt, and apt fetches Google's Chrome repository
-          # index. "Hash Sum mismatch" there exits 100 and takes the whole lane
-          # down after every Rust test in it has already passed.
+          # The browser first, from the cache above, with no apt involved.
+          npm exec --prefix desktop/ui-tests -- playwright install chromium
+          # Then the system libraries it wants. This is the apt half, and it is
+          # the half that fails: `--with-deps` fetches Google's Chrome
+          # repository index, and a "Hash Sum mismatch" there exits 100 and
+          # takes the lane down after every Rust test in it has already passed.
+          # Four times in one afternoon, on an index this repository neither
+          # controls nor needs -- the browser is already downloaded.
           #
-          # The retry throws the index away first, which is the part that
-          # matters. A mismatch is apt saying its cached index does not agree
-          # with what the server just served -- so repeating the same fetch
-          # reproduces it exactly, which is what the first version of this
-          # retry did: three attempts, three identical failures, measured on
-          # this job. Clearing `/var/lib/apt/lists` is what makes the next
-          # attempt a different question.
-          for attempt in 1 2 3; do
-            npm exec --prefix desktop/ui-tests -- \
-              playwright install --with-deps chromium && break
-            if [ "$attempt" = 3 ]; then
-              echo "playwright install failed three times; this is not transient"
-              exit 1
-            fi
-            echo "playwright install failed (attempt $attempt); refetching the apt index"
-            sudo rm -rf /var/lib/apt/lists/*
-            sudo apt-get update || true
-          done
+          # Retrying it was the wrong fix and is gone: a mismatch is apt saying
+          # its cached index disagrees with the server, so the same fetch fails
+          # the same way, which is exactly what three attempts did.
+          #
+          # Not fatal now. `ubuntu-latest` ships the libraries Chromium needs,
+          # so this is belt and braces; if that ever stops being true the
+          # browser fails to launch in the next step and names the library it
+          # is missing, which is a better failure than a lane that dies on a
+          # mirror being mid-update.
+          if ! npm exec --prefix desktop/ui-tests -- playwright install-deps chromium; then
+            echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
+          fi
 
       - name: Chat UI with JSON ACP agents
         run: make desktop-agent-host-browser-e2e
