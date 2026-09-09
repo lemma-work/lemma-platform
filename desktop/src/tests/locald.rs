@@ -50,26 +50,72 @@ fn a_busy_daemon_refuses_an_operation_rather_than_dropping_it() {
 
 #[test]
 fn a_daemon_from_a_replaced_app_bundle_is_not_this_build() {
-    let expected = std::path::Path::new("/Applications/Lemma.app/Contents/MacOS/lemma-locald");
+    // A real file, because identity is now the build at the path and not only
+    // the path: the shell measures the sidecar it ships.
+    let bundle = tempfile::tempdir().expect("a temporary bundle");
+    let expected = bundle.path().join("lemma-locald");
+    std::fs::write(&expected, b"the daemon this app ships").unwrap();
+    let expected = expected.as_path();
+    let (size, modified) = executable_stamp(expected).expect("the sidecar can be measured");
     let this_build = json!({
         "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
         "executable": path_identity(expected),
+        "executable_size": size,
+        "executable_modified_ms": modified.to_string(),
     });
     assert!(locald_is_this_build(&this_build, Some(expected)));
 
-    // The failure this exists for. Updating the app moves the previous
-    // bundle to the Trash; its daemon keeps running and keeps the socket,
-    // reporting the same version and the same revision as the one that
+    // The failure this exists for on macOS. Updating the app moves the
+    // previous bundle to the Trash; its daemon keeps running and keeps the
+    // socket, reporting the same version and the same revision as the one that
     // replaced it.
     let from_the_trash = json!({
         "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
         "daemon_version": env!("CARGO_PKG_VERSION"),
         "executable": "/Users/someone/.Trash/Lemma 4.23.56 PM.app/Contents/MacOS/lemma-locald",
+        "executable_size": size,
+        "executable_modified_ms": modified.to_string(),
     });
     assert!(
         !locald_is_this_build(&from_the_trash, Some(expected)),
         "a daemon running from another bundle must be replaced, not adopted",
     );
+
+    // And the failure on Windows, which the path can never catch: an in-place
+    // update writes to the *same* path, so the previous version's daemon
+    // answers with a path identical to the one the new shell expects.
+    for (label, wrong) in [
+        (
+            "a different size at the same path",
+            json!({
+                "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
+                "executable": path_identity(expected),
+                "executable_size": size + 1,
+                "executable_modified_ms": modified.to_string(),
+            }),
+        ),
+        (
+            "a different build time at the same path",
+            json!({
+                "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
+                "executable": path_identity(expected),
+                "executable_size": size,
+                "executable_modified_ms": (modified + 1).to_string(),
+            }),
+        ),
+        (
+            "a daemon that will not say which build it is",
+            json!({
+                "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
+                "executable": path_identity(expected),
+            }),
+        ),
+    ] {
+        assert!(
+            !locald_is_this_build(&wrong, Some(expected)),
+            "{label} was adopted",
+        );
+    }
 
     // Every build older than the field predates the check, so silence is a
     // mismatch rather than a pass.
@@ -79,6 +125,8 @@ fn a_daemon_from_a_replaced_app_bundle_is_not_this_build() {
     let wrong_revision = json!({
         "daemon_api_revision": REQUIRED_LOCALD_API_REVISION + 1,
         "executable": path_identity(expected),
+        "executable_size": size,
+        "executable_modified_ms": modified.to_string(),
     });
     assert!(!locald_is_this_build(&wrong_revision, Some(expected)));
 

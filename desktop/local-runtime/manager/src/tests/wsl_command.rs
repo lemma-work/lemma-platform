@@ -15,21 +15,83 @@ use super::*;
 /// on, and the retry would contend with it.
 #[test]
 fn pulling_images_is_given_longer_than_the_guest_spends_pulling_them() {
-    // `ENGINE_PULL_TIMEOUT` in the guest daemon; a different crate, so the
-    // number is named rather than imported.
-    let guest_pull_timeout = Duration::from_secs(60 * 60);
+    let guest_pull_timeout = guest_pull_timeout();
     for operation in ["core.images", "core.sandbox_images"] {
-        assert!(
-            guest_request_budget(operation) > guest_pull_timeout,
-            "{operation} must outlast the guest's own pull"
-        );
+        for transport in [GuestTransport::Resident, GuestTransport::PerRequest] {
+            assert!(
+                guest_request_budget(operation, transport) > guest_pull_timeout,
+                "{operation} must outlast the guest's own pull"
+            );
+        }
     }
     // And nothing else grew: a wedged health probe still fails fast.
-    assert_eq!(guest_request_budget("health"), Duration::from_secs(5));
     assert_eq!(
-        guest_request_budget("core.postgres"),
+        guest_request_budget("health", GuestTransport::PerRequest),
+        Duration::from_secs(5)
+    );
+    assert_eq!(
+        guest_request_budget("core.postgres", GuestTransport::PerRequest),
         Duration::from_secs(8 * 60)
     );
+}
+
+/// Starting a sandbox may have to fetch its image, and only one transport
+/// can do that after the request has been answered.
+///
+/// A resident guest downloads on a worker thread and replies in seconds, so
+/// its budget stays short -- lengthening it there buys nothing and makes a
+/// wedged guest hold the caller for an hour. A per-request guest is
+/// `wsl.exe --exec lemma-guestd request`: the process ends with the reply,
+/// so the download happens inside the request or it does not happen at all,
+/// and the budget has to leave room for it.
+#[test]
+fn a_per_request_guest_may_download_inside_the_start_it_is_answering() {
+    assert!(
+        guest_request_budget("sandbox.ensure", GuestTransport::PerRequest) > guest_pull_timeout(),
+        "a WSL sandbox start fetches its own image, and must outlast that fetch"
+    );
+    assert_eq!(
+        guest_request_budget("sandbox.ensure", GuestTransport::Resident),
+        Duration::from_secs(8 * 60),
+        "a resident guest answers a missing image in seconds; it needs no room to download"
+    );
+}
+
+/// The guest's own `ENGINE_PULL_TIMEOUT`, read from the guest daemon.
+///
+/// A different crate -- the host links nothing from the Linux guest binary --
+/// and the two numbers have to stay ordered, so this reads the constant out
+/// of its source rather than restating it. A restated number is one somebody
+/// changes on one side, and the failure it causes is the guest carrying on
+/// downloading into a request nobody is waiting on any more.
+fn guest_pull_timeout() -> Duration {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../guestd/src/lib.rs"),
+    )
+    .expect("the guest daemon's source");
+    let declaration = source
+        .split("ENGINE_PULL_TIMEOUT: Duration = Duration::from_secs(")
+        .nth(1)
+        .expect("the guest's pull timeout is declared in one place");
+    let expression = declaration
+        .split(')')
+        .next()
+        .expect("a terminated declaration");
+    let seconds: u64 = expression
+        .split('*')
+        .map(|factor| {
+            factor
+                .trim()
+                .parse::<u64>()
+                .expect("a product of plain integers")
+        })
+        .product();
+    assert!(
+        seconds >= 10 * 60,
+        "parsed {seconds}s as the guest's pull timeout, which is too small to be \
+         the real one -- the declaration this reads has probably changed shape",
+    );
+    Duration::from_secs(seconds)
 }
 
 #[test]

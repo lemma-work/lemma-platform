@@ -340,3 +340,20 @@ pub(super) fn transitional_provider(managed_runtime_available: bool) -> String {
         _ => "podman".into(),
     }
 }
+
+/// The size and modification time of the executable this daemon is running.
+///
+/// Paired with `executable` in the handshake: see the comment there for why a
+/// path is not an identity on Windows.
+pub(super) fn executable_stamp() -> Option<(u64, u128)> {
+    let path = std::env::current_exe().ok()?;
+    let resolved = std::fs::canonicalize(&path).unwrap_or(path);
+    let metadata = std::fs::metadata(&resolved).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some((metadata.len(), modified))
+}
