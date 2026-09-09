@@ -132,12 +132,27 @@ mod tests {
     /// ends it anyway.
     #[test]
     fn a_grandchild_whose_parent_has_gone_still_dies_with_the_job() {
-        let marker = std::env::temp_dir().join(format!("lemma-job-{}.txt", std::process::id()));
-        let _ = std::fs::remove_file(&marker);
+        // By process id, not by image name. `ping.exe` is a name anything on
+        // the machine may be using -- a runner builds several jobs at once --
+        // so an image-name check could watch somebody else's process and
+        // report either answer for the wrong reason.
+        let pings = || -> std::collections::BTreeSet<String> {
+            let output = Command::new("tasklist")
+                .args(["/FI", "IMAGENAME eq ping.exe", "/FO", "CSV", "/NH"])
+                .output()
+                .expect("tasklist runs");
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.split(',').nth(1))
+                .map(|field| field.trim().trim_matches('"').to_owned())
+                .filter(|pid| pid.chars().all(|digit| digit.is_ascii_digit()) && !pid.is_empty())
+                .collect()
+        };
+        let before = pings();
 
         let job = Job::new().expect("a job object");
-        // `cmd` starts a detached `ping` that writes nothing and outlives it,
-        // then exits. `ping -t` runs until it is killed.
+        // `cmd` starts a detached `ping` that outlives it, then exits. `ping
+        // -t` runs until something kills it.
         let mut wrapper = Command::new("cmd")
             .args(["/c", "start", "/b", "ping", "-t", "127.0.0.1"])
             .stdin(Stdio::null())
@@ -149,15 +164,31 @@ mod tests {
             .expect("the wrapper joins the job");
         wrapper.wait().expect("the wrapper exits on its own");
 
-        let running = |name: &str| {
+        // Waited for, not sampled. `cmd` exits as soon as it has asked for the
+        // grandchild; the grandchild is not in the process list at that
+        // instant, and checking once there failed the assertion that is
+        // supposed to establish this test means anything.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let grandchild = loop {
+            if let Some(pid) = pings().difference(&before).next().cloned() {
+                break pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the grandchild never appeared, so there is nothing here to outlive its parent"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        let alive = |pid: &str| {
             let output = Command::new("tasklist")
-                .args(["/FI", &format!("IMAGENAME eq {name}")])
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
                 .output()
                 .expect("tasklist runs");
-            String::from_utf8_lossy(&output.stdout).contains(name)
+            String::from_utf8_lossy(&output.stdout).contains(pid)
         };
         assert!(
-            running("ping.exe"),
+            alive(&grandchild),
             "the grandchild outlived its parent, as it must for this test to mean anything"
         );
 
@@ -165,14 +196,15 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
-            if !running("ping.exe") {
+            if !alive(&grandchild) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        // Best effort cleanup before failing.
+        // Best effort cleanup before failing, so a broken run does not leave a
+        // `ping -t` behind on the runner for ever.
         let _ = Command::new("taskkill")
-            .args(["/F", "/IM", "ping.exe"])
+            .args(["/F", "/PID", &grandchild])
             .output();
         panic!("closing the job left the grandchild running");
     }
