@@ -2558,6 +2558,44 @@ struct EventOutcome {
     start_after_prepare: bool,
 }
 
+/// What to do with an event that names the operation it belongs to.
+///
+/// The whole of a decision that decides what somebody watching the splash
+/// sees, and the reason it is a function: `handle_locald_event` needs an
+/// `AppHandle` and a Tauri runtime, so none of this was reachable from a test
+/// and every case below was only ever exercised by using the app.
+///
+/// The daemon serves one operation at a time but several surfaces can ask, and
+/// their replies interleave. Showing another operation's progress on the
+/// splash is not cosmetic: its phases and its errors are about work the person
+/// in front of it did not start.
+#[derive(Debug, PartialEq, Eq)]
+enum EventAdmission {
+    /// It belongs to the operation already on screen.
+    Apply,
+    /// Nothing is on screen and this operation has not finished, so it becomes
+    /// the one being shown.
+    Adopt,
+    /// Another operation's, or one whose completion has already been shown.
+    /// The second is what stops a late straggler from reopening a finished
+    /// run's progress after the splash has moved on.
+    Ignore,
+}
+
+fn admit_locald_event(active: &str, completed: &[String], event: &str) -> EventAdmission {
+    if !active.is_empty() {
+        return if active == event {
+            EventAdmission::Apply
+        } else {
+            EventAdmission::Ignore
+        };
+    }
+    if completed.iter().any(|finished| finished == event) {
+        return EventAdmission::Ignore;
+    }
+    EventAdmission::Adopt
+}
+
 fn handle_locald_event(app: &AppHandle, event: &Value) {
     if std::env::var("LEMMA_DESKTOP_DEBUG").as_deref() == Ok("1") {
         eprintln!("[locald] {event}");
@@ -2570,18 +2608,14 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     let event_operation_id = locald_event_operation_id(event);
     if let Some(event_operation_id) = event_operation_id {
         let mut ui = shell.ui.lock().unwrap();
-        if !ui.active_operation_id.is_empty() && ui.active_operation_id != event_operation_id {
-            return;
-        }
-        if ui.active_operation_id.is_empty() {
-            if ui
-                .completed_operation_ids
-                .iter()
-                .any(|completed| completed == event_operation_id)
-            {
-                return;
-            }
-            ui.active_operation_id = event_operation_id.to_owned();
+        match admit_locald_event(
+            &ui.active_operation_id,
+            &ui.completed_operation_ids,
+            event_operation_id,
+        ) {
+            EventAdmission::Ignore => return,
+            EventAdmission::Adopt => ui.active_operation_id = event_operation_id.to_owned(),
+            EventAdmission::Apply => {}
         }
     }
     let _ = app.emit_to("control", "lemma:locald-event", event.clone());
@@ -7908,6 +7942,54 @@ mod tests {
     /// that have to stay true. It cannot be executed from here -- NSIS runs
     /// only on Windows, and only during a real uninstall -- so CI's Windows
     /// job building the installer is what proves it parses.
+    /// Which operation's progress the splash shows, in every case.
+    ///
+    /// The daemon serves one operation at a time, but several surfaces ask and
+    /// their replies interleave, so an event carries the operation it belongs
+    /// to and this decides whether it is the one on screen. It had no test at
+    /// all: `handle_locald_event` needs an `AppHandle` and a Tauri runtime, so
+    /// the only way to exercise any of this was to use the app and watch.
+    ///
+    /// Showing the wrong one is not cosmetic. Its phases and its failures
+    /// describe work the person watching did not start.
+    #[test]
+    fn only_the_operation_on_screen_moves_the_splash() {
+        let finished = vec!["install-1".to_string(), "start-1".to_string()];
+
+        // Nothing on screen: the first event of an unfinished operation takes it.
+        assert_eq!(
+            admit_locald_event("", &finished, "start-2"),
+            EventAdmission::Adopt
+        );
+
+        // Nothing on screen, but this one already ran to completion. A late
+        // straggler must not reopen a finished run's progress.
+        assert_eq!(
+            admit_locald_event("", &finished, "start-1"),
+            EventAdmission::Ignore
+        );
+
+        // The one being shown.
+        assert_eq!(
+            admit_locald_event("start-2", &finished, "start-2"),
+            EventAdmission::Apply
+        );
+
+        // Another surface's, while one is on screen.
+        assert_eq!(
+            admit_locald_event("start-2", &finished, "install-9"),
+            EventAdmission::Ignore
+        );
+
+        // Completion is only consulted when nothing is active: an operation
+        // that is on screen keeps its own events even if a stale entry for it
+        // survives in the ring.
+        assert_eq!(
+            admit_locald_event("start-1", &finished, "start-1"),
+            EventAdmission::Apply
+        );
+    }
+
     #[test]
     fn the_windows_uninstaller_removes_the_data_the_checkbox_promises() {
         // Normalised: CI's Windows runner checks the tree out with CRLF, and a
