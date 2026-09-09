@@ -5,6 +5,7 @@ import { useQueries } from '@tanstack/react-query';
 import { AlertTriangle, ChevronRight, Zap } from '@/components/ui/icons';
 
 import { ProductIcon } from '@/components/pod/product-icon';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/shared/loading';
 import {
     SKILL_MANIFEST_NAME,
@@ -77,10 +78,11 @@ export function SkillEntriesList({
                             phrasing content, which is what broke the old row's
                             clamp. `line-clamp` brings its own `display`, so
                             nothing here adds `block` on top of it. */}
-                        <button
+                        <Button
                             type="button"
+                            variant="quiet"
                             onClick={() => onOpenSkill(folder.name)}
-                            className="custom-focus-ring flex min-w-0 flex-1 flex-col rounded-md text-left"
+                            className="custom-focus-ring flex h-auto min-w-0 flex-1 flex-col items-stretch justify-start gap-0 whitespace-normal rounded-md p-0 text-left font-normal hover:bg-transparent active:bg-transparent"
                         >
                             {/* Glyph and name on one line. A skill card carries
                                 more text than a workflow card and no status of
@@ -142,7 +144,7 @@ export function SkillEntriesList({
                                     <ChevronRight className="h-3.5 w-3.5" />
                                 </span>
                             </span>
-                        </button>
+                        </Button>
 
                         {/* Outside the button, over its top-right corner: a menu
                             nested in a button is neither valid nor clickable. */}
