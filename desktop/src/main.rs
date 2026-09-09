@@ -2979,6 +2979,31 @@ fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Where the Dock icon should take somebody when every window is closed.
+///
+/// Separate from the arm that uses it because that arm needs a Tauri runtime
+/// and this is the part with cases in it. Splash is the fallback on purpose:
+/// while the stack is still coming up, or after it failed, the splash is where
+/// the state and the actions are, and a workspace URL that is not serving yet
+/// would open on an error page instead.
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq)]
+enum ReopenTarget {
+    Hosted,
+    Workspace(String),
+    Splash,
+}
+
+#[cfg(target_os = "macos")]
+fn reopen_target(mode: &str, ready: bool, error: bool, url: &str) -> ReopenTarget {
+    match mode {
+        // Nothing local has to be ready for hosted to be reachable.
+        "hosted" => ReopenTarget::Hosted,
+        "local" if ready && !error && !url.is_empty() => ReopenTarget::Workspace(url.to_owned()),
+        _ => ReopenTarget::Splash,
+    }
+}
+
 fn show_splash(app: &AppHandle) {
     let _ = open_app_window(app, &native_asset_url("index.html"));
 }
@@ -7743,10 +7768,36 @@ fn main() {
             // the variant does not exist on other platforms.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
+                restore_dock_presence(app);
                 if let Some(window) = app.get_window("main") {
-                    restore_dock_presence(app);
                     let _ = window.show();
                     let _ = window.set_focus();
+                } else {
+                    // Every window closed, which on macOS leaves the app
+                    // running. This arm only ever showed a window that already
+                    // existed, so in exactly that state clicking the Dock icon
+                    // did nothing at all -- the one gesture whose whole purpose
+                    // is bringing a running app back, on the one platform where
+                    // closing the last window is normal.
+                    let snapshot = {
+                        let shell: State<Shell> = app.state();
+                        let ui = shell.ui.lock().unwrap();
+                        ui.clone()
+                    };
+                    match reopen_target(
+                        &snapshot.mode,
+                        snapshot.ready,
+                        snapshot.error,
+                        &snapshot.url,
+                    ) {
+                        ReopenTarget::Hosted => {
+                            let _ = open_app_window(app, &hosted_url());
+                        }
+                        ReopenTarget::Workspace(url) => {
+                            let _ = open_app_window(app, &url);
+                        }
+                        ReopenTarget::Splash => show_splash(app),
+                    }
                 }
             }
             // Dock → Quit and any other OS-issued terminate arrive here without
@@ -7942,6 +7993,51 @@ mod tests {
     /// that have to stay true. It cannot be executed from here -- NSIS runs
     /// only on Windows, and only during a real uninstall -- so CI's Windows
     /// job building the installer is what proves it parses.
+    /// Clicking the Dock icon with no window open did nothing at all.
+    ///
+    /// On macOS closing the last window leaves the app running, so this is the
+    /// one gesture whose whole purpose is bringing it back -- and the arm that
+    /// handles it only ever showed a window that already existed. This is the
+    /// part of the fix with cases in it; the arm itself needs a Tauri runtime.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reopening_with_every_window_closed_goes_somewhere() {
+        assert_eq!(
+            reopen_target("local", true, false, "http://app.127.0.0.1.sslip.io:1/"),
+            ReopenTarget::Workspace("http://app.127.0.0.1.sslip.io:1/".into()),
+            "a running local stack goes straight back to the workspace"
+        );
+
+        // Hosted has no local stack to be ready for.
+        assert_eq!(
+            reopen_target("hosted", false, false, ""),
+            ReopenTarget::Hosted
+        );
+
+        for (label, ready, error, url) in [
+            ("still starting", false, false, ""),
+            ("failed", true, true, "http://app.127.0.0.1.sslip.io:1/"),
+            ("ready but with no url yet", true, false, ""),
+            (
+                "undecided mode",
+                true,
+                false,
+                "http://app.127.0.0.1.sslip.io:1/",
+            ),
+        ] {
+            let mode = if label == "undecided mode" {
+                "undecided"
+            } else {
+                "local"
+            };
+            assert_eq!(
+                reopen_target(mode, ready, error, url),
+                ReopenTarget::Splash,
+                "{label}: the splash is where the state and the actions are"
+            );
+        }
+    }
+
     /// Which operation's progress the splash shows, in every case.
     ///
     /// The daemon serves one operation at a time, but several surfaces ask and
