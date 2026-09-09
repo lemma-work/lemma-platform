@@ -102,3 +102,36 @@ async fn a_refresh_for_a_superseded_lease_is_ignored() {
         before
     );
 }
+
+/// Every terminal path in `spawn_run` wakes the poll that reports it.
+///
+/// `poll_target` snapshots the control batch when it builds the request, so a
+/// checkpoint written a moment later waits out the whole 25-second long poll.
+/// Two of the three terminal paths notified; the third did not, and a run that
+/// failed for want of an MCP configuration sat unreported for up to that long.
+///
+/// Asserted on the source: the property is "every one of them", and reaching
+/// each from a test needs a different half-broken start command.
+#[test]
+fn every_terminal_path_wakes_the_poll_that_reports_it() {
+    let source = include_str!("../../run.rs").replace("\r\n", "\n");
+    let mut silent = Vec::new();
+    for (offset, _) in source.match_indices("terminal_failure(") {
+        // The call, then whatever follows it up to the `return`.
+        let rest = &source[offset..];
+        let end = rest.find("return Ok(())").unwrap_or(rest.len());
+        if !rest[..end].contains("events_ready.notify_one()") {
+            let line = source[..offset].lines().count() + 1;
+            silent.push(line);
+        }
+    }
+    assert!(
+        silent.is_empty(),
+        "these terminal paths return without waking the poll, so the run they \
+         ended is reported up to a long poll late: run.rs lines {silent:?}",
+    );
+    assert!(
+        source.matches("terminal_failure(").count() >= 3,
+        "the scan found no terminal paths, so it is asserting nothing"
+    );
+}
