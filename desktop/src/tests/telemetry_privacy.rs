@@ -1,7 +1,7 @@
 //! The two telemetry promises that must not have races or holes in them.
 
 use super::*;
-use crate::telemetry::{destination_is_safe, is_enabled, set_enabled};
+use crate::telemetry::{destination_is_safe, set_enabled};
 
 /// An event that is mid-update holds off every other change to the file.
 ///
@@ -67,8 +67,14 @@ fn a_change_to_the_state_file_waits_for_the_one_in_flight() {
         "a second change went ahead while one was mid-flight; the read and the \
          write are not one operation",
     );
-    assert!(
-        !is_enabled(&root),
+    // The file, not `is_enabled`. `is_enabled` answers false whenever there is
+    // no ingestion key, and a test environment has none -- the sibling guard
+    // `disabled_without_a_key_even_when_opted_in` asserts exactly that -- so
+    // asking it here passed whether or not the opt-out had survived. Which is
+    // the same shape as the bug this test is about.
+    assert_eq!(
+        crate::telemetry::load_state(&root).enabled,
+        Some(false),
         "and the opt-out has to be what the file ends up saying",
     );
     let _ = std::fs::remove_dir_all(&root);
