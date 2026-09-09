@@ -268,7 +268,7 @@ export default function ProfilePage() {
 
                 <SettingsPanel
                     title="Your surfaces"
-                    description="Choose which connected surface should answer you."
+                    description="When several pods answer at one address, choose which of them hears you."
                 >
                     <div className="max-w-2xl">
                         <UserSurfacesPanel />
