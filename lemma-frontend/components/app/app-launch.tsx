@@ -266,8 +266,8 @@ export function AppFrame({
                 onOpenChange={setVersionsOpen}
                 canPromote={canShare}
                 previewingReleaseNumber={preview?.releaseNumber ?? null}
-                onPreview={(release) => {
-                    setPreview({ url: release.preview_url, releaseNumber: release.release_number });
+                onPreview={(release, previewUrl) => {
+                    setPreview({ url: previewUrl, releaseNumber: release.release_number });
                     setFrameLoaded(false);
                     setVersionsOpen(false);
                 }}
