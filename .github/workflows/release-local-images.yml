@@ -911,7 +911,16 @@ jobs:
             host-packs/lemma-host-pack-*.zip
             guest-runtimes/lemma-guest-runtime-*.zip
           if-no-files-found: error
-          retention-days: 14
+          # Three days, not fourteen. This bundle is ~840 MB and only a
+          # dispatch that is not publishing produces one, so a handful of
+          # branch tests is most of the repository's Actions storage: seven of
+          # them were holding 5.85 GB of a 9.54 GB total when an upload was
+          # refused with a 403 and the build that needed it could not finish.
+          #
+          # Three days is long enough to install one and try it, which is what
+          # a branch test is for. `Desktop test build` covers the same need for
+          # ~11 MB.
+          retention-days: 3
 
       - name: Upload branch-test manifest for Desktop packaging
         if: github.event_name == 'workflow_dispatch' && !inputs.publish

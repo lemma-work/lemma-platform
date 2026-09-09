@@ -331,6 +331,57 @@ fn short_identity(identity_bytes: &[u8]) -> String {
     hex::encode(&digest[..4])
 }
 
+/// Delete release directories nothing points at any more.
+///
+/// Installing never removes anything, deliberately: a runtime that is still
+/// serving has to survive its own replacement, which is why activation records
+/// two -- `installedRuntime` and `previousRuntime`. Nothing removed the third.
+/// Every upgrade left another expanded release behind, about 2.2 GB each, for
+/// the life of the installation; four of them and a machine is carrying three
+/// runtimes it can never use again. On Windows the earlier 64-character
+/// release names make those leftovers unreadable as well as useless.
+///
+/// Deliberately timid about what it will touch. A direct child of `releases/`;
+/// not hidden, because an interrupted install leaves `.<version>-<pid>.staging`
+/// that another process may still be writing; recognisably one of ours, so a
+/// directory somebody put here by hand is left alone; and never one the caller
+/// named. A removal that fails is left for next time rather than reported --
+/// on Windows that is what a release still in use does, and it is the right
+/// outcome.
+pub fn prune_retired_releases(install_root: &Path, keep: &[PathBuf]) -> Vec<PathBuf> {
+    fn resolved(path: &Path) -> PathBuf {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    let kept: Vec<PathBuf> = keep.iter().map(|path| resolved(path)).collect();
+    let Ok(entries) = fs::read_dir(install_root.join("releases")) else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        if !path.join("local-runtime").is_dir() || !path.join("managed-runtime").is_dir() {
+            continue;
+        }
+        if kept.contains(&resolved(&path)) {
+            continue;
+        }
+        if fs::remove_dir_all(&path).is_ok() {
+            removed.push(path);
+        }
+    }
+    removed
+}
+
 pub fn installed_runtime(root: &Path, release: &str) -> InstalledRuntime {
     InstalledRuntime {
         release: release.to_owned(),
@@ -1803,6 +1854,46 @@ mod tests {
             "architecture": host_architecture(),
             "runtime_version": release,
         })
+    }
+
+    /// Every upgrade used to leave another expanded runtime behind forever.
+    ///
+    /// Installing deliberately removes nothing, and activation records exactly
+    /// two releases -- the live one and the one it replaced. Nothing ever
+    /// removed the third, so an installation's runtime directory grew by about
+    /// 2.2 GB per upgrade for as long as it was used, and none of that space
+    /// was reachable by anything.
+    #[test]
+    fn upgrading_stops_leaving_a_runtime_behind_every_time() {
+        let root = tempfile::tempdir().unwrap();
+        let install_root = root.path().join("runtime");
+        let releases = install_root.join("releases");
+
+        let release = |name: &str| {
+            let path = releases.join(name);
+            fs::create_dir_all(path.join("local-runtime")).unwrap();
+            fs::create_dir_all(path.join("managed-runtime")).unwrap();
+            path
+        };
+        let live = release("0.7.2-aaaaaaaa");
+        let previous = release("0.7.2-bbbbbbbb");
+        let retired = release("0.7.1-cccccccc");
+        // Two things it must not touch: an install that was interrupted and
+        // may still be being written, and a directory that is not ours.
+        let staging = release(".0.7.2-1234-5678.staging");
+        let stranger = releases.join("notes");
+        fs::create_dir_all(&stranger).unwrap();
+
+        let removed = prune_retired_releases(&install_root, &[live.clone(), previous.clone()]);
+
+        assert_eq!(removed, vec![retired.clone()]);
+        assert!(
+            !retired.exists(),
+            "the retired release is what this reclaims"
+        );
+        for kept in [&live, &previous, &staging, &stranger] {
+            assert!(kept.exists(), "{} must survive", kept.display());
+        }
     }
 
     #[test]
