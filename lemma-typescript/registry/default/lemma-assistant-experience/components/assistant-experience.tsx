@@ -91,10 +91,6 @@ export interface AssistantExperienceViewProps extends AssistantExperienceCustomi
   onNavigateResource?: (resourceType: string, resourceId: string, meta?: Record<string, unknown>) => void;
 }
 
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -109,12 +105,6 @@ function truncateLabel(value: string, max = 72): string {
   const trimmed = value.trim();
   if (trimmed.length <= max) return trimmed;
   return `${trimmed.slice(0, max - 1)}…`;
-}
-
-function fileNameFromPath(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const parts = normalized.split("/").filter(Boolean);
-  return parts[parts.length - 1] || normalized;
 }
 
 function formatMessageTimestamp(createdAt?: Date): { text: string; dateTime: string } | null {
@@ -1678,7 +1668,6 @@ export function AssistantExperienceView({
     const minHeight = 48;
     const maxHeight = 220;
 
-    const currentHeight = textarea.offsetHeight;
     textarea.style.height = `${minHeight}px`;
     const nextHeight = Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight));
     textarea.style.height = `${nextHeight}px`;
