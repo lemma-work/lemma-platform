@@ -2792,9 +2792,16 @@
             "title": "Label"
           },
           "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "readOnly": true,
-            "title": "Preview Url",
-            "type": "string"
+            "title": "Preview Url"
           },
           "pruned_at": {
             "anyOf": [

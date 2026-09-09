@@ -686,6 +686,9 @@ impl<E: Engine + 'static> GuestService<E> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner),
             )
         };
+        if !is_observation(&request.operation) {
+            refuse_unbound_data()?;
+        }
         match request.operation.as_str() {
             "health" => self.health(),
             "diagnostics.network" => Ok(network_diagnostics()),
@@ -3576,6 +3579,57 @@ const DIAGNOSTICS_TIMEOUT: &str = "20s";
 /// Kept to the tail, matching what the host writes to `logs/guest.log`.
 const MAX_DIAGNOSTICS_BYTES: usize = 128 * 1024;
 
+/// Refuse to write anything while the data is not on the storage that keeps it.
+///
+/// A WSL guest can be brought up by anything that runs a command in it: the
+/// bridge does exactly that for every request, and WSL restarts a terminated
+/// distribution to serve one. Nothing in that path runs
+/// `lemma-runtime-init`, so a distribution restarted that way has no binds --
+/// and `/var/lib/lemma` is then an ordinary directory on the runtime
+/// distribution's own disk, which the next upgrade deletes.
+///
+/// That is the failure the data holder exists to prevent, arriving by the one
+/// door the holder does not stand in. So: if this guest has a holder at all,
+/// the binds are not optional, and a mutation that would write outside them is
+/// refused rather than quietly misplaced.
+///
+/// Retryable, because it is: the host's start path runs the init that fixes
+/// it. Scoped to guests that have a holder, so it says nothing at all on macOS
+/// or in a test, where `/mnt/wsl` does not exist.
+fn refuse_unbound_data() -> Result<(), GuestError> {
+    // `/mnt/wsl` is the tmpfs WSL mounts in every distribution, and nothing
+    // else has it, so it is what "this guest is WSL" means here.
+    //
+    // The holder's own path is not that, and scoping on it was a hole in the
+    // exact case this guard exists for: a share that was never published
+    // leaves no directory, so the check said "no holder, nothing to protect"
+    // and let the mutation through to write on the disk the next upgrade
+    // deletes. Absent is not "not applicable", it is the failure.
+    if !Path::new("/mnt/wsl").is_dir() {
+        return Ok(());
+    }
+    if is_mountpoint(Path::new("/var/lib/lemma")) {
+        return Ok(());
+    }
+    Err(GuestError {
+        code: "guest_data_unbound".into(),
+        message: "Lemma's private runtime is not holding your data yet; it is \
+                  still starting."
+            .into(),
+        retryable: true,
+        status_code: 503,
+    })
+}
+
+fn is_mountpoint(path: &Path) -> bool {
+    Command::new("/usr/bin/mountpoint")
+        .arg("-q")
+        .arg(path)
+        .stdin(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn guest_diagnostics() -> Value {
     let output = Command::new("/usr/bin/timeout")
         .args([
@@ -5727,15 +5781,17 @@ mod tests {
     #[test]
     fn immutable_guest_routes_temporary_and_network_state_to_writable_mounts() {
         let fstab = include_str!("../../guest-image/rootfs-overlay/etc/fstab");
-        let mount_data =
-            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        // The binds moved into the script both platforms share; see
+        // `both_platforms_bind_the_data_through_the_same_script`.
+        let bind_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
         let guest_service = include_str!(
             "../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-guest-service"
         );
 
         assert!(fstab.contains("tmpfs /tmp tmpfs"));
-        assert!(mount_data.contains("$data_root/cni/net.d"));
-        assert!(mount_data.contains("/etc/cni/net.d"));
+        assert!(bind_data.contains("$data_root/cni/net.d"));
+        assert!(bind_data.contains("/etc/cni/net.d"));
         assert!(guest_service.contains("HOME=/var/lib/lemma/home"));
         assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
@@ -5852,6 +5908,145 @@ mod tests {
     /// `Assert*` fails the unit instead, and that failure propagates through
     /// those `Requires` and stops the services that would have written to the
     /// wrong disk.
+    /// The holder does not stand in every door into the guest.
+    ///
+    /// Anything that runs a command in a WSL distribution starts it, and the
+    /// bridge does exactly that for every request. Nothing on that path runs
+    /// `lemma-runtime-init`, so a distribution restarted that way has no binds
+    /// and `/var/lib/lemma` is an ordinary directory on the disk the next
+    /// upgrade deletes. A mutation served through that door would put work
+    /// somewhere it will not survive, and report success.
+    #[test]
+    fn a_guest_whose_data_is_not_bound_refuses_to_write() {
+        // Says nothing off WSL -- macOS, and this test host.
+        refuse_unbound_data().expect("not a WSL guest, nothing to be wrong about");
+
+        // Scoped on `/mnt/wsl`, which every WSL distribution has, and not on
+        // the share itself. Scoping on the share was a hole in the exact case
+        // the guard exists for: one that was never published leaves no
+        // directory, so the check read as "no holder, not applicable" and let
+        // the write through to the disk the next upgrade deletes.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let guard_body = &source[source
+            .find("fn refuse_unbound_data")
+            .expect("the guard exists")..];
+        let guard_body = &guard_body[..guard_body.find("\n}\n").expect("it ends")];
+        assert!(
+            guard_body.contains("Path::new(\"/mnt/wsl\").is_dir()"),
+            "the platform check has to be /mnt/wsl, not the share:\n{guard_body}"
+        );
+        assert!(
+            !guard_body.contains("Path::new(\"/mnt/wsl/lemma-data\")"),
+            "an absent share is the failure, not a reason to skip:\n{guard_body}"
+        );
+
+        // The guard is only worth having if it runs before the work, so this
+        // pins where it sits rather than only that it exists.
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let dispatch = source
+            .find("match request.operation.as_str()")
+            .expect("the dispatch exists");
+        let guard = source
+            .find("refuse_unbound_data()?")
+            .expect("mutations are guarded");
+        assert!(
+            guard < dispatch,
+            "the guard has to run before the operation it is guarding"
+        );
+
+        let observation_only = source[guard.saturating_sub(200)..guard]
+            .contains("!is_observation(&request.operation)");
+        assert!(
+            observation_only,
+            "reads have to keep answering: health is how the host learns the \
+             guest is still coming up, and refusing it would turn a starting \
+             runtime into a dead one"
+        );
+    }
+
+    /// On Windows the data used to live inside the replaceable distribution.
+    ///
+    /// Everything durable -- workspaces, databases, the container store -- sat
+    /// on the runtime distribution's own ext4.vhdx, which every upgrade
+    /// replaces wholesale. The upgrade could therefore only refuse, and did,
+    /// which pinned Windows users to whichever release they installed first.
+    /// The data now lives in a second distribution that publishes it into the
+    /// WSL VM's shared namespace, and this is the init that consumes it.
+    ///
+    /// Refusing when the share is absent is the load-bearing half. Carrying on
+    /// would put the data back inside the distribution the next upgrade
+    /// deletes, and every run until that upgrade would look perfectly healthy.
+    #[test]
+    fn windows_will_not_start_without_the_data_holder() {
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+
+        // A mountpoint, not a directory: `/mnt/wsl` is a tmpfs, so a publish
+        // that made the path and then failed to bind leaves a real directory
+        // on storage the VM discards, and binding the data out of *that*
+        // passes every check below while losing the work.
+        let check = init
+            .find("if ! /usr/bin/mountpoint -q \"$LEMMA_DATA_SHARE\"")
+            .expect("it checks the share is really the published bind");
+        let bind = init
+            .find("/usr/local/bin/lemma-bind-data")
+            .expect("it binds the data from the share");
+        let containerd = init
+            .find("mkdir -p /run/containerd")
+            .expect("it starts containerd");
+
+        assert!(
+            check < bind && bind < containerd,
+            "the share is checked, then bound, and only then does anything \
+             start that writes to it: {init}"
+        );
+        assert!(
+            init.contains("lemma-data: needs-repair:"),
+            "the refusal has to reach the host's own detector: {init}"
+        );
+    }
+
+    /// One implementation of the binds, for both platforms.
+    ///
+    /// The last thing that script does is the gate that says the data is not
+    /// where it must be. A second copy of it that drifted would be a guest
+    /// that looks healthy while throwing work away, on whichever platform got
+    /// the stale one -- so the two reach a data root differently and then run
+    /// exactly the same code.
+    #[test]
+    fn both_platforms_bind_the_data_through_the_same_script() {
+        let mount = include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        let bind = include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+
+        for (name, script) in [("lemma-mount-data", mount), ("lemma-runtime-init", init)] {
+            assert!(
+                script.contains("/usr/local/bin/lemma-bind-data"),
+                "{name} has to hand over rather than keep its own copy"
+            );
+            assert!(
+                !script.contains("mount --bind"),
+                "{name} still binds the data itself, which is the second copy: {script}"
+            );
+        }
+        for required in [
+            "/var/lib/lemma",
+            "/var/lib/containerd",
+            "/var/lib/nerdctl",
+            "/etc/cni/net.d",
+        ] {
+            assert!(
+                bind.contains(required),
+                "the shared script has to bind {required}"
+            );
+        }
+        assert!(
+            bind.contains("lemma-data: needs-repair:"),
+            "and it has to keep the gate that says the data did not land"
+        );
+    }
+
     /// A diagnosis written where the host cannot read it is not a diagnosis.
     ///
     /// The host's `guest_needs_data_repair` greps the serial console for
@@ -5989,7 +6184,7 @@ mod tests {
     #[test]
     fn the_guest_refuses_to_finish_mounting_with_the_binds_missing() {
         let mount_data =
-            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
         let verification = mount_data
             .rfind("for required in")
             .expect("the mount script must verify its bind mounts before exiting");

@@ -123,25 +123,55 @@ pub struct ManagedRuntimeStatus {
 
 /// Which rootfs a registered distribution was imported from.
 ///
-/// Size, and deliberately not modification time. The question this answers is
-/// "was this guest imported from a *different release*", and what the answer is
-/// used for is a prompt offering to delete the distribution -- which is where
-/// the user's workspaces and databases live. Modification time changes whenever
-/// the archive is written again, so a repair, a re-download or a plain reinstall
-/// of the very same release all looked like a different one, and offered to
-/// destroy the only copy of the data over a timestamp.
+/// The question this answers is "was this guest imported from a *different
+/// release*", and the answer decides whether the runtime distribution is
+/// replaced. Getting it wrong in either direction is expensive, and the two
+/// directions cost different things.
 ///
-/// Two different releases with a byte-identical archive size would go unnoticed.
-/// That is remote, and its consequence is one in-place start this check would
-/// otherwise have refused; the alternative, hashing several gigabytes on every
-/// launch, costs every user real time to catch it.
+/// Not modification time. That changes whenever the archive is written again,
+/// so a repair, a re-download or a plain reinstall of the very same release
+/// all looked like a different one -- and back when the data lived inside the
+/// distribution, that offered to destroy the only copy of it over a timestamp.
+///
+/// The recorded digest when there is one. `artifact_install` writes the signed
+/// manifest's `guest_sha256` beside the release when it installs it, so the
+/// exact identity is already on disk and costs a small read -- not the several
+/// gigabytes of hashing that made "just hash it" the wrong answer here.
+///
+/// Size only when there is not, which is the older layout and the bundled one.
+/// It is a weak discriminator and worth saying why: `tar` pads every member to
+/// a 512-byte block and the archive to the blocking factor, so archive size is
+/// coarsely quantised and two builds that differ by a few bytes in a script --
+/// which is exactly what a guest-side change usually is -- routinely produce a
+/// byte-identical size. A false "current" leaves this release's host talking to
+/// the previous release's guestd, which is the failure this check exists for.
 ///
 /// Free and un-gated so it is tested on every platform, not only compiled on
-/// one -- the Windows guest path is its only caller, and code that exists on one
-/// platform and is checked on none is how the mtime bug survived.
+/// one -- the Windows guest path is its only caller, and code that exists on
+/// one platform and is checked on none is how the mtime bug survived.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn rootfs_stamp(rootfs: &Path) -> io::Result<String> {
+    if let Some(digest) = recorded_guest_digest(rootfs) {
+        return Ok(digest);
+    }
     Ok(fs::metadata(rootfs)?.len().to_string())
+}
+
+/// The guest artifact's digest, as the installer recorded it.
+///
+/// `<release>/managed-runtime/<target>/rootfs.tar` is three levels below the
+/// release root, which is where `.lemma-runtime-artifacts.json` lives. Absent,
+/// unreadable or missing the field all mean the same thing -- there is nothing
+/// better than size to go on -- so none of them is an error.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recorded_guest_digest(rootfs: &Path) -> Option<String> {
+    let recorded = rootfs
+        .ancestors()
+        .nth(3)?
+        .join(".lemma-runtime-artifacts.json");
+    let value: Value = serde_json::from_slice(&fs::read(recorded).ok()?).ok()?;
+    let digest = value.get("guest_sha256")?.as_str()?.trim();
+    (!digest.is_empty()).then(|| digest.to_owned())
 }
 
 fn guest_request_budget(operation: &str) -> Duration {
@@ -857,48 +887,201 @@ impl ManagedRuntime {
         )
     }
 
-    /// Refuse to run this release's host against a guest from another one.
+    /// Whether the imported guest came from this release's rootfs.
     ///
-    /// The distribution is only ever created once, and its name says nothing
-    /// about which release built it, so an upgrade used to skip the import and
-    /// leave the new host talking to the old guestd. Every guest operation then
-    /// failed as "could not reach Lemma's private runtime", with nothing
-    /// pointing at the cause.
-    ///
-    /// This does not re-import. Under WSL there is no second data disk: unlike
-    /// the VZ guest, /var/lib/lemma and the container store live inside the
-    /// distribution's own ext4.vhdx, so `--import` over it would take every
-    /// workspace and database with it. Replacing the guest is therefore a
-    /// decision for the user, not something an upgrade does on its own.
+    /// The distribution's name says nothing about which release built it, so
+    /// an upgrade used to skip the import and leave the new host talking to
+    /// the old guestd. Every guest operation then failed as "could not reach
+    /// Lemma's private runtime", with nothing pointing at the cause.
     #[cfg(windows)]
-    fn check_installed_guest_is_current(&self, rootfs: &Path) -> io::Result<()> {
+    fn installed_guest_is_current(&self, rootfs: &Path) -> io::Result<bool> {
         if !rootfs.is_file() {
             // Nothing to compare against. An installed guest with no artifact
             // is the repair path's problem, not this one's.
-            return Ok(());
+            return Ok(true);
         }
         let marker = self.guest_release_marker();
         let recorded = fs::read_to_string(&marker).unwrap_or_default();
         let current = rootfs_stamp(rootfs)?;
         if recorded == current {
-            return Ok(());
+            return Ok(true);
         }
         if recorded.is_empty() {
             // A distribution imported before this marker existed. Adopt it
             // rather than declaring every existing installation broken.
             fs::write(&marker, &current)?;
-            return Ok(());
+            return Ok(true);
         }
-        Err(io::Error::other(format!(
-            "Lemma's private runtime was installed by a different release and \
-             cannot be upgraded in place, because your workspaces and databases \
-             live inside it. Open Local settings and reset the Windows runtime \
-             to rebuild it from this release ({}).",
-            self.wsl_distribution()
-        )))
+        Ok(false)
     }
 
-    /// Remove the private distribution, and everything inside it.
+    /// Where Lemma's data lives on Windows, and why it is a second guest.
+    ///
+    /// The runtime distribution is replaced wholesale by every upgrade, so
+    /// nothing that must survive one can live inside it -- and until this
+    /// existed, everything did: `/var/lib/lemma`, the container store and the
+    /// volumes were all on that distribution's own ext4.vhdx. An upgrade could
+    /// therefore only refuse, and it did, telling people to reset the runtime
+    /// and lose every workspace, database and pod. That refusal was correct
+    /// and useless: it left Windows users pinned to whichever release they
+    /// installed first.
+    ///
+    /// macOS attaches a second disk. WSL cannot: `wsl --mount --vhd` needs
+    /// administrator rights, and Lemma does not ask for them. What WSL does
+    /// give is `/mnt/wsl`, a tmpfs shared by every distribution in the same
+    /// VM, and a bind published into it from one distribution is readable and
+    /// writable from another. So the data gets a distribution of its own,
+    /// whose ext4.vhdx no upgrade touches, and it publishes itself there.
+    ///
+    /// Measured on a Windows machine before any of this was written: importing
+    /// the second distribution from the rootfs already on disk takes 1.9s; the
+    /// share is readable from the runtime distribution immediately; it stays
+    /// readable and writable after the data distribution goes idle and is
+    /// reported Stopped, and even after an explicit `--terminate`, because the
+    /// mount belongs to the VM rather than to the distribution's processes.
+    /// It does not survive `wsl --shutdown`, which is why publishing runs on
+    /// every start rather than once at import.
+    #[cfg(windows)]
+    fn data_distribution(&self) -> String {
+        format!("{}Data", self.wsl_distribution())
+    }
+
+    /// Import the data distribution if it is absent, and publish its share.
+    ///
+    /// Publishing is idempotent and unconditional: the share lives in the WSL
+    /// VM, and anything that stops the VM -- `wsl --shutdown`, a reboot --
+    /// takes it with it while leaving the distribution registered.
+    #[cfg(windows)]
+    fn ensure_data_distribution(&self, rootfs: &Path) -> io::Result<()> {
+        let distribution = self.data_distribution();
+        if !self.guest_is_registered(&distribution) {
+            if !rootfs.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("private WSL rootfs is missing: {}", rootfs.display()),
+                ));
+            }
+            let install = self.config.local_root.join("runtime/wsl-data");
+            fs::create_dir_all(&install)?;
+            self.wsl(
+                &[
+                    "--import",
+                    &distribution,
+                    &install.to_string_lossy(),
+                    &rootfs.to_string_lossy(),
+                    "--version",
+                    "2",
+                ],
+                None,
+            )?;
+        }
+        self.wsl(
+            &[
+                "--distribution",
+                &distribution,
+                "--user",
+                "root",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                PUBLISH_DATA_SHARE,
+            ],
+            None,
+        )?;
+        Ok(())
+    }
+
+    /// Move an existing installation's data out of the runtime distribution.
+    ///
+    /// Runs in whichever distribution currently holds the data, before
+    /// anything replaces it, and does nothing at all once the holder says it
+    /// is ready. A fresh install runs it too and copies nothing: what it is
+    /// really doing there is recording that the holder is now the home, so the
+    /// first upgrade afterwards knows it may replace the runtime.
+    ///
+    /// The distribution is terminated first, and only when there is really
+    /// something to move. On a warm start the container store is several
+    /// gigabytes with live overlay mounts stacked on it -- 3.6 GB on the
+    /// machine this was written against -- and copying that from underneath a
+    /// running containerd copies a moving target. Terminating costs nothing
+    /// here: the next command in the start sequence is the init that brings
+    /// the distribution back up.
+    #[cfg(windows)]
+    fn migrate_data_into_holder(&self) -> io::Result<()> {
+        if self.data_holder_is_ready()? {
+            return Ok(());
+        }
+        let _ = self.wsl_allowing_failure(&["--terminate", self.wsl_distribution()], None);
+        self.wsl(
+            &[
+                "--distribution",
+                self.wsl_distribution(),
+                "--user",
+                "root",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                MIGRATE_DATA_INTO_HOLDER,
+            ],
+            None,
+        )?;
+        Ok(())
+    }
+
+    /// Replace the runtime distribution with this release's rootfs.
+    ///
+    /// The gate is not a formality. `--unregister` deletes an ext4.vhdx and
+    /// everything in it, so this refuses to run until the holder itself says
+    /// the data is out -- asked of the holder, not inferred from a file on the
+    /// Windows side that could be stale, or from having just run the migration
+    /// and assumed it worked.
+    #[cfg(windows)]
+    fn replace_runtime_distribution(&self, install: &Path, rootfs: &Path) -> io::Result<()> {
+        refuse_replacement_without_holder(self.data_holder_is_ready()?)?;
+        let _ = self.wsl_allowing_failure(&["--terminate", self.wsl_distribution()], None);
+        self.wsl(&["--unregister", self.wsl_distribution()], None)?;
+        self.wsl(
+            &[
+                "--import",
+                self.wsl_distribution(),
+                &install.to_string_lossy(),
+                &rootfs.to_string_lossy(),
+                "--version",
+                "2",
+            ],
+            None,
+        )?;
+        fs::write(self.guest_release_marker(), rootfs_stamp(rootfs)?)?;
+        Ok(())
+    }
+
+    /// Ask the holder whether it holds the data.
+    #[cfg(windows)]
+    fn data_holder_is_ready(&self) -> io::Result<bool> {
+        let output = self.wsl_allowing_failure(
+            &[
+                "--distribution",
+                &self.data_distribution(),
+                "--user",
+                "root",
+                "--exec",
+                "/bin/sh",
+                "-c",
+                "test -f /data/.lemma-data-holder",
+            ],
+            None,
+        )?;
+        Ok(output.status.success())
+    }
+
+    /// Remove the private distributions, and everything inside them.
+    ///
+    /// Both of them, and that is the whole point now: the data moved out of
+    /// the runtime distribution into a holder of its own so that upgrades stop
+    /// destroying it, and a wipe that removed only the runtime would leave
+    /// every workspace, database and volume registered and full while the
+    /// dialog above it said "Everything Lemma keeps on this PC is deleted".
+    /// That exact sentence was false once before, for the same reason.
     ///
     /// The only lifecycle verbs used to be `--import` and `--terminate`, so a
     /// corrupt guest could not be rebuilt from inside the app and uninstalling
@@ -928,11 +1111,16 @@ impl ManagedRuntime {
             let _ = self.wsl_allowing_failure(&["--terminate", self.wsl_distribution()], None);
             self.wsl(&["--unregister", self.wsl_distribution()], None)?;
         }
+        let data = self.data_distribution();
+        if registered_guest(output.status.success(), &output.stdout, &data)? {
+            let _ = self.wsl_allowing_failure(&["--terminate", &data], None);
+            self.wsl(&["--unregister", &data], None)?;
+        }
         let _ = fs::remove_file(self.guest_release_marker());
         Ok(())
     }
 
-    /// Whether Lemma's private distribution exists right now.
+    /// Whether WSL lists a distribution by this exact name.
     ///
     /// Deliberately not `?`. `wsl --list --quiet` exits non-zero when there are
     /// no distributions at all -- which is exactly the state
@@ -940,16 +1128,17 @@ impl ManagedRuntime {
     /// treating that as fatal aborted the very first start before the import
     /// could ever run, permanently.
     ///
-    /// Listing is only ever asked whether *our* distribution is there. If the
-    /// question cannot be answered, assume it is not and let the caller's next
-    /// command report the real problem.
+    /// A false "absent" is safe here, and that is not an assumption: `--import`
+    /// refuses a name that already exists rather than replacing it, so the
+    /// mistake surfaces as an error from the next command and never as a
+    /// distribution that was overwritten.
     #[cfg(windows)]
-    fn distribution_is_registered(&self) -> bool {
+    fn guest_is_registered(&self, name: &str) -> bool {
         self.wsl_allowing_failure(&["--list", "--quiet"], None)
             .map(|output| {
                 decode_wsl_output(&output.stdout)
                     .lines()
-                    .any(|line| line.trim() == self.wsl_distribution())
+                    .any(|line| line.trim() == name)
             })
             .unwrap_or(false)
     }
@@ -970,8 +1159,12 @@ impl ManagedRuntime {
         let _ = fs::remove_file(self.wsl_setup_marker());
         let install = self.config.local_root.join("runtime/wsl");
         fs::create_dir_all(&install)?;
-        let installed = self.distribution_is_registered();
         let rootfs = self.config.artifact_root.join("windows-x86_64/rootfs.tar");
+        // The holder first, and its share published, because the runtime
+        // distribution's init refuses to start without it -- and because the
+        // upgrade below is only safe once the data is somewhere else.
+        self.ensure_data_distribution(&rootfs)?;
+        let installed = self.guest_is_registered(self.wsl_distribution());
         if !installed {
             if !rootfs.is_file() {
                 return Err(io::Error::new(
@@ -994,8 +1187,17 @@ impl ManagedRuntime {
             )?;
             let stamp = rootfs_stamp(&rootfs)?;
             fs::write(self.guest_release_marker(), stamp)?;
+            // Copies nothing here. It records that the holder is the home, so
+            // the first upgrade after this one knows it may replace the
+            // runtime distribution.
+            self.migrate_data_into_holder()?;
         } else {
-            self.check_installed_guest_is_current(&rootfs)?;
+            // Always before the replacement, and against the distribution that
+            // currently holds the data rather than the one about to.
+            self.migrate_data_into_holder()?;
+            if !self.installed_guest_is_current(&rootfs)? {
+                self.replace_runtime_distribution(&install, &rootfs)?;
+            }
         }
         let capability = fs::read(&self.capability_file)?;
         self.wsl(
@@ -1469,6 +1671,92 @@ fn decode_wsl_output(value: &[u8]) -> String {
 /// explain most of what goes wrong here -- what addresses the guest has, and
 /// which containers are up. Bounded per file, and `2>&1` throughout, because a
 /// collector that fails halfway is still worth what it printed first.
+/// The gate between an upgrade and somebody's work.
+///
+/// `--unregister` deletes a distribution's ext4.vhdx and everything in it, and
+/// the upgrade path calls it deliberately. What makes that safe is only that
+/// the data is already somewhere else, so this asks -- and the answer comes
+/// from the holder itself, not from having just run the migration and assumed
+/// it worked, and not from a file on the Windows side that could be left over
+/// from an installation that no longer exists.
+#[cfg(any(windows, test))]
+fn refuse_replacement_without_holder(holder_ready: bool) -> io::Result<()> {
+    if holder_ready {
+        return Ok(());
+    }
+    Err(io::Error::other(
+        "Lemma will not replace its private runtime until your workspaces and \
+         databases have moved out of it. Start Lemma again to retry; nothing \
+         has been changed.",
+    ))
+}
+
+/// Publish the data distribution's storage into the shared namespace.
+///
+/// `/mnt/wsl` is a tmpfs every distribution in the WSL VM sees, and a bind
+/// made into it from one is usable from the others. This is how Lemma's data
+/// reaches the runtime distribution without a second disk and without asking
+/// for administrator rights.
+///
+/// Idempotent, and run on every start rather than once at import: the mount
+/// belongs to the VM, so `wsl --shutdown` or a reboot removes it while leaving
+/// the distribution registered.
+#[cfg(any(windows, test))]
+const PUBLISH_DATA_SHARE: &str = "\
+set -eu
+mkdir -p /data /mnt/wsl/lemma-data
+if ! /usr/bin/mountpoint -q /mnt/wsl/lemma-data; then
+  /usr/bin/mount --bind /data /mnt/wsl/lemma-data
+fi
+";
+
+/// Move an existing installation's data out of the runtime distribution.
+///
+/// Runs inside whichever distribution holds the data today. Everything before
+/// the holder existed lives on that distribution's own disk at these four
+/// paths; the holder's marker is written last, so an interrupted copy is
+/// retried rather than mistaken for a finished one -- and the replacement that
+/// deletes the old distribution refuses until that marker exists.
+///
+/// `cp -a` rather than a move: the source distribution is about to be deleted
+/// anyway on the upgrade path, and on the path where it is not, leaving the
+/// old copy in place costs disk and keeps a way back.
+///
+/// The container store is deliberately not among them, and this is not an
+/// oversight. `lemma-bind-data` discards a store whose recorded metadata
+/// generation is not the current one, and the old layout recorded none at all
+/// -- it predates that file -- so the store is rebuilt on the first start
+/// after the move whatever we do. Copying it first would move several
+/// gigabytes, measured at 3.6 GB on the machine this was written against, to
+/// delete them a second later. Images are re-pullable. What is not is named
+/// volumes and workspaces, and those come across: the generation reset clears
+/// nerdctl's container definitions and leaves `volumes` alone.
+#[cfg(any(windows, test))]
+const MIGRATE_DATA_INTO_HOLDER: &str = "\
+set -eu
+share=/mnt/wsl/lemma-data
+if [ ! -d \"$share\" ]; then
+  echo 'lemma-data: needs-repair: the data holder is not published' >&2
+  exit 1
+fi
+if [ -f \"$share/.lemma-data-holder\" ]; then
+  exit 0
+fi
+mkdir -p \"$share/lemma\" \"$share/containerd\" \"$share/nerdctl\" \"$share/cni/net.d\"
+copy_tree() {
+  source=$1
+  target=$2
+  if [ -d \"$source\" ] && [ -n \"$(ls -A \"$source\" 2>/dev/null)\" ]; then
+    cp -a \"$source/.\" \"$target/\"
+  fi
+}
+copy_tree /var/lib/lemma \"$share/lemma\"
+copy_tree /var/lib/nerdctl \"$share/nerdctl\"
+copy_tree /etc/cni/net.d \"$share/cni/net.d\"
+chmod 0700 \"$share/lemma\"
+touch \"$share/.lemma-data-holder\"
+";
+
 #[cfg(any(windows, test))]
 const GUEST_DIAGNOSTICS: &str = include_str!("../../guest-diagnostics.sh");
 
@@ -1749,6 +2037,155 @@ mod tests {
         ensure_private_file(runtime.capability_file()).unwrap();
     }
 
+    /// Windows users were pinned to whichever release they installed first.
+    ///
+    /// The data lived inside the runtime distribution, so an upgrade could
+    /// only refuse -- and it did, telling people to reset the runtime and lose
+    /// every workspace, database and pod. Now the data has a distribution of
+    /// its own and the upgrade replaces the runtime, which means the upgrade
+    /// path calls `--unregister` on purpose. This is the only thing standing
+    /// between that call and somebody's work.
+    #[test]
+    fn an_upgrade_will_not_delete_a_runtime_that_still_holds_the_data() {
+        refuse_replacement_without_holder(true).expect("the holder has it; proceed");
+
+        let refused = refuse_replacement_without_holder(false).unwrap_err();
+        let message = refused.to_string();
+        assert!(
+            message.contains("workspaces") && message.contains("databases"),
+            "the refusal has to say what is at stake: {message}"
+        );
+        assert!(
+            message.contains("nothing has been changed"),
+            "and that it stopped before doing any of it: {message}"
+        );
+    }
+
+    /// The gate is worth nothing if it runs after the deletion.
+    #[test]
+    fn the_gate_runs_before_the_unregister_it_guards() {
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn replace_runtime_distribution")
+            .expect("the replacement exists");
+        let body = &source[start..];
+        let end = body.find("\n    }\n").expect("the function ends");
+        let body = &body[..end];
+
+        let gate = body
+            .find("refuse_replacement_without_holder")
+            .expect("the replacement is gated at all");
+        let unregister = body.find("\"--unregister\"").expect("it does unregister");
+        assert!(
+            gate < unregister,
+            "the gate has to come first, or it guards nothing:\n{body}"
+        );
+    }
+
+    /// "Everything Lemma keeps on this PC is deleted" has to stay true.
+    ///
+    /// It was false once already, when the reset removed the state directory
+    /// and left the distribution registered and full. Splitting the data into
+    /// its own distribution is exactly the shape of change that would make it
+    /// false a second time.
+    #[test]
+    fn starting_over_removes_the_data_distribution_too() {
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = source
+            .find("pub fn unregister_windows_guest")
+            .expect("the wipe exists");
+        let body = &source[start..];
+        let end = body.find("\n    }\n").expect("the function ends");
+        let body = &body[..end];
+
+        assert!(
+            body.contains("self.data_distribution()"),
+            "a wipe that leaves the data holder registered deletes nothing that \
+             matters:\n{body}"
+        );
+        assert_eq!(
+            body.matches("\"--unregister\"").count(),
+            2,
+            "both distributions, or the promise is false again:\n{body}"
+        );
+    }
+
+    /// The marker is the holder's own word that the copy finished.
+    #[test]
+    fn the_migration_claims_nothing_until_the_copy_is_done() {
+        let script = MIGRATE_DATA_INTO_HOLDER;
+        let marker = script
+            .rfind(".lemma-data-holder")
+            .expect("it writes the marker");
+        assert!(
+            !script.contains("/var/lib/containerd"),
+            "the container store is rebuilt on the first start after the move \
+             whatever this does, so copying it moves gigabytes to delete them: \
+             {script}"
+        );
+        for tree in ["/var/lib/lemma ", "/var/lib/nerdctl ", "/etc/cni/net.d "] {
+            let copy = script
+                .find(tree)
+                .unwrap_or_else(|| panic!("{tree} has to be carried across: {script}"));
+            assert!(
+                copy < marker,
+                "{tree} is copied after the marker that says the copy is done, \
+                 so an interrupted migration would look finished: {script}"
+            );
+        }
+        assert!(
+            script.find("exit 0").expect("it is idempotent") < marker,
+            "a second run has to stop before copying over what it already moved"
+        );
+    }
+
+    /// A live container store is a moving target.
+    ///
+    /// On a warm start containerd is running with several gigabytes of overlay
+    /// mounts stacked on the store -- 3.6 GB on the machine this was written
+    /// against. Copying that out from underneath it would copy a filesystem
+    /// mid-write, and the copy is the thing the upgrade then trusts enough to
+    /// delete the original.
+    #[test]
+    fn the_migration_quiesces_the_distribution_before_copying_it() {
+        let source = include_str!("lib.rs").replace("\r\n", "\n");
+        let start = source
+            .find("fn migrate_data_into_holder")
+            .expect("the migration exists");
+        let body = &source[start..];
+        let end = body.find("\n    }\n").expect("the function ends");
+        let body = &body[..end];
+
+        let skip = body
+            .find("data_holder_is_ready")
+            .expect("it does nothing once the holder has the data");
+        let terminate = body
+            .find("\"--terminate\"")
+            .expect("it quiesces before copying");
+        let copy = body
+            .find("MIGRATE_DATA_INTO_HOLDER")
+            .expect("it runs the copy");
+        assert!(
+            skip < terminate && terminate < copy,
+            "a warm start must not be terminated when there is nothing to \
+             move, and the copy must not run against a live store:\n{body}"
+        );
+    }
+
+    /// Publishing runs on every start, so it has to survive running twice.
+    #[test]
+    fn publishing_the_data_share_is_idempotent() {
+        let script = PUBLISH_DATA_SHARE;
+        let guard = script
+            .find("mountpoint -q /mnt/wsl/lemma-data")
+            .expect("it checks first");
+        let bind = script.find("mount --bind").expect("it binds");
+        assert!(
+            guard < bind,
+            "stacking a second bind on the same path every start: {script}"
+        );
+    }
+
     /// A macOS start that failed used to leave nothing but the boot log.
     ///
     /// `capture_diagnostics` returned success on macOS having written nothing
@@ -1808,6 +2245,90 @@ mod tests {
         validate_macos_release(&release).unwrap();
         fs::remove_file(release.join("disk.raw")).unwrap();
         assert!(validate_macos_release(&release).is_err());
+    }
+
+    /// The uninstaller names the distributions; nothing else knows them.
+    ///
+    /// When `reset` cannot run -- an installation too damaged to reset is
+    /// still one somebody asked to remove -- the uninstaller falls back to
+    /// telling them what to unregister by hand. That text is the only place
+    /// those names appear outside this file, and the one that matters is the
+    /// holder: the runtime distribution is replaced by every upgrade, so
+    /// naming only it would say "delete the disposable half and keep the
+    /// several gigabytes you were trying to remove".
+    #[test]
+    fn the_uninstaller_names_the_distribution_that_holds_the_data() {
+        let hooks = include_str!("../../../installer/hooks.nsh").replace("\r\n", "\n");
+        let root = tempdir().unwrap();
+        let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            wsl_distribution: DEFAULT_WSL_DISTRIBUTION.to_string(),
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            #[cfg(target_os = "macos")]
+            vz_executable: root.path().join("lemma-vz"),
+            #[cfg(windows)]
+            wsl_executable: PathBuf::from("wsl.exe"),
+        })
+        .unwrap();
+
+        // Derived the same way the running code derives it, so a rename here
+        // fails rather than silently leaving the installer pointing at a name
+        // that no longer exists.
+        let holder = format!("{}Data", runtime.wsl_distribution());
+        assert!(
+            hooks.contains(&holder),
+            "the manual fallback has to name {holder}, or it sends people to \
+             delete the wrong one:\n{hooks}"
+        );
+    }
+
+    /// Two releases can ship archives of exactly the same size.
+    ///
+    /// `tar` pads every member to a 512-byte block and the archive to the
+    /// blocking factor, so archive size is coarsely quantised: a guest-side
+    /// change of a few bytes in a shell script -- which is what most of them
+    /// are -- routinely lands on a byte-identical size. Reading that as "same
+    /// release" leaves this release's host talking to the previous release's
+    /// guestd, which is the failure this stamp exists to prevent.
+    ///
+    /// The installer already wrote the signed manifest's digest beside the
+    /// release, so the exact answer is on disk for the cost of a small read.
+    #[test]
+    fn two_releases_of_the_same_size_are_still_two_releases() {
+        let root = tempdir().unwrap();
+        let stamp_of = |digest: &str| {
+            let release = root.path().join(digest);
+            let target = release.join("managed-runtime/windows-x86_64");
+            fs::create_dir_all(&target).unwrap();
+            let rootfs = target.join("rootfs.tar");
+            // Byte-identical size, as tar's padding makes likely.
+            fs::write(&rootfs, vec![0u8; 10240]).unwrap();
+            fs::write(
+                release.join(".lemma-runtime-artifacts.json"),
+                format!("{{\"schema_version\":1,\"guest_sha256\":\"{digest}\"}}"),
+            )
+            .unwrap();
+            rootfs_stamp(&rootfs).unwrap()
+        };
+
+        assert_ne!(
+            stamp_of("aaaa1111"),
+            stamp_of("bbbb2222"),
+            "size alone cannot tell these apart, and the recorded digest can"
+        );
+    }
+
+    /// Nothing recorded is not an error, it is the older layout.
+    #[test]
+    fn a_release_with_no_recorded_digest_still_has_a_stamp() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("managed-runtime/windows-x86_64");
+        fs::create_dir_all(&target).unwrap();
+        let rootfs = target.join("rootfs.tar");
+        fs::write(&rootfs, b"a guest filesystem").unwrap();
+
+        assert_eq!(rootfs_stamp(&rootfs).unwrap(), "18");
     }
 
     /// Re-writing the same archive must not look like a different release.
