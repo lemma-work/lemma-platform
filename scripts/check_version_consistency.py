@@ -148,6 +148,7 @@ SOURCES: tuple[Source, ...] = (
 # re-declares its own would be invisible to SOURCES above and would drift at the
 # next release, so the shape is checked rather than the value.
 WORKSPACE_MEMBERS: tuple[str, ...] = (
+    "desktop/job-object",
     "desktop/locald",
     "desktop/agent-host",
     "desktop/local-runtime/manager",
