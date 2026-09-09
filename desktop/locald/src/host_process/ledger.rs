@@ -1,6 +1,8 @@
 //! What this installation started, written down so a replaced daemon can
 //! find it again.
 
+pub(crate) use lemma_private_file::write_atomic as write_private_atomic;
+
 use super::*;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -71,44 +73,6 @@ pub(crate) fn read_process_ledger(path: &Path) -> Option<ProcessLedger> {
 
 pub(crate) fn write_process_ledger(path: &Path, ledger: &ProcessLedger) -> io::Result<()> {
     write_private_atomic(path, &serde_json::to_vec_pretty(ledger)?)
-}
-
-pub(crate) fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("process ledger has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let temporary = parent.join(format!(
-        ".processes-{}-{}.tmp",
-        std::process::id(),
-        random_generation()?
-    ));
-    let _ = fs::remove_file(&temporary);
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    replace_private_file(&temporary, path)?;
-    #[cfg(unix)]
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-pub(crate) fn replace_private_file(source: &Path, destination: &Path) -> io::Result<()> {
-    // No delete-then-rename on Windows. `fs::rename` is MoveFileExW with
-    // MOVEFILE_REPLACE_EXISTING and already replaces the destination, so the
-    // unlink bought nothing and cost two things: a window in which the process
-    // ledger simply did not exist -- crash there and the previous backend and
-    // frontend are never reclaimed, and keep their ports -- and a second way to
-    // fail, since removing a file anything has open (a virus scanner, moments
-    // after it was written) is a sharing violation.
-    fs::rename(source, destination)
 }
 
 pub(crate) fn reclaim_verified_processes(

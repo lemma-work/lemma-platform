@@ -21,6 +21,7 @@ resolver = "2"
 members = [
     "locald",
     "agent-host",
+    "private-file",
     "process",
     "local-runtime/manager",
     "local-runtime/hostctl",
@@ -74,6 +75,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 lemma-desktop-process = { path = "process" }
+lemma-private-file = { path = "private-file" }
 # macos-private-api is what gates WebviewWindowBuilder::transparent, which an
 # NSVisualEffectView has to sit behind to be visible at all. It is also what
 # makes a build ineligible for the Mac App Store — fine for the dmg/app targets

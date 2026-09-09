@@ -3,6 +3,15 @@
 
 use super::*;
 
+// The implementations were here, and in five other modules, each with a
+// slightly different guarantee -- this one never fsynced the directory the
+// rename happened in, so a power cut could take back a write that had
+// already reported success.
+pub(crate) use lemma_private_file::{
+    appending_log as private_appending_log, ensure_private as ensure_private_file,
+    ensure_private_directory as set_private_directory, write_atomic as write_private_atomic,
+};
+
 #[cfg(target_os = "macos")]
 pub(crate) fn remove_if_present(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
@@ -42,72 +51,6 @@ pub(crate) fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<b
     file.sync_all()?;
     ensure_private_file(path)?;
     Ok(true)
-}
-
-pub(crate) fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    let _ = fs::remove_file(&temporary);
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)?;
-    ensure_private_file(path)
-}
-
-pub(crate) fn set_private_directory(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-pub(crate) fn ensure_private_file(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = fs::symlink_metadata(path)?;
-        if !metadata.file_type().is_file() || metadata.mode() & 0o077 != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "private runtime file has unsafe permissions: {}",
-                    path.display()
-                ),
-            ));
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
-}
-
-pub(crate) fn private_appending_log(path: &Path) -> io::Result<std::fs::File> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)
 }
 
 pub(crate) fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {

@@ -198,3 +198,24 @@ fn the_host_respects_the_bounds_the_backend_enforces() {
         "object_id is truncated to this in acp.rs; both sides read it here"
     );
 }
+
+/// The protocol version both sides send and compare, from one place.
+///
+/// `lemma_agent_host::PROTOCOL_VERSION` and the backend's
+/// `AGENT_HOST_PROTOCOL_VERSION` are two literals in two languages. The host
+/// puts its number in every identity it publishes and the backend checks it;
+/// raising one without the other makes every host of the old version look
+/// unrecognised, from the moment the backend deploys, with nothing failing on
+/// either side to say so.
+#[test]
+fn the_protocol_version_is_the_one_the_backend_expects() {
+    let declared = contract()["protocol_version"]
+        .as_u64()
+        .expect("the contract declares a protocol version");
+    assert_eq!(
+        u64::from(lemma_agent_host::PROTOCOL_VERSION),
+        declared,
+        "PROTOCOL_VERSION and the shared contract disagree; the backend reads \
+         the contract's number, so raise both or neither",
+    );
+}
