@@ -5727,15 +5727,17 @@ mod tests {
     #[test]
     fn immutable_guest_routes_temporary_and_network_state_to_writable_mounts() {
         let fstab = include_str!("../../guest-image/rootfs-overlay/etc/fstab");
-        let mount_data =
-            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        // The binds moved into the script both platforms share; see
+        // `both_platforms_bind_the_data_through_the_same_script`.
+        let bind_data =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
         let guest_service = include_str!(
             "../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-guest-service"
         );
 
         assert!(fstab.contains("tmpfs /tmp tmpfs"));
-        assert!(mount_data.contains("$data_root/cni/net.d"));
-        assert!(mount_data.contains("/etc/cni/net.d"));
+        assert!(bind_data.contains("$data_root/cni/net.d"));
+        assert!(bind_data.contains("/etc/cni/net.d"));
         assert!(guest_service.contains("HOME=/var/lib/lemma/home"));
         assert!(guest_service.contains("LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine"));
         assert!(guest_service.contains("TMPDIR=\"$LEMMA_GUEST_TEMP_ROOT\""));
@@ -5852,6 +5854,85 @@ mod tests {
     /// `Assert*` fails the unit instead, and that failure propagates through
     /// those `Requires` and stops the services that would have written to the
     /// wrong disk.
+    /// On Windows the data used to live inside the replaceable distribution.
+    ///
+    /// Everything durable -- workspaces, databases, the container store -- sat
+    /// on the runtime distribution's own ext4.vhdx, which every upgrade
+    /// replaces wholesale. The upgrade could therefore only refuse, and did,
+    /// which pinned Windows users to whichever release they installed first.
+    /// The data now lives in a second distribution that publishes it into the
+    /// WSL VM's shared namespace, and this is the init that consumes it.
+    ///
+    /// Refusing when the share is absent is the load-bearing half. Carrying on
+    /// would put the data back inside the distribution the next upgrade
+    /// deletes, and every run until that upgrade would look perfectly healthy.
+    #[test]
+    fn windows_will_not_start_without_the_data_holder() {
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+
+        let check = init
+            .find("if [ ! -d \"$LEMMA_DATA_SHARE\" ]")
+            .expect("it checks the share is published");
+        let bind = init
+            .find("/usr/local/bin/lemma-bind-data")
+            .expect("it binds the data from the share");
+        let containerd = init
+            .find("mkdir -p /run/containerd")
+            .expect("it starts containerd");
+
+        assert!(
+            check < bind && bind < containerd,
+            "the share is checked, then bound, and only then does anything \
+             start that writes to it: {init}"
+        );
+        assert!(
+            init.contains("lemma-data: needs-repair:"),
+            "the refusal has to reach the host's own detector: {init}"
+        );
+    }
+
+    /// One implementation of the binds, for both platforms.
+    ///
+    /// The last thing that script does is the gate that says the data is not
+    /// where it must be. A second copy of it that drifted would be a guest
+    /// that looks healthy while throwing work away, on whichever platform got
+    /// the stale one -- so the two reach a data root differently and then run
+    /// exactly the same code.
+    #[test]
+    fn both_platforms_bind_the_data_through_the_same_script() {
+        let mount = include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+        let bind = include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
+        let init =
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-runtime-init");
+
+        for (name, script) in [("lemma-mount-data", mount), ("lemma-runtime-init", init)] {
+            assert!(
+                script.contains("/usr/local/bin/lemma-bind-data"),
+                "{name} has to hand over rather than keep its own copy"
+            );
+            assert!(
+                !script.contains("mount --bind"),
+                "{name} still binds the data itself, which is the second copy: {script}"
+            );
+        }
+        for required in [
+            "/var/lib/lemma",
+            "/var/lib/containerd",
+            "/var/lib/nerdctl",
+            "/etc/cni/net.d",
+        ] {
+            assert!(
+                bind.contains(required),
+                "the shared script has to bind {required}"
+            );
+        }
+        assert!(
+            bind.contains("lemma-data: needs-repair:"),
+            "and it has to keep the gate that says the data did not land"
+        );
+    }
+
     /// A diagnosis written where the host cannot read it is not a diagnosis.
     ///
     /// The host's `guest_needs_data_repair` greps the serial console for
@@ -5989,7 +6070,7 @@ mod tests {
     #[test]
     fn the_guest_refuses_to_finish_mounting_with_the_binds_missing() {
         let mount_data =
-            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-mount-data");
+            include_str!("../../guest-image/rootfs-overlay/usr/local/bin/lemma-bind-data");
         let verification = mount_data
             .rfind("for required in")
             .expect("the mount script must verify its bind mounts before exiting");
