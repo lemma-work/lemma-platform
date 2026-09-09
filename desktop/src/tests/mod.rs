@@ -149,7 +149,7 @@ fn every_included_source_is_read_with_normalised_line_endings() {
     );
 }
 
-fn granted(name: &str) -> Vec<String> {
+pub(crate) fn granted(name: &str) -> Vec<String> {
     capability(name)["permissions"]
         .as_array()
         .expect("permissions array")

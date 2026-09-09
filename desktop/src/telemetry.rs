@@ -24,6 +24,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::shell_paths::locald_root;
+use crate::{require_control_window, Webview};
+use serde_json::Value;
+
 const KEY_ENV: &str = "LEMMA_TELEMETRY_KEY";
 const HOST_ENV: &str = "LEMMA_TELEMETRY_HOST";
 const DISABLE_ENV: &str = "LEMMA_TELEMETRY";
@@ -162,9 +166,30 @@ pub fn load_state(root: &Path) -> TelemetryState {
 
 pub fn save_state(root: &Path, state: &TelemetryState) -> std::io::Result<()> {
     fs::create_dir_all(root)?;
-    let encoded = serde_json::to_string_pretty(state)
+    let encoded = serde_json::to_vec_pretty(state)
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
-    fs::write(state_path(root), encoded)
+    // Atomically, and readable only by this user. It was a plain `write`,
+    // which can leave a truncated file: this one holds the opt-out, and a
+    // half-written opt-out reads as "never answered", which reads as consent.
+    lemma_private_file::write_atomic(&state_path(root), &encoded)
+}
+
+/// Where the install id and the opt-out live.
+///
+/// The daemon's state directory rather than the app's own, so "start over"
+/// takes them with it: somebody who erases this installation gets a new
+/// install id, which is the behaviour the identity promises.
+pub fn root() -> PathBuf {
+    locald_root()
+}
+
+/// Record an event about this installation, if the person has not opted out
+/// and this build has an ingestion key.
+///
+/// The convenience the call sites use, so none of them has to know where the
+/// state lives.
+pub fn note(event: InstallEvent) {
+    record(&root(), event);
 }
 
 /// The Local settings toggle writes through here.
@@ -342,5 +367,120 @@ mod tests {
         // No path, no host, no user-supplied string can appear: the variant
         // only accepts &'static str chosen at the call site.
         assert!(!rendered.contains('/'));
+    }
+}
+
+/// What Local settings shows for the anonymous install-health switch.
+///
+/// `available` is whether this build has an ingestion key at all. Without one
+/// nothing is ever sent, so a switch would be a control over nothing -- the
+/// page hides the whole panel rather than offering a lie.
+#[tauri::command(async)]
+pub(crate) fn telemetry_status(window: Webview) -> Result<Value, String> {
+    require_control_window(&window)?;
+    let root = root();
+    Ok(serde_json::json!({
+        "available": ingestion_key().is_some(),
+        "enabled": is_enabled(&root),
+        "host": DEFAULT_HOST,
+        "install_id": load_state(&root).install_id,
+    }))
+}
+
+/// The switch itself.
+///
+/// An explicit `false` is never overridden by anything: not by an upgrade, not
+/// by a new ingestion key. That is what makes it an opt-out rather than a
+/// preference.
+#[tauri::command(async)]
+pub(crate) fn set_telemetry_enabled(window: Webview, enabled: bool) -> Result<(), String> {
+    require_control_window(&window)?;
+    set_enabled(&root(), enabled)
+        .map_err(|error| format!("could not save your anonymous install-health choice: {error}"))
+}
+
+#[cfg(test)]
+mod wiring_tests {
+
+    /// Every event this module can express is one the app actually sends.
+    ///
+    /// The module was written, reviewed and shipped with no caller at all:
+    /// `record` was never invoked from anywhere, so the first signal that a
+    /// runtime install broke on a new macOS release stayed a GitHub issue
+    /// three weeks later -- which is the exact failure the opening comment
+    /// says this exists to prevent. A variant nobody constructs is that bug
+    /// coming back one event at a time.
+    #[test]
+    fn every_event_is_sent_from_somewhere() {
+        let source = crate::tests::shell_source();
+        let mut unsent = Vec::new();
+        for variant in [
+            "Launched",
+            "RuntimeInstallStarted",
+            "RuntimeInstallCompleted",
+            "RuntimeInstallFailed",
+            "RuntimeReady",
+            "ModeSelected",
+            "Quit",
+        ] {
+            if !source.contains(&format!("InstallEvent::{variant}")) {
+                unsent.push(variant);
+            }
+        }
+        assert!(
+            unsent.is_empty(),
+            "these events exist and nothing sends them: {unsent:?}",
+        );
+    }
+
+    /// The switch is offered to Local settings and to nothing else.
+    #[test]
+    fn the_switch_is_not_reachable_from_the_workspace() {
+        for command in ["allow-telemetry-status", "allow-set-telemetry-enabled"] {
+            assert!(
+                crate::tests::granted("control")
+                    .iter()
+                    .any(|p| p == command),
+                "{command} has to be granted to Local settings"
+            );
+            assert!(
+                !crate::tests::granted("workspace")
+                    .iter()
+                    .any(|p| p == command),
+                "{command} must not be reachable from a remote origin"
+            );
+            assert!(
+                !crate::tests::granted("main").iter().any(|p| p == command),
+                "{command} must not be reachable from the splash"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod documentation_tests {
+    /// The switch, the destination and the events are documented where a
+    /// person installing Lemma will look.
+    ///
+    /// The register's DOC-1 is exactly this gap: the module named a PostHog
+    /// endpoint that appeared in no document a user reads, and claimed a Local
+    /// settings toggle that did not exist.
+    #[test]
+    fn what_is_sent_and_how_to_stop_it_is_written_down() {
+        let installation = include_str!("../../docs/installation.md").replace("\r\n", "\n");
+        assert!(
+            installation.contains("Anonymous install health"),
+            "the switch is not documented where somebody installing Lemma reads",
+        );
+        for required in [
+            super::DEFAULT_HOST,
+            "LEMMA_TELEMETRY=0",
+            "desktop.runtime_install",
+        ] {
+            assert!(
+                installation.contains(required),
+                "{required:?} is not in the installation guide",
+            );
+        }
     }
 }
