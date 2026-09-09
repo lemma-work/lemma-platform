@@ -84,6 +84,20 @@ pub(super) struct GatedPullEngine {
     invalid: Mutex<std::collections::HashSet<String>>,
 }
 
+impl GatedPullEngine {
+    pub(super) fn new(
+        release: std::sync::mpsc::Receiver<bool>,
+        started: std::sync::mpsc::Sender<String>,
+    ) -> Self {
+        Self {
+            release: Mutex::new(release),
+            started,
+            present: Mutex::new(std::collections::HashSet::new()),
+            invalid: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+}
+
 impl Engine for GatedPullEngine {
     fn run(&self, arguments: &[String]) -> Result<Output, String> {
         match arguments[0].as_str() {

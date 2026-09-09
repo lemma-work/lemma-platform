@@ -63,9 +63,7 @@ impl<E: Engine + 'static> GuestService<E> {
         };
         if should_create {
             self.admit_sandbox_memory(requested_memory)?;
-            // Non-blocking: a pull here would stop every other sandbox
-            // operation on the machine for as long as it takes.
-            self.ensure_sandbox_image(&parameters.image, parameters.workload_kind, false)?;
+            self.ensure_sandbox_image_for_start(&parameters.image, parameters.workload_kind)?;
             let workspace = match parameters.workload_kind {
                 WorkloadKind::Workspace => Some(self.workspace(&parameters.sandbox_id)?),
                 WorkloadKind::Function => None,
