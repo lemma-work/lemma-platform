@@ -59,12 +59,15 @@ impl Daemon {
                     failure.get_or_insert_with(|| error.to_string());
                 }
             }
-            if let Some(mut supervisor) = daemon
+            // Taken out under the lock; killed and reaped outside it. `wait`
+            // blocks until the process is gone, and every client thread that
+            // wants the supervisor takes this same lock.
+            let taken = daemon
                 .supervisor
                 .lock()
                 .expect("supervisor lock poisoned")
-                .take()
-            {
+                .take();
+            if let Some(mut supervisor) = taken {
                 let _ = supervisor.child.kill();
                 let _ = supervisor.child.wait();
             }

@@ -10,10 +10,11 @@
     so they cannot drift.
 
     There is deliberately no `dev` verb. Running the app from source is macOS
-    only for now: dev-local.sh has no Windows counterpart, and the WSL
-    distribution name the managed runtime uses is a global constant, so a dev
-    run in a throwaway state root would adopt and mutate the distro a real
-    install owns. On Windows, build and install the app instead — `exe`.
+    only for now: dev-local.sh has no Windows counterpart. The distribution
+    name is no longer the blocker it was — a state root other than the standard
+    one gets its own `LemmaRuntime-<hash>`, and `LEMMA_RUNTIME_WSL_DISTRIBUTION`
+    overrides it — so a dev run in a throwaway root no longer adopts the distro
+    a real install owns. On Windows, build and install the app instead — `exe`.
 
 .EXAMPLE
     pwsh desktop\scripts\desktop.ps1 test
