@@ -318,3 +318,59 @@ fn a_manifest_for_another_release_is_refused_before_anything_is_downloaded() {
         "nothing is fetched for a runtime this app cannot use",
     );
 }
+
+/// An install that was killed does not leave its runtime on the disk for ever.
+///
+/// A failed install cleans up after itself. A killed one cannot -- a crash, a
+/// power cut, quitting mid-install -- and what it leaves is a fully expanded
+/// runtime, about 2.2 GB, hidden under `releases/`. `prune_retired_releases`
+/// skips hidden entries deliberately, because a `.staging` may belong to a live
+/// install, so nothing removed these at all.
+#[test]
+fn staging_left_by_a_killed_install_is_removed_and_a_live_one_is_not() {
+    let root = tempfile::tempdir().unwrap();
+    let releases = root.path().join("releases");
+    std::fs::create_dir_all(&releases).unwrap();
+
+    let day = 24 * 60 * 60 * 1000_u128;
+    let now = 10 * day;
+    let abandoned = releases.join(format!(".0.7.2-4242-{}.staging", now - day - 1));
+    let live = releases.join(format!(".0.7.2-4243-{}.staging", now - 60_000));
+    // A version with a hyphen of its own: the timestamp is read from the right
+    // for exactly this.
+    let hyphenated = releases.join(format!(".0.8.0-rc1-4244-{}.staging", now - day - 1));
+    // Not ours, whatever it looks like.
+    let stranger = releases.join(".something.staging");
+    let release = releases.join("0.7.2");
+    for path in [&abandoned, &live, &hyphenated, &stranger, &release] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+
+    let removed = prune_abandoned_staging(root.path(), now);
+
+    assert!(
+        !abandoned.exists(),
+        "a day-old staging directory is abandoned"
+    );
+    assert!(!hyphenated.exists(), "and its version may contain a hyphen");
+    assert!(
+        live.exists(),
+        "a staging directory a minute old may be an install in progress"
+    );
+    assert!(stranger.exists(), "a name that is not ours is left alone");
+    assert!(release.exists(), "and an installed release is not staging");
+    assert_eq!(removed.len(), 2, "{removed:?}");
+}
+
+/// A clock that went backwards deletes nothing.
+#[test]
+fn staging_is_kept_when_the_clock_disagrees_with_the_name() {
+    let root = tempfile::tempdir().unwrap();
+    let releases = root.path().join("releases");
+    std::fs::create_dir_all(&releases).unwrap();
+    let future = releases.join(".0.7.2-4242-999999999999.staging");
+    std::fs::create_dir_all(&future).unwrap();
+
+    assert!(prune_abandoned_staging(root.path(), 1_000).is_empty());
+    assert!(future.exists(), "a name from the future is not an old one");
+}
