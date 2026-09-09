@@ -523,6 +523,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.storage_phase.uncommitted_object_delete.degraded': EventSpec('warning', frozenset()),
     'datastore.table_service.metadata_undo_failed.degraded': EventSpec('warning', frozenset({'change', 'pod_id', 'table_name'})),
     'datastore.transaction_writer.delete_user_markdown_s_s.diagnostic': EventSpec('debug', frozenset()),
+    'db.session.pool_utilization_probe_failed': EventSpec('warning', frozenset({'error_type'})),
     'dependency.degraded': EventSpec('warning', frozenset({'dependency', 'error_type', 'failure_count', 'incident_duration_ms'})),
     'dependency.recovered': EventSpec('info', frozenset({'dependency', 'failure_count', 'incident_duration_ms'})),
     'email.send.failed': EventSpec('error', frozenset()),

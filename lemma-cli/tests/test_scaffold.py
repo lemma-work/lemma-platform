@@ -699,12 +699,14 @@ def test_enums_match_sdk_source():
     from lemma_sdk.openapi_client.models.agent_toolset import AgentToolset
     from lemma_sdk.openapi_client.models.datastore_data_type import DatastoreDataType
     from lemma_sdk.openapi_client.models.resource_visibility import ResourceVisibility
+    from lemma_sdk.openapi_client.models.schedule_type import ScheduleType
     from lemma_sdk.openapi_client.models.surface_platform import SurfacePlatform
 
     assert enums.VISIBILITY_VALUES == tuple(v.value for v in ResourceVisibility)
     assert enums.TOOLSETS == tuple(v.value for v in AgentToolset)
     assert enums.COLUMN_TYPES == tuple(v.value for v in DatastoreDataType)
     assert enums.SURFACE_PLATFORMS == tuple(v.value for v in SurfacePlatform)
+    assert enums.SCHEDULE_TYPES == tuple(v.value for v in ScheduleType)
 
 
 def test_scaffold_comments_list_every_enum_value(tmp_path: Path):
@@ -721,6 +723,11 @@ def test_scaffold_comments_list_every_enum_value(tmp_path: Path):
     surface = (init_resource("surface", "slack", root=tmp_path).files[0]).read_text()
     for platform in enums.SURFACE_PLATFORMS:
         assert platform in surface
+    # The schedule comment annotates each type ("TIME (cron)"), so it is prose
+    # rather than a rendered join -- this is what keeps the prose honest.
+    schedule = (init_resource("schedule", "daily", root=tmp_path).files[0]).read_text()
+    for schedule_type in enums.SCHEDULE_TYPES:
+        assert schedule_type in schedule
 
 
 # --------------------------------------------------------------------------- #

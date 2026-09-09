@@ -11,6 +11,9 @@ from app.core.observability.connection_scope import attach_connection_scope_moni
 from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+# Set once if the pool-utilization probe below ever raises, so a broken
+# diagnostic is reported a single time instead of on every checkout.
+_pool_probe_failed = False
 _pool_pressure_incident = DependencyIncident(
     "database_pool_capacity",
     logger=logger,
@@ -70,8 +73,20 @@ def _log_pool_utilization(dbapi_conn, connection_record, proxy=None):
             _pool_pressure_incident.record_failure(error_type="PoolUtilizationHigh")
         else:
             _pool_pressure_incident.record_success()
-    except Exception:
-        pass
+    except Exception as exc:
+        # This runs on every checkout, so the handler must never break one --
+        # but a bare `pass` means a diagnostic that starts failing is simply
+        # gone, and pool exhaustion goes back to arriving as an unexplained
+        # `TimeoutError`. Warned once, not per checkout: the second occurrence
+        # says nothing the first did not, and there can be thousands a second.
+        global _pool_probe_failed
+        if not _pool_probe_failed:
+            _pool_probe_failed = True
+            logger.warning(
+                "db.session.pool_utilization_probe_failed",
+                error_type=type(exc).__name__,
+                exc_info=exc,
+            )
 
 
 def get_engine():
