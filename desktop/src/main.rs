@@ -2558,6 +2558,44 @@ struct EventOutcome {
     start_after_prepare: bool,
 }
 
+/// What to do with an event that names the operation it belongs to.
+///
+/// The whole of a decision that decides what somebody watching the splash
+/// sees, and the reason it is a function: `handle_locald_event` needs an
+/// `AppHandle` and a Tauri runtime, so none of this was reachable from a test
+/// and every case below was only ever exercised by using the app.
+///
+/// The daemon serves one operation at a time but several surfaces can ask, and
+/// their replies interleave. Showing another operation's progress on the
+/// splash is not cosmetic: its phases and its errors are about work the person
+/// in front of it did not start.
+#[derive(Debug, PartialEq, Eq)]
+enum EventAdmission {
+    /// It belongs to the operation already on screen.
+    Apply,
+    /// Nothing is on screen and this operation has not finished, so it becomes
+    /// the one being shown.
+    Adopt,
+    /// Another operation's, or one whose completion has already been shown.
+    /// The second is what stops a late straggler from reopening a finished
+    /// run's progress after the splash has moved on.
+    Ignore,
+}
+
+fn admit_locald_event(active: &str, completed: &[String], event: &str) -> EventAdmission {
+    if !active.is_empty() {
+        return if active == event {
+            EventAdmission::Apply
+        } else {
+            EventAdmission::Ignore
+        };
+    }
+    if completed.iter().any(|finished| finished == event) {
+        return EventAdmission::Ignore;
+    }
+    EventAdmission::Adopt
+}
+
 fn handle_locald_event(app: &AppHandle, event: &Value) {
     if std::env::var("LEMMA_DESKTOP_DEBUG").as_deref() == Ok("1") {
         eprintln!("[locald] {event}");
@@ -2570,18 +2608,14 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     let event_operation_id = locald_event_operation_id(event);
     if let Some(event_operation_id) = event_operation_id {
         let mut ui = shell.ui.lock().unwrap();
-        if !ui.active_operation_id.is_empty() && ui.active_operation_id != event_operation_id {
-            return;
-        }
-        if ui.active_operation_id.is_empty() {
-            if ui
-                .completed_operation_ids
-                .iter()
-                .any(|completed| completed == event_operation_id)
-            {
-                return;
-            }
-            ui.active_operation_id = event_operation_id.to_owned();
+        match admit_locald_event(
+            &ui.active_operation_id,
+            &ui.completed_operation_ids,
+            event_operation_id,
+        ) {
+            EventAdmission::Ignore => return,
+            EventAdmission::Adopt => ui.active_operation_id = event_operation_id.to_owned(),
+            EventAdmission::Apply => {}
         }
     }
     let _ = app.emit_to("control", "lemma:locald-event", event.clone());
@@ -2943,6 +2977,31 @@ fn open_pod_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
         .build()
         .map_err(|error| format!("could not open the app window: {error}"))?;
     Ok(())
+}
+
+/// Where the Dock icon should take somebody when every window is closed.
+///
+/// Separate from the arm that uses it because that arm needs a Tauri runtime
+/// and this is the part with cases in it. Splash is the fallback on purpose:
+/// while the stack is still coming up, or after it failed, the splash is where
+/// the state and the actions are, and a workspace URL that is not serving yet
+/// would open on an error page instead.
+#[cfg(target_os = "macos")]
+#[derive(Debug, PartialEq, Eq)]
+enum ReopenTarget {
+    Hosted,
+    Workspace(String),
+    Splash,
+}
+
+#[cfg(target_os = "macos")]
+fn reopen_target(mode: &str, ready: bool, error: bool, url: &str) -> ReopenTarget {
+    match mode {
+        // Nothing local has to be ready for hosted to be reachable.
+        "hosted" => ReopenTarget::Hosted,
+        "local" if ready && !error && !url.is_empty() => ReopenTarget::Workspace(url.to_owned()),
+        _ => ReopenTarget::Splash,
+    }
 }
 
 fn show_splash(app: &AppHandle) {
@@ -7709,10 +7768,36 @@ fn main() {
             // the variant does not exist on other platforms.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
+                restore_dock_presence(app);
                 if let Some(window) = app.get_window("main") {
-                    restore_dock_presence(app);
                     let _ = window.show();
                     let _ = window.set_focus();
+                } else {
+                    // Every window closed, which on macOS leaves the app
+                    // running. This arm only ever showed a window that already
+                    // existed, so in exactly that state clicking the Dock icon
+                    // did nothing at all -- the one gesture whose whole purpose
+                    // is bringing a running app back, on the one platform where
+                    // closing the last window is normal.
+                    let snapshot = {
+                        let shell: State<Shell> = app.state();
+                        let ui = shell.ui.lock().unwrap();
+                        ui.clone()
+                    };
+                    match reopen_target(
+                        &snapshot.mode,
+                        snapshot.ready,
+                        snapshot.error,
+                        &snapshot.url,
+                    ) {
+                        ReopenTarget::Hosted => {
+                            let _ = open_app_window(app, &hosted_url());
+                        }
+                        ReopenTarget::Workspace(url) => {
+                            let _ = open_app_window(app, &url);
+                        }
+                        ReopenTarget::Splash => show_splash(app),
+                    }
                 }
             }
             // Dock → Quit and any other OS-issued terminate arrive here without
@@ -7908,6 +7993,99 @@ mod tests {
     /// that have to stay true. It cannot be executed from here -- NSIS runs
     /// only on Windows, and only during a real uninstall -- so CI's Windows
     /// job building the installer is what proves it parses.
+    /// Clicking the Dock icon with no window open did nothing at all.
+    ///
+    /// On macOS closing the last window leaves the app running, so this is the
+    /// one gesture whose whole purpose is bringing it back -- and the arm that
+    /// handles it only ever showed a window that already existed. This is the
+    /// part of the fix with cases in it; the arm itself needs a Tauri runtime.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reopening_with_every_window_closed_goes_somewhere() {
+        assert_eq!(
+            reopen_target("local", true, false, "http://app.127.0.0.1.sslip.io:1/"),
+            ReopenTarget::Workspace("http://app.127.0.0.1.sslip.io:1/".into()),
+            "a running local stack goes straight back to the workspace"
+        );
+
+        // Hosted has no local stack to be ready for.
+        assert_eq!(
+            reopen_target("hosted", false, false, ""),
+            ReopenTarget::Hosted
+        );
+
+        for (label, ready, error, url) in [
+            ("still starting", false, false, ""),
+            ("failed", true, true, "http://app.127.0.0.1.sslip.io:1/"),
+            ("ready but with no url yet", true, false, ""),
+            (
+                "undecided mode",
+                true,
+                false,
+                "http://app.127.0.0.1.sslip.io:1/",
+            ),
+        ] {
+            let mode = if label == "undecided mode" {
+                "undecided"
+            } else {
+                "local"
+            };
+            assert_eq!(
+                reopen_target(mode, ready, error, url),
+                ReopenTarget::Splash,
+                "{label}: the splash is where the state and the actions are"
+            );
+        }
+    }
+
+    /// Which operation's progress the splash shows, in every case.
+    ///
+    /// The daemon serves one operation at a time, but several surfaces ask and
+    /// their replies interleave, so an event carries the operation it belongs
+    /// to and this decides whether it is the one on screen. It had no test at
+    /// all: `handle_locald_event` needs an `AppHandle` and a Tauri runtime, so
+    /// the only way to exercise any of this was to use the app and watch.
+    ///
+    /// Showing the wrong one is not cosmetic. Its phases and its failures
+    /// describe work the person watching did not start.
+    #[test]
+    fn only_the_operation_on_screen_moves_the_splash() {
+        let finished = vec!["install-1".to_string(), "start-1".to_string()];
+
+        // Nothing on screen: the first event of an unfinished operation takes it.
+        assert_eq!(
+            admit_locald_event("", &finished, "start-2"),
+            EventAdmission::Adopt
+        );
+
+        // Nothing on screen, but this one already ran to completion. A late
+        // straggler must not reopen a finished run's progress.
+        assert_eq!(
+            admit_locald_event("", &finished, "start-1"),
+            EventAdmission::Ignore
+        );
+
+        // The one being shown.
+        assert_eq!(
+            admit_locald_event("start-2", &finished, "start-2"),
+            EventAdmission::Apply
+        );
+
+        // Another surface's, while one is on screen.
+        assert_eq!(
+            admit_locald_event("start-2", &finished, "install-9"),
+            EventAdmission::Ignore
+        );
+
+        // Completion is only consulted when nothing is active: an operation
+        // that is on screen keeps its own events even if a stale entry for it
+        // survives in the ring.
+        assert_eq!(
+            admit_locald_event("start-1", &finished, "start-1"),
+            EventAdmission::Apply
+        );
+    }
+
     #[test]
     fn the_windows_uninstaller_removes_the_data_the_checkbox_promises() {
         // Normalised: CI's Windows runner checks the tree out with CRLF, and a

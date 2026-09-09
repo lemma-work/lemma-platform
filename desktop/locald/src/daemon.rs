@@ -2861,6 +2861,97 @@ mod tests {
             .collect()
     }
 
+    /// An installation that cannot share refuses before it takes anything.
+    ///
+    /// The three sharing arms all begin by checking that this installation has
+    /// the managed local runtime, and the order matters more than the refusal
+    /// does. `sharing.enable` goes on to parse its payload and then take the
+    /// lifecycle lock -- the one a start needs -- so a reordering that put
+    /// either of those first would have a daemon with no sharing at all
+    /// holding that lock while it worked out it had nothing to do.
+    ///
+    /// So this asserts the refusal, that nothing was acknowledged, and that
+    /// the lifecycle is still free afterwards. The last is the one that
+    /// notices a reordering.
+    #[test]
+    fn sharing_commands_refuse_before_they_take_the_lock_a_start_needs() {
+        let (_root, daemon) = daemon();
+
+        for command in ["sharing.preflight", "sharing.enable", "sharing.disable"] {
+            let replies = exchange(
+                &daemon,
+                json!({"cmd": command, "id": command, "payload": {}}),
+            );
+            let last = replies
+                .last()
+                .unwrap_or_else(|| panic!("{command} must be answered, not ignored"));
+            assert_eq!(last["event"], "error", "{command}");
+            assert_eq!(
+                last["code"], "sharing-unavailable",
+                "{command} has to say why, so the app can explain it"
+            );
+            assert!(
+                replies.iter().all(|reply| reply["event"] != "ack"),
+                "{command} was acknowledged, which tells the app it began"
+            );
+            assert!(
+                daemon.lifecycle.begin().is_ok(),
+                "{command} left the lifecycle held, so a start would now be refused"
+            );
+            daemon.lifecycle.finish();
+        }
+    }
+
+    /// The one arm that erases somebody's work asks first, and had no test.
+    ///
+    /// `local.reset-data` removes the pods, databases and workspaces of an
+    /// installation. The only thing between a stray or malformed request and
+    /// all of it is a literal confirmation string, and nothing checked that
+    /// the check was there -- so it could have been dropped, or its spelling
+    /// changed on one side, and every test in this file would still pass.
+    ///
+    /// Wrong-but-present is the case worth having: an empty confirmation is
+    /// the obvious one to guard, and a client that sends a *different* phrase
+    /// is the one a refactor produces.
+    #[test]
+    fn erasing_local_data_refuses_anything_but_its_exact_confirmation() {
+        let (_root, daemon) = daemon();
+
+        for (label, request) in [
+            (
+                "no confirmation at all",
+                json!({"cmd": "local.reset-data", "id": "r1"}),
+            ),
+            (
+                "an empty confirmation",
+                json!({"cmd": "local.reset-data", "id": "r1", "confirm": ""}),
+            ),
+            (
+                "a different phrase",
+                json!({"cmd": "local.reset-data", "id": "r1", "confirm": "reset-local-Data"}),
+            ),
+            (
+                "the reset the uninstaller uses, which is a different one",
+                json!({"cmd": "local.reset-data", "id": "r1", "confirm": "erase-local-lemma"}),
+            ),
+        ] {
+            let replies = exchange(&daemon, request);
+            let last = replies
+                .last()
+                .unwrap_or_else(|| panic!("{label} must be answered, not ignored"));
+            assert_eq!(last["event"], "error", "{label} must not start a reset");
+            assert_eq!(
+                last["code"], "confirmation-required",
+                "{label} has to be refused for the reason it was refused"
+            );
+            assert_eq!(last["id"], "r1", "{label}: the app matches answers by id");
+            assert!(
+                replies.iter().all(|reply| reply["event"] != "ack"),
+                "{label} was acknowledged, which is how the app learns a reset began"
+            );
+        }
+    }
+
     #[test]
     fn an_unknown_command_is_refused_by_name_rather_than_ignored() {
         let (_root, daemon) = daemon();
