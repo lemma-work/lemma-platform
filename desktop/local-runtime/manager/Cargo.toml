@@ -7,6 +7,7 @@ license = "AGPL-3.0-or-later"
 
 [dependencies]
 lemma-desktop-process = { path = "../../process" }
+lemma-private-file = { path = "../../private-file" }
 getrandom = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }

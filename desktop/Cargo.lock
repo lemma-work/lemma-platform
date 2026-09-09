@@ -2764,6 +2764,7 @@ dependencies = [
  "hex",
  "interprocess",
  "lemma-desktop-process",
+ "lemma-private-file",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -2818,6 +2819,7 @@ dependencies = [
  "interprocess",
  "keyring",
  "lemma-desktop-process",
+ "lemma-private-file",
  "lemma-runtime-manager",
  "libc",
  "qrcode",
@@ -2828,6 +2830,14 @@ dependencies = [
  "socket2 0.6.4",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemma-private-file"
+version = "0.7.2"
+dependencies = [
+ "tempfile",
  "windows-sys 0.61.2",
 ]
 
@@ -2845,6 +2855,7 @@ version = "0.7.2"
 dependencies = [
  "getrandom 0.3.4",
  "lemma-desktop-process",
+ "lemma-private-file",
  "libc",
  "serde",
  "serde_json",
