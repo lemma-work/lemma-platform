@@ -1066,7 +1066,30 @@ jobs:
             ${{ (github.event_name == 'push'
             || needs.changes.outputs.desktop_packaging == 'true')
             && 'app,dmg' || 'app' }}
-        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json --bundles "$BUNDLES"
+        run: |
+          set -euo pipefail
+          # Retried, and the detach between attempts is the part that matters.
+          # `bundle_dmg.sh` failing partway leaves its image attached, so a
+          # second attempt meets the first one's leftovers and fails the same
+          # way -- the same shape as retrying an apt fetch whose cached index
+          # is the thing that is wrong. Cargo has already compiled by then, so
+          # a retry costs the bundling and the signing, not the build.
+          #
+          # Measured: this took main red once today, after every test in the
+          # job had passed, and the re-run went green untouched.
+          for attempt in 1 2 3; do
+            npx -y "$TAURI_CLI" build \
+              --config tauri.online.conf.json --bundles "$BUNDLES" && break
+            if [ "$attempt" = 3 ]; then
+              echo "::error::tauri build failed three times; this is not hdiutil"
+              exit 1
+            fi
+            echo "tauri build failed (attempt $attempt); detaching leftovers and retrying"
+            for volume in /Volumes/Lemma*; do
+              [ -d "$volume" ] && hdiutil detach "$volume" -force || true
+            done
+            sleep 20
+          done
 
       - name: Verify application signature
         shell: bash

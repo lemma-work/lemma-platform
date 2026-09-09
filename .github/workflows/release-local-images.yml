@@ -1133,11 +1133,28 @@ jobs:
           # nightly is already the online config.
           overlay="${RUNNER_TEMP}/tauri.nightly.conf.json"
           printf '{"version": "%s"}\n' "${VERSION}" > "${overlay}"
-          rm -rf target/release/bundle/macos target/release/bundle/dmg
-          npx -y "$TAURI_CLI" build \
-            --config tauri.online.conf.json \
-            --config tauri.updater.conf.json \
-            --config "${overlay}"
+          # Retried, and each attempt starts from the same clean state as the
+          # first. `bundle_dmg.sh` fails on a busy `hdiutil`, and when it does
+          # it leaves its image attached and a half-built bundle behind -- so
+          # an attempt that does not clear both meets the last one's leftovers
+          # and fails the same way. Cargo has compiled by then, so a retry
+          # costs the bundling and the signing rather than the build.
+          for attempt in 1 2 3; do
+            rm -rf target/release/bundle/macos target/release/bundle/dmg
+            for volume in /Volumes/Lemma*; do
+              [ -d "${volume}" ] && hdiutil detach "${volume}" -force || true
+            done
+            npx -y "$TAURI_CLI" build \
+              --config tauri.online.conf.json \
+              --config tauri.updater.conf.json \
+              --config "${overlay}" && break
+            if [ "${attempt}" = 3 ]; then
+              echo "::error::the nightly DMG failed to build three times"
+              exit 1
+            fi
+            echo "nightly DMG build failed (attempt ${attempt}); retrying"
+            sleep 20
+          done
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
