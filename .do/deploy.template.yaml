@@ -53,7 +53,7 @@ spec:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-backend
-        tag: v0.7.2
+        tag: v0.8.0
       http_port: 8000
       instance_size_slug: professional-xs
       instance_count: 1
@@ -110,7 +110,7 @@ spec:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-frontend
-        tag: v0.7.2
+        tag: v0.8.0
       http_port: 8080
       instance_size_slug: basic-xs
       instance_count: 1
@@ -128,7 +128,7 @@ spec:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-backend
-        tag: v0.7.2
+        tag: v0.8.0
       run_command: python -m app.worker
       instance_size_slug: professional-xs
       instance_count: 1
@@ -144,7 +144,7 @@ spec:
         registry_type: GHCR
         registry: lemma-work
         repository: lemma-backend
-        tag: v0.7.2
+        tag: v0.8.0
       run_command: alembic upgrade head
       instance_size_slug: basic-xs
       instance_count: 1
