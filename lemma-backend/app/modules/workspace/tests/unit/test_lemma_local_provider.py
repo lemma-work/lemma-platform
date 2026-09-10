@@ -273,7 +273,7 @@ async def test_an_operation_against_a_deleted_sandbox_is_definitively_gone(
     )
 
     with pytest.raises(ProviderGone):
-        await provider.port_base_url(instance, port=8080, deadline_at=_deadline())
+        await provider.reach_port(instance, port=8080, deadline_at=_deadline())
 
 
 # ---------------------------------------------------------------------------
@@ -395,10 +395,12 @@ async def test_a_port_resolves_to_the_guest_endpoint(
     provider: LemmaLocalSandboxProvider,
 ) -> None:
     instance = await provider.create(_spec(uuid4()))
-    assert (
-        await provider.port_base_url(instance, port=4848, deadline_at=_deadline())
-        == "http://127.0.0.1:4848"
-    )
+    endpoint = await provider.reach_port(instance, port=4848, deadline_at=_deadline())
+    assert endpoint.url == "http://127.0.0.1:4848"
+    # Loopback inside the person's own machine: nothing opens it, and nothing
+    # outside the guest can reach it.
+    assert endpoint.headers == {}
+    assert endpoint.public is False
 
 
 async def test_an_unexposed_port_is_refused(
@@ -406,4 +408,4 @@ async def test_an_unexposed_port_is_refused(
 ) -> None:
     instance = await provider.create(_spec(uuid4()))
     with pytest.raises(ProviderRejected, match="does not expose"):
-        await provider.port_base_url(instance, port=1234, deadline_at=_deadline())
+        await provider.reach_port(instance, port=1234, deadline_at=_deadline())

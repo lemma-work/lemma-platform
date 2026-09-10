@@ -35,6 +35,7 @@ from sandbox_runtime.errors import (
 )
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
+    ProviderCapability,
     ProviderGone,
     ProviderInstance,
 )
@@ -42,6 +43,7 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
+from app.modules.workspace.providers.e2b_reach import E2BReachMixin
 from app.modules.workspace.providers.e2b_process_index import (
     ENTRY_TTL_SECONDS,
     decode_pid,
@@ -74,13 +76,17 @@ def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
     return snapshot.state in _FINISHED_PROCESS_STATES
 
 
-class E2BOpsMixin:
+class E2BOpsMixin(E2BReachMixin):
     """The `SandboxOpsProvider` half of the E2B provider.
 
     A mixin rather than a collaborator because the ops protocol is defined on
     the provider itself, and splitting it into an object the provider forwards
     to would add a layer that exists only to satisfy a line count.
     """
+
+    capabilities = frozenset(
+        {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
+    )
 
     async def _remember_pid(
         self,
@@ -559,17 +565,6 @@ class E2BOpsMixin:
         # Nothing to forget is success.
         with sdk_best_effort():
             await sandbox.files.remove(f"/tmp/lemma-python-{session_id}.pkl")
-
-    # ------------------------------------------------------------------
-    # Ports
-    # ------------------------------------------------------------------
-
-    async def port_base_url(
-        self, instance: ProviderInstance, *, port: int, deadline_at: datetime
-    ) -> str:
-        sandbox = await self._connect(instance.provider_id)
-        with sdk_errors():
-            return f"https://{sandbox.get_host(port)}"
 
 
 def _to_stat(entry) -> FileStat:

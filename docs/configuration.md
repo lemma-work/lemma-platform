@@ -257,9 +257,21 @@ E2B_DOMAIN=
 # production; override it for anything sharing an E2B account with real
 # workspaces.
 E2B_METADATA_NAMESPACE=
+# Whether a sandbox's public *.e2b.app hosts answer without a credential.
+# Off by default; see below before turning it on.
+E2B_ALLOW_PUBLIC_TRAFFIC=false
 ```
 
-These five are the whole backend-side E2B surface. In particular:
+These six are the whole backend-side E2B surface. In particular:
+
+- **`E2B_ALLOW_PUBLIC_TRAFFIC` decides whether a sandbox is on the internet.**
+  E2B gives every port a sandbox listens on a public name. With this off — the
+  default — E2B mints a per-sandbox traffic token and answers 403 without it,
+  and the backend carries that token on every call it makes. Turning it on
+  exposes whatever is listening, which includes the agent's browser and its
+  dashboard. The flag is set when a sandbox is created and cannot be changed
+  afterwards, so sandboxes made before it was introduced stay open until they
+  are replaced; the backend reports those as public rather than assuming.
 
 - **`E2B_METADATA_NAMESPACE` is a safety boundary.** A provider is blind to
   sandboxes labelled with any other namespace, and the orphan sweep destroys

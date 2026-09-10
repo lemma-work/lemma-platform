@@ -29,6 +29,7 @@ from sandbox_runtime.protocol import (
 
 from sandbox_runtime.protocol import (
     FunctionRuntimeLease,
+    RuntimeRequestHeader,
     PortAccessGrant,
     PortProtocol,
     SandboxKey,
@@ -369,7 +370,7 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
         sandbox_id = await self._ensure_row(logical_id, WorkloadKind.FUNCTION)
         handle = await self._service.ensure(sandbox_id)
         _, instance = await self._instance(sandbox_id)
-        url = await self._provider.port_base_url(
+        endpoint = await self._provider.reach_port(
             instance, port=FUNCTION_RUNTIME_PORT, deadline_at=deadline_at
         )
         return FunctionRuntimeLease(
@@ -380,8 +381,14 @@ class LocalSandboxClient(LocalSandboxFilesMixin):
                 name=workspace_settings.function_profile_name,
                 digest=workspace_settings.function_profile_digest,
             ),
-            url=url.rstrip("/") + "/",
-            request_headers=(),
+            url=endpoint.url.rstrip("/") + "/",
+            # Whatever the fabric's own door needs -- an E2B traffic token, a
+            # preview token -- rather than the empty tuple this always was. A
+            # provider that needs no header still returns none.
+            request_headers=tuple(
+                RuntimeRequestHeader(name=name, value=value)
+                for name, value in endpoint.headers.items()
+            ),
             expires_at=max(required_valid_until, datetime.now(timezone.utc))
             + timedelta(seconds=_LEASE_HEADROOM_SECONDS),
         )

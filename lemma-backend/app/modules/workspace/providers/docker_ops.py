@@ -34,10 +34,13 @@ from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     LABEL_SANDBOX_KIND,
     ProcessDescriptor,
+    ProviderCapability,
     ProviderFailed,
     ProviderGone,
     ProviderInstance,
     ProviderNotReady,
+    ProviderRejected,
+    SandboxEndpoint,
 )
 from app.modules.workspace.providers.docker_engine import (
     DockerContainerInspect,
@@ -60,6 +63,10 @@ _BOOTSTRAP_DIR = "/run/lemma-bootstrap"
 
 class DockerOpsMixin:
     """The `SandboxOpsProvider` half of the Docker provider."""
+
+    capabilities = frozenset(
+        {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
+    )
 
     # ------------------------------------------------------------------
     # Operations inside the sandbox
@@ -396,23 +403,61 @@ class DockerOpsMixin:
             raise WorkspaceRuntimeError("Docker runtime port is not published")
         return f"http://127.0.0.1:{bindings[0].host_port}"
 
-    async def port_base_url(
+    async def reach_port(
         self, instance: ProviderInstance, *, port: int, deadline_at: datetime
-    ) -> str:
-        """Where a published port of this sandbox can be reached."""
+    ) -> SandboxEndpoint:
+        """Where a published port of this sandbox can be reached.
+
+        No headers and not public: the port is either on a private Docker
+        network or bound to loopback on the host, so reaching it at all already
+        means being inside the trust boundary.
+        """
         inspected = await self._engine.inspect_container(
             instance.provider_id, deadline_at=deadline_at
         )
         if inspected is None:
             raise ProviderGone(f"sandbox container {instance.provider_id} is gone")
-        return self._base_url(inspected, runtime_port=port)
+        return SandboxEndpoint(url=self._base_url(inspected, runtime_port=port))
+
+    async def deliver_secret(
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        value: bytes,
+        deadline_at: datetime,
+    ) -> None:
+        directory, _, name = path.rpartition("/")
+        if not name:
+            raise ProviderRejected(f"{path!r} does not name a file")
+        inspected = await self._engine.inspect_container(
+            instance.provider_id, deadline_at=deadline_at
+        )
+        if inspected is None:
+            raise ProviderGone(f"sandbox container {instance.provider_id} is gone")
+        await self._engine.put_archive(
+            inspected.container_id,
+            directory or "/",
+            _one_file_archive(name, value),
+            deadline_at=deadline_at,
+        )
 
 
 def _token_archive(token: str) -> bytes:
+    return _one_file_archive("token", token.encode())
+
+
+def _one_file_archive(name: str, payload: bytes) -> bytes:
+    """A tar holding one 0600 file owned by the sandbox user.
+
+    `put_archive` is the only way to place a file in a container without
+    starting a process, which is what keeps a credential out of argv and out of
+    the environment. The uid is the image's own user, so the file is readable by
+    the sandbox and by nothing else in it.
+    """
     buffer = BytesIO()
-    payload = token.encode()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        info = tarfile.TarInfo(name="token")
+        info = tarfile.TarInfo(name=name)
         info.size = len(payload)
         info.mode = 0o600
         info.mtime = 0

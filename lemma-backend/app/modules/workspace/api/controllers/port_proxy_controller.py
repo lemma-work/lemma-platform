@@ -35,7 +35,13 @@ from app.core.request_context import create_inherited_task
 
 from app.core.config import settings
 from app.modules.workspace.config import workspace_settings
-from app.modules.workspace.providers.base import ProviderGone, ProviderInstance
+from app.modules.workspace.providers.base import (
+    ProviderCapability,
+    ProviderGone,
+    ProviderInstance,
+    require_capability,
+)
+from sandbox_runtime.errors import SandboxCapabilityUnsupported
 from app.modules.workspace.services.port_access import (
     PortAccessInvalid,
     PortAccessSigner,
@@ -110,14 +116,15 @@ async def _resolve_target(token: str) -> str | None:
     deadline_at = datetime.now(timezone.utc) + timedelta(seconds=30)
     try:
         handle = await service.ensure(grant.sandbox_id)
-        return await service._provider.port_base_url(
+        require_capability(service._provider, ProviderCapability.PORT_REACH)
+        return await service._provider.reach_port(
             ProviderInstance(
                 provider_id=handle.provider_id, name=handle.provider_id, running=True
             ),
             port=grant.port,
             deadline_at=deadline_at,
         )
-    except ProviderGone:
+    except ProviderGone, SandboxCapabilityUnsupported:
         return None
 
 
@@ -252,15 +259,19 @@ async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Re
     deadline_at = datetime.now(timezone.utc) + timedelta(seconds=30)
     try:
         handle = await service.ensure(grant.sandbox_id)
-        base_url = await service._provider.port_base_url(
+        require_capability(service._provider, ProviderCapability.PORT_REACH)
+        endpoint = await service._provider.reach_port(
             ProviderInstance(
                 provider_id=handle.provider_id, name=handle.provider_id, running=True
             ),
             port=grant.port,
             deadline_at=deadline_at,
         )
+        base_url = endpoint.url
     except ProviderGone:
         return Response(status_code=status.HTTP_404_NOT_FOUND)
+    except SandboxCapabilityUnsupported:
+        return Response(status_code=status.HTTP_409_CONFLICT)
 
     # `path` is caller-controlled, so the target is built from the trusted base
     # rather than handed to base_url merging. Merging would have been safe by

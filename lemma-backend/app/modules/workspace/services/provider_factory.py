@@ -111,6 +111,7 @@ def _build_e2b_provider():
             function_template=workspace_settings.e2b_function_template,
             domain=workspace_settings.e2b_domain,
             metadata_namespace=resolve_metadata_namespace(),
+            allow_public_traffic=workspace_settings.e2b_allow_public_traffic,
         )
     )
 
