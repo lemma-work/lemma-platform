@@ -47,6 +47,7 @@ import {
     getSiteOrigin,
 } from '@/lib/utils/invite-redirects';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 /**
  * Adding someone to a pod.
@@ -335,7 +336,7 @@ function AddPeopleComposer({ podId, onClose }: { podId: string; onClose: () => v
     const copyInviteLink = async () => {
         if (!inviteLink) return;
         try {
-            await navigator.clipboard.writeText(inviteLink);
+            await copyText(inviteLink);
             toast.success('Invite link copied');
         } catch {
             toast.error('Could not copy to clipboard');

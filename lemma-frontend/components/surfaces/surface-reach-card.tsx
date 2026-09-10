@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { getSurfaceDeepLink, getSurfaceIdentity, getSurfacePlatformKey } from '@/lib/utils/surfaces';
 import type { AssistantSurface } from '@/lib/types';
+import { copyText } from '@/lib/clipboard';
 
 /**
  * How a human reaches this surface — the proof that setup worked.
@@ -63,7 +64,7 @@ export function SurfaceReachCard({ surface }: { surface: AssistantSurface }) {
 
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(deepLink || handle || '');
+            await copyText(deepLink || handle || '');
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         } catch {

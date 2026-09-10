@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { ArrowRight, Check, Copy } from "@/components/ui/icons";
+import { copyText } from "@/lib/clipboard";
 import {
   PUBLIC_TEMPLATES,
   templateCoverPath,
@@ -292,7 +293,7 @@ export function BuildSection() {
   const [copied, setCopied] = useState<PromptTarget | null>(null);
 
   const copyPrompt = async (target: PromptTarget) => {
-    await navigator.clipboard.writeText(buildPrompts[target]);
+    await copyText(buildPrompts[target]);
     setCopied(target);
     window.setTimeout(() => {
       setCopied((current) => (current === target ? null : current));

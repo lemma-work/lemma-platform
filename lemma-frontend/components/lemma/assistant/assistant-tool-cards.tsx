@@ -61,6 +61,7 @@ import {
 } from "./assistant-format";
 import { currentPodIdFromBrowserPath } from "./assistant-resource-cards";
 import type { ToolCardArgs, ToolCardResult } from "./assistant-experience";
+import { copyText } from "@/lib/clipboard";
 
 type ToolStatus = { label: string; tone: "running" | "success" | "error" };
 
@@ -70,7 +71,7 @@ export function DetailsWithCopy({ label, value }: { label: string; value: string
   const handleCopy = async (e: React.MouseEvent) => {
     e.preventDefault();
     try {
-      await navigator.clipboard.writeText(value);
+      await copyText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }
@@ -199,7 +200,7 @@ function CodeBlock({ label, value, tone = "default" }: { label?: string; value?:
   const handleCopy = async () => {
     if (!value) return;
     try {
-      await navigator.clipboard.writeText(value);
+      await copyText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }

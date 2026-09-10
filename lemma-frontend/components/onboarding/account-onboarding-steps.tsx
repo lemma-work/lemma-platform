@@ -83,6 +83,7 @@ import {
   type TeamKind,
 } from "./account-onboarding-helpers";
 import { StepLoader } from "@/components/brand/loader";
+import { copyText } from "@/lib/clipboard";
 
 type ProviderPreset = {
   id: string;
@@ -1022,7 +1023,7 @@ export function StartStep({
             <Button variant="quiet"
               type="button"
               onClick={() => {
-                void navigator.clipboard.writeText(starterPrompt).then(() => {
+                void copyText(starterPrompt).then(() => {
                   setPromptCopied(true);
                   toast.success("Prompt copied");
                 });

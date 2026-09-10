@@ -10,6 +10,7 @@ import type { ContactCardSpec } from '@/lib/share/contact-card';
 import { contactChannels } from '@/lib/share/contact-card';
 import { agentEmailAddress, getSurfaceIdentity, getSurfacePlatformKey } from '@/lib/utils/surfaces';
 import type { AssistantSurface } from '@/lib/types';
+import { copyText } from '@/lib/clipboard';
 
 interface AgentContactShareProps {
     podId: string;
@@ -115,7 +116,7 @@ export function AgentContactShare({
             return;
         }
         try {
-            await navigator.clipboard.writeText(link);
+            await copyText(link);
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         } catch {

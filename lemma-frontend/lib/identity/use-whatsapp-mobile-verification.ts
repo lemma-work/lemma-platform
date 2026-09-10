@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
+import { copyText } from '@/lib/clipboard';
+
 import { buildApiUrl } from '@/components/auth/portal/auth/config';
 import {
     buildWhatsAppVerificationMessage,
@@ -152,7 +154,7 @@ export function useWhatsAppMobileVerification({
 
     const copyMessage = useCallback(async () => {
         try {
-            await navigator.clipboard.writeText(message);
+            await copyText(message);
             toast.success('Full verification message copied');
         } catch {
             toast.error('Could not copy the message. Select it and copy it manually.');

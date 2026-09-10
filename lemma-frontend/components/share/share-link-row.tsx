@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { shareSubject, type ShareSubject } from '@/lib/share/share-targets';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 interface ShareLinkRowProps {
     url?: string | null;
@@ -48,7 +49,7 @@ export function ShareLinkRow({
     async function copyLink() {
         if (!url) return;
         try {
-            await navigator.clipboard.writeText(url);
+            await copyText(url);
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1600);
         } catch {
