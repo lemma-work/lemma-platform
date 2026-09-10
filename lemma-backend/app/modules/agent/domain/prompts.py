@@ -438,6 +438,25 @@ def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> 
     )
 
 
+def _sandbox_root(cwd: str) -> str:
+    """The sandbox's top-level directory, taken from the cwd this run was given.
+
+    Every sentence below used to name ``/workspace`` outright while the cwd
+    beside it came from the run. That is the same fact written twice, and the
+    literal is the copy that cannot be right everywhere: an agent running as a
+    native process is handed a cwd on the host, and telling it to `cd` to a
+    container path it has no mount for produces a command that simply fails.
+
+    Derived rather than configured, so there is still only one source: whatever
+    root the run's own cwd is under is the root the prompt describes.
+    """
+    trimmed = (cwd or "").strip()
+    if not trimmed.startswith("/"):
+        return trimmed or "the working directory"
+    first = trimmed.strip("/").split("/", 1)[0]
+    return f"/{first}" if first else "/"
+
+
 def _workspace_directory_section(
     *,
     ctx: AgentContext,
@@ -447,13 +466,15 @@ def _workspace_directory_section(
     has_pod_files: bool = False,
 ) -> str:
     cwd = _workspace_cwd(ctx, conversation)
+    root = _sandbox_root(cwd)
     if not has_workspace_tools:
         return (
             "# Working Directory\n"
             "Your native tools use the directory this process started in. "
             "Agent Host supplies its exact path in Native Working Directory; "
             "it persists across conversation turns. You have no Lemma sandbox "
-            "execution tools on this run. Do not invent a /workspace path for "
+            "execution tools on this run. Work only in the directory you were "
+            "given; do not invent a sandbox path such as `/workspace` for "
             "native tools. Tool approvals still apply."
         )
     repo = _workspace_repo(ctx)
@@ -463,7 +484,7 @@ def _workspace_directory_section(
         else (
             "An empty working directory means this is a **new conversation**, "
             "not a reset sandbox. Earlier conversations' work is still on disk "
-            "under another `/workspace/c/<date>/<slug>`; list `/workspace/c/` "
+            f"under another `{root}/c/<date>/<slug>`; list `{root}/c/` "
             "to find it. Treat prior files as gone only if a tool result says "
             "the workspace was recreated."
         )
@@ -476,7 +497,7 @@ def _workspace_directory_section(
             "process started in; native `pwd` reports that host directory. "
             "Agent Host supplies its exact path in Native Working Directory. "
             "These are separate filesystems with no automatic mount or sync. "
-            "Do not use a sandbox /workspace path with native tools, or a host "
+            f"Do not use a sandbox `{root}` path with native tools, or a host "
             "path with sandbox tools."
         )
         if runs_as_remote_process
@@ -493,7 +514,7 @@ def _workspace_directory_section(
     attachments = (
         "\n\nFiles a person **attached to this conversation are not here** — "
         "they are in pod files, under the directory named in `# Pod Files`. "
-        "Read them there rather than looking for them under `/workspace`."
+        f"Read them there rather than looking for them under `{root}`."
         if has_pod_files
         else ""
     )
@@ -501,7 +522,7 @@ def _workspace_directory_section(
         "# Working Directory\n"
         f"{where}\n\n"
         f"{orientation}{attachments}\n\n"
-        "Files under `/workspace` survive an idle pause; running processes and "
+        f"Files under `{root}` survive an idle pause; running processes and "
         "your `execute_python` kernel do not, so don't plan around a background "
         "process living between turns. A `cd` in one `exec_command` does not "
         "carry to the next — pass `workdir` or use relative paths."

@@ -230,7 +230,27 @@ class TestNativeAndSandboxDirectories:
         prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
         assert "Your Lemma sandbox working directory is `/workspace/" in prompt
         assert "no automatic mount or sync" in prompt
-        assert "Do not use a sandbox /workspace path with native tools" in prompt
+        assert "Do not use a sandbox `/workspace` path with native tools" in prompt
+
+    async def test_the_sandbox_root_comes_from_the_cwd_this_run_was_given(
+        self,
+    ) -> None:
+        """The literal and the cwd beside it were the same fact written twice.
+
+        Only one of the two copies could follow a run whose sandbox is rooted
+        somewhere else, and the literal was the one that could not. An agent
+        told to `cd` to a root nothing mounted for it produces a command that
+        simply fails -- which is what a user reported.
+        """
+        from app.modules.agent.domain.prompts import _sandbox_root
+
+        assert _sandbox_root("/workspace/c/2026-09-10/ab12cd34") == "/workspace"
+        assert _sandbox_root("/srv/agent/c/2026-09-10/ab12cd34") == "/srv"
+        assert _sandbox_root("/workspace") == "/workspace"
+        # A relative or empty cwd has no root to name, and inventing one is
+        # the failure this exists to prevent.
+        assert _sandbox_root("relative/dir") == "relative/dir"
+        assert _sandbox_root("") == "the working directory"
 
     async def test_without_sandbox_tools_native_work_is_still_available(self) -> None:
         prompt = _system_prompt(toolsets=[])

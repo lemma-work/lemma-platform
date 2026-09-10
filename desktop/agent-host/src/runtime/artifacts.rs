@@ -12,9 +12,12 @@ pub(crate) fn host_directory_instructions(cwd: &str) -> String {
         "\n\n# Native Working Directory\nYour native tools run on this computer in \
          {encoded} (JSON-encoded path). This directory belongs to this conversation \
          and is reused across turns. Use relative paths here for native file and \
-         shell tools. Lemma MCP execution tools use their separate sandbox cwd; \
-         never pass its /workspace paths to native tools or this host path to \
-         sandbox tools. A reported path is not an access grant. Respect tool \
+         shell tools. Lemma MCP execution tools have their own working directory \
+         inside the sandbox, which is not mounted on this computer: never pass a \
+         sandbox path to a native tool, or this host path to a sandbox tool. \
+         Each tool is given the directory it is supposed to use; use the one you \
+         were given rather than a path you assumed. A reported path is not an \
+         access grant. Respect tool \
          approvals; access outside this directory requires separate permission."
     )
 }

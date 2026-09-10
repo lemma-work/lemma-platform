@@ -136,8 +136,17 @@ fn native_directory_instruction_encodes_paths_without_inventing_a_mount() {
     ] {
         let prompt = super::host_directory_instructions(cwd);
         assert!(prompt.contains(&serde_json::to_string(cwd).unwrap()));
-        assert!(prompt.contains("separate sandbox cwd"));
+        assert!(prompt.contains("not mounted on this computer"));
         assert!(prompt.contains("not an access grant"));
+        // The mount this must not invent is a literal one. Naming a container
+        // root here told an agent whose native tools run on the host that
+        // `/workspace` was somewhere it could `cd` -- and it tried, and the
+        // command failed. The sandbox path belongs to the run that was given
+        // one, not to a sentence written months earlier.
+        assert!(
+            !prompt.contains("/workspace"),
+            "the native instruction must not name a container root: {prompt}"
+        );
     }
 }
 
