@@ -21,6 +21,16 @@ export type SandboxImageState =
     | 'failed'
     /** No guest to warm — a supervisor-mode stack manages no sandbox images. */
     | 'unsupported'
+    /**
+     * There is a guest that could hold the image and nobody has asked for it.
+     *
+     * Terminal, and silent. Starting no longer fetches the image on its own:
+     * the coding agents run natively, so someone using only those paid for
+     * several hundred megabytes and a toast for a capability they never used.
+     * Settings is where it is offered now, and a download that someone asked
+     * for is the only one worth announcing.
+     */
+    | 'not-prepared'
     | 'unknown';
 
 export type SandboxImageStatus = {
@@ -102,6 +112,7 @@ function readStatus(value: unknown): SandboxImageStatus {
         'ready',
         'failed',
         'unsupported',
+        'not-prepared',
     ];
     return {
         state: known.includes(state as SandboxImageState)

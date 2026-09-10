@@ -15,7 +15,7 @@
     "provider": 87,
     "real_llm": 18,
     "real_sandbox": 13,
-    "skip": 18,
+    "skip": 20,
     "skipif": 50,
     "slow": 26,
     "surface_live": 5,

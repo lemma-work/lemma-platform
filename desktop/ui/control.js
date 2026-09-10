@@ -88,8 +88,12 @@ function setPage(page) {
   $("page-subtitle").textContent = titles[page][1];
   document.querySelector(".content").scrollTo({ top: 0, behavior: "instant" });
   // Only poll while the logs are actually on screen.
-  if (page === "diagnostics") startLogPolling();
-  else stopLogPolling();
+  if (page === "diagnostics") {
+    startLogPolling();
+    loadTelemetry();
+  } else {
+    stopLogPolling();
+  }
 }
 
 /* ---------------------------------------------------------------- logs ---
@@ -768,6 +772,23 @@ async function runDesktopAction(button) {
       if (!stopEverything) return;
       await invoke("stop", { includeInfra: true });
     }
+    if (action === "prepare-sandbox-image") {
+      button.disabled = true;
+      button.textContent = "Starting…";
+      try {
+        await invoke("prepare_sandbox_image", { id: nextId("sandbox-prepare") });
+      } catch (error) {
+        // Put the offer back. Without this the button stayed disabled reading
+        // "Starting…" for a download that never started, and the only way to
+        // try again was to reopen Settings.
+        renderSandboxImage(snapshot?.sandbox_images);
+        throw error;
+      }
+      // Not re-enabled on success: the `sandbox-images` broadcast arrives with
+      // `downloading` and renders the panel, and re-enabling it would offer a
+      // second download of what is already being fetched.
+      renderSandboxImage({ state: "downloading", detail: "" });
+    }
     if (action === "logs") await invoke("open_logs");
     if (action === "devtools") await invoke("open_developer_tools");
     // Connecting, choosing agents and turning it off live in the workspace, so
@@ -808,7 +829,12 @@ async function runDesktopAction(button) {
       if (appUpdate?.dataCompatibility !== "compatible") {
         throw new Error("This update has no supported data-preserving migration. Your current version and data have been kept.");
       }
-      await invoke("install_app_update", { resetData: false });
+      // The version the user is looking at, so the command can refuse if the
+      // feed has moved on since they were shown it.
+      await invoke("install_app_update", {
+        resetData: false,
+        expectedVersion: appUpdate?.availableVersion ?? "",
+      });
       await loadAppUpdate();
     }
     if (action === "retry-snapshot") {
@@ -938,6 +964,42 @@ function render() {
   }
   renderAgentHost(snapshot.agent_host || {});
   renderSharing(sharing);
+}
+
+// The anonymous install-health switch.
+//
+// Read once, when Local settings opens. It is not part of the operator config
+// -- it is a choice about this installation, stored beside the install id --
+// so it neither joins the dirty-section machinery nor waits for a save.
+let telemetryLoaded = false;
+async function loadTelemetry() {
+  if (telemetryLoaded) return;
+  telemetryLoaded = true;
+  let status;
+  try {
+    status = await invoke("telemetry_status");
+  } catch {
+    // A build that cannot answer offers nothing rather than a dead switch.
+    return;
+  }
+  if (!status?.available) return;
+  const panel = $("telemetry-panel");
+  const box = $("telemetry-enabled");
+  panel.hidden = false;
+  box.checked = Boolean(status.enabled);
+  $("telemetry-detail").textContent =
+    `Sent to ${status.host}, identified only by a random id for this installation`
+    + (status.install_id ? ` (${status.install_id.slice(0, 8)}…).` : ".")
+    + " Turning this off is remembered, and nothing is sent again.";
+  box.addEventListener("change", async () => {
+    const wanted = box.checked;
+    try {
+      await invoke("set_telemetry_enabled", { enabled: wanted });
+    } catch (error) {
+      box.checked = !wanted;
+      toast(String(error), "bad");
+    }
+  });
 }
 
 // Matches `formatUptime` in the workspace's own This computer card, which is
@@ -1280,7 +1342,15 @@ async function loadRuntimeInfo() {
  * Now it retries on a heartbeat until a snapshot arrives, and says so on screen
  * while it is trying.
  */
-const SNAPSHOT_RETRY_MS = 5000;
+// Backed off rather than flat. A daemon that is coming back does so within a
+// second or two, and one that is not is usually not coming back at all -- a
+// stopped stack, a crash loop, a machine going to sleep with this window open.
+// A fixed five seconds asked that question for ever at the same rate, which is
+// a wake-up every five seconds on a laptop lid nobody has opened. Starting
+// sooner also makes the ordinary case feel faster than the flat interval did.
+const SNAPSHOT_RETRY_FLOOR_MS = 1000;
+const SNAPSHOT_RETRY_CEILING_MS = 30000;
+let snapshotRetryDelay = SNAPSHOT_RETRY_FLOOR_MS;
 let snapshotRetryTimer = null;
 
 function requestSnapshot() {
@@ -1295,10 +1365,22 @@ function requestSnapshot() {
 
 function scheduleSnapshotRetry() {
   if (snapshotRetryTimer) return;
+  const delay = snapshotRetryDelay;
+  snapshotRetryDelay = Math.min(snapshotRetryDelay * 2, SNAPSHOT_RETRY_CEILING_MS);
   snapshotRetryTimer = setTimeout(() => {
     snapshotRetryTimer = null;
     requestSnapshot();
-  }, SNAPSHOT_RETRY_MS);
+  }, delay);
+}
+
+// A snapshot arrived, so the next outage starts asking quickly again. Without
+// this the backoff is one-way: a window left open through a restart would keep
+// the half-minute interval it had reached, and the next real outage would take
+// thirty seconds to notice.
+function resetSnapshotRetry() {
+  snapshotRetryDelay = SNAPSHOT_RETRY_FLOOR_MS;
+  clearTimeout(snapshotRetryTimer);
+  snapshotRetryTimer = null;
 }
 
 /* Daemon errors, said in a way a person can act on.
@@ -1391,6 +1473,48 @@ function unusableEventReason(event) {
   return missing.length ? `${event.event} arrived without ${missing.join(", ")}` : null;
 }
 
+/**
+ * What the sandbox panel says, and whether the download is worth offering.
+ *
+ * `not-prepared` is the only state where the button does something useful:
+ * `ready` has nothing left to fetch, `downloading` is already doing it, and
+ * `unsupported` means there is no guest that could hold an image at all.
+ */
+function sandboxImageWording(state) {
+  if (state === "ready") {
+    return { text: "Downloaded. Pods can run code, shells and browsers on this computer.", offer: false };
+  }
+  if (state === "downloading") {
+    return { text: "Downloading…", offer: false };
+  }
+  if (state === "failed") {
+    return { text: "The last download did not finish. The first task in a pod will fetch it, or try again here.", offer: true };
+  }
+  if (state === "unsupported") {
+    return { text: "This installation runs no private runtime, so there is no sandbox image to download.", offer: false };
+  }
+  if (state === "not-prepared") {
+    return { text: "Not downloaded. Coding agents run natively and do not need it; download it to run pod code, shells and browsers here.", offer: true };
+  }
+  return { text: "Checking…", offer: false };
+}
+
+function renderSandboxImage(status) {
+  const label = $("sandbox-image-state");
+  const detail = $("sandbox-image-detail");
+  const button = document.querySelector('[data-action="prepare-sandbox-image"]');
+  if (!label || !button) return;
+  const state = status?.state || "";
+  const wording = sandboxImageWording(state);
+  label.textContent = wording.text;
+  if (detail) {
+    detail.textContent = status?.detail || "";
+    detail.hidden = !status?.detail;
+  }
+  button.disabled = !wording.offer;
+  button.textContent = state === "failed" ? "Try the download again" : "Download sandbox image";
+}
+
 function handleLocaldEvent(event) {
   const unusable = unusableEventReason(event);
   if (unusable) {
@@ -1408,9 +1532,11 @@ function handleLocaldEvent(event) {
     snapshot = event;
     state = event.state;
     clearSnapshotUnavailable();
+    resetSnapshotRetry();
     if (!sharingChoice) sharingChoice = snapshot.sharing?.mode || "this_computer";
     fillConfiguration();
     render();
+    renderSandboxImage(event.sandbox_images);
     for (const [id, pending] of pendingSaves) {
       const operation = event.config_operations?.[id];
       if (operation?.status === "succeeded") {
@@ -1422,6 +1548,10 @@ function handleLocaldEvent(event) {
       }
     }
     if (pendingSaves.size) scheduleSnapshotRetry();
+  }
+  if (event.event === "sandbox-images") {
+    if (snapshot) snapshot.sandbox_images = { state: event.state, detail: event.detail };
+    renderSandboxImage({ state: event.state, detail: event.detail });
   }
   if (event.event === "config.applied") {
     const pending = pendingSaves.get(event.id);

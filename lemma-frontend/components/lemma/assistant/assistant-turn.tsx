@@ -28,7 +28,10 @@ import {
   normalizeAssistantMarkdown,
   type AssistantRenderableMessage,
 } from "lemma-sdk";
+import { toast } from "sonner";
+
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { Check, ChevronDown, Copy } from "@/components/ui/icons";
 import { InlineLoader } from "@/components/brand/loader";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
@@ -218,11 +221,17 @@ function HoverCopyButton({ text, side }: { text: string; side: "left" | "right" 
         side === "left" ? "lchat-copybtn-left" : "lchat-copybtn-right",
       )}
       onClick={async () => {
+        // Reported rather than swallowed. The empty catch here turned every
+        // failure into a button that does nothing: `navigator.clipboard` is
+        // absent outside a secure context, so on the desktop workspace this
+        // threw before it ever reached the clipboard.
         try {
-          await navigator.clipboard.writeText(text);
+          await copyText(text);
           setCopied(true);
           setTimeout(() => setCopied(false), 1600);
-        } catch { /* clipboard denied */ }
+        } catch {
+          toast.error("Could not copy to clipboard");
+        }
       }}
     >
       {copied ? <Check className="size-3 text-[var(--state-success)]" /> : <Copy className="size-3" />}

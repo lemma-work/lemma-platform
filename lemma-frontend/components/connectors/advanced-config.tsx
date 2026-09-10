@@ -29,6 +29,7 @@ import {
     type SchemaValues,
 } from './connector-utils';
 import { StepLoader } from '@/components/brand/loader';
+import { copyText } from '@/lib/clipboard';
 
 export interface AdvancedEnablePayload {
     kind: string;
@@ -53,7 +54,7 @@ function OAuthRedirectField() {
 
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(redirectUri);
+            await copyText(redirectUri);
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         } catch {

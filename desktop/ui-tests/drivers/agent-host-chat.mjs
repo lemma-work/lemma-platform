@@ -84,7 +84,7 @@ try {
   page.setDefaultTimeout(45_000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`${origin}${config.conversationUrl}`, { timeout: 120_000 });
+  await openConversation(page, `${origin}${config.conversationUrl}`);
   const composer = page.locator('textarea.lm-composer-input:visible');
   await composer.fill('Read the project file for this test.');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -138,7 +138,9 @@ try {
         page = await context.newPage();
         page.setDefaultTimeout(45_000);
         page.on('pageerror', error => errors.push(error.message));
-        await page.goto(`${origin}${config.conversationUrl}`);
+        // Through the same helper. The route is compiled by now, so a 404 here
+        // would be real -- and this is what makes it fail saying so.
+        await openConversation(page, `${origin}${config.conversationUrl}`);
       }
       await writeFile(config.releaseFile, 'The browser observed the first text.');
       answer = /前 café 👩🏽‍💻\s+second line\s+完成/;
@@ -164,4 +166,41 @@ try {
   server.kill('SIGTERM');
   log.end();
   network.end();
+}
+
+/**
+ * Open the conversation, waiting out a dev server that has not compiled the
+ * route yet.
+ *
+ * "Ready in" — which is what the readiness wait above listens for — means the
+ * server is listening, not that it has built anything. Next answers 404 for a
+ * dynamic route it has not compiled, and this frontend is started fresh for
+ * every journey, so the first request can arrive before its own route exists.
+ * What the journey then saw was the "This page could not be found" screen, and
+ * what the test reported was `status=None; saved=[]`: no status and no
+ * messages, because nothing had ever loaded. It read as a failure of whichever
+ * scenario drew the short straw, and it landed on a different one each time.
+ *
+ * Not papering over a product 404. The page at this route is a client-rendered
+ * stub that draws nothing and calls `notFound()` nowhere, and no layout above
+ * it does either, so a 404 from it can only be the router. A shipped build has
+ * its routes compiled before it serves anything.
+ *
+ * A 404 that outlasts the deadline is still a failure, and it fails with what
+ * the page actually said rather than leaving that to be recovered from
+ * artifacts afterwards.
+ */
+async function openConversation(page, url) {
+  const deadline = Date.now() + 60_000;
+  for (;;) {
+    const response = await page.goto(url, { timeout: 120_000 });
+    if (response?.status() !== 404) return response;
+    if (Date.now() > deadline) {
+      const shown = (await page.textContent('body').catch(() => '')) ?? '';
+      throw new Error(
+        `the conversation page answered 404 for a minute: ${shown.trim().slice(0, 300)}`,
+      );
+    }
+    await page.waitForTimeout(500);
+  }
 }

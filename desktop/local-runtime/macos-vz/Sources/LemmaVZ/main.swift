@@ -296,11 +296,27 @@ private func unixListener(path: String) throws -> Int32 {
 private final class GuestBridge {
     private let socketDevice: VZVirtioSocketDevice
     private let listener: Int32
-    // Reuse the control channel and serialize requests so each caller receives
-    // its own reply, including after another caller abandons a slow request.
-    private var guestConnection: VZVirtioSocketConnection?
-    private var pendingClients: [Int32] = []
-    private var requestActive = false
+    // A guest connection per client, not one channel served one request at a
+    // time.
+    //
+    // Sharing a channel is why this used to serialise: two requests on one
+    // connection can hand each caller the other's reply, and a caller that
+    // abandons a slow request leaves an unread response for whoever is next.
+    // Serialising fixed that and introduced a worse one. `core.images` is
+    // allowed seventy-five minutes because a first install really can take
+    // that long on a slow line, and while it held the channel every later
+    // request waited behind it -- including the health probe, which has five
+    // seconds. So the host concluded its own guest had died in the middle of
+    // the pull it had asked for. The guest has served concurrent connections
+    // since it stopped answering them from its accept loop; this was the last
+    // place that funnelled them back into one.
+    //
+    // Bounded, and well under the guest's own limit of 32: a client that
+    // cannot be served yet waits rather than opening a connection nothing will
+    // read. That policy lives in `RequestGate`, in the library target, because
+    // it is the whole of the defect and none of it needs a virtual machine to
+    // exercise.
+    private let gate = RequestGate<Int32>(limit: 8)
 
     init(
         socketDevice: VZVirtioSocketDevice,
@@ -321,30 +337,26 @@ private final class GuestBridge {
                 }
                 _ = fcntl(client, F_SETFD, FD_CLOEXEC)
                 DispatchQueue.main.async { [self] in
-                    pendingClients.append(client)
-                    processNext()
+                    start(gate.admit(client))
                 }
             }
         }
     }
 
-    private func processNext() {
+    private func start(_ clients: [Int32]) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard !requestActive, !pendingClients.isEmpty else { return }
-        requestActive = true
-        let client = pendingClients.removeFirst()
-        if let connection = guestConnection {
-            transfer(client: client, connection: connection)
-            return
-        }
-        socketDevice.connect(toPort: guestPort) { [self] result in
-            switch result {
-            case .failure(let error):
-                fputs("lemma-vz: guest connect failed: \(error.localizedDescription)\n", stderr)
-                fail(client: client)
-            case .success(let connection):
-                guestConnection = connection
-                transfer(client: client, connection: connection)
+        for client in clients {
+            socketDevice.connect(toPort: guestPort) { [self] result in
+                switch result {
+                case .failure(let error):
+                    fputs(
+                        "lemma-vz: guest connect failed: \(error.localizedDescription)\n",
+                        stderr
+                    )
+                    fail(client: client)
+                case .success(let connection):
+                    transfer(client: client, connection: connection)
+                }
             }
         }
     }
@@ -357,12 +369,12 @@ private final class GuestBridge {
             } catch {
                 fputs("lemma-vz: client read failed: \(error.localizedDescription)\n", stderr)
                 close(client)
-                finishRequest(keepGuestConnection: true)
+                finishRequest(connection)
                 return
             }
             guard !request.isEmpty else {
                 close(client)
-                finishRequest(keepGuestConnection: true)
+                finishRequest(connection)
                 return
             }
             do {
@@ -377,19 +389,21 @@ private final class GuestBridge {
                 do {
                     try writeAll(client, response)
                 } catch {
-                    // A timed-out bridge caller may close its Unix socket while
-                    // the guest operation finishes. The persistent guest
-                    // channel remains valid and must not be discarded.
+                    // A timed-out bridge caller may close its Unix socket
+                    // while the guest operation finishes. Its answer has
+                    // nowhere to go, which is not an error worth failing over:
+                    // the guest did the work, and this connection is this
+                    // request's alone to close either way.
                     fputs("lemma-vz: client write failed: \(error.localizedDescription)\n", stderr)
                 }
                 close(client)
-                finishRequest(keepGuestConnection: true)
+                finishRequest(connection)
             } catch {
                 fputs("lemma-vz: guest bridge failed: \(error.localizedDescription)\n", stderr)
                 let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Guest control channel is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
                 _ = try? writeAll(client, Data(payload.utf8))
                 close(client)
-                finishRequest(keepGuestConnection: false)
+                finishRequest(connection)
             }
         }
     }
@@ -398,18 +412,23 @@ private final class GuestBridge {
         let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Private guest is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
         _ = try? writeAll(client, Data(payload.utf8))
         close(client)
-        requestActive = false
-        processNext()
+        finishRequest(nil)
     }
 
-    private func finishRequest(keepGuestConnection: Bool) {
+    /// One request is over: close its guest connection and admit the next.
+    ///
+    /// Closing unconditionally is the difference this rework buys. The shared
+    /// channel had to be kept alive across a caller that gave up -- discarding
+    /// it would have cost every other caller too -- so a failure had to decide
+    /// whether the channel was still good. A connection owned by one request
+    /// is simply finished with when that request is.
+    private func finishRequest(_ connection: VZVirtioSocketConnection?) {
+        // On the main queue, which is the VM's: every other Virtualization
+        // object here is touched there, and closing a connection from the
+        // worker that just used it would be the one exception.
         DispatchQueue.main.async { [self] in
-            if !keepGuestConnection {
-                guestConnection?.close()
-                guestConnection = nil
-            }
-            requestActive = false
-            processNext()
+            connection?.close()
+            start(gate.finish())
         }
     }
 }

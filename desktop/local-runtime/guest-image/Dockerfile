@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1.7
-FROM ubuntu:24.04 AS runtime
+# Pinned to the index digest, not the tag. `ubuntu:24.04` is rebuilt whenever
+# Canonical rebuilds it, so the same commit produced a different guest on
+# different days -- and the one thing this image is *for* is being the same
+# Linux on every machine that installs Lemma. A guest that quietly changed
+# under a fixed release is a difference nobody can see and nobody can bisect.
+#
+# The digest is the multi-arch index, so amd64 and arm64 both resolve from it;
+# the tag is kept beside it for a reader, and Dependabot already watches this
+# directory and updates the pair together.
+FROM ubuntu:24.04@sha256:224a1869083a311ef3f13648a154ba79832fbef6364d31493642ca03082da254 AS runtime
 
 ARG TARGETARCH
 ARG NERDCTL_VERSION=2.3.4
@@ -61,6 +70,7 @@ COPY rootfs-overlay/ /
 RUN chmod 0755 \
         /usr/local/bin/lemma-guestd \
         /usr/local/bin/lemma-mount-data \
+        /usr/local/bin/lemma-bind-data \
         /usr/local/bin/lemma-data-unavailable \
         /usr/local/bin/lemma-set-host-time \
         /usr/local/bin/lemma-runtime-guest-service \

@@ -281,6 +281,40 @@ def prune_python_runtime(python_root: Path) -> None:
                 continue
             for tests in sorted(root.rglob("tests"), reverse=True):
                 shutil.rmtree(tests, ignore_errors=True)
+        prune_unused_twilio_domains(site_packages)
+
+
+def prune_unused_twilio_domains(site_packages: Path) -> None:
+    """Drop the Twilio REST domains, which this product never calls.
+
+    Twilio is here by accident of the dependency graph. Nothing in `app`
+    imports it; `supertokens_python` does, at module level, so that its
+    passwordless recipe can deliver a one-time code by SMS -- a feature Lemma
+    does not enable. The package cannot simply be removed, because that
+    module-level `from twilio.rest import Client` would then fail at import.
+
+    Its `rest/` tree can. Every domain under it is imported lazily: the
+    top-level names in `twilio/rest/__init__.py` are under `TYPE_CHECKING`, and
+    `Client.api` runs `from twilio.rest.api import Api` only when something
+    reaches for it. Nothing does.
+
+    What this buys is the Windows path budget below. `twilio/rest/api/v2010/
+    account/sip/domain/auth_types/auth_type_registrations/` is a directory tree
+    describing an API nobody here calls, and a source file inside it sat nine
+    characters past the limit -- which fails the build, correctly, because a
+    source file Windows cannot open is a backend that cannot import a module
+    sitting in its own directory listing.
+
+    Verified rather than assumed: with all 39 domain trees removed,
+    `from twilio.rest import Client` and the SuperTokens SMS delivery types
+    both still import.
+    """
+    rest = site_packages / "twilio" / "rest"
+    if not rest.is_dir():
+        return
+    for domain in sorted(rest.iterdir()):
+        if domain.is_dir():
+            shutil.rmtree(domain, ignore_errors=True)
 
 
 # How long a path inside the pack may be, measured from the pack's own root.
@@ -339,6 +373,55 @@ def enforce_windows_path_budget(pack_root: Path) -> None:
         print(
             f"+ dropped {len(over_budget)} cached bytecode files past the "
             f"{WINDOWS_PATH_BUDGET}-character Windows path budget",
+            flush=True,
+        )
+    report_windows_path_headroom(pack_root)
+
+
+# How little headroom is worth saying something about.
+#
+# A dependency update that lands ten characters below the limit has not broken
+# anything, and is one release away from doing so.
+WINDOWS_PATH_HEADROOM_WARNING = 15
+
+
+def report_windows_path_headroom(pack_root: Path) -> None:
+    """Say how close the longest surviving path came.
+
+    The gate above only speaks when something has already crossed the line,
+    which makes every crossing a surprise -- a build that was fine yesterday
+    failing today because a dependency grew a directory level. This is the
+    number that would have made it visible first: a `twilio` file sat nine
+    characters over, and nothing before it had ever reported how much room was
+    left.
+
+    Reported on every build, and loudly when the margin is thin, so the last
+    quiet release before a failure looks different from the ones before it.
+    """
+    longest = max(
+        (
+            (len(installed_path(pack_root, path)), installed_path(pack_root, path))
+            for path in pack_root.rglob("*")
+            if path.is_file()
+        ),
+        default=(0, ""),
+    )
+    length, where = longest
+    headroom = WINDOWS_PATH_BUDGET - length
+    print(
+        f"+ longest installed path is {length} characters, "
+        f"{headroom} below the {WINDOWS_PATH_BUDGET}-character Windows budget",
+        flush=True,
+    )
+    # Negatives included. `enforce_windows_path_budget` raises before this for
+    # a source file over the line, so a negative here means bytecode it dropped
+    # -- still worth saying, and silence would be the wrong answer to the one
+    # number this function exists to report.
+    if headroom < WINDOWS_PATH_HEADROOM_WARNING:
+        print(
+            f"::warning::only {headroom} characters of Windows path budget "
+            f"remain; the next dependency to grow a directory level will fail "
+            f"the build. Longest: {where}",
             flush=True,
         )
 

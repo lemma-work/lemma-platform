@@ -5,6 +5,7 @@ import { Check, Copy, ExternalLink, ShieldCheck } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import type { SurfaceSetupAction, SurfaceSetupActionField } from 'lemma-sdk';
+import { copyText } from '@/lib/clipboard';
 
 /**
  * The steps Lemma genuinely cannot do for you — pasting a callback URL into
@@ -101,7 +102,7 @@ export function SetupCopyField({ field }: { field: SurfaceSetupActionField }) {
 
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(field.value);
+            await copyText(field.value);
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         } catch {

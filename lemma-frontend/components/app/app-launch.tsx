@@ -20,6 +20,7 @@ import { trackAppOpened } from '@/lib/analytics/onboarding';
 import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
 import { AppVersionsPanel } from '@/components/app/app-versions-panel';
+import { copyText } from '@/lib/clipboard';
 
 interface AppFrameProps {
     podId: string;
@@ -128,7 +129,7 @@ export function AppFrame({
 
     const copyLink = async () => {
         try {
-            await navigator.clipboard.writeText(frameUrl);
+            await copyText(frameUrl);
             toast.success('App link copied');
         } catch {
             toast.error('Could not copy the app link');
@@ -266,8 +267,8 @@ export function AppFrame({
                 onOpenChange={setVersionsOpen}
                 canPromote={canShare}
                 previewingReleaseNumber={preview?.releaseNumber ?? null}
-                onPreview={(release) => {
-                    setPreview({ url: release.preview_url, releaseNumber: release.release_number });
+                onPreview={(release, previewUrl) => {
+                    setPreview({ url: previewUrl, releaseNumber: release.release_number });
                     setFrameLoaded(false);
                     setVersionsOpen(false);
                 }}

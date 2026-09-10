@@ -2738,6 +2738,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "lemma-desktop-process",
+ "lemma-job-object",
  "predicates",
  "reqwest",
  "rusqlite",
@@ -2764,6 +2765,9 @@ dependencies = [
  "hex",
  "interprocess",
  "lemma-desktop-process",
+ "lemma-job-object",
+ "lemma-locald",
+ "lemma-private-file",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -2776,9 +2780,11 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-deep-link",
+ "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tempfile",
+ "uuid",
  "window-vibrancy",
  "windows-sys 0.61.2",
  "zip 8.6.0",
@@ -2806,6 +2812,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lemma-job-object"
+version = "0.7.2"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lemma-locald"
 version = "0.7.2"
 dependencies = [
@@ -2818,6 +2831,7 @@ dependencies = [
  "interprocess",
  "keyring",
  "lemma-desktop-process",
+ "lemma-private-file",
  "lemma-runtime-manager",
  "libc",
  "qrcode",
@@ -2828,6 +2842,14 @@ dependencies = [
  "socket2 0.6.4",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lemma-private-file"
+version = "0.7.2"
+dependencies = [
+ "tempfile",
  "windows-sys 0.61.2",
 ]
 
@@ -2845,6 +2867,7 @@ version = "0.7.2"
 dependencies = [
  "getrandom 0.3.4",
  "lemma-desktop-process",
+ "lemma-private-file",
  "libc",
  "serde",
  "serde_json",
@@ -4091,6 +4114,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "rfd"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a15ad77d9e70a92437d8f74c35d99b4e4691128df018833e99f90bcd36152672"
+dependencies = [
+ "block2",
+ "dispatch2",
+ "glib-sys",
+ "gobject-sys",
+ "gtk-sys",
+ "js-sys",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "raw-window-handle",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "windows-sys 0.60.2",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5150,6 +5197,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-dialog"
+version = "2.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61854a36651aa48381e5e209f69a01273b77f3f9f91f0c430b1b98d33bd47229"
+dependencies = [
+ "log",
+ "raw-window-handle",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "tauri-plugin-fs",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
+name = "tauri-plugin-fs"
+version = "2.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de22eef34fd78c0da050e748710edd50bf127e651d02ea1b2bfada1523cc5c51"
+dependencies = [
+ "anyhow",
+ "dunce",
+ "glob",
+ "log",
+ "objc2-foundation",
+ "percent-encoding",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "serde_repr",
+ "tauri",
+ "tauri-plugin",
+ "tauri-utils",
+ "thiserror 2.0.18",
+ "toml 1.1.2+spec-1.1.0",
+ "url",
+]
+
+[[package]]
 name = "tauri-plugin-single-instance"
 version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5305,7 +5394,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

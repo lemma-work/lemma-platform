@@ -51,6 +51,17 @@ export interface AssistantControllerView {
   sendMessage(content: string, options?: { forceNewConversation?: boolean }): Promise<void>;
   /** Append a follow-up to a conversation that already has a run in flight. */
   steerMessage(content: string): Promise<void>;
+  /**
+   * Messages waiting for a turn that cannot be told anything mid-flight.
+   *
+   * Only ever non-empty for an Agent Host conversation: ACP has no way to add
+   * input to a `session/prompt` already running.
+   */
+  queuedSteers?: { id: string; content: string; queuedAt: string }[];
+  /** Interrupt the running turn and deliver what is queued. */
+  sendQueuedSteersNow?(): Promise<void>;
+  /** Drop one queued message without sending it. */
+  discardQueuedSteer?(id: string): void;
   retryFailedMessage?(): Promise<void>;
   uploadFiles(files: File[], options?: { deferUntilSend?: boolean }): Promise<void>;
   removePendingFile(fileKey: string): void;

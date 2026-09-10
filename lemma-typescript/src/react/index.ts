@@ -191,6 +191,9 @@ export type { UseRecordFormOptions, UseRecordFormResult } from "./useRecordForm.
 export { useSchemaForm } from "./useSchemaForm.js";
 export type { UseSchemaFormOptions, UseSchemaFormResult } from "./useSchemaForm.js";
 export { useAssistantController } from "./useAssistantController.js";
+// The shape of a message held for a turn that cannot be told anything, so a
+// consumer rendering the queue can name it rather than restate it.
+export type { QueuedSteer } from "./queued-steers.js";
 export type {
   AssistantAction,
   AssistantConversationScope,

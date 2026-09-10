@@ -46,6 +46,13 @@ futures-util = "0.3.33"
 rustix = { version = "1", features = ["process"] }
 fs4 = { version = "1.1.0", features = ["sync"] }
 lemma-desktop-process = { path = "../process" }
+lemma-job-object = { path = "../job-object" }
+
+# Measurement, not a test: it asserts nothing, and a test target is compiled
+# and linked on every `cargo test` whether or not it is ignored.
+[[bench]]
+name = "latency"
+harness = false
 
 [dev-dependencies]
 assert_cmd = "2"
