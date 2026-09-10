@@ -25,6 +25,7 @@ from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
     NotificationNotFoundError,
 )
+from app.modules.agent_surfaces.domain.events import NotificationSettledEvent
 from app.modules.agent_surfaces.domain.notification import (
     NotificationEntity,
     NotificationOriginKind,
@@ -61,25 +62,28 @@ def default_expiry() -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 
-def attribute(
-    body: str, *, agent_name: str | None, actor_display_name: str | None
-) -> str:
-    """Prefix the message with who is asking and on whose authority.
+def attribute(body: str, *, actor_display_name: str | None) -> str:
+    """Prefix the message with whose authority it carries, when that is news.
 
-    Mandatory, not cosmetic. The recipient sees the pod's bot — the same bot
-    they trust — and has no other way to tell "the agent Priya's schedule is
-    running" from "the pod". Without this line, an agent that can message
-    colleagues is a phishing primitive.
+    Not the agent. A surface belongs to exactly one agent and nothing borrows
+    another's — see ``surfaces_for_agent`` — so the bot a message arrives from
+    *is* the answer to "which agent". Where one app does serve several, the
+    platform paints the agent's own name and avatar on the message before it is
+    sent (``slack_customized_message_kwargs``). Naming it again in the body adds
+    a line and no information, and it was the line that leaked ``pod_default``.
+
+    The actor is the half no channel can carry. Under one bot, with one name and
+    one avatar, an agent acting for Priya and the same agent acting for Anukul
+    are indistinguishable — and an agent that can message colleagues without
+    that distinction is a phishing primitive.
+
+    ``actor_display_name`` is None when the recipient *is* the actor, and that
+    is the whole of the omission: the ambiguity this line exists to resolve
+    cannot arise when the authority being carried is the reader's own.
     """
-    if agent_name and actor_display_name:
-        header = f"*{agent_name}*, on behalf of {actor_display_name}:"
-    elif agent_name:
-        header = f"*{agent_name}*:"
-    elif actor_display_name:
-        header = f"On behalf of {actor_display_name}:"
-    else:
+    if not actor_display_name:
         return body
-    return f"{header}\n\n{body}"
+    return f"On behalf of {actor_display_name}:\n\n{body}"
 
 
 class NotificationService:
@@ -93,7 +97,6 @@ class NotificationService:
         surface_repository,
         conversation_link_repository,
         external_user_repository,
-        conversation_service,
         ingress_service: SurfaceNotificationEgressPort,
         pod_membership_port,
         rate_limiter=None,
@@ -101,10 +104,11 @@ class NotificationService:
     ):
         self.uow = uow
         self.notifications = notification_repository
-        self.surfaces = surface_repository
-        self.links = conversation_link_repository
-        self.external_users = external_user_repository
-        self.conversation_service = conversation_service
+        # The three repositories this used to also hang on `self` are not kept:
+        # they were assigned and never read, because the objects that use them
+        # are built with them below. A field nothing reads reads as a seam --
+        # someone will reach for `service.surfaces` and get a repository this
+        # class has no opinion about.
         self.ingress = ingress_service
         self.membership = pod_membership_port
         self.rate_limiter = rate_limiter
@@ -122,7 +126,7 @@ class NotificationService:
         # coupling. See ``notification_egress``.
         self.egress = NotificationEgress(
             egress=ingress_service,
-            conversation_service=conversation_service,
+            uow=uow,
             conversation_link_repository=conversation_link_repository,
         )
 
@@ -248,10 +252,16 @@ class NotificationService:
             )
             return await self.notifications.update(notification)
 
+        # Suppressed for a message to its own asker; still handed to `send`
+        # below, which puts it in the email `From` where an inbox list needs
+        # *some* name and yours is the true one.
         message = attribute(
             notification.body,
-            agent_name=agent_name,
-            actor_display_name=actor_display_name,
+            actor_display_name=(
+                None
+                if notification.actor_user_id == notification.recipient_user_id
+                else actor_display_name
+            ),
         )
 
         # First success wins. Three copies of one message across three apps is
@@ -300,9 +310,10 @@ class NotificationService:
                     conversation_id=conversation_id,
                     notification=notification,
                     message=message,
-                    # The same two names ``attribute()`` puts in the body. On
-                    # email they also become the From display name, so the
-                    # attribution survives an inbox list nobody has opened yet.
+                    # Both names, unconditionally — wider than the body header
+                    # above. On email they become the From display name, which
+                    # is all an unopened inbox list shows; on chat the agent
+                    # name is the bot's username and avatar.
                     agent_name=agent_name,
                     actor_display_name=actor_display_name,
                 )
@@ -383,12 +394,16 @@ class NotificationService:
         summary: str,
         data: dict | None = None,
     ) -> NotificationEntity:
-        """Record an answer. The domain decides whether it is legal.
+        """Record an answer, and say so if it was the last one outstanding.
 
-        Recording only. Bringing the asking conversation back is the caller's
-        job, through ``composition.agent_notifications`` — this module may not
-        reach into the agent module, and both respond paths (the tool and the
-        app endpoint) already do it. A third one must too.
+        The domain decides whether the answer is legal. Whether the asking
+        conversation should be brought back is decided here and announced as
+        ``NotificationSettledEvent``: this module may not reach into `agent`,
+        and the two respond paths used to each have to remember to make that
+        call themselves.
+
+        The count is read after the write has been flushed, so the row just
+        closed is already counted as settled.
         """
         notification = await self._owned_by(
             pod_id=pod_id,
@@ -396,7 +411,35 @@ class NotificationService:
             user_id=responder_user_id,
         )
         notification.respond(summary=summary, data=data)
-        return await self.notifications.update(notification)
+        updated = await self.notifications.update(notification)
+        await self._announce_if_settled(updated)
+        return updated
+
+    async def _announce_if_settled(self, notification: NotificationEntity) -> None:
+        """Raise ``NotificationSettledEvent`` once this conversation is owed nothing.
+
+        Scoped to ``AGENT_RUN`` because that is the only origin a conversation
+        has: a workflow form is owed to its run, and resuming that is the
+        workflow engine's job.
+        """
+        conversation_id = notification.origin_conversation_id
+        if conversation_id is None:
+            return
+        if notification.origin_kind is not NotificationOriginKind.AGENT_RUN:
+            return
+        if await self.notifications.count_open_from_origin_conversation(
+            conversation_id
+        ):
+            return
+        self.uow.collect_events(
+            [
+                NotificationSettledEvent(
+                    pod_id=notification.pod_id,
+                    conversation_id=conversation_id,
+                    notification_id=notification.id,
+                )
+            ]
+        )
 
     async def resolve_through_action(
         self,

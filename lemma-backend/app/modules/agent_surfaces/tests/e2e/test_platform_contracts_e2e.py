@@ -750,7 +750,7 @@ async def test_resolve_outbound_email_attachments_and_urls(monkeypatch):
     from unittest.mock import AsyncMock
     from uuid import uuid4
 
-    import app.composition.surface_agent as surface_agent_composition
+    from app.modules.agent_surfaces.platforms import email_attachments
     from app.modules.agent_surfaces.platforms.email_attachments import (
         append_attachment_links,
         resolve_outbound_email_attachment_urls,
@@ -778,28 +778,28 @@ async def test_resolve_outbound_email_attachments_and_urls(monkeypatch):
     assert links_oversize == []
 
     # A datastore file too large to inline resolves to a signed-URL link
-    # instead. `pod_services` is a real DB-backed async context manager in
-    # production; fake it here (matching the unit-level Composio email
-    # tests' style) so this stays a hermetic test of the size-gating branch.
+    # instead. `pod_datastore_access` is a real DB-backed async context manager
+    # in production, and the two datastore reads behind it are real queries;
+    # fake all three here so this stays a hermetic test of the size-gating
+    # branch.
     fake_entity = SimpleNamespace(name="report.pdf", size_bytes=999)
-    fake_file_service = SimpleNamespace(
-        get_file_by_path=AsyncMock(return_value=fake_entity),
-        create_signed_url=AsyncMock(
-            return_value=(
-                fake_entity,
-                "https://signed.example.test/report.pdf",
-                None,
-                None,
-            )
-        ),
-    )
 
     @asynccontextmanager
-    async def _fake_pod_services(deps):
+    async def _fake_pod_access(deps):
         del deps
-        yield SimpleNamespace(file=fake_file_service, ctx=None)
+        yield SimpleNamespace(uow=None, ctx=None, pod_id=uuid4())
 
-    monkeypatch.setattr(surface_agent_composition, "pod_services", _fake_pod_services)
+    for name, double in (
+        ("pod_datastore_access", _fake_pod_access),
+        ("read_pod_file", AsyncMock(return_value=fake_entity)),
+        (
+            "sign_pod_file",
+            AsyncMock(
+                return_value=(fake_entity, "https://signed.example.test/report.pdf")
+            ),
+        ),
+    ):
+        monkeypatch.setattr(email_attachments, name, double)
 
     datastore_deps = SimpleNamespace(pod_id=uuid4())
     inline_link, links_link = await resolve_outbound_email_attachments(

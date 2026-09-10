@@ -7,6 +7,8 @@ from typing import Annotated
 from fastapi import Depends
 
 from app.core.api.dependencies import get_uow_factory
+from app.core.authorization.dependencies import pod_from_path, require_action
+from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.pod_bundle.application.export_use_cases import ExportUseCases
 from app.modules.pod_bundle.application.import_use_cases import ImportUseCases
@@ -52,3 +54,12 @@ def get_publish_use_cases(
 
 
 PublishUseCasesDep = Annotated[PublishUseCases, Depends(get_publish_use_cases)]
+
+
+# Every bundle route is guarded on the pod named in its path, so these are the
+# pod permissions rather than bundle ones: an export reads a pod's resources and
+# an import writes them. Declared here from the core primitives rather than
+# imported from `pod`, which would make one module's dependency wiring part of
+# another module's route definitions.
+PodViewerDep = require_action(Permissions.POD_READ, pod_from_path)
+PodEditorDep = require_action(Permissions.POD_UPDATE, pod_from_path)

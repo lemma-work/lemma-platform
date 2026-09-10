@@ -11,10 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.agent_surfaces.platforms.slack.blocks import (
-    DEFAULT_RESPONDER_NAME,
-    _truncate,
-)
+from app.modules.agent_surfaces.platforms.slack.blocks import _truncate
 
 
 AGENT_DM_ACTION_ID = "lemma_agent_dm"
@@ -197,31 +194,35 @@ def _app_blocks(apps: list) -> list[dict[str, Any]]:
     ]
 
 
-def _channel_routes_block(channel_routes: list) -> dict[str, Any]:
-    """Who answers in which channel, or how to get the first one wired up."""
-    if not channel_routes:
+def _channels_block(channel_ids: list[str]) -> dict[str, Any]:
+    """Where this bot may be spoken to, or how to wire the first one up.
+
+    Just the channels. Each row used to carry the agent answering in it, from
+    back when one app could serve several; the caller then had one agent to
+    report and passed ``None`` for every row, so the fallback beside it fired
+    unconditionally and printed the *pod* agent's name over whichever agent the
+    settings row above had just named.
+    """
+    if not channel_ids:
         return {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    "*Channels*\nInvite me to a channel and I'll ask who "
-                    "should answer there."
+                    "*Channels*\nInvite me to a channel and I'll ask whether "
+                    "I should answer there."
                 ),
             },
         }
-    routes = "\n".join(
-        f"<#{channel_id}> \u2192 `{agent or DEFAULT_RESPONDER_NAME}`"
-        for channel_id, agent in list(channel_routes)[:20]
-    )
+    listed = "\n".join(f"<#{channel_id}>" for channel_id in channel_ids[:20])
     return {
         "type": "section",
-        "text": {"type": "mrkdwn", "text": f"*Channels*\n{routes}"},
+        "text": {"type": "mrkdwn", "text": f"*Channels*\n{listed}"},
     }
 
 
 def _settings_blocks(
-    channel_routes: list,
+    channel_ids: list[str],
     agent_name: str,
 ) -> list[dict[str, Any]]:
     """Settings last: real, but not the pitch.
@@ -241,7 +242,7 @@ def _settings_blocks(
                 "text": f"*Your direct messages*\nYou are talking to `{agent_name}`",
             },
         },
-        _channel_routes_block(channel_routes),
+        _channels_block(channel_ids),
     ]
 
 
@@ -268,7 +269,7 @@ def app_home_view(
     *,
     pod_name: str | None,
     agent_name: str,
-    channel_routes: list,
+    channel_ids: list[str],
     agents: list | None = None,
     apps: list | None = None,
     workspace_url: str | None = None,
@@ -299,7 +300,7 @@ def app_home_view(
             *_try_one_blocks(),
             *_agent_blocks(list(agents or [])),
             *_app_blocks(list(apps or [])),
-            *_settings_blocks(channel_routes, agent_name),
+            *_settings_blocks(channel_ids, agent_name),
             *_footer_blocks(workspace_url),
         ]
     )

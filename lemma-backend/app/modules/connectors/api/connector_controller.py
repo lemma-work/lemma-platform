@@ -23,7 +23,7 @@ SKILLS_DIR = (Path(__file__).parent.parent / "skills").resolve()
 # segment like `..` (or a percent-encoded separator) from walking out of the
 # skills directory and reading an arbitrary file off the server.
 _CONNECTOR_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_SKILL_KINDS = frozenset({"composio", "package", "http", "sql", "mcp"})
+_SKILL_KINDS = frozenset({"composio", "http", "sql", "mcp"})
 
 
 def _resolve_skill_file(connector_id: str, kind: str | None) -> Path | None:
@@ -92,7 +92,7 @@ async def list_connectors(
     summary="Get Connector Skill",
     description=(
         "Get the skill guide markdown for a connector. "
-        "Pass `kind=package` or `kind=composio` to get kind-specific instructions "
+        "Pass `kind=http` or `kind=composio` to get kind-specific instructions "
         "when the app supports both. Falls back to the generic doc if no kind-specific file exists. "
         "Returns 404 if no skill doc has been generated yet."
     ),
@@ -102,7 +102,7 @@ async def get_connector_skill(
     connector_id: str,
     connector_service: ConnectorServiceDep,
     kind: str | None = Query(
-        default=None, description="Kind override, e.g. package or composio"
+        default=None, description="Kind override, e.g. http or composio"
     ),
 ) -> ConnectorSkillResponse:
     skill_file = _resolve_skill_file(connector_id, kind)
@@ -116,9 +116,7 @@ async def get_connector_skill(
         title = connector.title
     except Exception:
         title = None
-    effective_kind = kind or (
-        "package" if f"{connector_id}.package.md" == skill_file.name else None
-    )
+    effective_kind = kind
     return ConnectorSkillResponse(
         connector_id=connector_id,
         title=title,

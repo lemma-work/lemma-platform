@@ -14,11 +14,12 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
     SurfacePodMembershipPort,
+    SurfaceUserDirectoryPort,
 )
 from app.modules.agent_surfaces.services.surface_address import (
     contended_surface_ids,
 )
-from app.modules.identity.contracts import UserPreferences, UserRepositoryPort
+from app.modules.identity.contracts import UserPreferences
 
 
 @dataclass(frozen=True)
@@ -57,17 +58,14 @@ class UserSurfacesService:
         *,
         surface_repository: SurfaceInstallationRepositoryPort,
         pod_membership_port: SurfacePodMembershipPort,
-        user_repository: UserRepositoryPort,
+        user_directory: SurfaceUserDirectoryPort,
     ):
         self._surfaces = surface_repository
         self._membership = pod_membership_port
-        self._users = user_repository
+        self._users = user_directory
 
     async def _load_preferences(self, user_id: UUID) -> UserPreferences:
-        user = await self._users.get(user_id)
-        if user is None or user.preferences is None:
-            return UserPreferences()
-        return user.preferences
+        return await self._users.preferences(user_id)
 
     async def list_user_surfaces(self, user_id: UUID) -> list[UserSurfaceGroup]:
         pod_ids = await self._membership.get_user_pod_ids(user_id)

@@ -20,6 +20,7 @@ import {
     type DisplayResourceRequest,
 } from '@/lib/assistant/display-resource';
 import { buildConversationPresentationHref } from '@/lib/assistant/conversation-presentation';
+import { usageOrganizationScope } from '@/components/usage/usage-scope';
 import { resolveAssistantControllerGates } from '@/lib/assistant/controller-gates';
 import {
     projectConversationMetadata,
@@ -55,6 +56,7 @@ interface AIAssistantContextType {
     hasPodContext: boolean;
     podContext: PodContext | null | undefined;
     conversationPodId: string | null;
+    conversationOrganizationId: string | null | undefined;
     openAssistant: () => void;
     closeAssistant: (options?: { skipUrlSync?: boolean; suppressUrlRestore?: boolean }) => void;
     toggleAssistant: () => void;
@@ -82,10 +84,15 @@ interface AIAssistantContextType {
     isLoadingOlderMessages: boolean;
     hasOlderMessages: boolean;
     error: string | null;
+    errorCode: string | null;
+    errorReason: string | null;
     canRetryFailedMessage: boolean;
     sendMessage: (content: string, options?: SendMessageOptions) => Promise<void>;
     /** Append a follow-up to a conversation that already has a run in flight. */
     steerMessage: (content: string) => Promise<void>;
+    queuedSteers: { id: string; content: string; queuedAt: string }[];
+    sendQueuedSteersNow: () => Promise<void>;
+    discardQueuedSteer: (id: string) => void;
     retryFailedMessage: () => Promise<void>;
     uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
     isUploadingFiles: boolean;
@@ -661,6 +668,7 @@ export function AIAssistantProvider({
         hasPodContext: isProviderEnabled && !!podContext,
         podContext,
         conversationPodId: conversationScope.podId ?? null,
+        conversationOrganizationId: usageOrganizationScope(controller.conversations.find(conversation => conversation.id === controller.openedConversationId), conversationScope.organizationId),
         openAssistant,
         closeAssistant,
         toggleAssistant,
@@ -684,9 +692,14 @@ export function AIAssistantProvider({
         isLoadingOlderMessages: controller.isLoadingOlderMessages,
         hasOlderMessages: controller.hasOlderMessages,
         error: controller.error,
+        errorCode: controller.errorCode,
+        errorReason: controller.errorReason,
         canRetryFailedMessage: controller.canRetryFailedMessage,
         sendMessage,
         steerMessage,
+        queuedSteers: controller.queuedSteers,
+        sendQueuedSteersNow: controller.sendQueuedSteersNow,
+        discardQueuedSteer: controller.discardQueuedSteer,
         retryFailedMessage,
         uploadFiles: controller.uploadFiles,
         isUploadingFiles: controller.isUploadingFiles,
@@ -718,6 +731,8 @@ export function AIAssistantProvider({
         controller.conversationRuntime,
         controller.conversations,
         controller.error,
+        controller.errorCode,
+        controller.errorReason,
         controller.hasOlderMessages,
         controller.isOpenedConversationRunning,
         controller.isLoading,
@@ -728,11 +743,15 @@ export function AIAssistantProvider({
         controller.loadOlderMessages,
         controller.pendingFiles,
         controller.pendingFileUploads,
+        controller.queuedSteers,
+        controller.sendQueuedSteersNow,
+        controller.discardQueuedSteer,
         controller.removePendingFile,
         controller.setConversationModel,
         controller.stop,
         controller.uploadFiles,
         conversationScope.podId,
+        conversationScope.organizationId,
         isOpen,
         isProviderEnabled,
         lastCreatedResource,

@@ -1,21 +1,11 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-
-declare global {
-  interface Window {
-    __TAURI__?: {
-      core?: {
-        invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-      };
-    };
-  }
-}
+import { useDesktopBridge } from "@/lib/desktop/local-capabilities";
 
 type LocalSettingsButtonProps = {
   variant?: "row" | "rail";
@@ -24,31 +14,20 @@ type LocalSettingsButtonProps = {
   onOpen?: () => void;
 };
 
-// The desktop shell injects its globals as an initialization script, which runs
-// before any page script on every navigation. They are therefore already there
-// on first render and never appear later, so there is nothing to subscribe to.
-function subscribeDesktopContext() {
-  return () => {};
-}
-
-function desktopLocalAvailable() {
-  return (
-    window.__LEMMA_DESKTOP__?.mode === "local"
-    && typeof window.__TAURI__?.core?.invoke === "function"
-  );
-}
-
 export function LocalSettingsButton({
   variant = "row",
   page = "overview",
   className,
   onOpen,
 }: LocalSettingsButtonProps) {
-  const visible = useSyncExternalStore(
-    subscribeDesktopContext,
-    desktopLocalAvailable,
-    () => false,
-  );
+  // `useDesktopBridge` rather than this component's own check of
+  // `__LEMMA_DESKTOP__.mode`. That field is baked into the initialization
+  // script when the window is *built*, so on a first run that chooses local
+  // without recreating the webview it still reads unset -- and the button that
+  // opens Local settings did not render in the one session where someone had
+  // just set local up. See `readDesktopBridge` for the same bug's first
+  // appearance.
+  const visible = useDesktopBridge();
 
   if (!visible) return null;
 

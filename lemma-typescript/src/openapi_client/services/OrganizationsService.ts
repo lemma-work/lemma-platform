@@ -218,18 +218,18 @@ export class OrganizationsService {
     /**
      * Get Organization
      * Get organization details
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
     public static orgGet(
-        orgId: string,
+        organizationId: string,
     ): CancelablePromise<OrganizationResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/organizations/{org_id}',
+            url: '/organizations/{organization_id}',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             errors: {
                 422: `Validation Error`,
@@ -239,20 +239,20 @@ export class OrganizationsService {
     /**
      * Update Organization
      * Update an organization's name or join policy (owner only)
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
     public static orgUpdate(
-        orgId: string,
+        organizationId: string,
         requestBody: OrganizationUpdateRequest,
     ): CancelablePromise<OrganizationResponse> {
         return __request(OpenAPI, {
             method: 'PATCH',
-            url: '/organizations/{org_id}',
+            url: '/organizations/{organization_id}',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             body: requestBody,
             mediaType: 'application/json',
@@ -264,18 +264,18 @@ export class OrganizationsService {
     /**
      * Get Organization Home
      * One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationHomeResponse Successful Response
      * @throws ApiError
      */
     public static orgHome(
-        orgId: string,
+        organizationId: string,
     ): CancelablePromise<OrganizationHomeResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/organizations/{org_id}/home',
+            url: '/organizations/{organization_id}/home',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             errors: {
                 422: `Validation Error`,
@@ -285,7 +285,7 @@ export class OrganizationsService {
     /**
      * List Organization Invitations
      * Get all pending invitations for an organization
-     * @param orgId
+     * @param organizationId
      * @param status
      * @param limit
      * @param pageToken
@@ -293,16 +293,16 @@ export class OrganizationsService {
      * @throws ApiError
      */
     public static orgInvitationList(
-        orgId: string,
+        organizationId: string,
         status: OrganizationInvitationStatus = OrganizationInvitationStatus.PENDING,
         limit: number = 100,
         pageToken?: (string | null),
     ): CancelablePromise<OrganizationInvitationListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/organizations/{org_id}/invitations',
+            url: '/organizations/{organization_id}/invitations',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             query: {
                 'status': status,
@@ -317,20 +317,20 @@ export class OrganizationsService {
     /**
      * Invite Member
      * Invite a user to join the organization
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns OrganizationInvitationResponse Successful Response
      * @throws ApiError
      */
     public static orgInvitationInvite(
-        orgId: string,
+        organizationId: string,
         requestBody: OrganizationInvitationRequest,
     ): CancelablePromise<OrganizationInvitationResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/organizations/{org_id}/invitations',
+            url: '/organizations/{organization_id}/invitations',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             body: requestBody,
             mediaType: 'application/json',
@@ -342,18 +342,18 @@ export class OrganizationsService {
     /**
      * Join Auto-Join Organization
      * Join an organization when the current user's email domain is allowed to auto-join
-     * @param orgId
+     * @param organizationId
      * @returns OrganizationResponse Successful Response
      * @throws ApiError
      */
     public static orgJoinAutoJoin(
-        orgId: string,
+        organizationId: string,
     ): CancelablePromise<OrganizationResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/organizations/{org_id}/join',
+            url: '/organizations/{organization_id}/join',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             errors: {
                 422: `Validation Error`,
@@ -363,22 +363,22 @@ export class OrganizationsService {
     /**
      * List Organization Members
      * Get all members of an organization
-     * @param orgId
+     * @param organizationId
      * @param limit
      * @param pageToken
      * @returns OrganizationMemberListResponse Successful Response
      * @throws ApiError
      */
     public static orgMemberList(
-        orgId: string,
+        organizationId: string,
         limit: number = 100,
         pageToken?: (string | null),
     ): CancelablePromise<OrganizationMemberListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/organizations/{org_id}/members',
+            url: '/organizations/{organization_id}/members',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             query: {
                 'limit': limit,
@@ -392,20 +392,20 @@ export class OrganizationsService {
     /**
      * Remove Member
      * Remove a member from the organization
-     * @param orgId
+     * @param organizationId
      * @param memberId
      * @returns void
      * @throws ApiError
      */
     public static orgMemberRemove(
-        orgId: string,
+        organizationId: string,
         memberId: string,
     ): CancelablePromise<void> {
         return __request(OpenAPI, {
             method: 'DELETE',
-            url: '/organizations/{org_id}/members/{member_id}',
+            url: '/organizations/{organization_id}/members/{member_id}',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
                 'member_id': memberId,
             },
             errors: {
@@ -416,22 +416,22 @@ export class OrganizationsService {
     /**
      * Update Member Role
      * Update a member's role in the organization
-     * @param orgId
+     * @param organizationId
      * @param memberId
      * @param requestBody
      * @returns OrganizationMemberResponse Successful Response
      * @throws ApiError
      */
     public static orgMemberUpdateRole(
-        orgId: string,
+        organizationId: string,
         memberId: string,
         requestBody: UpdateMemberRoleRequest,
     ): CancelablePromise<OrganizationMemberResponse> {
         return __request(OpenAPI, {
             method: 'PATCH',
-            url: '/organizations/{org_id}/members/{member_id}/role',
+            url: '/organizations/{organization_id}/members/{member_id}/role',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
                 'member_id': memberId,
             },
             body: requestBody,

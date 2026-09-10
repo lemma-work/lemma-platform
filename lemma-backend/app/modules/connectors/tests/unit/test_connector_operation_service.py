@@ -8,8 +8,8 @@ import pytest
 from pydantic import BaseModel
 
 from app.modules.connectors.domain.connector import (
+    ConnectorKind,
     ConnectorEntity,
-    AuthProvider,
 )
 from app.modules.connectors.domain.errors import (
     OperationExecutionError,
@@ -25,12 +25,33 @@ from app.modules.connectors.services.connector_operation_service import (
 pytestmark = pytest.mark.asyncio
 
 
+def _composio_install_service():
+    """A `connector_service` double whose install is Composio-kind.
+
+    The kind decides the executor. It used to default to the vendored-package
+    kind when no install was resolvable, which is how these tests reached the
+    operation gateway without saying so; the default is now `http`, which
+    reaches the OpenAPI executor and asks for a base URL nobody configured.
+    Saying which install this is makes the routing explicit rather than
+    incidental.
+    """
+    return SimpleNamespace(
+        auth_config_repository=AsyncMock(
+            get=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=uuid4(), kind=ConnectorKind.COMPOSIO, config=None
+                )
+            )
+        )
+    )
+
+
 async def test_list_operations_reads_from_catalog():
     connector_repository = AsyncMock(
         get=AsyncMock(
             return_value=ConnectorEntity(
                 id="slack",
-                auth_provider=AuthProvider.LEMMA,
+                auth_kind=ConnectorKind.HTTP,
             )
         )
     )
@@ -70,7 +91,7 @@ async def test_discover_operations_returns_structured_summary():
                 id="gmail",
                 title="Gmail",
                 description="Email connector",
-                auth_provider=AuthProvider.COMPOSIO,
+                auth_kind=ConnectorKind.COMPOSIO,
             )
         )
     )
@@ -120,7 +141,7 @@ async def test_discover_operations_uses_repository_search_for_queries():
         get=AsyncMock(
             return_value=ConnectorEntity(
                 id="gmail",
-                auth_provider=AuthProvider.COMPOSIO,
+                auth_kind=ConnectorKind.COMPOSIO,
             )
         )
     )
@@ -213,7 +234,7 @@ async def test_get_operation_details_batch_returns_all_when_names_omitted():
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="slack",
-                    auth_provider=AuthProvider.LEMMA,
+                    auth_kind=ConnectorKind.HTTP,
                 )
             )
         ),
@@ -256,7 +277,7 @@ async def test_an_unnamed_details_batch_is_capped_and_says_so():
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="slack",
-                    auth_provider=AuthProvider.LEMMA,
+                    auth_kind=ConnectorKind.HTTP,
                 )
             )
         ),
@@ -292,7 +313,7 @@ async def test_naming_operations_still_returns_exactly_those():
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="slack",
-                    auth_provider=AuthProvider.LEMMA,
+                    auth_kind=ConnectorKind.HTTP,
                 )
             )
         ),
@@ -327,7 +348,7 @@ async def test_get_operation_details_batch_matches_names_case_insensitively():
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="excel",
-                    auth_provider=AuthProvider.COMPOSIO,
+                    auth_kind=ConnectorKind.COMPOSIO,
                 )
             )
         ),
@@ -350,7 +371,7 @@ async def test_discover_operations_includes_relevance_score_for_queries():
         get=AsyncMock(
             return_value=ConnectorEntity(
                 id="excel",
-                auth_provider=AuthProvider.COMPOSIO,
+                auth_kind=ConnectorKind.COMPOSIO,
             )
         )
     )
@@ -410,8 +431,13 @@ async def test_execute_operation_uses_provider_operation_name():
             output_schema={"type": "object"},
         )
     )
+    operation_repository.get_by_connector_kind_and_name.return_value = (
+        operation_repository.get_by_connector_and_name.return_value
+    )
 
-    account = SimpleNamespace(id=uuid4(), credentials={"access_token": "token"})
+    account = SimpleNamespace(
+        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
+    )
     account_resolution_service = AsyncMock(
         resolve_account=AsyncMock(return_value=account)
     )
@@ -424,13 +450,14 @@ async def test_execute_operation_uses_provider_operation_name():
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="gmail",
-                    auth_provider=AuthProvider.COMPOSIO,
+                    auth_kind=ConnectorKind.COMPOSIO,
                 )
             )
         ),
         operation_repository=operation_repository,
         operation_gateway=operation_gateway,
         account_resolution_service=account_resolution_service,
+        connector_service=_composio_install_service(),
     )
 
     response = await service.execute_operation(
@@ -465,14 +492,19 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
             output_schema={"type": "object"},
         )
     )
+    operation_repository.get_by_connector_kind_and_name.return_value = (
+        operation_repository.get_by_connector_and_name.return_value
+    )
 
-    account = SimpleNamespace(id=uuid4(), credentials={"access_token": "token"})
+    account = SimpleNamespace(
+        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
+    )
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="slack",
-                    auth_provider=AuthProvider.LEMMA,
+                    auth_kind=ConnectorKind.COMPOSIO,
                 )
             )
         ),
@@ -483,6 +515,7 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
         account_resolution_service=AsyncMock(
             resolve_account=AsyncMock(return_value=account)
         ),
+        connector_service=_composio_install_service(),
     )
 
     with pytest.raises(OperationExecutionError) as exc_info:
@@ -518,13 +551,18 @@ async def test_execute_operation_keeps_the_status_an_executor_reported():
             input_schema={"type": "object"},
         )
     )
-    account = SimpleNamespace(id=uuid4(), credentials={"access_token": "token"})
+    operation_repository.get_by_connector_kind_and_name.return_value = (
+        operation_repository.get_by_connector_and_name.return_value
+    )
+    account = SimpleNamespace(
+        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
+    )
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="github",
-                    auth_provider=AuthProvider.LEMMA,
+                    auth_kind=ConnectorKind.COMPOSIO,
                 )
             )
         ),
@@ -535,6 +573,7 @@ async def test_execute_operation_keeps_the_status_an_executor_reported():
         account_resolution_service=AsyncMock(
             resolve_account=AsyncMock(return_value=account)
         ),
+        connector_service=_composio_install_service(),
     )
 
     with pytest.raises(OperationExecutionNotFoundError) as exc_info:
@@ -578,14 +617,19 @@ async def test_execute_operation_normalizes_pydantic_binary_results():
             output_schema={"type": "object"},
         )
     )
+    operation_repository.get_by_connector_kind_and_name.return_value = (
+        operation_repository.get_by_connector_and_name.return_value
+    )
 
-    account = SimpleNamespace(id=uuid4(), credentials={"access_token": "token"})
+    account = SimpleNamespace(
+        id=uuid4(), auth_config_id=uuid4(), credentials={"access_token": "token"}
+    )
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
             get=AsyncMock(
                 return_value=ConnectorEntity(
                     id="google_drive",
-                    auth_provider=AuthProvider.COMPOSIO,
+                    auth_kind=ConnectorKind.COMPOSIO,
                 )
             )
         ),
@@ -602,6 +646,7 @@ async def test_execute_operation_normalizes_pydantic_binary_results():
         account_resolution_service=AsyncMock(
             resolve_account=AsyncMock(return_value=account)
         ),
+        connector_service=_composio_install_service(),
     )
 
     response = await service.execute_operation(

@@ -347,6 +347,22 @@ Docker/Podman compatibility install instead, which Desktop users do not want.
 Run it after Desktop's local setup has completed once — it reads the endpoints
 from the running installation, so it fails if there is nothing to read.
 
+### On a server, for a team
+
+Lemma Desktop is for one person's machine. To run Lemma for a team on a VM you
+control, there is a production Docker Compose stack:
+
+```bash
+git clone https://github.com/lemma-work/lemma-platform.git
+cd lemma-platform/deploy/compose && ./bootstrap.sh && docker compose up -d
+```
+
+It brings up the API, the worker, Postgres, Redis, SuperTokens and a Caddy
+front end from images pinned by digest, and serves on `<your-ip>.sslip.io`
+until you point a domain at it. The full guide is
+[self-hosting on a VM](docs/self-hosting.md); one-click templates for
+DigitalOcean, Hetzner, Render and Railway are in [`deploy/`](deploy/README.md).
+
 ### Agent Host
 
 To let a pod dispatch runs through your local Claude Code, Codex, OpenCode, or

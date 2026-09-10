@@ -10,17 +10,18 @@ import pytest
 
 from sandbox_runtime.protocol import WorkloadKind
 
+from app.modules.function.config import function_settings
 from app.modules.workspace.services.local_sandbox_client import (
     LocalSandboxClient,
 )
 
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.composition.workspace_identity import (
+from app.modules.function.api.dependencies import (
+    get_function_storage_factory,
     mint_function_session_token,
-    resolve_workspace_organization_id,
+    resolve_function_organization_id,
 )
-from app.modules.function.api.dependencies import get_function_storage_factory
 from app.modules.function.application.function_artifact_builder import (
     FunctionArtifactBuilder,
 )
@@ -42,6 +43,7 @@ from app.modules.function.domain.entities import (
 )
 from app.modules.function.infrastructure.models import (
     FunctionModel,
+    FunctionRevisionModel,
     FunctionRunModel,
 )
 
@@ -134,9 +136,25 @@ async def _create_run(
         status=FunctionStatus.READY,
         visibility="POD",
         revision_hash=artifact.revision_hash,
+        code_path=artifact.code_path,
     )
     session.add(function)
     await session.flush()
+    await get_function_storage_factory()(function_id).write_file(
+        artifact.code_path, code
+    )
+    session.add(
+        FunctionRevisionModel(
+            function_id=function_id,
+            revision_number=1,
+            revision_hash=artifact.revision_hash,
+            generation=artifact.generation,
+            code_path=artifact.code_path,
+            input_schema={},
+            output_schema={},
+            created_by=user_id,
+        )
+    )
 
     run_id = uuid7()
     deadline = datetime.now(timezone.utc) + timedelta(seconds=_RUN_DEADLINE_SECONDS)
@@ -197,12 +215,12 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
     del e2e_settings
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
-    original_gateway_url = settings.function_runtime_gateway_url
+    original_gateway_url = function_settings.function_runtime_gateway_url
     # The URL the *sandbox* uses to fetch its artifact, which is not always the
     # one this process would use. A local container reaches the host gateway; a
     # sandbox in E2B's cloud needs a publicly resolvable address, and the
     # fixture publishes whichever applies (starting a tunnel when it must).
-    settings.function_runtime_gateway_url = configure_workspace_api_url[
+    function_settings.function_runtime_gateway_url = configure_workspace_api_url[
         "workspace_callback_url"
     ]
     try:
@@ -236,7 +254,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),
             runtime_http_client_factory=runtime_http_clients.get,
-            organization_resolver=resolve_workspace_organization_id,
+            organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
 
@@ -291,7 +309,7 @@ async def test_api_and_job_execute_through_one_per_pod_docker_sandbox(
     finally:
         if "runtime_http_clients" in locals():
             await runtime_http_clients.close()
-        settings.function_runtime_gateway_url = original_gateway_url
+        function_settings.function_runtime_gateway_url = original_gateway_url
 
 
 @pytest.mark.asyncio
@@ -322,8 +340,8 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
     del e2e_settings
     pod_id = UUID(test_pod["id"])
     user_id = UUID(fixed_test_user["id"])
-    original_gateway_url = settings.function_runtime_gateway_url
-    settings.function_runtime_gateway_url = configure_workspace_api_url[
+    original_gateway_url = function_settings.function_runtime_gateway_url
+    function_settings.function_runtime_gateway_url = configure_workspace_api_url[
         "workspace_callback_url"
     ]
 
@@ -345,7 +363,7 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
             token_cache=FunctionSessionTokenCache(),
             endpoint_cache=FunctionRuntimeEndpointCache(),
             runtime_http_client_factory=runtime_http_clients.get,
-            organization_resolver=resolve_workspace_organization_id,
+            organization_resolver=resolve_function_organization_id,
             delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
         )
 
@@ -390,7 +408,7 @@ async def test_a_destroyed_sandbox_behind_a_warm_endpoint_costs_no_failed_run(
         )
     finally:
         await runtime_http_clients.close()
-        settings.function_runtime_gateway_url = original_gateway_url
+        function_settings.function_runtime_gateway_url = original_gateway_url
         async with client_factory() as client:
             with contextlib.suppress(Exception):
                 await client.destroy_sandbox(

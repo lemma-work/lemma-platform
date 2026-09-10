@@ -257,7 +257,7 @@ async def test_app_home_surface_selector_parses_an_explicit_choice():
     view = app_home_view(
         pod_name=None,
         agent_name="triage",
-        channel_routes=[],
+        channel_ids=[],
         surface_choices=[("Sales pod", "00000000-0000-0000-0000-000000000001")],
     )
     button = view["blocks"][2]["elements"][0]
@@ -283,7 +283,7 @@ async def test_home_lists_agents_and_apps():
     view = app_home_view(
         pod_name="Test1",
         agent_name="triage",
-        channel_routes=[("C1", None)],
+        channel_ids=["C1"],
         agents=[("agent3", "Handles ops questions")],
         apps=[("Dashboard", "https://d.test")],
     )

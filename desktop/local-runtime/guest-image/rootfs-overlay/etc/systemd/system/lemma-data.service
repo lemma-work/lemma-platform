@@ -1,15 +1,38 @@
 [Unit]
 Description=Mount Lemma's private persistent data disk
 DefaultDependencies=no
-ConditionPathExists=/dev/vdb
-After=dev-vdb.device local-fs.target
-Requires=dev-vdb.device
+# Assert, not Condition. A failed Condition makes systemd *skip* the unit and
+# record it as started successfully, so the `Requires=lemma-data.service` in
+# containerd and lemma-guestd was satisfied by a data disk that was never
+# mounted. Both then started and wrote workspaces, databases and volumes to the
+# root filesystem, which this image discards on every boot -- and the app
+# reported a healthy run each time. A failed Assert fails the unit, and that
+# failure propagates through those Requires and stops them.
+AssertPathExists=/dev/nvme0n1
+After=dev-nvme0n1.device local-fs.target
+Requires=dev-nvme0n1.device
+RequiresMountsFor=/mnt/lemma-control
 Before=containerd.service lemma-guestd.service
+# The Assert above fails the unit before ExecStart runs, so the script
+# never gets to say why. This does, and it is the only way the assert case
+# reaches the host at all.
+OnFailure=lemma-data-unavailable.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/lemma-mount-data
 RemainAfterExit=yes
+# The console, not just the journal.
+#
+# The host's whole data-repair path -- `guest_needs_data_repair`, the
+# named error, the reset the app then offers -- greps the serial console
+# for `lemma-data: needs-repair:`. Under the default `journal` that line
+# went to a journal nothing on the host can read: the kernel command line
+# sets no `forward_to_console`, and Windows runs this guest with systemd
+# off entirely. Every one of those diagnoses was written somewhere nobody
+# would ever look, and the host reported a flat timeout instead.
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
-WantedBy=lemma-runtime.target
+WantedBy=multi-user.target

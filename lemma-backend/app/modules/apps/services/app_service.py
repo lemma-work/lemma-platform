@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
-from uuid import UUID
-from zipfile import ZIP_DEFLATED, ZipFile
+from uuid import UUID, uuid7
 
 import structlog
 
@@ -42,7 +40,10 @@ from app.modules.apps.domain.ports import (
     AppStorageFactoryPort,
 )
 from app.modules.apps.services.app_asset_resolver import AppAssetResolver
-from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
+from app.modules.apps.services.app_dist_bundle import (
+    load_app_dist_bundle,
+    single_index_html_zip,
+)
 from app.modules.apps.services.app_storage_phase import (
     AppStoragePhase,
     _AppDeletionCleanup,
@@ -71,8 +72,6 @@ class AppService:
             app_repository,
             app_branding_entitlement,
         )
-        # Storage side of the asset/archive/bundle/delete sagas, on an object
-        # that holds NO repository (DB-free by construction).
         self._storage_phase = AppStoragePhase(file_manager_factory)
 
     async def _validate_unique_public_slug(
@@ -90,8 +89,7 @@ class AppService:
             )
 
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
-        """Storage phase: read the asset bytes — delegated to the repo-free
-        ``AppStoragePhase`` (holds no DB connection)."""
+        """Read assets without a DB connection."""
         return await self._storage_phase.read_asset(inputs)
 
     async def _require_pod_permission(
@@ -165,13 +163,6 @@ class AppService:
             return refreshed or created
         return created
 
-    @staticmethod
-    def _single_index_html_zip(html: str) -> bytes:
-        buffer = BytesIO()
-        with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
-            archive.writestr("index.html", html)
-        return buffer.getvalue()
-
     async def create_app_from_widget(
         self,
         pod_id: UUID,
@@ -207,13 +198,16 @@ class AppService:
         app = await self.create_app_with_context(
             AppEntity(**entity_data), user_id, ctx=ctx
         )
-        bundle = await run_blocking(self._single_index_html_zip, document)
+        # The document IS the source for a promoted widget -- no build step sits
+        # behind it -- so it ships as both. Uploading dist only left the app
+        # source-less, and a pod bundle then exported its build without its code.
+        archive = await run_blocking(single_index_html_zip, document)
         return await self.upload_bundle(
             pod_id,
             app.name,
             user_id,
-            source_archive_bytes=bundle,
-            dist_archive_bytes=bundle,
+            source_archive_bytes=archive,
+            dist_archive_bytes=archive,
             ctx=ctx,
         )
 
@@ -348,9 +342,7 @@ class AppService:
         )
 
     async def cleanup_app_storage(self, cleanup: _AppDeletionCleanup) -> None:
-        """Delete an app's stored bytes — delegated to the repo-free
-        ``AppStoragePhase`` (holds no DB connection). Call after
-        resolve_delete_app's UoW has committed."""
+        """Delete stored bytes after the deletion transaction commits."""
         await self._storage_phase.cleanup_storage(cleanup)
 
     async def resolve_upload_bundle(
@@ -363,8 +355,7 @@ class AppService:
         dist_archive_bytes: bytes | Path | None,
         ctx: Context | None = None,
     ) -> _UploadPlan:
-        """Authorize + dedup (DB only). The storage writes happen outside this UoW
-        via write_bundle_storage; finalize_upload_bundle then persists."""
+        """Authorize an upload; its unique storage generation is written outside the UoW."""
         app = await self.repository.get_by_name(pod_id, name)
         if not app:
             raise AppNotFoundError(f"App {name} not found")
@@ -385,21 +376,14 @@ class AppService:
 
         version: str | None = None
         release_root: str | None = None
-        existing_release_id: UUID | None = None
         needs_dist_write = False
         if dist_archive_bytes is not None:
-            # Validate the bundle up front (raises AppValidationError on a missing
-            # root index.html), regardless of dedup — matches prior behavior and
-            # ensures no storage write happens for an invalid bundle.
-            # Both are thread offloads over the whole archive. The method's own
-            # docstring calls this phase "DB only", which it was not.
+            # Validate and hash outside the pooled connection.
             async with connection_released(getattr(self.repository, "session", None)):
                 await run_blocking(load_app_dist_bundle, dist_archive_bytes)
                 version = await run_blocking(upload_source_sha256, dist_archive_bytes)
-            release_root = f"releases/{version}/dist/"
-            existing = await self.repository.get_release_by_version(app.id, version)
-            existing_release_id = existing.id if existing is not None else None
-            needs_dist_write = existing is None
+            release_root = f"releases/{version}/{uuid7()}/dist/"
+            needs_dist_write = True
         return _UploadPlan(
             app_id=app.id,
             pod_id=pod_id,
@@ -407,7 +391,6 @@ class AppService:
             has_source=has_source,
             version=version,
             release_root=release_root,
-            existing_release_id=existing_release_id,
             needs_dist_write=needs_dist_write,
         )
 
@@ -417,9 +400,7 @@ class AppService:
         source_archive_bytes: bytes | Path | None,
         dist_archive_bytes: bytes | Path | None,
     ) -> _WrittenBundle:
-        """Write uploaded bytes to storage — delegated to the repo-free
-        ``AppStoragePhase`` (holds no DB connection). Call between
-        resolve_upload_bundle and finalize_upload_bundle."""
+        """Write a generation without holding a DB connection."""
         return await self._storage_phase.write_bundle(
             plan, source_archive_bytes, dist_archive_bytes
         )
@@ -428,21 +409,24 @@ class AppService:
         self, plan: _UploadPlan, written: _WrittenBundle, user_id: UUID
     ) -> AppEntity:
         """Persist the release + app pointer (DB only) after the storage writes."""
-        app = await self.repository.get_by_name(plan.pod_id, plan.name)
+        app = await self.repository.get_for_update(plan.app_id)
         if not app:
             raise AppNotFoundError(f"App {plan.name} not found")
-        release_id = plan.existing_release_id
+        release_id = app.current_release_id
         if plan.needs_dist_write:
-            release = await self.repository.create_release(
+            release = await self.repository.record_release(
                 AppReleaseEntity(
                     app_id=app.id,
                     version=plan.version,
                     dist_root_path=plan.release_root,
                     dist_archive_path=written.dist_archive_path,
+                    source_archive_path=written.source_path,
+                    source_digest=written.source_digest,
+                    created_by=user_id,
                 )
             )
             release_id = release.id
-        if written.source_path is not None:
+        if written.source_path is not None or plan.version is not None:
             app.source_archive_path = written.source_path
         newly_published = plan.version is not None and app.status is not AppStatus.READY
         if plan.version is not None:
@@ -539,8 +523,14 @@ class AppService:
         *,
         asset_path: str | None,
         request_etag: str | None = None,
+        release_ref: str | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
-        """DB phase for serving a public (unauthenticated) app asset by slug."""
+        """DB phase for serving a public (unauthenticated) app asset by slug.
+
+        ``release_ref`` serves a specific release instead of the live one, for
+        the preview host ``<slug>--r7.<app_base_domain>``. See
+        ``AppAssetResolver.preview_url`` for why it is a host and not a prefix.
+        """
         app = await self.repository.get_by_public_slug(public_slug)
         if not app:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
@@ -555,12 +545,21 @@ class AppService:
             is not ResourceVisibility.PUBLIC
         ):
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
+        release = None
+        public_url = self._asset_resolver.public_url(app)
+        if release_ref is not None:
+            from app.modules.apps.services.app_release_service import resolve_preview
+
+            release, public_url = await resolve_preview(
+                self.repository, self._asset_resolver, app, release_ref
+            )
         return await self._asset_resolver.resolve(
             app,
             raise_not_found_name=public_slug,
             asset_path=asset_path,
             request_etag=request_etag,
-            public_url=self._asset_resolver.public_url(app),
+            public_url=public_url,
+            release=release,
         )
 
     async def resolve_source_archive(

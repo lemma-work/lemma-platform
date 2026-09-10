@@ -46,12 +46,16 @@ the recipe:
 |---|---|
 | The port, declared where the consumer can own it | `app/core/ports/widget_content.py:26` |
 | The implementation, in the providing module | `app/modules/agent/services/widget_asset_service.py:21` |
-| The binding, in the composition root | `app/composition/widget_content.py:10` |
+| The binding, published as a factory by the provider | `app/modules/agent/contracts/widget_content.py:26` |
 | The consumer, depending on the type and not the class | `app/modules/apps/api/dependencies.py:82` |
 
 ---
 
 ## Boundaries
+
+> The `Today` figures under DES-01, DES-02/03, DES-04, DES-05 and DES-09 were
+> re-measured in Sep 2026. The others were not, and a stale number is worth less
+> than none — re-run each rule's own `Check` before quoting it.
 
 ### DES-01 — a module reaches another module only through `contracts` or a domain event
 
@@ -62,48 +66,41 @@ Not its services, not its repositories, not its ORM models, not its
 making. It survives refactors by preventing them.
 
 *Check:* `uv run python scripts/check_architecture.py` (`forbidden_imports`)
-*Today:* **35** — ratchet
+*Today:* **23** over 9 module pairs — ratchet
 
-### DES-02 — the composition root composes; it does not re-export
+### DES-02, DES-03 — the composition root: **done**
 
-`app/composition/` exists to build adapters that bind one module's implementation
-to another module's port. A file there whose whole body is `from … import X` with
-an `__all__` is coupling with a nicer address —
-`app/composition/surface_agent.py:8` and `agent_context_models.py:3` are the
-current counter-examples.
+Both rules governed `app/composition/`, a shared middle layer that thirteen of
+the fifteen modules depended on. The directory has been emptied and deleted, so
+neither rule has anything left to govern: a capability now belongs to the module
+that provides it and is published from that module's `contracts/`, which is
+DES-01.
 
-*Check:* `check_architecture.py` (`composition_deep_imports`)
-*Today:* **203** of 223 composition→module imports reach past `contracts` — ratchet
+The three metrics that measured it — `composition_deep_imports`,
+`module_composition_imports` and `induced_module_cycles` — are gone from
+`check_architecture.py` too. The last of those existed to report what the graph
+would look like once the hop was deleted; with the hop gone it had nothing to
+inline and was `module_cycles` computed twice.
 
-### DES-03 — a module must not import the composition root
-
-Dependencies point inward. When a module imports `app.composition`, the root is
-no longer a root; it is a shared middle layer that every module is coupled to.
-
-*Check:* `make architecture` — `module_composition_imports` in the baseline.
-*Today:* **195** — ratchet
-
-Until this rule had a check, the number was a `grep` in this document and nothing
-failed when it rose. Worse, the cycles those 195 edges carry were invisible too:
-`module_cycles` reads **0** because a file under `app/composition` is excluded
-from the dependency graph, so a cycle with a hop through the root is not a cycle
-as far as the gate is concerned. `induced_module_cycles` inlines that hop.
-It reports **one component of 13 of the 15 modules**, and that is the number
-this rule is really about — deleting the root without breaking those cycles
-first would turn the whole backend into one knot.
+The numbers are kept here as a record of what the rules were worth: 32
+composition→module imports past `contracts`, 25 modules reaching the root, and
+one knot containing 13 of the 15 modules. All three are now zero, and
+`module_cycles` reads **0** because there are none rather than because a
+directory was excluded from the graph.
 
 ### DES-04 — `app/core/` must not import `app/modules/`
 
 Core is what modules are built on. The one exception is
 `app/core/registry/installed.py`, whose job is naming them.
 
-Today the central authorization service imports eight modules' ORM classes. The
-gate could not see any of it until recently: it scanned `app/modules/` only,
-which is how the count reached 42 without anyone deciding on it.
+The central authorization service still imports four modules' ORM classes, and
+the resource tables and name registry account for most of the rest. The gate
+could not see any of it until recently: it scanned `app/modules/` only, which is
+how the count reached 42 without anyone deciding on it.
 
 *Check:* `check_architecture.py` (`core_module_imports`), which exempts
 `app/core/registry/installed.py`
-*Today:* **42** — ratchet
+*Today:* **21** over 9 modules — ratchet
 
 ### DES-05 — layers point one way
 
@@ -195,9 +192,8 @@ find. The current gate applies the rule to `app/modules/` only, which is how
 `app/composition/analytics_consumer.py` reached 975 lines unnoticed.
 
 *Check:* `check_architecture.py` (`oversized_files`)
-*Today:* **23** — 14 under `app/modules/` and 9 that only became visible when the
-gate was widened past it, including `app/composition/analytics_consumer.py` at
-975 lines — ratchet
+*Today:* **20** — 13 under `app/modules/` and 7 under `app/core/`, which only
+became visible when the gate was widened past `app/modules/` — ratchet
 
 ### DES-10 — split a service by use case, not by layer
 
@@ -322,8 +318,12 @@ names for "adapter". Pick one and DES-08 becomes a single grep.
 1. Write the port in the consumer, as a `Protocol` with the methods you actually
    call (DES-06, DES-07).
 2. Implement it in the providing module, under `services/` or `infrastructure/`.
-3. Bind it in `app/composition/` — an adapter class, not a re-export (DES-02).
-4. Depend on the type in the consumer; never import the implementation (DES-01).
+3. Publish a factory for it from the provider's `contracts/`, in a named
+   submodule — never a re-export of the implementation (DES-02). A port held for
+   the length of a run is the one case a factory beats free functions; anything
+   else should be operations.
+4. Depend on the type in the consumer, and bind the factory in its
+   `api/dependencies.py`; never import the implementation (DES-01).
 5. If the collaboration can tolerate latency, use a domain event instead of steps
    1–4, and make the consumer idempotent (DES-15).
 

@@ -7,6 +7,7 @@ import type { AppBundleUploadResponse } from '../models/AppBundleUploadResponse.
 import type { AppDetailResponse } from '../models/AppDetailResponse.js';
 import type { AppListResponse } from '../models/AppListResponse.js';
 import type { AppMessageResponse } from '../models/AppMessageResponse.js';
+import type { AppReleaseListResponse } from '../models/AppReleaseListResponse.js';
 import type { CreateAppFromWidgetRequest } from '../models/CreateAppFromWidgetRequest.js';
 import type { CreateAppRequest } from '../models/CreateAppRequest.js';
 import type { UpdateAppRequest } from '../models/UpdateAppRequest.js';
@@ -261,6 +262,56 @@ export class AppsService {
             path: {
                 'pod_id': podId,
                 'app_name': appName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List App Releases
+     * @param podId
+     * @param appName
+     * @returns AppReleaseListResponse Successful Response
+     * @throws ApiError
+     */
+    public static appReleaseList(
+        podId: string,
+        appName: string,
+    ): CancelablePromise<AppReleaseListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/apps/{app_name}/releases',
+            path: {
+                'pod_id': podId,
+                'app_name': appName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Promote App Release
+     * Make an existing release the one this app serves. The release keeps its bytes; only the app's current-release pointer moves.
+     * @param podId
+     * @param appName
+     * @param releaseRef
+     * @returns AppDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static appReleasePromote(
+        podId: string,
+        appName: string,
+        releaseRef: string,
+    ): CancelablePromise<AppDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote',
+            path: {
+                'pod_id': podId,
+                'app_name': appName,
+                'release_ref': releaseRef,
             },
             errors: {
                 422: `Validation Error`,

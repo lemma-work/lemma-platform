@@ -25,7 +25,7 @@ from app.modules.connectors.infrastructure.composio_triggers import (
 def _install(connector_id: str, *, toolkit_slug: str | None = None):
     return ResolvedAuthInstall(
         connector_id=connector_id,
-        kind=ConnectorKind.COMPOSIO if toolkit_slug else ConnectorKind.PACKAGE,
+        kind=ConnectorKind.COMPOSIO if toolkit_slug else ConnectorKind.HTTP,
         auth_scheme=AuthScheme.OAUTH2,
         auth_config_id=uuid4(),
         organization_id=uuid4(),

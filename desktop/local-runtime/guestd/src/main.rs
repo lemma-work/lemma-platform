@@ -11,7 +11,11 @@ fn main() {
 fn run() -> io::Result<()> {
     match std::env::args().nth(1).as_deref().unwrap_or("serve-vsock") {
         "request" => {
-            let service = GuestService::<NerdctlEngine>::discover().map_err(error)?;
+            let mut service = GuestService::<NerdctlEngine>::discover().map_err(error)?;
+            // This process ends with the reply below, so nothing it starts on
+            // a thread survives to finish. Anything long belongs in the
+            // request itself.
+            service.set_per_request_process();
             let ok = handle_reader(stdin().lock(), stdout().lock(), &service)?;
             if ok {
                 Ok(())

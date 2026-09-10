@@ -14,6 +14,15 @@ from pathlib import Path
 from typing import Any
 
 from app.core.log.log import get_logger
+from app.modules.agent.contracts.pod_files import (
+    is_pod_datastore_path,
+    pod_datastore_access,
+)
+from app.modules.datastore.contracts.surfaces import (
+    download_pod_file,
+    read_pod_file,
+    sign_pod_file,
+)
 
 logger = get_logger(__name__)
 
@@ -76,17 +85,13 @@ async def resolve_outbound_email_attachments(
     inlined. Returns ``(inline, links)`` where ``inline`` is a list of
     ``(file_name, bytes, mime)`` and ``links`` is ``(file_name, url)``.
     """
-    # Imported lazily to avoid a module-load cycle (this module is imported
-    # by the platform services).
-    from app.composition.surface_agent import is_datastore_path, pod_services
-
     inline: list[tuple[str, bytes, str]] = []
     links: list[tuple[str, str]] = []
     for path in paths:
-        if is_datastore_path(path):
-            async with pod_services(deps) as services:
-                entity = await services.file.get_file_by_path(
-                    deps.pod_id, path, services.ctx
+        if is_pod_datastore_path(path):
+            async with pod_datastore_access(deps) as pod:
+                entity = await read_pod_file(
+                    pod.uow, pod_id=pod.pod_id, path=path, ctx=pod.ctx
                 )
                 size = entity.size_bytes
                 # A known, positive size at/below the cap inlines. Treat 0 or an
@@ -94,11 +99,8 @@ async def resolve_outbound_email_attachments(
                 # unbounded file whose size wasn't stamped can't be inlined at full
                 # size and blow the provider's hard limit.
                 if isinstance(size, int) and 0 < size <= inline_cap_bytes:
-                    (
-                        _entity,
-                        content,
-                    ) = await services.file.download_file_content_by_path(
-                        deps.pod_id, path, services.ctx
+                    _entity, content = await download_pod_file(
+                        pod.uow, pod_id=pod.pod_id, path=path, ctx=pod.ctx
                     )
                     inline.append(
                         (
@@ -108,13 +110,8 @@ async def resolve_outbound_email_attachments(
                         )
                     )
                 else:
-                    (
-                        _entity,
-                        signed_url,
-                        _expires,
-                        _hits,
-                    ) = await services.file.create_signed_url(
-                        deps.pod_id, path, services.ctx
+                    _entity, signed_url = await sign_pod_file(
+                        pod.uow, pod_id=pod.pod_id, path=path, ctx=pod.ctx
                     )
                     links.append((entity.name, signed_url))
         else:
@@ -147,23 +144,13 @@ async def resolve_outbound_email_attachment_urls(
     returned as unresolved names (the caller notes them). Returns
     ``(url_attachments, unresolved_names)``.
     """
-    from app.composition.surface_agent import is_datastore_path, pod_services
-
     resolved: list[tuple[str, str]] = []
     unresolved: list[str] = []
     for path in paths:
-        if is_datastore_path(path):
-            async with pod_services(deps) as services:
-                entity = await services.file.get_file_by_path(
-                    deps.pod_id, path, services.ctx
-                )
-                (
-                    _entity,
-                    signed_url,
-                    _expires,
-                    _hits,
-                ) = await services.file.create_signed_url(
-                    deps.pod_id, path, services.ctx
+        if is_pod_datastore_path(path):
+            async with pod_datastore_access(deps) as pod:
+                entity, signed_url = await sign_pod_file(
+                    pod.uow, pod_id=pod.pod_id, path=path, ctx=pod.ctx
                 )
                 resolved.append((entity.name, signed_url))
         else:

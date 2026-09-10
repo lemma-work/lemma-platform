@@ -195,6 +195,8 @@ class ConversationModel(UUIDAuditBase):
             is_archived=bool(self.is_archived),  # None until the INSERT.
             last_run_status=latest_run.status if latest_run else None,
             last_run_error=latest_run.error if latest_run else None,
+            last_run_error_code=_failure_field(latest_run, "code"),
+            last_run_error_reason=_failure_field(latest_run, "reason"),
             last_run_finished_at=latest_run.finished_at if latest_run else None,
             messages=[message.to_entity() for message in loaded_messages],
             agent_runs=[agent_run.to_entity() for agent_run in loaded_runs],
@@ -365,3 +367,11 @@ class MessageModel(UUIDCreatedBase):
             tool_result=self.tool_result,
             metadata=self.message_metadata,
         )
+
+
+def _failure_field(run: AgentRunModel | None, field: str) -> str | None:
+    if run is None or run.status != "FAILED":
+        return None
+    failure = (run.run_metadata or {}).get("failure")
+    value = failure.get(field) if isinstance(failure, dict) else None
+    return value if isinstance(value, str) else None

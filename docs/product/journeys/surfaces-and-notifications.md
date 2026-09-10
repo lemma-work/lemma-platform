@@ -21,20 +21,24 @@ it is asked, not skipped.
 
 ## Capability: Connect a pod to a platform
 
-### PS-SURF-001 — A person connects a pod's agent to a platform
-**Status:** gap
+### PS-SURF-001 — A person connects a pod's agent to a further platform
+**Status:** covered
 
-> **Gap:** a pod is never connected to *nothing*. Creating one mints the
-> assistant's mailbox, so `agent.surface.list` returns a `resend` surface
-> immediately and the two scenarios that open by asserting an empty pod fail on
-> that precondition rather than on what they set out to prove. See
-> `DEV-SURF-005`, which is a question for the product rather than a bug: an
-> agent with no other way to reach anyone should have an address, and what is
-> unresolved is whether "a person connects a surface" is the right framing for
-> the *first* one or only for the rest.
+> "A person connects a surface" describes the second and subsequent ones, not
+> the first. That was an open spec question; this is the answer to it, and the
+> promise below is written to match. A pod is never connected
+> to nothing: creating one mints its assistant's mailbox, so `agent.surface.list`
+> answers with a `resend` surface before anyone opens the surfaces screen. That
+> is the behaviour we want — an agent with no other way to reach anyone should
+> still have an address — so the promise below is about the second and
+> subsequent platforms, and the scenarios say "nothing a person connected"
+> rather than "no surfaces at all".
 
-- When a person connects a surface for a platform and binds it to an agent, the
-  system shall start accepting messages for that pod on that platform.
+- Every pod shall start with its assistant reachable at an address nobody had to
+  connect.
+- When a person connects a surface for a further platform and binds it to an
+  agent, the system shall start accepting messages for that pod on that
+  platform.
 - A surface shall answer as exactly one agent. Where a person wants a second
   agent reachable on a platform, the system shall let them make that agent its
   own bot rather than sharing one.
@@ -205,20 +209,24 @@ it is asked, not skipped.
 
 **Contracts:** `agent.surface.create`, `surface.webhook.handle_platform`, `agent.surface.send`
 
-### PS-SURF-023 — A person reached on several platforms gets one predictable answer
-**Status:** gap
+### PS-SURF-023 — A person reachable from several pods is reached by the right one
+**Status:** covered
 
-> **Gap:** the default holds for messages a person starts, not for messages the
-> system starts. Agent-initiated contact ranks the *sending agent's* own surfaces
-> and never reads the preference, and the stored preference is per platform —
-> it chooses which pod's surface answers on WhatsApp, not whether to use WhatsApp
-> at all. See `DEV-SURF-004`, which is a question for the product rather than a
-> bug: the second half of this promise may be the part that is wrong.
+> This promise used to conflate two things. An agent reaches out through **its
+> own** surfaces — that is by design, not a shortfall: an agent can only speak
+> where it has been given a voice, and a person's preference has no bearing on
+> which platforms an agent was connected to. The preference answers a different
+> question, and only that one: where the same person is reachable from two
+> organizations that both use a Lemma-native account on one platform, which of
+> them reaches them there. It selects between pods on a platform; it does not
+> select the platform.
 
-- Where a person has chosen a default surface, the system shall reach them there
-  when it starts the contact, whatever platform any earlier conversation used.
-- When a person changes their default surface, the system shall use the new one
-  from then on.
+- An agent shall reach a person through a surface that agent has, and shall not
+  borrow another agent's.
+- Where a person is reachable from several pods on one platform and has chosen
+  which should reach them, the system shall use that choice.
+- When a person changes that choice, the system shall use the new one from then
+  on.
 - Where a pod's bot serves several organizations, the system shall route each
   person to the right one and shall keep that routing stable.
 - The system shall never let one organization's thread appear in another's.

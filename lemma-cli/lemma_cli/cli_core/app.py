@@ -335,6 +335,7 @@ def init(
 
 @app.command("schema")
 def schema_cmd(
+    ctx: typer.Context,
     resource: str = typer.Argument(
         ..., help="pod, table, function, agent, workflow, schedule, or surface."
     ),
@@ -344,7 +345,7 @@ def schema_cmd(
     (and the same as the per-resource `lemma <resource> schema`)."""
     from .commands._authoring import print_resource_schema
 
-    print_resource_schema(resource)
+    print_resource_schema(ctx, resource)
 
 
 @app.command("version")

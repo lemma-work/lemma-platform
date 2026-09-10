@@ -1,6 +1,15 @@
 name: Backend protected E2E
 
 on:
+  # Every release gate asks for a successful run against the *exact* commit
+  # being released, within seven days. The cron runs against whatever main's
+  # head was at 02:41 on a Wednesday, which is almost never the commit a tag
+  # points at -- so cutting a release meant dispatching this by hand first and
+  # waiting, and forgetting to meant a release build that failed at its first
+  # step after everything else was ready.
+  push:
+    tags:
+      - "v*"
   schedule:
     - cron: "41 2 * * 3"
   workflow_dispatch:
@@ -42,7 +51,7 @@ jobs:
       - name: Run protected suite
         run: >-
           uv run pytest
-          -m "e2e and (slow or workspace or surface_live or indexing or local_cli or protected) and not provider and not mock_sandbox_only"
+          -m "e2e and (slow or workspace or indexing or local_cli or protected) and not provider"
           --junitxml=protected-e2e.xml
           -o timeout=300
         env:
@@ -51,7 +60,6 @@ jobs:
           # paid model credential. Provider-only tests remain covered by the
           # deterministic model unless a dedicated real-provider run opts in.
           E2E_LLM_MODE: "mock"
-          LEMMA_RUN_SURFACE_LIVE_E2E: "1"
           LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
       - name: Publish commit-linked evidence
         if: always()

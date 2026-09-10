@@ -217,7 +217,8 @@ lemma query run "select status, count(*) as total from tickets group by status"
 ```
 
 Read the table schema before writing — **ENUM columns reject values outside
-`options`**. Prefer `query run` (a read-only SELECT subset — one SELECT, no writes)
+`options`**, and **a value over 256KB or a record over 1MB is refused** (put a
+document in a pod file and keep its path in a `FILE_PATH` column). Prefer `query run` (a read-only SELECT subset — one SELECT, no writes)
 for aggregates and joins instead of paging records; it reads across any tables,
 including RLS tables, where it returns only your own rows (RLS scopes every caller
 the same way). To read across all users' rows on an RLS table you'd pass

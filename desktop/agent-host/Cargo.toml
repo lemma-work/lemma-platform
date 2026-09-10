@@ -20,6 +20,9 @@ path = "src/main.rs"
 
 [dependencies]
 agent-client-protocol = "=2.0.0"
+# The agent child is spawned through the protocol crate's escape hatch and
+# supervised here; see `SupervisedAgent` in acp.rs for why.
+async-process = "2.5"
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
@@ -28,7 +31,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 getrandom = "0.3"
 hex = "0.4"
 reqwest = { workspace = true }
-rusqlite = { version = "0.38", features = ["bundled", "uuid"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "uuid"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -40,7 +43,16 @@ url = { version = "2", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 semver = "1"
 futures-util = "0.3.33"
+rustix = { version = "1", features = ["process"] }
 fs4 = { version = "1.1.0", features = ["sync"] }
+lemma-desktop-process = { path = "../process" }
+lemma-job-object = { path = "../job-object" }
+
+# Measurement, not a test: it asserts nothing, and a test target is compiled
+# and linked on every `cargo test` whether or not it is ignored.
+[[bench]]
+name = "latency"
+harness = false
 
 [dev-dependencies]
 assert_cmd = "2"

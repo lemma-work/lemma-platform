@@ -1,0 +1,284 @@
+# Lemma, self-hosted.
+#
+#   ./bootstrap.sh && docker compose up -d
+#
+# See docs/self-hosting.md. Every value comes from .env, which bootstrap.sh
+# writes; .env.example documents each one.
+#
+# The service set and start order are translated from lemma-stack
+# (lemma_stack/stack/specs.py), which is the source of truth for the managed
+# local install. The differences here are deliberate and are production ones:
+# the API and the worker are separate containers rather than one all-in-one
+# process, sandboxes are kept off the database network, and databases are
+# created by initdb instead of imperatively after the fact.
+
+name: lemma
+
+x-backend-image: &backend-image ${LEMMA_BACKEND_IMAGE:?run ./bootstrap.sh first}
+
+# The api, worker and migrate containers all read the same .env, so the three
+# cannot drift into disagreeing about the database they are pointed at. The
+# frontend deliberately does not — see the note on that service.
+x-backend-env: &backend-env
+  env_file: [.env]
+
+services:
+  # ── infrastructure ────────────────────────────────────────────────────────
+  db:
+    image: ${LEMMA_POSTGRES_IMAGE}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: lemma
+    volumes:
+      # /var/lib/postgresql, NOT /var/lib/postgresql/data. The pg18+ images keep
+      # major-version-specific directories under it and refuse to start with a
+      # mount parked on the old path (docker-library/postgres#1259).
+      - postgres_data:/var/lib/postgresql
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [data]
+
+  redis:
+    image: ${LEMMA_REDIS_IMAGE}
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [data]
+
+  supertokens:
+    image: ${LEMMA_SUPERTOKENS_IMAGE}
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      POSTGRESQL_CONNECTION_URI: postgresql://postgres:${POSTGRES_PASSWORD:?}@db:5432/supertokens
+    healthcheck:
+      test: >
+        bash -c 'exec 3<>/dev/tcp/127.0.0.1/3567 && echo -e "GET /hello HTTP/1.1\r\nhost: 127.0.0.1:3567\r\nConnection: close\r\n\r\n" >&3 && cat <&3 | grep "Hello"'
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    networks: [data]
+
+  # ── one-shot setup ────────────────────────────────────────────────────────
+  # The backend provisions sandboxes by talking to the Docker Engine API
+  # directly, and that client has no pull path — it creates, inspects and starts
+  # containers only (app/modules/workspace/providers/docker_engine.py). An
+  # absent image therefore fails at provision time, in the middle of somebody's
+  # agent run, rather than at startup. lemma-stack pulls these up front for the
+  # same reason (lemma_stack/stack/images.py); this is that step.
+  sandbox-images:
+    image: ${LEMMA_DOCKER_CLI_IMAGE}
+    restart: "no"
+    volumes:
+      - ${LEMMA_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    environment:
+      WORKSPACE_IMAGE: ${WORKSPACE_IMAGE:?}
+      FUNCTION_IMAGE: ${FUNCTION_IMAGE:?}
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        for image in "$$WORKSPACE_IMAGE" "$$FUNCTION_IMAGE"; do
+          if docker image inspect "$$image" >/dev/null 2>&1; then
+            echo "sandbox image present: $$image"
+          else
+            # Not --quiet: the workspace image is 2.5 GB and this is the
+            # step a first `up` spends most of its time in. Progress here is
+            # the difference between "slow" and "hung" in
+            # `docker compose logs sandbox-images`.
+            echo "pulling $$image"
+            docker pull "$$image"
+          fi
+        done
+    # Named rather than left to the implicit default network, which compose
+    # would otherwise create just for this one container. The transfer itself
+    # happens in the daemon, not here — this container only talks to the socket.
+    networks: [sandbox]
+
+  # Migrations are their own container, not a step inside the API's startup, so
+  # a failed migration stops the deploy instead of crash-looping the API against
+  # a schema it cannot use. lemma_stack/stack/migrations.py says the same.
+  migrate:
+    image: *backend-image
+    <<: *backend-env
+    restart: "no"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    command: ["alembic", "upgrade", "head"]
+    networks: [data]
+
+  # ── application ───────────────────────────────────────────────────────────
+  api:
+    image: *backend-image
+    <<: *backend-env
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      supertokens: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+      sandbox-images: {condition: service_completed_successfully}
+    command:
+      - uvicorn
+      - app.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --ws
+      - websockets-sansio
+      - --no-access-log
+    # The workspace module drives the host's container runtime to provision
+    # sandboxes, so it needs the socket and the privilege to use it. This is the
+    # single largest thing a Lemma operator is agreeing to; docs/self-hosting.md
+    # spells out what it means and what the alternative (E2B) costs.
+    user: root
+    volumes:
+      - ${LEMMA_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - object_storage:/app/.local/object-storage
+      - file_storage:/app/.local/files
+      # EMBEDDING_PROVIDER=local downloads a ~210 MB model on first use.
+      # Without a volume it is fetched again every time the container is
+      # recreated — every upgrade, and every `up` after an edit. HOME is
+      # /home/appuser in the image, even running as root.
+      #
+      # One volume per service, NOT one shared between them. The API and the
+      # worker each load the model through `LocalEmbedder._load_model`, which
+      # takes a `FileLock` in the cache directory with **no timeout** to keep
+      # two processes on a host from downloading at once. Point both containers
+      # at one volume and that becomes a cross-container lock: a download that
+      # fails in one leaves the other blocked in its startup lifespan forever,
+      # with no error and no log line. Observed exactly that — the API sat in
+      # "Waiting for application startup." for half an hour.
+      - api_model_cache:/home/appuser/.cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 30
+      start_period: 60s
+    networks: [data, sandbox, edge]
+
+  worker:
+    image: *backend-image
+    <<: *backend-env
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      supertokens: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+      sandbox-images: {condition: service_completed_successfully}
+    command: ["python", "-m", "app.worker"]
+    user: root
+    volumes:
+      - ${LEMMA_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - object_storage:/app/.local/object-storage
+      - file_storage:/app/.local/files
+      - worker_model_cache:/home/appuser/.cache
+    # No healthcheck: the worker serves no HTTP, deliberately
+    # (core/infrastructure/jobs/streaq_runtime.py). A wedged loop is caught by
+    # its own watchdog, not from out here.
+    networks: [data, sandbox]
+
+  # Deliberately NOT env_file: .env — that file holds the database password and
+  # the secret-encryption key, and the Next server has no use for either. It
+  # gets the browser-facing values only, read from the same settings the backend
+  # uses so the two cannot disagree about their own URLs. Every NEXT_PUBLIC_*
+  # here is injected at runtime by docker-entrypoint.sh, so one published image
+  # serves any domain.
+  frontend:
+    image: ${LEMMA_FRONTEND_IMAGE:?run ./bootstrap.sh first}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+      HOSTNAME: 0.0.0.0
+      NEXT_PUBLIC_API_URL: ${API_URL:?}
+      NEXT_PUBLIC_SITE_URL: ${FRONTEND_URL:?}
+      NEXT_PUBLIC_AUTH_URL: ${AUTH_FRONTEND_URL:?}
+      NEXT_PUBLIC_AUTH_WEBSITE_BASE_PATH: ${AUTH_WEBSITE_BASE_PATH:-/auth}
+      NEXT_PUBLIC_SUPERTOKENS_API_BASE_PATH: ${SUPERTOKENS_API_BASE_PATH:-/auth}
+      NEXT_PUBLIC_SUPERTOKENS_API_GATEWAY_PATH: ${SUPERTOKENS_API_GATEWAY_PATH:-/st}
+      NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI: ${FRONTEND_URL:?}/
+      # Blank: the session cookie is host-only. See SESSION_COOKIE_DOMAIN.
+      NEXT_PUBLIC_SESSION_TOKEN_DOMAIN: ""
+      NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED: ${AUTH_EMAIL_VERIFICATION_REQUIRED:-true}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [edge]
+
+  # ── ingress ───────────────────────────────────────────────────────────────
+  # Profile-gated. COMPOSE_PROFILES=caddy in .env turns it on, which is the
+  # default; comment that line out to run behind your own load balancer and
+  # publish the ports below yourself.
+  caddy:
+    image: ${LEMMA_CADDY_IMAGE}
+    profiles: [caddy]
+    restart: unless-stopped
+    depends_on:
+      api: {condition: service_healthy}
+      frontend: {condition: service_healthy}
+    environment:
+      LEMMA_DOMAIN: ${LEMMA_DOMAIN:?}
+      LEMMA_API_PORT: ${LEMMA_API_PORT:-8443}
+      LEMMA_TLS_ARG: ${LEMMA_TLS_ARG:-internal}
+      LEMMA_APPS_TLS_OPTS: ${LEMMA_APPS_TLS_OPTS:-}
+      LEMMA_APPS_SUFFIX: .apps.${LEMMA_DOMAIN:?}
+      LEMMA_MAX_UPLOAD: ${LEMMA_MAX_UPLOAD:-512MB}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+      - "${LEMMA_API_PORT:-8443}:${LEMMA_API_PORT:-8443}"
+      - "${LEMMA_API_PORT:-8443}:${LEMMA_API_PORT:-8443}/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+
+networks:
+  # Postgres, Redis and SuperTokens live here and nowhere else. Sandboxes are
+  # not on this network, so code an agent runs cannot open a socket to the
+  # database even though it shares a daemon with it. The managed local stack
+  # puts everything on one network; this is stricter on purpose.
+  data:
+    name: lemma-data
+
+  # The API, the worker, and every sandbox they provision.
+  # WORKSPACE_DOCKER_PRIVATE_NETWORK names this, so the name is fixed rather
+  # than prefixed with the compose project.
+  sandbox:
+    name: lemma-sandbox
+
+  # Caddy to the two things it proxies.
+  edge:
+    name: lemma-edge
+
+volumes:
+  postgres_data:
+  redis_data:
+  object_storage:
+  file_storage:
+  api_model_cache:
+  worker_model_cache:
+  caddy_data:
+  caddy_config:

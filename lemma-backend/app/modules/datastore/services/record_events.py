@@ -1,4 +1,12 @@
-"""Record-event construction and durable outbox dispatch policy."""
+"""Record-event construction and durable outbox dispatch policy.
+
+Events carry the row so a subscriber can read a column the writer never
+mentioned. That convenience is unbounded, and unbounded is what broke: a table
+column holding a document produced 3.4MB stream entries -- the new row plus the
+prior value of every changed column -- in a stream capped by entry count rather
+than bytes. Above a budget the body is dropped and flagged, and the consumer
+that actually needs it reads the row it was just told about.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +18,8 @@ from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
 )
+from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.services.record_size_policy import exceeds
 from app.modules.datastore.services.table_context import TableContext
 
 
@@ -35,16 +45,24 @@ class RecordEventCoordinator:
         if not ctx.events_enabled:
             return None
         event_owner = (owner_user_id or user_id) if ctx.enable_rls else None
+        budget = datastore_settings.datastore_event_payload_max_bytes
+        payload_truncated = exceeds(payload, budget)
+        # `previous` is measured on its own rather than against what is left of
+        # the payload's budget: the two answer different questions, and one
+        # large column should not silently strip the other's prior image.
+        previous_truncated = previous is not None and exceeds(previous, budget)
         return DatastoreRecordEvent.create(
             pod_id=ctx.pod_id,
             table_name=ctx.table_name,
             record_id=str(record_id),
             operation=operation,
-            payload=payload,
+            payload={} if payload_truncated else payload,
             changed=changed,
-            previous=previous,
+            previous=None if previous_truncated else previous,
             actor_id=user_id,
             owner_user_id=event_owner,
+            payload_truncated=payload_truncated,
+            previous_truncated=previous_truncated,
         )
 
     def required_for_record(

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from app.modules.connectors.config import connector_settings
+from app.modules.connectors.domain.errors import AccountResolutionError
 
 
 def _as_aware(value: Any) -> datetime | None:
@@ -30,6 +31,16 @@ def _as_aware(value: Any) -> datetime | None:
     if not isinstance(value, datetime):
         return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def credential_expires_at(credentials: dict[str, Any] | None) -> datetime | None:
+    """When this credential stops working, if the provider said.
+
+    Public because expiry is not only a refresh trigger: anything that *copies*
+    a token somewhere -- the workspace credential bridge writes one into a
+    sandbox -- has to know how long its copy is good for.
+    """
+    return _as_aware((credentials or {}).get("expires_at"))
 
 
 def credential_refresh_due(
@@ -78,3 +89,55 @@ async def resolve_execution_credentials(
     if "user_data" not in refreshed_credentials and stored.get("user_data"):
         refreshed_credentials["user_data"] = stored["user_data"]
     return refreshed_credentials
+
+
+def serialize_credentials(credentials: Any) -> dict[str, Any]:
+    """A stored credential as a plain mapping, in either shape it arrives in.
+
+    Callers hold a typed model on the OAuth paths and a plain mapping on the
+    credential-managed ones.
+    """
+    if credentials is None:
+        raise AccountResolutionError("Resolved account has no credentials.")
+    if isinstance(credentials, dict):
+        return credentials
+    model_dump = getattr(credentials, "model_dump", None)
+    if callable(model_dump):
+        return model_dump(exclude_none=True)
+    raise AccountResolutionError(
+        "Resolved account credentials are in unsupported format."
+    )
+
+
+def is_oauth_account(account: Any) -> bool:
+    """Whether this account holds something a refresh could renew.
+
+    Decided from the credential's own shape, because that is the only authority
+    available here: an auth scheme is a property of the install's `KindSpec`,
+    not of the connector, and this is handed an account.
+    """
+    creds = getattr(account, "credentials", None)
+    keys = ("access_token", "refresh_token", "connection_id")
+    if isinstance(creds, dict):
+        return any(key in creds for key in keys)
+    return any(hasattr(creds, key) for key in keys)
+
+
+async def fresh_credentials(
+    account: Any, user_id: Any, *, connector_service: Any
+) -> dict[str, Any]:
+    """`resolve_execution_credentials` with this module's own shape helpers.
+
+    The convenience form, so a caller that has no opinion about serialization
+    does not have to supply one -- and, more to the point, so every path that
+    reaches a stored token reaches it through the same refresh. The sandbox's
+    `git`/`gh` bridge did not, and re-wrote an expired token into the workspace
+    every time it was asked.
+    """
+    return await resolve_execution_credentials(
+        account,
+        user_id,
+        connector_service=connector_service,
+        serialize=serialize_credentials,
+        is_oauth=is_oauth_account,
+    )

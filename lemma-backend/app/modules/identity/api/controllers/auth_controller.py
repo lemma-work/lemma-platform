@@ -5,7 +5,7 @@ from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
 from supertokens_python.recipe.session.asyncio import (
@@ -13,6 +13,7 @@ from supertokens_python.recipe.session.asyncio import (
 )
 
 from app.core.config import settings
+from app.modules.identity.config import identity_settings
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
@@ -43,6 +44,7 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
 )
 from app.modules.identity.services.desktop_auth_handoff import (
     DesktopAuthCompletionConflict,
+    DesktopAuthHandoffStore,
     DesktopAuthRequestNotFound,
     DesktopAuthRequestPending,
     DesktopAuthRateLimitExceeded,
@@ -131,7 +133,15 @@ class WhatsAppMobileVerificationConfigResponse(BaseModel):
 
 
 class WhatsAppMobileVerificationStartRequest(BaseModel):
-    mobile_number: str = Field(min_length=8, max_length=32)
+    """The number is optional: omitting it says "bind whichever phone answers".
+
+    Profile settings has one to declare, because the form asked for it. The
+    surface connect journey does not, and asking there would be the only place
+    in the product that makes someone type a number a platform is about to tell
+    us anyway.
+    """
+
+    mobile_number: str | None = Field(default=None, min_length=8, max_length=32)
 
 
 class WhatsAppMobileVerificationStartResponse(BaseModel):
@@ -200,7 +210,9 @@ async def create_altcha_challenge(
     response_model=TelegramConfigResponse,
 )
 async def telegram_config() -> TelegramConfigResponse:
-    return TelegramConfigResponse(enabled=settings.is_telegram_oidc_configured())
+    return TelegramConfigResponse(
+        enabled=identity_settings.is_telegram_oidc_configured()
+    )
 
 
 async def _verified_auth_user(request: Request) -> User:
@@ -244,20 +256,24 @@ async def start_whatsapp_mobile_verification(
     data: WhatsAppMobileVerificationStartRequest,
 ) -> WhatsAppMobileVerificationStartResponse:
     user = await _verified_auth_user(request)
-    try:
-        normalized_phone = normalize_mobile_e164(data.mobile_number)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    async with async_session_maker() as db_session:
-        owner = await get_other_mobile_number_owner_id(
-            db_session,
-            digits=normalized_phone.removeprefix("+"),
-            user_id=user.id,
-        )
-    if owner is not None:
-        raise HTTPException(
-            status_code=409, detail="This mobile number is already in use"
-        )
+    # Only a declared number can be checked for an owner up front. An undeclared
+    # one is checked where it becomes known instead -- `_persist_claim` runs the
+    # same lookup under the claim lock before it writes.
+    if data.mobile_number is not None:
+        try:
+            normalized_phone = normalize_mobile_e164(data.mobile_number)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        async with async_session_maker() as db_session:
+            owner = await get_other_mobile_number_owner_id(
+                db_session,
+                digits=normalized_phone.removeprefix("+"),
+                user_id=user.id,
+            )
+        if owner is not None:
+            raise HTTPException(
+                status_code=409, detail="This mobile number is already in use"
+            )
 
     service = get_whatsapp_mobile_verification_service()
     try:
@@ -491,6 +507,9 @@ async def complete_desktop_auth_request(
 async def create_desktop_auth_session(
     body: DesktopAuthSessionRequest,
     request: Request,
+    # Injected rather than fetched from module scope, so a test can hand this
+    # endpoint a store instead of patching the module it is testing.
+    store: DesktopAuthHandoffStore = Depends(get_desktop_auth_handoff_store),
 ) -> DesktopAuthSessionResponse:
     if request.headers.get("st-auth-mode") != "cookie":
         raise HTTPException(
@@ -498,7 +517,7 @@ async def create_desktop_auth_session(
             detail="Desktop session exchange requires cookie auth mode",
         )
     try:
-        user_id = await get_desktop_auth_handoff_store().consume(
+        user_id = await store.consume(
             body.request_id,
             body.code_verifier,
         )

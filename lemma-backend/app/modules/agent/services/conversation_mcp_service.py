@@ -185,7 +185,7 @@ class ConversationMCPService:
             Tool(
                 name=exported_tool_name(tool.name),
                 description=tool.description,
-                inputSchema=inline_tool_schema_refs(tool.input_schema),
+                input_schema=inline_tool_schema_refs(tool.input_schema),
                 _meta={
                     "lemma_tool_name": tool.name,
                     **(
@@ -268,7 +268,7 @@ class ConversationMCPService:
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
                 tool_name=tool_name,
-                result=error.structuredContent,
+                result=error.structured_content,
             )
             return error
         await self._close_if_it_did_not_wait(

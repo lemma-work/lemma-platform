@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 import aiohttp
+from redis.exceptions import RedisError
 
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.config import settings
@@ -98,7 +99,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     cache = _get_token_cache()
     try:
         cached_token = await cache.get_raw(cache_key)
-    except Exception as exc:
+    except (RedisError, OSError, TimeoutError) as exc:
         # A cache miss is survivable — the OAuth fetch below is the real source
         # — so this stays non-fatal. Recorded rather than logged per call: this
         # runs on every outbound Teams call, and one record per call during a
@@ -125,7 +126,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
             if response.status >= 400:
                 try:
                     err_body = await response.json(content_type=None)
-                except Exception:
+                except aiohttp.ClientError, ValueError:
                     err_body = {}
                 error_code = err_body.get("error", "unknown")
                 error_desc = str(err_body.get("error_description", ""))[:300]
@@ -163,7 +164,7 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     # Subtract 60 s so we refresh before the token actually expires.
     try:
         await cache.set_raw(cache_key, str(token), ttl_seconds=max(60, expires_in - 60))
-    except Exception as exc:
+    except (RedisError, OSError, TimeoutError) as exc:
         _token_cache_incident.record_failure(error_type=type(exc).__name__)
     else:
         _token_cache_incident.record_success()

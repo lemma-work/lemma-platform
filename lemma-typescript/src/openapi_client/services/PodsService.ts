@@ -12,27 +12,7 @@ import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class PodsService {
     /**
-     * Create Pod
-     * Create a new pod
-     * @param requestBody
-     * @returns PodResponse Successful Response
-     * @throws ApiError
-     */
-    public static podCreate(
-        requestBody: PodCreateRequest,
-    ): CancelablePromise<PodResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/pods',
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * List PodS by Organization
+     * List Pods by Organization
      * List all pods in an organization
      * @param organizationId
      * @param limit
@@ -47,7 +27,7 @@ export class PodsService {
     ): CancelablePromise<PodListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/pods/organization/{organization_id}',
+            url: '/organizations/{organization_id}/pods',
             path: {
                 'organization_id': organizationId,
             },
@@ -55,6 +35,26 @@ export class PodsService {
                 'limit': limit,
                 'page_token': pageToken,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Pod
+     * Create a new pod
+     * @param requestBody
+     * @returns PodResponse Successful Response
+     * @throws ApiError
+     */
+    public static podCreate(
+        requestBody: PodCreateRequest,
+    ): CancelablePromise<PodResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods',
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

@@ -14,6 +14,13 @@ configured, the tool says so.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from app.modules.usage.contracts.execution import (
+    UsageExecutionContext,
+    current_usage_context,
+)
+from app.modules.usage.contracts.metering import metering_execution
+
 import asyncio
 import os
 from collections.abc import Sequence
@@ -23,6 +30,7 @@ from uuid import UUID
 from pydantic_ai import Agent as PydanticAIAgent
 from pydantic_ai import BinaryContent
 from pydantic_ai.messages import UserContent
+from pydantic_ai.models import Model
 from pydantic_ai import UsageLimits
 
 from app.core.log.log import get_logger
@@ -36,6 +44,14 @@ logger = get_logger(__name__)
 VISION_TIMEOUT_SECONDS = 120
 MAX_IMAGES_PER_CALL = 8
 MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024
+
+# A guard against a model that will not stop, not a budget the work has to fit
+# inside. At 4096 it was the latter: a dense table or a full-page diagram
+# transcribed verbatim -- which is exactly what the instructions above ask for
+# -- ran past it, `UsageLimitExceeded` was raised, and the whole description was
+# discarded rather than truncated. Eight pages of images may legitimately need
+# this much; a runaway needs stopping long before it.
+VISION_OUTPUT_TOKENS_LIMIT = 32768
 
 _SYSTEM_PROMPT = (
     "You are the eyes of another agent that cannot see images. Answer only "
@@ -81,7 +97,9 @@ def vision_delegate_available() -> bool:
     return configured_vision_model_name() is not None
 
 
-async def _resolve_vision_model(*, organization_id: UUID | None, user_id: UUID):
+async def _resolve_vision_model(
+    *, organization_id: UUID | None, user_id: UUID
+) -> Model:
     """A vision-capable pydantic-ai model, or raise.
 
     Asserts the resolved catalog entry actually declares VISION so a misconfigured
@@ -175,10 +193,26 @@ async def describe_images(
 
     agent = PydanticAIAgent(model, instructions=_SYSTEM_PROMPT)
     try:
-        async with asyncio.timeout(VISION_TIMEOUT_SECONDS):
+        current = current_usage_context()
+        usage_context = (
+            replace(current, source_type="vision")
+            if current
+            else UsageExecutionContext(
+                user_id=user_id,
+                organization_id=organization_id,
+                pod_id=None,
+                source_type="vision",
+            )
+        )
+        async with (
+            metering_execution(usage_context),
+            asyncio.timeout(VISION_TIMEOUT_SECONDS),
+        ):
             result = await agent.run(
                 prompt,
-                usage_limits=UsageLimits(request_limit=1, output_tokens_limit=4096),
+                usage_limits=UsageLimits(
+                    request_limit=1, output_tokens_limit=VISION_OUTPUT_TOKENS_LIMIT
+                ),
             )
     except TimeoutError as exc:
         raise VisionDescriptionError(

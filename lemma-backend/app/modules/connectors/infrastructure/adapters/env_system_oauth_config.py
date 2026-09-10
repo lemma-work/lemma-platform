@@ -70,7 +70,9 @@ def _google_oauth2_defaults(*api_scopes: str) -> OAuth2Defaults:
 
 # OAuth2 endpoints/scopes for native Lemma-provider apps, keyed by connector id.
 NATIVE_LEMMA_OAUTH2_DEFAULTS: dict[str, OAuth2Defaults] = {
-    "gmail": _google_oauth2_defaults("https://www.googleapis.com/auth/gmail.modify"),
+    # Gmail is absent on purpose: it declares its own endpoints and scopes in
+    # `lemma_apps_config.json` now that it installs as `http`, and an entry here
+    # would out-rank them.
     "google_calendar": _google_oauth2_defaults(
         "https://www.googleapis.com/auth/calendar"
     ),

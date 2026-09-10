@@ -35,6 +35,7 @@ from app.modules.workspace.services.workspace_process_store import WorkspaceProc
 from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
 )
+from app.modules.workspace.config import workspace_settings
 
 _storage_generation_store: WorkspaceStorageGenerationStore | None = None
 _process_store: WorkspaceProcessStore | None = None
@@ -162,8 +163,8 @@ class WorkspaceSandboxService:
 
     @staticmethod
     def _resolve_workspace_api_url() -> str:
-        if settings.workspace_callback_api_url:
-            return settings.workspace_callback_api_url
+        if workspace_settings.workspace_callback_api_url:
+            return workspace_settings.workspace_callback_api_url
         return settings.cli_api_url or settings.api_url
 
     async def _delete_sandbox(
@@ -328,9 +329,11 @@ class WorkspaceSandboxService:
         scope: list[str] | None = None,
         session_id: str | None = None,
     ) -> dict[str, str]:
-        from app.composition.workspace_identity import mint_workspace_token
+        from app.modules.identity.contracts.delegated_tokens import (
+            mint_delegated_token,
+        )
 
-        token = await mint_workspace_token(
+        token = await mint_delegated_token(
             user_id=user_id,
             workload_type=workload_type,
             workload_id=workload_id,
@@ -342,11 +345,13 @@ class WorkspaceSandboxService:
         )
         api_url = self._resolve_workspace_api_url()
         auth_url = (
-            settings.workspace_callback_auth_url
+            workspace_settings.workspace_callback_auth_url
             or settings.cli_auth_frontend_url
             or settings.auth_frontend_url
         )
-        host_origin = settings.workspace_callback_frontend_url or settings.frontend_url
+        host_origin = (
+            workspace_settings.workspace_callback_frontend_url or settings.frontend_url
+        )
 
         resolved_org_id = (
             str(organization_id)
@@ -368,11 +373,12 @@ class WorkspaceSandboxService:
     async def _resolve_organization_id(self, pod_id: UUID | None) -> str | None:
         if pod_id is None:
             return None
-        from app.composition.workspace_identity import (
-            resolve_workspace_organization_id,
+        from app.modules.pod.contracts.detached_reads import (
+            pod_organization_id_detached,
         )
 
-        return await resolve_workspace_organization_id(pod_id)
+        organization_id = await pod_organization_id_detached(pod_id)
+        return str(organization_id) if organization_id else None
 
     async def get_session(
         self,

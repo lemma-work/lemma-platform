@@ -7,9 +7,25 @@ use serde_json::{json, Value};
 
 use crate::PROTOCOL_VERSION;
 
+fn default_state_schema_version() -> u64 {
+    STATE_SCHEMA_VERSION
+}
+
+/// The shape of `state.json`.
+///
+/// Written into every file and read back, so a build that changes the shape
+/// can tell "an older Lemma wrote this" from "this is corrupt". There was no
+/// version at all, and `load` falls back to the default on any parse failure
+/// -- which means a shape change would have silently reset every
+/// installation's state with nothing anywhere saying why.
+pub const STATE_SCHEMA_VERSION: u64 = 1;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
+    /// Absent in files written before this existed, which is version 1.
+    #[serde(default = "default_state_schema_version")]
+    pub schema_version: u64,
     pub revision: u64,
     pub status: String,
     pub ready: bool,
@@ -28,6 +44,7 @@ pub struct StateSnapshot {
 impl Default for StateSnapshot {
     fn default() -> Self {
         Self {
+            schema_version: STATE_SCHEMA_VERSION,
             revision: 0,
             status: "stopped".into(),
             ready: false,
@@ -196,11 +213,16 @@ impl StateSnapshot {
         event
     }
 
+    /// Write the state, atomically and privately.
+    ///
+    /// This used to be a plain `write` to `state.json.next` and a rename: no
+    /// fsync of either the file or the directory, so a power cut could take
+    /// back a write that had already returned `Ok`; no private mode, on a file
+    /// that carries the workspace URL; and a temporary named from the path
+    /// alone, so two threads persisting at once wrote through each other.
     pub fn persist(&self, path: &Path) -> io::Result<()> {
-        let temporary = path.with_extension("json.next");
         let bytes = serde_json::to_vec_pretty(self).map_err(io::Error::other)?;
-        std::fs::write(&temporary, bytes)?;
-        std::fs::rename(temporary, path)
+        lemma_private_file::write_atomic(path, &bytes)
     }
 
     fn normalize_loaded_state(&mut self) {

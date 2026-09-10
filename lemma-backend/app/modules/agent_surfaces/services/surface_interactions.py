@@ -13,14 +13,15 @@ three platforms where ``acknowledge_interaction`` was a no-op.
 
 from __future__ import annotations
 
-from typing import Any
-
-
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 
 from app.modules.agent.contracts import AgentRunApprovalDecision
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
@@ -43,7 +44,6 @@ from app.modules.agent_surfaces.services.interaction_helpers import (
     parse_interaction_target,
     resolve_current_interaction_delivery,
     resolve_interaction_delivery,
-    retry_interaction_conversation,
 )
 from app.core.log.log import get_logger
 
@@ -196,8 +196,8 @@ class SurfaceInteractionMixin:
                     )
                 return
 
-            conversation = await self.conversation_service.conversation_repository.get_conversation(
-                conversation_id
+            conversation = await agent_conversations.surface_conversation(
+                self.uow, conversation_id
             )
             if conversation is None:
                 logger.debug(
@@ -233,10 +233,11 @@ class SurfaceInteractionMixin:
                             clear_actions=True,
                         )
                     return
-                await retry_interaction_conversation(
-                    conversation_service=self.conversation_service,
-                    uow=self.uow,
-                    conversation=conversation,
+                await agent_conversations.retry_failed_run(
+                    self.uow,
+                    conversation_id=conversation.id,
+                    user_id=conversation.user_id,
+                    pod_id=conversation.pod_id,
                 )
                 async with connection_released(self.uow.session):
                     await adapter.acknowledge_interaction(
@@ -264,15 +265,14 @@ class SurfaceInteractionMixin:
             )
             token = set_current_context(auth_ctx)
             try:
-                await self.conversation_service.resolve_user_approval_internal(
-                    conversation=conversation,
+                await agent_conversations.resolve_pending_interaction(
+                    self.uow,
+                    conversation_id=conversation.id,
                     approval_id=tool_call_id,
                     user_id=conversation.user_id,
                     pod_id=conversation.pod_id,
                     decision=decision,
                     response=response,
-                    # Same webhook deadline as the typed-reply path above.
-                    defer_reconciliation=True,
                 )
             finally:
                 reset_current_context(token)
@@ -298,8 +298,8 @@ class SurfaceInteractionMixin:
         *,
         link: AgentSurfaceConversationLink,
         surface: AgentSurfaceEntity,
-        conversation,
-    ) -> tuple[AgentSurfaceConversationLink, Any, bool] | None:
+        conversation: SurfaceConversation,
+    ) -> tuple[AgentSurfaceConversationLink, SurfaceConversation, bool] | None:
         """Apply the normal DM agent/TTL reset policy before an action runs."""
 
         try:
@@ -321,10 +321,8 @@ class SurfaceInteractionMixin:
         )
         if refreshed_link.conversation_id == link.conversation_id:
             return refreshed_link, conversation, False
-        refreshed_conversation = (
-            await self.conversation_service.conversation_repository.get_conversation(
-                refreshed_link.conversation_id
-            )
+        refreshed_conversation = await agent_conversations.surface_conversation(
+            self.uow, refreshed_link.conversation_id
         )
         if refreshed_conversation is None:
             return None

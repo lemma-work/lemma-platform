@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "confirmation-capability",
+  "description": "Only the bundled confirmation overlay can resolve its own pending app action.",
+  "webviews": ["confirmation"],
+  "permissions": ["allow-resolve-confirmation"]
+}

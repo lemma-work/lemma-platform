@@ -23,7 +23,7 @@ class AgentHostRunConfig:
     model_name: str | None
 
 
-def agent_host_run_config(options: HarnessOptions) -> AgentHostRunConfig:
+def agent_host_run_config[DepsT](options: HarnessOptions[DepsT]) -> AgentHostRunConfig:
     profile = _runtime_profile(options)
     harness_id = UUID(str(profile["harness_id"]))
     runtime_profile_id = UUID(str(profile["profile_id"]))
@@ -56,7 +56,7 @@ def resolve_pod_cwd(conversation: Conversation) -> str:
     return resolve_pod_cwd(conversation)
 
 
-def _runtime_profile(options: HarnessOptions) -> JsonObject:
+def _runtime_profile[DepsT](options: HarnessOptions[DepsT]) -> JsonObject:
     extra = getattr(options, "extra", None)
     profile = json_object(extra).get("runtime_profile") if extra else None
     if not isinstance(profile, dict):

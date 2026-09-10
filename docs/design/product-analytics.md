@@ -4,7 +4,7 @@ The plane is built on all four edges: the backend spine (`app/core/origin.py`,
 `app/core/analytics/`, and the subscriber in
 `app/composition/analytics_consumer.py`), the web client
 (`lib/analytics/client.ts`), the CLI (`lemma_cli/cli_core/telemetry.py` and
-`lemma telemetry`), and Desktop (`locald/src/telemetry.rs`). The ClickStack sink
+`lemma telemetry`), and Desktop (`desktop/src/telemetry.rs`). The ClickStack sink
 described in §4 is not written yet.
 
 Nothing reports anywhere until an ingestion key is set, and no key is set

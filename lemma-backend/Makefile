@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-connectors test-connectors lint-async lint-session-scope lint-io-hygiene lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -99,6 +99,10 @@ help:
 	@echo "  make lint-async        # blocking-call gate for async code"
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
+	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
+	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
+	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
+	@echo "  make test-e2e-shard-ci SHARD=sandbox   # one CI shard, exactly as CI runs it"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
@@ -173,14 +177,18 @@ test-e2e-fast:
 # contention that makes -n2 flaky. The union of all shards' E2E_ARGS must equal
 # the whole fast suite (the last shard is a catch-all via --ignore).
 test-e2e-shard:
-	uv run pytest $(E2E_PARALLEL) $(E2E_ARGS) -m "e2e and not slow and not workspace and not provider and not local_cli and not indexing and not protected" -o timeout=120
+	uv run pytest $(E2E_PARALLEL) $(E2E_ARGS) -m "$(E2E_SHARD_MARKERS)" -o timeout=120
 
-# Kreuzberg-backed indexing/search e2e (real document extraction). Split out of
-# test-e2e-fast so that job stays fast and never boots the RAM-heavy Kreuzberg
-# container; these are still mocked (Kreuzberg only — no model key, no Docker
-# sandbox) and run as their own CI job so indexing/authz coverage isn't lost.
-test-e2e-indexing:
-	uv run pytest $(E2E_PARALLEL) -m "e2e and indexing and not provider and not local_cli" -o timeout=180
+# Reproduce one CI shard by name, taking its paths, worker count and marker
+# filter from `.github/e2e-shards.json` -- the same file the workflow reads.
+#
+# Prefer this to `test-e2e-shard` for anything you are checking against CI. That
+# target used to hard-code the fast-lane filter and ignore E2E_SHARD_MARKERS
+# entirely, so reproducing the `sandbox` shard locally deselected every
+# Docker-sandbox test and passed while the shard failed on the pull request.
+test-e2e-shard-ci:
+	@test -n "$(SHARD)" || (echo "SHARD is required -- one of:" && uv run python ../scripts/run_e2e_shard.py --list && exit 1)
+	uv run python ../scripts/run_e2e_shard.py $(SHARD)
 
 # Real runtime suite only (real model + Docker), serial. Subset of test-e2e-real.
 # The real-model agent suite. Every `real_llm` test lives here and, until this
@@ -193,10 +201,20 @@ test-e2e-indexing:
 # little while making a rate-limit failure look like a flake.
 test-e2e-real-llm:
 	E2E_LLM_MODE=real uv run pytest -m "e2e and not slow and not workspace and not local_cli and not indexing" \
-		app/modules/agent -o timeout=300
+		app/modules/agent app/modules/usage/tests/e2e/test_real_model_accounting_e2e.py -o timeout=300
 
+# Byte-identical to the marker filter and environment in
+# `.github/workflows/backend-protected-e2e.yml`, and asserted so by
+# `test_the_protected_lane_can_be_reproduced_from_the_makefile`. It had drifted:
+# this target used to select `provider` where the workflow says `not provider`,
+# carry a marker the workflow did not, and leave `E2E_LLM_MODE` unset -- so running it
+# locally to reproduce the protected lane failed on tests CI never runs, and
+# passed on none it does. That lane once did nothing at all for eleven days and
+# blocked every Desktop release; it should be reproducible in one command.
 test-e2e-runtime:
-	E2E_REAL=1 uv run pytest -m "e2e and (slow or workspace or provider or local_cli or indexing or surface_live or protected)"
+	E2E_REAL=1 E2E_LLM_MODE=mock uv run pytest \
+		-m "e2e and (slow or workspace or indexing or local_cli or protected) and not provider" \
+		-o timeout=300
 
 test-module:
 	@test -n "$(MODULE)" || (echo "MODULE is required, e.g. make test-module MODULE=pod" && exit 1)
@@ -288,13 +306,7 @@ test-collect:
 lint:
 	uv run ruff check app migrations scripts
 
-# Formatting, over first-party code only. The exclusion of `lemma-connectors/`
-# here is deliberately broader than `lint-connectors` below: only
-# `src/lemma_connectors/*/generated/**` comes from provider specs, but the whole
-# package is left alone by the formatter because reformatting the generated half
-# would be undone by the next generation run and read as codegen drift. Linting
-# is the finer instrument -- the package's own `[tool.ruff]` scopes past the
-# generated clients so the hand-written half stays enforceable.
+# Formatting, over first-party code only.
 FORMAT_PATHS = app migrations scripts sandbox_runtime load_tests standalone_app.py sitecustomize.py
 
 format:
@@ -302,16 +314,6 @@ format:
 
 format-check:
 	uv run ruff format --check $(FORMAT_PATHS)
-
-# lemma-connectors is vendored here but was outside every gate: not in `lint`'s
-# paths, excluded from basedpyright, and its tests are outside pytest.ini's
-# testpaths. Its own pyproject scopes ruff past the generated clients, so the
-# hand-written half is enforceable -- see the comment there.
-lint-connectors:
-	uv run ruff check lemma-connectors/src lemma-connectors/tests lemma-connectors/scripts
-
-test-connectors:
-	uv run pytest lemma-connectors/tests -q
 
 # `app/modules/agent/api/dependencies.py` is in the list for one line it holds:
 # it hands the concrete `ConversationRepository` to a parameter typed as the
@@ -326,8 +328,89 @@ test-connectors:
 # raised TypeError into a broad except and returned 502. Structural, not a test:
 # no amount of test writing catches a port that drifts from an implementation
 # nobody exercises.
+#
+# `app/modules/agent_surfaces/api/controllers` is the same argument one level
+# out: not a port, but a call site whose only reader is the type checker. A
+# rename of `publish_home_view`'s `channel_routes` swept up a call to
+# `surface_config_from_input` -- a different function that kept the parameter --
+# and `POST /surfaces/telegram/managed` raised `TypeError` before it reached
+# Telegram. A controller is exactly where that goes unnoticed: it is the layer
+# tests reach through a client rather than by calling, so a keyword nobody
+# passes in a test is a keyword nobody checks.
+# Standard type checking accepts absent annotations. Keep accounting boundaries
+# and their test doubles explicit so deleting a type cannot make this gate pass.
+AGENT_HARNESS_TYPED_PATHS := \
+	app/modules/agent/capabilities/assembler.py \
+	app/modules/agent/capabilities/deferred_hint.py \
+	app/modules/agent/capabilities/instructed_toolset.py \
+	app/modules/agent/capabilities/todo.py \
+	app/modules/agent/domain/ports.py \
+	app/modules/agent/domain/value_objects.py \
+	app/modules/agent/infrastructure/harnesses/agent_host/dispatch.py \
+	app/modules/agent/infrastructure/harnesses/agent_host/harness.py \
+	app/modules/agent/infrastructure/harnesses/agent_host/run_config.py \
+	app/modules/agent/infrastructure/harnesses/history.py \
+	app/modules/agent/infrastructure/harnesses/pydantic_ai.py \
+	app/modules/agent/infrastructure/harnesses/pydantic_ai_node_loop.py \
+	app/modules/agent/infrastructure/harnesses/remote_payload.py \
+	app/modules/agent/services/agent_runner_service.py \
+	app/modules/agent/services/conversation_title_service.py \
+	app/modules/agent/services/runtime_model_factory.py \
+	app/modules/agent/services/runtime_profile_service.py \
+	app/modules/agent/services/summarization_model.py \
+	app/modules/agent/services/vision_service.py \
+	app/modules/agent/tools/graceful_toolset.py \
+	app/modules/agent/tools/registry.py \
+	app/modules/agent/tools/tool_assembler.py \
+	app/modules/agent_surfaces/contracts/egress.py \
+	app/modules/agent_surfaces/infrastructure/adapters/platform_tool_factory.py
+
+USAGE_ANNOTATED_PATHS := \
+	app/modules/agent/infrastructure/harnesses/pydantic_ai.py \
+	app/modules/agent/infrastructure/harnesses/history.py \
+	app/modules/agent/services/agent_runner_service.py \
+	app/modules/agent/services/conversation_title_service.py \
+	app/modules/agent/services/run_usage_recorder.py \
+	app/modules/agent/services/runtime_model_factory.py \
+	app/modules/agent/services/runtime_profile_service.py \
+	app/modules/agent/services/summarization_model.py \
+	app/modules/agent/services/vision_service.py \
+	app/modules/agent/tests/unit/test_runtime_model_settings.py \
+	app/modules/usage/api/controllers.py \
+	app/modules/usage/config.py \
+	app/modules/usage/contracts/metering.py \
+	app/modules/usage/domain/accounting.py \
+	app/modules/usage/domain/budget_windows.py \
+	app/modules/usage/domain/ports.py \
+	app/modules/usage/domain/query_types.py \
+	app/modules/usage/infrastructure/provider_retries.py \
+	app/modules/usage/infrastructure/request_features.py \
+	app/modules/usage/infrastructure/cost_expressions.py \
+	app/modules/usage/infrastructure/usage_limit_reads.py \
+	app/modules/usage/infrastructure/request_accounting.py \
+	app/modules/usage/services/request_accounting_gateway.py \
+	app/modules/usage/services/request_meter.py \
+	app/modules/usage/tests/unit/test_request_meter.py \
+	app/modules/usage/infrastructure/metered_model.py \
+	app/modules/usage/infrastructure/models.py \
+	app/modules/usage/infrastructure/price_catalog.py \
+	app/modules/usage/infrastructure/repositories.py \
+	app/modules/usage/services/metering_scope.py \
+	app/modules/usage/services/pricing.py \
+	app/modules/usage/services/run_receipts.py \
+	app/modules/usage/services/usage_service.py \
+	app/modules/usage/services/usage_service_factory.py \
+	app/modules/usage/tests/e2e \
+	app/modules/usage/tests/fakes.py \
+	app/modules/usage/tests/unit/test_accounting_money.py \
+	app/modules/usage/tests/unit/test_price_catalog.py \
+	app/modules/usage/tests/unit/test_request_features.py \
+	app/modules/usage/tests/unit/test_accounting_failures.py
+
 typecheck-critical:
-	uv run basedpyright --level error \
+	uv run ruff check --select ANN $(USAGE_ANNOTATED_PATHS) $(AGENT_HARNESS_TYPED_PATHS)
+	uv run basedpyright --project pyright-usage-tests.json
+	uv run basedpyright --level error $(AGENT_HARNESS_TYPED_PATHS) \
 		app/core/domain/events.py \
 		app/core/domain/errors.py \
 		app/core/api/schemas.py \
@@ -336,6 +419,7 @@ typecheck-critical:
 		app/modules/agent/api/dependencies.py \
 		app/modules/agent/domain/ports.py \
 		app/modules/agent/services \
+		app/modules/agent_surfaces/api/controllers \
 		app/modules/agent_surfaces/domain/ports.py \
 		app/modules/connectors/domain/ports.py \
 		app/modules/connectors/api/dependencies.py \
@@ -346,7 +430,7 @@ typecheck-critical:
 		app/modules/pod/domain \
 		app/modules/pod_bundle/domain \
 		app/modules/schedule/domain \
-		app/modules/usage/domain \
+		app/modules/usage \
 		app/modules/workspace/services/local_sandbox_client.py \
 		app/modules/workspace/services/port_access.py \
 		app/modules/workspace/services/sandbox_service.py \
@@ -383,6 +467,26 @@ lint-session-scope:
 # Ratcheted against io-hygiene-baseline.json.
 lint-io-hygiene:
 	uv run python scripts/check_io_hygiene.py
+
+# Unbounded queues and caches, and CPU-heavy work on the event loop.
+# Ratcheted against unbounded-baseline.json.
+lint-unbounded:
+	uv run python scripts/check_unbounded.py
+
+# A default argument naming something tests replace by patching a module
+# attribute. Defaults bind at import, so the patch never reaches them -- and
+# the test usually still passes. No baseline: the rule is quiet by
+# construction, and somewhere to hide a finding is the one thing it must not
+# have.
+lint-import-bound-defaults:
+	uv run python scripts/check_import_bound_defaults.py
+
+# Where a signature meets a caller: every module's HTTP controllers, plus
+# `agent_surfaces/services`, the most entangled service layer in the backend.
+# #620 shipped a keyword argument that stopped matching its callee straight to
+# CI; `typecheck-critical` names paths by hand and did not name these.
+lint-controller-types:
+	uv run python scripts/check_controller_types.py
 
 # Swallowed-error gate (enforced in CI). A broad `except` must leave a trace of
 # what it caught: production runs at INFO, so a debug record with no exc_info

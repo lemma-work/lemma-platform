@@ -20,7 +20,7 @@ def test_every_platform_has_a_binding():
 
 def test_teams_maps_to_microsoft_teams():
     assert surface_connector_id(SurfacePlatform.TEAMS) == "microsoft_teams"
-    assert surface_connector_binding(SurfacePlatform.TEAMS).kind == "package"
+    assert surface_connector_binding(SurfacePlatform.TEAMS).kind == "http"
 
 
 def test_slack_maps_to_slack():

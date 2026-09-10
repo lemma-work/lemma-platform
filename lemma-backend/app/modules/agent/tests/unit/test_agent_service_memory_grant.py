@@ -40,12 +40,28 @@ def _service(agent, *, exists: bool):
     # repository answers `.uow` with a fresh mock whatever happens, so nothing
     # here would notice the service reading the wrong one.
     uow = AsyncMock()
+    asked: dict = {}
+
+    async def _derive(derive_uow, **kwargs):
+        asked["uow"] = derive_uow
+        asked.update(kwargs)
+
     return (
         AgentService(
-            uow=uow, agent_repository=repository, authorization_service=AsyncMock()
+            uow=uow,
+            agent_repository=repository,
+            authorization_service=AsyncMock(),
+            # Injected, not patched. What these tests watch is the service
+            # calling its collaborator with the right unit of work and the
+            # toolsets as saved -- a patch inside `agent_memory_grant` would be
+            # a double inside the subject, and would survive a rename that
+            # should have failed.
+            memory_grant_deriver=_derive,
+            email_surface_provisioner=AsyncMock(return_value=None),
         ),
         repository,
         uow,
+        asked,
     )
 
 
@@ -59,22 +75,9 @@ def _agent(toolsets):
 
 
 @pytest.mark.asyncio
-async def test_creating_an_agent_derives_its_memory_grant(monkeypatch):
+async def test_creating_an_agent_derives_its_memory_grant():
     agent = _agent([AgentToolset.MEMORY])
-    service, _, uow = _service(agent, exists=False)
-    asked: dict = {}
-
-    async def _derive(derive_uow, **kwargs):
-        asked["uow"] = derive_uow
-        asked.update(kwargs)
-
-    monkeypatch.setattr(
-        "app.composition.agent_memory.derive_agent_memory_grant", _derive
-    )
-    monkeypatch.setattr(
-        "app.composition.agent_email_surface.provision_agent_email_surface",
-        AsyncMock(return_value=None),
-    )
+    service, _, uow, asked = _service(agent, exists=False)
 
     await service.create_agent(
         pod_id=uuid4(),
@@ -91,22 +94,11 @@ async def test_creating_an_agent_derives_its_memory_grant(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_updating_derives_from_the_agent_as_saved_not_from_the_request(
-    monkeypatch,
-):
+async def test_updating_derives_from_the_agent_as_saved_not_from_the_request():
     # A PATCH that omits `toolsets` is not the same thing as one turning memory
     # off. Reading the request would revoke the grant on any unrelated edit.
     agent = _agent([AgentToolset.MEMORY])
-    service, _, uow = _service(agent, exists=True)
-    asked: dict = {}
-
-    async def _derive(derive_uow, **kwargs):
-        asked["uow"] = derive_uow
-        asked.update(kwargs)
-
-    monkeypatch.setattr(
-        "app.composition.agent_memory.derive_agent_memory_grant", _derive
-    )
+    service, _, uow, asked = _service(agent, exists=True)
 
     await service.update_agent(
         pod_id=uuid4(),

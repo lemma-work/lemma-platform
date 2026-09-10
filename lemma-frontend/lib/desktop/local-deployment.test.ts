@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
 
 const source = (path: string) =>
     readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
@@ -53,19 +55,105 @@ describe("local deployments never serve the landing page", () => {
  * computer, inside the desktop app. `useSyncExternalStore` gives React a server
  * snapshot it knows to reconcile and a client snapshot that is actually true.
  */
-describe("desktop bridge detection", () => {
-    it("is read through a store rather than called during render", () => {
-        const capabilities = source("lib/desktop/local-capabilities.ts");
+/**
+ * Run `work` with `window` and the deployment set as given, then put the
+ * globals back.
+ *
+ * Modules are reset around each one: `local-capabilities` and what it imports
+ * read both at module scope, so a cached copy answers for whatever the last
+ * test set. A `location` is supplied because a transitive import reads
+ * `window.location.hostname` while it is being evaluated.
+ */
+async function withEnvironment<T>(
+    { deployment, windowValue }: { deployment?: string; windowValue?: object },
+    work: () => Promise<T>,
+): Promise<T> {
+    const globals = globalThis as Record<string, unknown>;
+    const previousWindow = globals.window;
+    const previousDeployment = process.env.NEXT_PUBLIC_LEMMA_DEPLOYMENT;
+    const restore = (key: string, value: string | undefined) => {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+    };
+    if (windowValue === undefined) delete globals.window;
+    else globals.window = { location: { hostname: "lemma.local", port: "" }, ...windowValue };
+    restore("NEXT_PUBLIC_LEMMA_DEPLOYMENT", deployment);
+    vi.resetModules();
+    try {
+        return await work();
+    } finally {
+        if (previousWindow === undefined) delete globals.window;
+        else globals.window = previousWindow;
+        restore("NEXT_PUBLIC_LEMMA_DEPLOYMENT", previousDeployment);
+        vi.resetModules();
+    }
+}
 
-        expect(capabilities).toContain("useSyncExternalStore");
-        expect(capabilities).toMatch(/export function useDesktopBridge\(\)/);
+const SHELL = { __TAURI__: { core: { invoke: () => undefined } } };
+
+describe("desktop bridge detection", () => {
+    /**
+     * The server render is what the user reads first, and on the server the
+     * answer has to be "not in the desktop app" whatever the globals say —
+     * otherwise React reconciles a mismatch and, in between, the user is
+     * looking at HTML that contradicts where they are sitting.
+     *
+     * Rendered rather than read: `useSyncExternalStore`'s third argument is the
+     * only thing that makes this true, and its presence in the source says
+     * nothing about what it returns.
+     */
+    it("renders as unavailable on the server even inside the desktop app", async () => {
+        await withEnvironment({ deployment: "local", windowValue: SHELL }, async () => {
+            const { useDesktopBridge } = await import("./local-capabilities");
+            const Probe = () => createElement("p", null, String(useDesktopBridge()));
+
+            expect(renderToString(createElement(Probe))).toBe("<p>false</p>");
+        });
     });
 
+    /**
+     * The non-reactive form is for event handlers, where there is no server
+     * render to get wrong — and it has to be safe to call with no `window` at
+     * all, because a module that imports it is evaluated on the server too.
+     */
+    it("answers false with no window rather than throwing", async () => {
+        await withEnvironment({ deployment: "local" }, async () => {
+            const { desktopBridgeAvailable } = await import("./local-capabilities");
+
+            expect(desktopBridgeAvailable()).toBe(false);
+        });
+    });
+
+    /**
+     * Both halves are required, and each is false on its own: a LAN browser
+     * pointed at a local install has the deployment and no shell, and a desktop
+     * window showing a cloud workspace has the shell and no local stack.
+     */
+    it("requires both a local deployment and a reachable shell", async () => {
+        const cases: Array<[string | undefined, object, boolean]> = [
+            ["local", SHELL, true],
+            ["local", {}, false],
+            [undefined, SHELL, false],
+            ["cloud", SHELL, false],
+        ];
+        for (const [deployment, windowValue, expected] of cases) {
+            await withEnvironment({ deployment, windowValue }, async () => {
+                const { desktopBridgeAvailable } = await import("./local-capabilities");
+
+                expect(desktopBridgeAvailable(), `${deployment} / ${JSON.stringify(windowValue)}`)
+                    .toBe(expected);
+            });
+        }
+    });
+
+    /**
+     * The steps that gate on it must use the hook, not the bare function. This
+     * one stays a source contract on purpose: what it guards is a *call site*,
+     * and a call site's absence cannot be observed by calling anything.
+     */
     it("is not called during render by the steps that gate on it", () => {
         const steps = source("components/onboarding/local-setup-steps.tsx");
 
-        // The hook, never the bare function: the bare one is for event
-        // handlers, where there is no server render to get wrong.
         expect(steps).toContain("useDesktopBridge()");
         expect(steps).not.toContain("desktopBridgeAvailable()");
     });

@@ -28,7 +28,10 @@ import {
   normalizeAssistantMarkdown,
   type AssistantRenderableMessage,
 } from "lemma-sdk";
+import { toast } from "sonner";
+
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { Check, ChevronDown, Copy } from "@/components/ui/icons";
 import { InlineLoader } from "@/components/brand/loader";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
@@ -38,7 +41,13 @@ import {
   parseAssistantJson,
   splitAssistantMessageSegments,
 } from "@/lib/assistant/json-blocks";
+import {
+  readChannelContext,
+  readSource,
+  readSubject,
+} from "@/lib/assistant/conversation-source";
 import { AssistantJsonBlock } from "./assistant-json-block";
+import { ChannelContextNote, MessageSubjectLine } from "./conversation-source-marks";
 import {
   answerIsDocument,
   chatTurnFingerprint,
@@ -212,11 +221,17 @@ function HoverCopyButton({ text, side }: { text: string; side: "left" | "right" 
         side === "left" ? "lchat-copybtn-left" : "lchat-copybtn-right",
       )}
       onClick={async () => {
+        // Reported rather than swallowed. The empty catch here turned every
+        // failure into a button that does nothing: `navigator.clipboard` is
+        // absent outside a secure context, so on the desktop workspace this
+        // threw before it ever reached the clipboard.
         try {
-          await navigator.clipboard.writeText(text);
+          await copyText(text);
           setCopied(true);
           setTimeout(() => setCopied(false), 1600);
-        } catch { /* clipboard denied */ }
+        } catch {
+          toast.error("Could not copy to clipboard");
+        }
       }}
     >
       {copied ? <Check className="size-3 text-[var(--state-success)]" /> : <Copy className="size-3" />}
@@ -514,6 +529,13 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 }: AssistantTurnViewProps) {
   const userTimestamp = turn.userMessage?.createdAt ? formatTimeStamp(turn.userMessage.createdAt.getTime()) : null;
   const showStatusPill = turn.isLive || turn.trace.length > 0;
+  // What this ask carried that a chat bubble has no room for: an email's
+  // subject, and the channel messages the run was given as background. Who sent
+  // it is a fact about the conversation, not about each turn, so it is said
+  // once in the bar above the transcript rather than over every bubble.
+  const askSource = readSource(turn.userMessage);
+  const askSubject = askSource?.shape === "mail" ? readSubject(turn.userMessage) : null;
+  const askContext = askSource?.shape === "channel" ? readChannelContext(turn.userMessage) : [];
   // The assistant's stamp rides under the turn's last beat, not every bubble.
   const assistantStamp = !turn.isLive && turn.items.length > 0 ? formatTimeStamp(turn.endedAtMs) : null;
   // A turn that was live and just settled earns one settle motion — its pill
@@ -570,8 +592,16 @@ export const AssistantTurnView = memo(function AssistantTurnView({
       data-settled={isSettled || undefined}
       {...{ [TRANSCRIPT_ROW_ATTRIBUTE]: ""}}
     >
+      {/* Background from the surrounding channel, above the ask it gave context
+          to and outside the bubble stack: it belongs to the place, not to this
+          conversation. */}
+      {askSource && askContext.length > 0 ? (
+        <ChannelContextNote entries={askContext} source={askSource} />
+      ) : null}
+
       {turn.userMessage && turn.userMessage.content.trim() ? (
         <div className="lchat-user">
+          {askSubject ? <MessageSubjectLine subject={askSubject} /> : null}
           <div className="lchat-bubble lchat-bubble-user group relative">
             {speechContent(turn.userMessage.content, turn.userMessage, "user", turn.userMessage.id)}
             <HoverCopyButton text={turn.userMessage.content} side="left" />

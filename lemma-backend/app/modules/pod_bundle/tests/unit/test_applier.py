@@ -466,7 +466,7 @@ async def test_an_imported_agent_carries_the_toolsets_its_grant_is_derived_from(
     pod and importing it back died on `Unknown resource name(s): folder:/memory`.
 
     The floor now lives in `AgentService.create_agent` (see
-    `app.composition.agent_memory`), so what is left for the applier to get
+    `app.modules.agent.services.agent_memory_grant`), so what is left for the applier to get
     right is passing the toolsets through at all -- without them the service has
     nothing to derive from and the same bug returns by a different route.
     """
@@ -631,8 +631,13 @@ async def test_function_grants_are_a_deferred_step(tmp_path, monkeypatch):
     async def _invalidate(*, pod_id, function_id):
         invalidated["function_id"] = function_id
 
+    # On the contract the applier imports, not on the service module behind it:
+    # `workspace/contracts/tooling.py` binds the name at import time, so patching
+    # the service module is a patch nothing reads. It only worked while the
+    # applier reached this through `app/composition/pod_bundle_apps.py`, whose
+    # own import was deferred to the call.
     monkeypatch.setattr(
-        "app.modules.workspace.services.workspace_tool_runtime."
+        "app.modules.workspace.contracts.tooling."
         "invalidate_function_workspace_env_cache",
         _invalidate,
     )
@@ -828,7 +833,7 @@ class FakeSurfaceService:
         }
         return SimpleNamespace(id=_uuid4(), config=config)
 
-    async def create_surface_minting_address(self, *, agent, **kwargs):
+    async def create_surface_minting_address(self, *, agent_id, agent_name, **kwargs):
         """What the applier calls, routed through the real minting function.
 
         Delegating straight to `create_surface` was simpler and tested nothing:
@@ -837,6 +842,10 @@ class FakeSurfaceService:
         function decides the name and whether to adopt an existing mailbox,
         which is exactly the part the applier depends on and the part that
         broke.
+
+        The agent arrives as an id and a name, as it now does through
+        `agent_surfaces/contracts/provisioning.py::create_surface`: the entity
+        used to travel this far so two `getattr` calls could take it apart here.
         """
         from types import SimpleNamespace
 
@@ -848,8 +857,8 @@ class FakeSurfaceService:
         return await create_surface_on_minted_address(
             self,
             SimpleNamespace(session=session),
-            agent_id=getattr(agent, "id", None),
-            agent_name=getattr(agent, "name", None),
+            agent_id=agent_id,
+            agent_name=agent_name,
             **kwargs,
         )
 
@@ -1028,7 +1037,7 @@ class _FakeConnectorService:
     """Stand-in for the connectors service the applier consults to confirm a
     supplied account matches the connector the bundle declared."""
 
-    def __init__(self, account, kind: str = "package"):
+    def __init__(self, account, kind: str = "http"):
         from types import SimpleNamespace
 
         self.account_repository = SimpleNamespace(get=self._get_account)
@@ -1076,7 +1085,7 @@ async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkey
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1109,7 +1118,7 @@ async def test_surface_apply_rejects_wrong_connector_account(tmp_path, monkeypat
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1136,7 +1145,7 @@ async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1170,7 +1179,7 @@ async def test_surface_apply_rejects_an_account_of_the_wrong_kind(
             "platform": "SLACK",
             "account_id": "${slack_account}",
             "connector_id": "slack",
-            "connector_kind": "package",
+            "connector_kind": "http",
             "is_enabled": True,
         },
     )
@@ -1214,6 +1223,41 @@ async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch
     )
     _patch_surface_deps(
         monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="mcp")
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(account)})
+    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+    assert surface_fake.created is not None
+
+
+async def test_surface_apply_accepts_a_bundle_exported_under_the_package_kind(
+    tmp_path, monkeypatch
+):
+    """Every bundle exported before the `package` kind was removed says
+    `package`, and every connector that was installable as `package` is
+    installable as `http` now. Holding an old bundle to a kind that no longer
+    exists would make it unimportable for a rename."""
+    from types import SimpleNamespace
+
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "connector_kind": "package",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    connector_account = SimpleNamespace(
+        connector_id="microsoft_teams", auth_config_id=uuid4()
+    )
+    _patch_surface_deps(
+        monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="http")
     )
 
     applier = _applier(root, replacements={"teams_account": str(account)})

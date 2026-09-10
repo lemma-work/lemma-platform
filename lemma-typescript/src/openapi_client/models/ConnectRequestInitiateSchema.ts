@@ -14,4 +14,8 @@ export type ConnectRequestInitiateSchema = {
      * Connector ID to connect
      */
     connector_id?: (string | null);
+    /**
+     * Path inside the app to come back to when the flow finishes. Only a rooted path is accepted; anything else is ignored.
+     */
+    return_to?: (string | null);
 };

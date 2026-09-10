@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from zipfile import BadZipFile, ZipFile
+from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile
 
 from pydantic import BaseModel
 
@@ -63,3 +63,12 @@ def load_app_dist_bundle(dist_archive_bytes: bytes | Path) -> AppDistBundle:
         raise AppValidationError("Dist archive must include index.html at its root")
 
     return AppDistBundle(files=files)
+
+
+def single_index_html_zip(html: str) -> bytes:
+    """A one-file dist archive. Pure bytes-in, bytes-out, so it belongs beside
+    the other bundle format helpers rather than on the service."""
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", html)
+    return buffer.getvalue()

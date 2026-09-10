@@ -6,7 +6,6 @@ import asyncio
 import functools
 import logging
 import time
-import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ from app.core.infrastructure.db.session import (
     get_engine,
     close_engine,
 )
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.events.consumer_groups import (
     consumer_group_reconcile_loop,
@@ -47,6 +45,8 @@ from app.core.infrastructure.events.stream_observability import (
     redis_stream_snapshot_loop,
 )
 from app.core.observability.backlog_gauges import backlog_gauge_loop
+from app.core.infrastructure.jobs.cron_pruning import prune_orphaned_crons_safely
+from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
 from app.core.infrastructure.jobs.job_liveness import (
     register_job_liveness_middleware,
 )
@@ -55,9 +55,6 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     close_streaq_job_queue,
     get_streaq_job_queue,
     load_job_observability_context,
-)
-from app.modules.identity.infrastructure.supertokens_auth.initialization import (
-    initialize_supertokens,
 )
 from app.core.log.log import (
     get_dependency_logger,
@@ -142,46 +139,6 @@ def _silence_lane_signal_handler(worker: Worker[AppWorkerContext]) -> None:
         await asyncio.Event().wait()  # until the lane's task group unwinds
 
     worker.signal_handler = _never_receives_signals  # type: ignore[method-assign]
-
-
-def _install_task_dump_handler() -> None:
-    """Print every pending coroutine's stack on SIGQUIT.
-
-    A worker that stops responding to SIGTERM shows nothing useful in a thread
-    dump: `faulthandler` reports the event loop sitting in `select()`, which is
-    what an idle loop always looks like. The question is always *which awaited
-    coroutine is not finishing*, and only the task list answers it. SIGQUIT is
-    free — neither streaq nor anything else here uses it.
-
-    Windows has no SIGQUIT at all, so `signal.SIGQUIT` raises `AttributeError`
-    there rather than the errors the guard below anticipates. That was harmless
-    while only `python -m app.worker` reached here, because Desktop never ran
-    it; the moment the embedded app runs its lanes, this is the first thing a
-    Windows backend would execute, and it would fail before serving anything.
-    """
-    import signal
-
-    sigquit = getattr(signal, "SIGQUIT", None)
-    if sigquit is None:  # pragma: no cover - platform
-        return
-
-    def _dump(*_args: object) -> None:
-        for task in asyncio.all_tasks():
-            frames = "".join(
-                traceback.format_stack(task.get_coro().cr_frame)  # type: ignore[union-attr]
-                if getattr(task.get_coro(), "cr_frame", None)
-                else []
-            )
-            logger.warning(
-                "infrastructure.streaq_runtime.pending_task_dump.diagnostic",
-                task_name=task.get_name(),
-                frames=frames[-2000:],
-            )
-
-    try:
-        asyncio.get_running_loop().add_signal_handler(sigquit, _dump)
-    except NotImplementedError, RuntimeError:  # pragma: no cover - platform
-        pass
 
 
 async def _stop_secondary_lanes() -> None:
@@ -327,83 +284,6 @@ class AppWorkerContext:
     def uow(self):
         return self.uow_factory()
 
-    def build_function_storage_factory(self):
-        from app.modules.function.api.dependencies import (
-            get_function_storage_factory,
-        )
-
-        return get_function_storage_factory()
-
-    def build_function_service(self, uow: SqlAlchemyUnitOfWork):
-        from app.core.infrastructure.events.message_bus import get_message_bus
-        from app.modules.function.infrastructure.repositories import (
-            FunctionRepository,
-            FunctionRunRepository,
-        )
-        from app.modules.function.services.function_service import FunctionService
-
-        message_bus = get_message_bus()
-        return FunctionService(
-            function_repository=FunctionRepository(uow, message_bus=message_bus),
-            run_repository=FunctionRunRepository(uow, message_bus=message_bus),
-            storage_factory=self.build_function_storage_factory(),
-        )
-
-    def build_function_use_cases(self):
-        """Build the function use-case layer for the worker (same object the API
-        builds). Used to execute queued runs without holding a pooled connection
-        across the sandbox round-trip."""
-        from app.modules.function.api.dependencies import build_function_use_cases
-
-        return build_function_use_cases(self.uow_factory)
-
-    def build_surface_event_handler(self, uow: SqlAlchemyUnitOfWork):
-        from app.modules.agent.api.dependencies import get_conversation_service
-        from app.modules.agent_surfaces.api.dependencies import (
-            surface_repository_factory,
-        )
-        from app.modules.connectors.api.dependencies import (
-            get_connector_service,
-        )
-        from app.modules.agent_surfaces.services.ingress_service import (
-            AgentSurfaceIngressService,
-        )
-        from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
-            SqlAlchemySurfaceRoutingResolutionAdapter,
-        )
-        from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-            SurfaceConversationLinkRepository,
-        )
-
-        return AgentSurfaceIngressService(
-            uow=uow,
-            surface_repository=surface_repository_factory(uow),
-            conversation_link_repository=SurfaceConversationLinkRepository(uow),
-            conversation_service=get_conversation_service(uow),
-            connector_service=get_connector_service(uow),
-            pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-        )
-
-    def build_surface_event_handler_with_factory(self):
-        """Build an AgentSurfaceIngressService that scopes its own short UoWs.
-
-        Used by the process_surface_message worker task: execute_chat runs long
-        external I/O (platform APIs, file ingest, voice transcription) that must
-        NOT hold a pooled DB connection. The service resolves credentials and
-        writes the inbound message in separate short UoWs from this factory.
-        """
-        from app.modules.agent.api.dependencies import get_conversation_service
-        from app.modules.connectors.api.dependencies import get_connector_service
-        from app.modules.agent_surfaces.services.ingress_service import (
-            AgentSurfaceIngressService,
-        )
-
-        return AgentSurfaceIngressService(
-            uow_factory=self.uow_factory,
-            conversation_service_factory=get_conversation_service,
-            connector_service_factory=get_connector_service,
-        )
-
 
 async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:
     """Run one teardown step, bounded, and say which one is running.
@@ -503,7 +383,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     job_queue = get_streaq_job_queue()
     await job_queue.connect()
     await get_message_bus().connect()
-    initialize_supertokens()
     context = AppWorkerContext(
         job_queue=job_queue,
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
@@ -575,25 +454,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         name="backlog-gauges",
     )
 
-    # Fires due schedules and timers. Runs on every worker replica: the poll
-    # claims with FOR UPDATE SKIP LOCKED, so replicas share the work rather than
-    # duplicating it, and there is no leader to lose.
-    from app.modules.agent.services.due_snooze_claimer import claim_due_snooze_waits
-    from app.modules.schedule.services.schedule_poller import run_schedule_poller
-    from app.modules.workflow.services.due_wait_claimer import (
-        claim_due_workflow_waits,
-    )
-
-    schedule_poller_task = create_background_task(
-        run_schedule_poller(
-            context.uow_factory,
-            # Injected here, where crossing module boundaries is the job.
-            timer_claimers=(claim_due_workflow_waits, claim_due_snooze_waits),
-            interval_seconds=settings.schedule_poll_interval_seconds,
-        ),
-        name="schedule-poller",
-    )
-
     started = False
     global _primary_lane_context
     try:
@@ -637,7 +497,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             heartbeat_task,
             stream_snapshot_task,
             backlog_gauge_task,
-            schedule_poller_task,
         ):
             if background_task is not None and not background_task.done():
                 background_task.cancel()
@@ -687,9 +546,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
             "channel_service.disconnect", channel_service.disconnect
         )
 
-        from app.modules.datastore.infrastructure.session import close_datastore_engine
-
-        await _safe_shutdown_step("close_datastore_engine", close_datastore_engine)
         if started:
             logger.info("service.stopped")
         shutdown_telemetry()
@@ -831,7 +687,11 @@ async def run_worker_lanes(
         "worker.lanes.starting",
         lanes=",".join(lane.value for lane in selected),
     )
-    _install_task_dump_handler()
+    install_task_dump_handler()
+    # Before any lane consumes: a cron removed from the code stops firing only
+    # when its schedule is removed from Redis too.
+    for lane in selected:
+        await prune_orphaned_crons_safely(LANE_WORKERS[lane], redis=get_redis())
     primary, *secondary = selected
     if not secondary:
         await LANE_WORKERS[primary].run_async(task_status=task_status)

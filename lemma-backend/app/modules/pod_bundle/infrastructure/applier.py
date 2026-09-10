@@ -340,7 +340,7 @@ class BundleApplier:
         # A function's grants feed the env its workspace tools run with, so the
         # cached env must be dropped whenever they change — same as the
         # permissions-replace controller does.
-        from app.composition.pod_bundle_apps import (
+        from app.modules.workspace.contracts.tooling import (
             invalidate_function_workspace_env_cache,
         )
 

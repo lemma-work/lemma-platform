@@ -18,6 +18,7 @@ from pydantic import (
 from app.core.authorization.context import ResourceType, ResourceVisibility
 from app.core.authorization.grants import ensure_grant_uses_resource_name
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.entities import MAX_AGENT_INSTRUCTION_CHARACTERS
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunApprovalDecision,
@@ -170,6 +171,8 @@ class ConversationResponse(BaseModel):
     is_archived: bool = False
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
+    last_run_error_code: str | None = None
+    last_run_error_reason: str | None = None
     last_run_finished_at: datetime | None = None
     last_run_retryable: bool = False
     created_at: datetime
@@ -279,7 +282,7 @@ class SendMessageRequest(BaseModel):
 
 class CreateAgentRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    instruction: str = Field(min_length=1)
+    instruction: str = Field(min_length=1, max_length=MAX_AGENT_INSTRUCTION_CHARACTERS)
     description: str | None = None
     icon_url: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None
@@ -308,7 +311,9 @@ class CreateAgentRequest(BaseModel):
 
 
 class UpdateAgentRequest(BaseModel):
-    instruction: str | None = Field(default=None, min_length=1)
+    instruction: str | None = Field(
+        default=None, min_length=1, max_length=MAX_AGENT_INSTRUCTION_CHARACTERS
+    )
     description: str | None = None
     icon_url: str | None = None
     agent_runtime: AgentRuntimeConfig | None = None

@@ -114,7 +114,7 @@ class PodSteps:
         """
         return await every_item(
             lambda params: self.api.get(
-                f"/pods/organization/{organization['id']}", params=params
+                f"/organizations/{organization['id']}/pods", params=params
             ),
             pages=pages,
         )

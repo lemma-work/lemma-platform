@@ -498,6 +498,16 @@ class AgentHostEventNormalizer:
         """
         request_id = row.object_id or f"permission-{row.sequence}"
         tool_call = payload.get("toolCall")
+        # ACP carries a ToolCallUpdate inside the permission request. Its input
+        # is ready for the user's decision and may be the first complete input
+        # the adapter supplied. Preserve it before publishing the approval.
+        opening: list[AgentEvent] = []
+        if isinstance(tool_call, dict):
+            tool_id = tool_call.get("toolCallId")
+            if isinstance(tool_id, str) and tool_id:
+                opening = self._announce_tool_call(
+                    self.tool_calls.release(tool_id, tool_call, metadata)
+                )
         # Tracked like any other open call, so a run that ends without an answer
         # closes it. An approval card outlives its run otherwise: the host is no
         # longer holding the request — its own timeout denied it — but the card
@@ -508,6 +518,7 @@ class AgentHostEventNormalizer:
             "request_approval"
         )
         return [
+            *opening,
             *self._flush_messages(final=False),
             *permission_approval_events(
                 agent_run_id=self.agent_run_id,

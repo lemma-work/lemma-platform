@@ -14,6 +14,11 @@ organization, no pod, no content. That is deliberate — a person's first
 organization is a decision about who they work with, and guessing it wrong is
 worse than asking.
 
+Onboarding keeps its primary Continue, Create, or Join action visible within
+the window, including at the desktop's minimum size and with enlarged text.
+Long setup content scrolls independently of that action. Connection failures
+are shown with a retry action rather than an indefinite loading message.
+
 ---
 
 ## Capability: Sign up and sign in

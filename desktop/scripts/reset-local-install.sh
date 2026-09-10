@@ -32,12 +32,17 @@ printf '\n→ Stopping anything still running\n'
 osascript -e 'tell application "Lemma" to quit' >/dev/null 2>&1 || true
 # The daemon deliberately outlives the app, and the VM outlives the daemon, so
 # quitting is not enough on its own.
+# `-u` on purpose. Without it this matches every user's processes of that
+# name, which on a shared Mac is somebody else's session -- the signal fails
+# for want of privilege, so the damage is bounded, but the intent was wrong and
+# the script would have said it stopped something it did not.
+me="$(id -u)"
 for name in lemma-locald lemma-vz lemma-agent-host lemma-runtime; do
-  if pkill -x "${name}" 2>/dev/null; then say "stopped ${name}"; fi
+  if pkill -u "${me}" -x "${name}" 2>/dev/null; then say "stopped ${name}"; fi
 done
 sleep 2
 for name in lemma-locald lemma-vz lemma-agent-host lemma-runtime; do
-  if pkill -9 -x "${name}" 2>/dev/null; then say "killed ${name}"; fi
+  if pkill -u "${me}" -9 -x "${name}" 2>/dev/null; then say "killed ${name}"; fi
 done
 
 printf '\n→ Removing local state\n'

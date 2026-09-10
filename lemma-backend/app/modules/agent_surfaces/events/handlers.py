@@ -24,7 +24,7 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.composition.surface_agent import get_conversation_service
+from app.modules.agent_surfaces.api import dependencies as surface_dependencies
 from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
     surface_repository_factory,
@@ -56,7 +56,6 @@ from app.modules.agent_surfaces.services.ingress_service import (
 from app.modules.agent_surfaces.services.surface_inbound import (
     release_ingress_claim,
 )
-from app.composition.surface_connectors import get_connector_service
 from app.modules.pod.domain.events import PodDeletedEvent, PodEvents
 from app.modules.identity.domain.events import IdentityEvents, UserMobileChangedEvent
 from app.core.log.log import get_logger
@@ -79,8 +78,6 @@ def build_surface_event_handler(uow):
         uow=uow,
         surface_repository=surface_repository_factory(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        conversation_service=get_conversation_service(uow),
-        connector_service=get_connector_service(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
 
@@ -291,5 +288,7 @@ async def process_surface_message(
     # tail) around the long external I/O inside execute_chat — platform API
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
-    service = worker_ctx.build_surface_event_handler_with_factory()
+    service = surface_dependencies.build_surface_event_handler_with_factory(
+        worker_ctx.uow_factory
+    )
     await service.execute_chat(task_payload.context)

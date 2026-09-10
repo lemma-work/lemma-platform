@@ -29,7 +29,6 @@ __all__ = ["files_held_for_one_reply"]
 async def files_held_for_one_reply(
     *,
     uow: Any,
-    conversation_service: Any,
     target: SurfaceEgressTarget,
     conversation_id: UUID,
 ) -> list[EnvelopeFile]:
@@ -46,7 +45,6 @@ async def files_held_for_one_reply(
     for path in paths:
         resolved = await resolve_pod_file_parts(
             uow=uow,
-            conversation_service=conversation_service,
             target=target,
             conversation_id=conversation_id,
             path=path,

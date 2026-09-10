@@ -64,8 +64,6 @@ jobs:
               - 'lemma-backend/Dockerfile'
               - 'lemma-backend/pyproject.toml'
               - 'lemma-backend/uv.lock'
-              - 'lemma-backend/lemma-connectors/pyproject.toml'
-              - 'lemma-backend/lemma-connectors/uv.lock'
               - 'lemma-pod-bundle/pyproject.toml'
               - 'lemma-pod-bundle/uv.lock'
               - '.github/workflows/security.yml'
@@ -187,7 +185,6 @@ jobs:
         run: >-
           uv export --frozen --no-dev --extra local --no-emit-project
           --no-emit-package lemma-pod-bundle
-          --no-emit-package lemma-connectors
           --output-file /tmp/lemma-backend-audit.txt
       - name: Audit locked third-party dependency graph
         run: >-

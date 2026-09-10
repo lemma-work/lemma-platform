@@ -16,13 +16,12 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
     kind_to_provider,
-    provider_to_kind,
 )
 
 
@@ -69,23 +68,13 @@ class ConnectorOperationEntity(_OperationFields):
     id: str = Field(..., description="Unique catalog ID for the operation")
     connector_id: str = Field(..., description="Connector ID")
     kind: ConnectorKind = Field(
-        default=ConnectorKind.PACKAGE,
+        default=ConnectorKind.HTTP,
         description="Install kind whose executor runs this operation",
     )
     execution: Optional[dict[str, Any]] = Field(
         default=None,
         description="Execution descriptor; None for package-executed operations",
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_provider(cls, data: Any) -> Any:
-        """Accept ``provider=`` from callers not yet migrated to kinds."""
-        if not isinstance(data, dict):
-            return data
-        if data.get("kind") is None and data.get("provider") is not None:
-            data = {**data, "kind": provider_to_kind(data["provider"])}
-        return data
 
     @property
     def provider(self) -> AuthProvider:

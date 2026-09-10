@@ -56,9 +56,7 @@ def _refuse_a_private_literal(base_url: str | None) -> str | None:
     # refused below regardless — the metadata service is never a Slack endpoint.
     from app.core.config import settings
 
-    self_hosted = bool(
-        getattr(settings, "connector_allow_private_network_targets", False)
-    )
+    self_hosted = settings.connector_allow_private_network_targets
     host = urlsplit(base_url).hostname or ""
     try:
         address = ipaddress.ip_address(host.strip("[]"))

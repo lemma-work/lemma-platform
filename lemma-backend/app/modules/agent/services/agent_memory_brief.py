@@ -29,7 +29,7 @@ from app.core.authorization.current import reset_current_context, set_current_co
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.composition.agent_datastore import build_file_service
+from app.modules.datastore.contracts.agent_tools import build_file_service
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.agent_memory_paths import (

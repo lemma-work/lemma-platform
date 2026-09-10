@@ -24,6 +24,14 @@ function pretend(platform: string | undefined, hostname: string): void {
     };
 }
 
+/** In the desktop shell, but talking to one too old to say which OS it is. */
+function pretendShellWithoutPlatform(hostname: string): void {
+    (globalThis as Record<string, unknown>).window = {
+        __LEMMA_DESKTOP__: { version: '0', mode: 'local' },
+        location: { hostname },
+    };
+}
+
 afterEach(() => {
     delete (globalThis as Record<string, unknown>).window;
 });
@@ -56,6 +64,24 @@ describe('whether an embedded app would still be signed in', () => {
 
     it('says yes on Windows, where WebView2 treats *.localhost as same-site', () => {
         pretend('windows', 'app.lemma.localhost');
+        expect(crossSiteFramesCarryCookies()).toBe(true);
+    });
+
+    it('fails closed inside a shell that never said which OS it is', () => {
+        // `platform` is optional for a reason: locald serves a frontend pack
+        // that updates independently of the shell, so a newer pack can run
+        // inside an older shell that never injected it. Guessing "not macOS"
+        // there restores the signed-out iframe on the one platform that has
+        // the bug; guessing the other way costs a window on Windows.
+        pretendShellWithoutPlatform('app.lemma.localhost');
+        expect(crossSiteFramesCarryCookies()).toBe(false);
+    });
+
+    it('still permits embedding under a real domain when the OS is unknown', () => {
+        // The unknown-platform case must not become a blanket refusal: the
+        // hostname alone already settles it once the install has moved off
+        // `.localhost`.
+        pretendShellWithoutPlatform('app.127.0.0.1.sslip.io');
         expect(crossSiteFramesCarryCookies()).toBe(true);
     });
 

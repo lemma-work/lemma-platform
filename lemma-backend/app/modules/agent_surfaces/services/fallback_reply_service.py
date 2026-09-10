@@ -22,9 +22,34 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
     SurfacePlatformAdapterPort,
 )
+from app.modules.agent_surfaces.platforms.email_authentication import (
+    EmailAuthenticationVerdict,
+)
 
 logger = get_logger(__name__)
 _fallback_incident = DependencyIncident("surface_fallback_delivery", logger=logger)
+
+
+def sender_can_be_answered(parsed: ParsedInboundSurfaceEvent) -> bool:
+    """Whether anyone is actually at the address a fallback would reply to.
+
+    Only email can lie about who sent it, and ``_email_sender_is_believable``
+    already refuses to resolve an unvouched ``From:`` to a user. The unresolved
+    path then replied to that same unvouched address -- so the check protecting
+    identity was manufacturing the message it should have prevented: forge a
+    ``From:`` header at an agent's mailbox, and Lemma mails whoever the forger
+    named. The stricter the authentication check became, the more of these it
+    produced.
+
+    Silence is the honest answer to a sender the receiving mail service would
+    not vouch for. Nobody is there to read a reply, and somebody else might be.
+
+    Every chat platform asserts its sender inside a signed payload, so this only
+    ever narrows email.
+    """
+    if not parsed.platform.is_email:
+        return True
+    return parsed.sender_authentication == EmailAuthenticationVerdict.PASS
 
 
 def signup_message() -> str:
@@ -50,6 +75,38 @@ def _pod_access_message(pod_id: UUID) -> str:
         "You're signed up, but don't have access to this workspace yet. "
         f"Request access here: {base}/pod/{pod_id}"
     )
+
+
+# Platforms that can answer one person inside a room without the room reading it.
+_ANSWERS_PRIVATELY_IN_A_ROOM = frozenset({SurfacePlatform.SLACK.value})
+
+
+def private_reply_metadata(parsed: ParsedInboundSurfaceEvent) -> dict[str, str] | None:
+    """How to answer this person without answering the room -- None for nowhere.
+
+    Every fallback used to be gated on ``is_dm``, which asked one question in
+    place of two and got both backwards. It was most cautious in a channel,
+    where caution was unnecessary, and most talkative to an anonymous inbox,
+    where it was not.
+
+    A Slack channel is not a public place: everyone in it was admitted by a
+    workspace an organisation authorised, so an unrecognised sender there is a
+    colleague without a Lemma account -- the safest person the system meets.
+    Going quiet in front of them is the one case where silence has no defence,
+    and it makes being added to the channel buy nothing.
+
+    What the old gate actually protected was the *room*, not the boundary. So
+    the room keeps its protection and the person still gets their answer, which
+    is the same trade Slack already makes with an ephemeral when Lemma is added
+    to a channel. Where a platform cannot answer privately, silence stands --
+    a public notice about somebody's account is worse than none.
+    """
+    if parsed.is_dm:
+        return {}
+    if str(parsed.platform).upper() not in _ANSWERS_PRIVATELY_IN_A_ROOM:
+        return None
+    sender = str(parsed.sender_external_user_id or "").strip()
+    return {"ephemeral_to": sender} if sender else None
 
 
 def _can_disclose_pod_access_link(surface: AgentSurfaceEntity) -> bool:
@@ -94,10 +151,13 @@ def unresolved_sender_context(
     adapter: SurfacePlatformAdapterPort,
     agent_display_name: str,
 ) -> SurfaceReplyContext | None:
-    if not parsed.is_dm:
+    audience = private_reply_metadata(parsed)
+    if audience is None:
+        return None
+    if not sender_can_be_answered(parsed):
         return None
     identity_reply = adapter.unresolved_sender_reply(parsed)
-    reply = identity_reply or (signup_message(), {})
+    message, reply_metadata = identity_reply or (signup_message(), {})
     reply_kind: SurfaceReplyKind = (
         "identity_link" if identity_reply is not None else "signup"
     )
@@ -106,7 +166,7 @@ def unresolved_sender_context(
         surface=surface,
         parsed=parsed,
         agent_display_name=agent_display_name,
-        reply=reply,
+        reply=(message, {**reply_metadata, **audience}),
         reply_kind=reply_kind,
     )
 
@@ -134,7 +194,8 @@ def nonmember_context(
     parsed: ParsedInboundSurfaceEvent,
     agent_display_name: str,
 ) -> SurfaceReplyContext | None:
-    if not parsed.is_dm:
+    audience = private_reply_metadata(parsed)
+    if audience is None:
         return None
     disclose_pod = _can_disclose_pod_access_link(surface)
     message = (
@@ -146,7 +207,7 @@ def nonmember_context(
         surface=surface,
         parsed=parsed,
         agent_display_name=agent_display_name,
-        reply=(message, {}),
+        reply=(message, audience),
         reply_kind=reply_kind,
     )
 
@@ -157,14 +218,15 @@ def surface_setup_context(
     parsed: ParsedInboundSurfaceEvent,
     agent_display_name: str,
 ) -> SurfaceReplyContext | None:
-    if not parsed.is_dm:
+    audience = private_reply_metadata(parsed)
+    if audience is None:
         return None
     return _reply_context(
         platform=surface.surface_type,
         surface=surface,
         parsed=parsed,
         agent_display_name=agent_display_name,
-        reply=(surface_setup_message(), {}),
+        reply=(surface_setup_message(), audience),
         reply_kind="surface_setup",
     )
 
@@ -179,6 +241,8 @@ async def prepare_unrouted_context(
     agent_display_name: str,
     event_dedup_store: SurfaceEventDedupStorePort,
 ) -> SurfaceReplyContext | None:
+    if not sender_can_be_answered(parsed):
+        return None
     claimed = await event_dedup_store.claim_message(
         surface_installation_id=None,
         platform=platform,
@@ -262,7 +326,21 @@ async def deliver_fallback_reply(
     adapter: SurfacePlatformAdapterPort,
     context: SurfaceReplyContext,
     credentials: dict[str, Any],
+    event_dedup_store: SurfaceEventDedupStorePort,
 ) -> None:
+    # Every fallback reply on every platform passes here, which makes it the one
+    # place the window can be held for all four reply kinds at once.
+    if not await event_dedup_store.claim_stranger_reply(
+        platform=str(context.platform),
+        surface_installation_id=context.surface_id,
+        sender_external_user_id=context.event.sender_external_user_id,
+    ):
+        logger.debug(
+            "agent_surfaces.fallback_reply.surface_fallback_within_window.observed",
+            platform=str(context.platform),
+            reply_kind=context.reply_kind,
+        )
+        return
     if not has_delivery_credentials(context.platform, credentials):
         # Not a dependency wobbling: the surface has no way to send at all, so
         # every unrecognised sender on it is being ignored rather than told how

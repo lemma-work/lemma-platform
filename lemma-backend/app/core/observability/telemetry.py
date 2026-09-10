@@ -70,7 +70,6 @@ _telemetry_initialized = False
 _libraries_instrumented = False
 _instrumented_app_ids: set[int] = set()
 _instrumented_engine_ids: set[int] = set()
-_logs_initialized = False
 _trace_provider: TracerProvider | None = None
 _llm_trace_provider: TracerProvider | None = None
 _meter_provider: MeterProvider | None = None

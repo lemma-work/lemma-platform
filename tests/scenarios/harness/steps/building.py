@@ -269,7 +269,9 @@ class BuildingSteps:
         return await self.api.get(f"/usage/organizations/{organization['id']}/summary")
 
     async def own_usage_in(self, organization: JSON) -> JSON:
-        return await self.api.get(f"/usage/organizations/{organization['id']}/me")
+        return await self.api.get(
+            f"/usage/me/summary?organization_id={organization['id']}"
+        )
 
     async def is_refused_usage_of(self, organization: JSON) -> int:
         response = await self.api.call(

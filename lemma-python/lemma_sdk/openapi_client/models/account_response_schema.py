@@ -39,6 +39,8 @@ class AccountResponseSchema:
         user_id (UUID):
         connector (ConnectorResponseSchema | None | Unset):
         display_name (None | str | Unset):
+        install_state (str | Unset): READY, INSTALL_REQUIRED, CHOOSE_INSTALL or PENDING_APPROVAL. Anything but READY
+            means the connection cannot reach resources yet. Default: 'READY'.
         is_default (bool | Unset):  Default: False.
         kind (None | str | Unset):
         provider_account_id (None | str | Unset):
@@ -57,6 +59,7 @@ class AccountResponseSchema:
     user_id: UUID
     connector: ConnectorResponseSchema | None | Unset = UNSET
     display_name: None | str | Unset = UNSET
+    install_state: str | Unset = "READY"
     is_default: bool | Unset = False
     kind: None | str | Unset = UNSET
     provider_account_id: None | str | Unset = UNSET
@@ -114,6 +117,8 @@ class AccountResponseSchema:
         else:
             display_name = self.display_name
 
+        install_state = self.install_state
+
         is_default = self.is_default
 
         kind: None | str | Unset
@@ -149,6 +154,8 @@ class AccountResponseSchema:
             field_dict["connector"] = connector
         if display_name is not UNSET:
             field_dict["display_name"] = display_name
+        if install_state is not UNSET:
+            field_dict["install_state"] = install_state
         if is_default is not UNSET:
             field_dict["is_default"] = is_default
         if kind is not UNSET:
@@ -250,6 +257,8 @@ class AccountResponseSchema:
 
         display_name = _parse_display_name(d.pop("display_name", UNSET))
 
+        install_state = d.pop("install_state", UNSET)
+
         is_default = d.pop("is_default", UNSET)
 
         def _parse_kind(data: object) -> None | str | Unset:
@@ -286,6 +295,7 @@ class AccountResponseSchema:
             user_id=user_id,
             connector=connector,
             display_name=display_name,
+            install_state=install_state,
             is_default=is_default,
             kind=kind,
             provider_account_id=provider_account_id,

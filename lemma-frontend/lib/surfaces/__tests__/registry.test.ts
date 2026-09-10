@@ -5,6 +5,8 @@ import {
     getSurfaceDefinition,
     SURFACE_PLATFORM_ORDER,
 } from '@/lib/surfaces/registry';
+import { POD_DEFAULT_AGENT_SELECTOR } from 'lemma-sdk';
+
 import { DEFAULT_RESPONDER_NAME } from '@/lib/utils/agents';
 
 describe('surface registry', () => {
@@ -75,5 +77,18 @@ describe('surface registry', () => {
     it('names the agent in second-person copy, and the default responder otherwise', () => {
         expect(forAgent('Make {agent} reachable', 'Ops')).toBe('Make Ops reachable');
         expect(forAgent('Make {agent} reachable', null)).toBe(`Make ${DEFAULT_RESPONDER_NAME} reachable`);
+    });
+
+    it('calls the pod assistant Lem when the surface arrives carrying its row name', () => {
+        // `null` was the pod default only while it had no row. It has one now,
+        // and `GET /surfaces` reports `agent_name` from that row -- so the
+        // truthy string `pod_default` walks straight past `agentName || ...`
+        // and onto the screen. The same falsy guard, at the same cost, as the
+        // five backend sites #609 fixed.
+        for (const stored of ['pod_default', POD_DEFAULT_AGENT_SELECTOR]) {
+            expect(forAgent('Make {agent} reachable', stored)).toBe(
+                `Make ${DEFAULT_RESPONDER_NAME} reachable`,
+            );
+        }
     });
 });

@@ -94,6 +94,13 @@ export interface ListRecordsOptions {
 export interface RunFunctionOptions {
   /** Input payload for the function */
   input?: Record<string, unknown>;
+  /**
+   * Run a specific built revision instead of the live one -- a revision number
+   * ("r12") or a hash prefix. Requires `function.update`: running a superseded
+   * build is an authoring action, so a caller who may only execute the function
+   * always gets the revision the pod has signed off on.
+   */
+  revision?: string;
 }
 
 /** Form field values submitted to a workflow form node. */

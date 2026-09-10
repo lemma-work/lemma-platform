@@ -24,7 +24,7 @@ import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from app.app import RequestObserverMiddleware, TrailingSlashMiddleware
+from app.middleware import RequestObserverMiddleware, TrailingSlashMiddleware
 
 pytestmark = pytest.mark.unit
 

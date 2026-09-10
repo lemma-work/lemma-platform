@@ -90,53 +90,6 @@ class RecordService:
             admin_mode=admin_mode,
         )
 
-    def _validate_update_payload(
-        self,
-        ctx: TableContext,
-        data: dict[str, Any],
-    ) -> None:
-        errors: list[str] = []
-        error_details: list[dict[str, Any]] = []
-
-        for key, value in data.items():
-            column = ctx.get_column(key)
-            if column is None:
-                continue
-            if key == ctx.primary_key_column:
-                errors.append(f"Cannot modify primary key column '{key}'")
-                error_details.append({"field": key, "reason": "primary_key"})
-            elif column.computed:
-                errors.append(f"Cannot provide value for computed column '{key}'")
-                error_details.append({"field": key, "reason": "computed"})
-            elif column.system and not RecordValidator.allows_creation_override(column):
-                errors.append(f"Cannot provide value for system-managed column '{key}'")
-                error_details.append({"field": key, "reason": "system_managed"})
-            elif (
-                column.type == DatastoreDataType.ENUM
-                and column.options
-                and value is not None
-                and value not in column.options
-            ):
-                allowed = ", ".join(column.options)
-                errors.append(
-                    f"Value '{value}' is not allowed for column '{key}'. "
-                    f"Allowed values: {allowed}"
-                )
-                error_details.append(
-                    {
-                        "field": key,
-                        "reason": "enum",
-                        "value": value,
-                        "allowed_values": column.options,
-                    }
-                )
-
-        if errors:
-            raise DatastoreValidationError(
-                f"Invalid record data: {'; '.join(errors)}",
-                details={"errors": error_details},
-            )
-
     async def _validate_user_reference_columns(
         self,
         ctx: TableContext,
@@ -367,7 +320,7 @@ class RecordService:
         release per record.
         """
         sanitized_data = RecordValidator(ctx).strip_system_write_overrides(data)
-        self._validate_update_payload(ctx, sanitized_data)
+        RecordValidator(ctx).validate_update(sanitized_data)
         await self._validate_user_reference_columns(
             ctx, sanitized_data, checked_user_ids
         )
@@ -516,7 +469,7 @@ class RecordService:
             payload.pop("id", None)
 
             sanitized = RecordValidator(ctx).strip_system_write_overrides(payload)
-            self._validate_update_payload(ctx, sanitized)
+            RecordValidator(ctx).validate_update(sanitized)
             await self._validate_user_reference_columns(
                 ctx, sanitized, checked_user_ids
             )

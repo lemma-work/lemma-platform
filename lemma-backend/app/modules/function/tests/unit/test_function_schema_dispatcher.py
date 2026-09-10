@@ -106,8 +106,8 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
             )
 
     monkeypatch.setattr(
-        "app.modules.function.application.function_schema_dispatcher.settings."
-        "function_runtime_gateway_url",
+        "app.modules.function.application.function_schema_dispatcher."
+        "function_settings.function_runtime_gateway_url",
         "http://127.0.0.1:8711",
     )
 

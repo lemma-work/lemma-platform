@@ -3,13 +3,16 @@
 //! `lemma-backend` asserts the same file from Python. Neither side can move
 //! alone: the enum has to name the same events, and the two text extractors
 //! have to agree character for character, because the host accumulates streamed
-//! text with one and the backend re-accumulates it with the other.
+//! text with one and the backend re-accumulates it with the other. The run
+//! spec is the third: both sides declare its fields, and only the fixture says
+//! which of them the backend adds as it hands the command over.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use lemma_agent_host::protocol::EventType;
+use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec};
 use serde_json::Value;
+use uuid::Uuid;
 
 fn contract() -> Value {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wire_contract.json");
@@ -172,5 +175,121 @@ fn chunk_text_matches_the_contract() {
             expected,
             "case {name:?} disagrees with the shared contract"
         );
+    }
+}
+
+/// Bounds the backend enforces, which this host must not exceed.
+///
+/// Exceeding one is not a graceful degradation. An `object_id` over the column
+/// length gets its whole batch refused, which the host reads as the run's fault
+/// and answers by discarding the transcript; a `max_runs` over the cap makes
+/// every poll 422, so the host reports itself offline indefinitely. Both were
+/// unbounded here, and neither limit was written down anywhere both sides read.
+#[test]
+fn the_host_respects_the_bounds_the_backend_enforces() {
+    let contract = contract();
+    let limits = &contract["limits"];
+
+    assert_eq!(
+        limits["max_runs"].as_u64(),
+        Some(u64::from(lemma_agent_host::config::MAX_SUPPORTED_RUNS)),
+        "the configured capacity ceiling must match what the backend accepts"
+    );
+    assert_eq!(
+        limits["object_id_max_length"].as_u64(),
+        Some(255),
+        "object_id is truncated to this in acp.rs; both sides read it here"
+    );
+}
+
+/// The protocol version both sides send and compare, from one place.
+///
+/// `lemma_agent_host::PROTOCOL_VERSION` and the backend's
+/// `AGENT_HOST_PROTOCOL_VERSION` are two literals in two languages. The host
+/// puts its number in every identity it publishes and the backend checks it;
+/// raising one without the other makes every host of the old version look
+/// unrecognised, from the moment the backend deploys, with nothing failing on
+/// either side to say so.
+#[test]
+fn the_protocol_version_is_the_one_the_backend_expects() {
+    let declared = contract()["protocol_version"]
+        .as_u64()
+        .expect("the contract declares a protocol version");
+    assert_eq!(
+        u64::from(lemma_agent_host::PROTOCOL_VERSION),
+        declared,
+        "PROTOCOL_VERSION and the shared contract disagree; the backend reads \
+         the contract's number, so raise both or neither",
+    );
+}
+
+/// The two `RunSpec` declarations, which only one side states in full.
+///
+/// The `START_RUN` payload is a run spec in two languages. Every field but one
+/// is declared on both; `mcp` is declared only here, because on the backend it
+/// rests in the command row as `encrypted_mcp` and is decrypted into `mcp` by
+/// `AgentHostDispatchRepository._wire_command` on the way out. A Python model
+/// field would be somewhere for a run-scoped credential to sit in plaintext,
+/// so its absence is deliberate -- and was indistinguishable from drift until
+/// this recorded which fields each side is supposed to have.
+///
+/// This half can only assert the union: `mcp` is a field of this struct whether
+/// the contract calls it shared or added on delivery. Which side of that line a
+/// field falls on is the Python half's to check, because it is the one that can
+/// see the model `mcp` is deliberately missing from.
+#[test]
+fn the_run_spec_carries_the_fields_the_contract_names() {
+    let contract = contract();
+    let run_spec = &contract["run_spec"];
+
+    let shared = run_spec["fields"]
+        .as_array()
+        .expect("run_spec.fields is a list")
+        .iter()
+        .map(|value| value.as_str().expect("a field name is a string").to_owned())
+        .collect::<BTreeSet<_>>();
+    let on_delivery = run_spec["added_on_delivery"]
+        .as_object()
+        .expect("run_spec.added_on_delivery is an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let ours = serde_json::to_value(sample_run_spec())
+        .expect("a run spec serializes")
+        .as_object()
+        .expect("as an object")
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        ours,
+        shared.union(&on_delivery).cloned().collect::<BTreeSet<_>>(),
+        "this side's run spec and the contract name different fields"
+    );
+    assert!(
+        shared.is_disjoint(&on_delivery),
+        "a field cannot be both declared on both sides and added on delivery"
+    );
+}
+
+/// Every field set, so serialization cannot omit one and pass.
+fn sample_run_spec() -> RunSpec {
+    RunSpec {
+        agent_run_id: Uuid::nil(),
+        conversation_id: Uuid::nil(),
+        harness_id: Uuid::nil(),
+        profile_revision: "r1".to_owned(),
+        model_name: Some("m".to_owned()),
+        config_selections: JsonMap::new(),
+        system_prompt: "s".to_owned(),
+        prompt: vec![serde_json::json!({"type": "text", "text": "hello"})],
+        resume_session_id: Some("session".to_owned()),
+        workspace_cwd: Some("project".to_owned()),
+        context: JsonMap::new(),
+        mcp: serde_json::json!({}),
+        run_deadline: chrono::Utc::now(),
+        system_prompt_delivery: Some("NEW_SESSION_ONLY".to_owned()),
     }
 }

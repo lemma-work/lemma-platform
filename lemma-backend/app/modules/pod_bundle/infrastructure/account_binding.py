@@ -102,14 +102,24 @@ async def _validate_account_kind(
     if actual is None:
         return
     wanted = str(expected_kind).lower()
-    # Legacy bundles say LEMMA/COMPOSIO. LEMMA covered every non-composio
-    # kind, so it is satisfied by any of them rather than by `package`
-    # alone -- an MCP install exported before the rename would otherwise be
-    # unimportable.
-    if wanted in ("lemma", "composio"):
+    # Two vocabularies predate the current one, and a bundle exported under
+    # either must still import.
+    #
+    # `lemma` is the older of the two: it covered every non-composio kind, so
+    # it is satisfied by any of them rather than by one in particular.
+    #
+    # `package` is the newer one, and it named the vendored connector clients
+    # that no longer exist. Every connector that was installable as `package`
+    # is installable as `http` now, so an old bundle asking for `package` is
+    # asking for what `http` became. Refusing it would make every bundle
+    # exported before this release unimportable, for a rename.
+    if wanted in ("lemma", "package", "composio"):
         from app.modules.connectors.domain.connector import kind_to_provider
 
-        if kind_to_provider(actual).value.lower() == wanted:
+        # Both older spellings mean "not Composio", so both are satisfied by
+        # whichever native kind the account actually has.
+        legacy_provider = "composio" if wanted == "composio" else "lemma"
+        if kind_to_provider(actual).value.lower() == legacy_provider:
             return
     elif actual.lower() == wanted:
         return

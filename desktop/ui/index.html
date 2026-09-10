@@ -33,7 +33,7 @@
     color-scheme: light dark;
     --ink: #1c1812;
     --ink-soft: rgba(28, 24, 18, 0.62);
-    --ink-faint: rgba(28, 24, 18, 0.38);
+    --ink-faint: rgba(28, 24, 18, 0.66);
     --gold: #5a3fd4;
     --gold-deep: #4630b0;
     --bad: #b3382c;
@@ -61,7 +61,7 @@
     :root {
       --ink: #f2efe9;
       --ink-soft: rgba(242, 239, 233, 0.66);
-      --ink-faint: rgba(242, 239, 233, 0.40);
+      --ink-faint: rgba(242, 239, 233, 0.66);
       --gold: #9583ee;
       --gold-deep: #b3a5f5;
       --bad: #f08a72;
@@ -292,15 +292,70 @@
   .scene.choosing .whisper,
   .scene.choosing .corner,
   .scene.choosing .progress { display: none; }
-  /* The sign-in screen is the splash with a button on it, so it takes no
-     layout of its own. Only the local review screen, which genuinely has a
-     column of disclosures to read, switches into `.choosing`. */
   .scene.choosing #choose, .scene.choosing #local-confirm {
     width: 100%;
     padding: 0 0 0 clamp(40px, 5vw, 72px);
     border-left: 1px solid var(--hairline);
   }
-  #choose { width: 100%; display: flex; flex-direction: column; align-items: center; }
+  .scene.welcoming {
+    padding: clamp(24px, 4vh, 44px) clamp(28px, 5vw, 76px) 54px;
+    text-align: left;
+    align-items: stretch;
+    justify-content: flex-start;
+    overflow-y: auto;
+    background: var(--canvas);
+  }
+  .scene.welcoming .setup-intro { display: block; width: 100%; max-width: 1080px; margin: 0 auto; }
+  .scene.welcoming .setup-brand { display: flex; align-items: center; gap: 9px; }
+  .scene.welcoming .orb-wrap,
+  .scene.welcoming .statement,
+  .scene.welcoming .whisper,
+  .scene.welcoming .truth { display: none; }
+  .scene.welcoming .corner { opacity: 1; color: var(--ink-soft); }
+  #choose { width: 100%; max-width: 1080px; margin: auto; padding: 26px 0 0; }
+  .welcome-heading { margin: 0; font-size: clamp(30px, 4vw, 48px); font-weight: 520; line-height: 1.08; letter-spacing: -.045em; }
+  .welcome-subtitle { margin: 12px 0 26px; font-size: 16px; line-height: 1.45; color: var(--ink-soft); }
+  .deployment-options { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(240px, 1fr); gap: 32px; }
+  .cloud-option { padding: 26px 28px; border-radius: 18px; background: color-mix(in srgb, var(--gold) 8%, var(--canvas)); border: 1px solid color-mix(in srgb, var(--gold) 28%, var(--canvas)); }
+  .deployment-title { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .deployment-title h2 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.025em; }
+  .recommended { padding: 3px 9px; border-radius: 6px; color: var(--gold-deep); background: color-mix(in srgb, var(--gold) 12%, transparent); font-size: 12px; font-weight: 600; }
+  .cloud-benefits { display: grid; gap: 17px; list-style: none; margin: 22px 0 24px; padding: 0; }
+  .cloud-benefits li { display: grid; grid-template-columns: 24px 1fr; gap: 12px; align-items: start; }
+  .cloud-benefits svg { width: 21px; height: 21px; margin-top: 2px; color: var(--gold-deep); }
+  .cloud-benefits strong { display: block; font-size: 16px; font-weight: 600; line-height: 1.3; }
+  .cloud-benefits p { margin: 3px 0 0; color: var(--ink-soft); font-size: 14px; line-height: 1.4; }
+  #choose-cloud { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 12px 17px; border-radius: 9px; background: var(--gold); border-color: var(--gold); color: #fff; }
+  #choose-cloud:hover { background: var(--gold-deep); }
+  .cloud-storage { margin: 10px 0 0; font-size: 12px; color: var(--ink-soft); text-align: center; }
+  .local-option { display: flex; flex-direction: column; align-items: flex-start; padding: 24px 0; }
+  .local-option h2 { margin: 0; font-size: 23px; font-weight: 550; letter-spacing: -.025em; }
+  .local-option p { margin: 14px 0 0; color: var(--ink-soft); font-size: 14px; line-height: 1.5; }
+  .local-option ul { padding: 0; list-style: none; display: grid; gap: 9px; margin: 19px 0 22px; color: var(--ink-soft); font-size: 14px; }
+  .local-option li { padding-left: 15px; position: relative; }
+  .local-option li::before { content: "·"; position: absolute; left: 0; color: var(--gold-deep); }
+  .local-option #choose-local { margin-top: auto; padding: 8px 0; font-size: 14px; }
+  .welcome-notes { margin: 20px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+  .welcome-notes p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ink-soft); }
+  @media (prefers-color-scheme: dark) {
+    #choose-cloud { color: #19142c; }
+  }
+  @media (max-height: 720px) and (min-width: 851px) {
+    .scene.welcoming { padding-top: 22px; }
+    #choose { padding-top: 18px; }
+    .welcome-heading { font-size: 36px; }
+    .welcome-subtitle { margin-bottom: 20px; }
+    .cloud-option { padding: 20px 24px; }
+    .cloud-benefits { gap: 12px; margin: 17px 0 20px; }
+    .local-option { padding: 18px 0; }
+    .welcome-notes { margin-top: 16px; }
+  }
+  @media (max-width: 850px) {
+    .deployment-options { grid-template-columns: 1fr; gap: 18px; }
+    .local-option { padding: 0; }
+    .local-option ul { margin: 12px 0; }
+    .welcome-notes { grid-template-columns: 1fr; gap: 10px; }
+  }
   button.start {
     all: unset;
     box-sizing: border-box;
@@ -424,13 +479,23 @@
     }
     .scene.choosing .statement { min-height: 220px; }
     .scene.choosing .statement p { font-size: 3.45rem; }
-    #choose, #local-confirm { padding-left: 40px; }
+    .scene.choosing #local-confirm { padding-left: 40px; }
   }
 
   @media (max-height: 720px) {
     .scene.choosing { padding-top: 36px; padding-bottom: 36px; }
     .scene.choosing .statement { min-height: 200px; }
     .scene.choosing .statement p { font-size: 3.15rem; }
+  }
+  @media (max-width: 850px) {
+    .scene.choosing { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 24px; padding: 28px 24px 70px; overflow-y: auto; }
+    .scene.choosing .setup-intro { height: auto; }
+    .scene.choosing .setup-brand { position: static; margin-bottom: 20px; }
+    .scene.choosing .statement { min-height: 0; }
+    .scene.choosing .statement p { position: static; font-size: 2.25rem; }
+    .scene.choosing .setup-support { margin-top: 12px; }
+    .scene.choosing #local-confirm { border-left: 0; padding: 0; min-width: 0; }
+    .confirm-actions { flex-wrap: wrap; }
   }
 
   /* ---------- quiet chrome ---------- */
@@ -473,11 +538,10 @@
     font-family: var(--mono);
     font-size: 0.68rem;
     letter-spacing: 0.08em;
-    color: var(--ink-faint);
-    opacity: 0.4;
-    transition: opacity 0.3s ease;
+    color: var(--ink-soft);
+    transition: color 0.3s ease;
   }
-  .corner:hover { opacity: 1; }
+  .corner:hover { color: var(--ink); }
   .corner.left { left: 22px; display: flex; gap: 18px; }
   .corner.right { right: 22px; }
   .corner button {
@@ -486,6 +550,15 @@
     color: inherit;
   }
   .corner button:hover { color: var(--ink); }
+  /* `all: unset` removes the user-agent focus ring too, so these were the only
+     controls on the screen a keyboard user could not see themselves on. */
+  .corner button:focus-visible,
+  .log-header button:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--gold) 45%, transparent);
+    outline-offset: 3px;
+    border-radius: 3px;
+    color: var(--ink);
+  }
 
   button.cta {
     font: inherit;
@@ -632,6 +705,14 @@
       filter: none;
     }
     .progress > div { transition: none; }
+    /* Naming the animations individually left the ones that never stop --
+       `progress-shine` on every install, `button-spin` on every busy button,
+       `bloom` when the stack comes up. control.css already does it this way. */
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+    }
   }
 </style>
 </head>
@@ -654,31 +735,35 @@
   </div>
   <p class="truth" id="truth"></p>
 
-  <!--
-    One button, because on this screen we do not yet know who is holding the app.
-
-    This used to be two equal choices under the heading "Workspace location" — an
-    architecture question asked before anything had been established, of someone
-    with no basis to answer it. Equal visual weight for options with wildly
-    unequal cost is misdirection however well meant, and the cost only appeared
-    on the next screen.
-
-    It also cannot pitch. Any line about coding agents excludes the person who
-    has not installed one, on the first screen they ever see. What the machine
-    actually has is checked after sign-in, where it is a fact rather than a
-    guess — and now cheap enough to check that the screen can be built on it.
-  -->
-  <section id="choose" hidden>
-    <button class="primary start" id="choose-cloud" type="button">Sign in</button>
-    <p class="mode-note">
-      Or <button class="linklike" id="choose-local" type="button">run Lemma on this Mac</button>
-      <!-- Qualitative on purpose. A figure here is a promise made on the first
-           screen anyone sees, over a download whose length is somebody else's
-           network, and the review screen behind this link is where the cost is
-           actually laid out. "A number in prose goes stale silently" applies to
-           product copy as much as to docs. -->
-      <span class="local-cost" id="local-choice-cost">· downloads and installs services</span>
-    </p>
+  <section id="choose" aria-labelledby="welcome-heading" hidden>
+    <h1 class="welcome-heading" id="welcome-heading">Better work, together.</h1>
+    <p class="welcome-subtitle">A shared home for your team, your agents, and everything you build.</p>
+    <div class="deployment-options">
+      <section class="cloud-option" aria-labelledby="cloud-title">
+        <div class="deployment-title"><h2 id="cloud-title">Lemma Cloud</h2><span class="recommended">Recommended</span></div>
+        <ul class="cloud-benefits">
+          <li><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 4a3 3 0 0 1 0 6M18 13a5 5 0 0 1 3 5v2"/></svg><div><strong>Share and collaborate with your team</strong><p>Work together on the same data, apps, and agents.</p></div></li>
+          <li><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 3 3 3-5 5-3-3m10 10 3 3 5-5-3-3M6 11l7 7M11 6l7 7m-7-2 2 2M2 22l5-5M17 7l5-5"/></svg><div><strong>Connect your tools, skip the setup</strong><p>Sign in to supported integrations. We handle the hosting.</p></div></li>
+          <li><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a5 5 0 1 1 .8-9.9A6 6 0 0 1 19 7a5.5 5.5 0 0 1 0 11H7Z"/><path d="m12 10-2 4h4l-2 4"/></svg><div><strong>Keep work moving when you're away</strong><p>Cloud agents and schedules run even when your computer is off.</p></div></li>
+        </ul>
+        <button class="primary start" id="choose-cloud" type="button">Use Lemma Cloud <span aria-hidden="true">→</span></button>
+        <p class="cloud-storage">Workspace data lives in Lemma Cloud. No local services to install.</p>
+      </section>
+      <section class="local-option" aria-labelledby="local-title">
+        <h2 id="local-title">Prefer to host it yourself?</h2>
+        <p>Local Lemma keeps its services and stored application data on this Mac.</p>
+        <ul>
+          <li id="local-choice-cost">Install and manage the local services.</li>
+          <li>Set up your own integrations and sharing.</li>
+          <li>Keep this computer on for agents and schedules.</li>
+        </ul>
+        <button class="linklike" id="choose-local" type="button">Use Local Lemma</button>
+      </section>
+    </div>
+    <div class="welcome-notes">
+      <p>You can also connect coding agents on this computer to Lemma Cloud. Local agents need this computer running.</p>
+      <p>Configured AI providers and connectors can send requested data over the internet in either mode. You can switch modes later in Settings.</p>
+    </div>
   </section>
 
   <section id="local-confirm" hidden>
@@ -687,20 +772,12 @@
     <div class="local-review">
       <ul>
         <li id="local-data-copy">Workspace data is stored on this Mac.</li>
-        <!-- Moved here from the choice screen. It is a consequence of picking
-             local, so it belongs where that is being decided rather than on a
-             screen that no longer asks the question. -->
         <li>A local workspace shares no data with a cloud one.</li>
-        <!-- The real numbers. "Several gigabytes" overstated the transfer by
-             about three times: the download gate is 750 MiB compressed, and a
-             current release is around 506 MB. This is the one screen where
-             somebody on a hotspot or a metered connection decides, so it should
-             not be the screen that guesses high. Resumability is worth saying
-             for the same reason -- it is already true, and nothing told them. -->
-        <li>First setup downloads about 500&nbsp;MB and installs about 1.8&nbsp;GB. On a slow connection this takes a while; you can close Lemma and it picks up where it left off.</li>
+        <li>First setup installs the local runtime and downloads service images. Download and storage needs depend on the release and cached files. Interrupted runtime downloads can resume.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
+        <li id="local-network-permission">macOS may ask for Local Network access so Lemma can reach its private virtual machine on this Mac. You can manage this in System Settings > Privacy &amp; Security > Local Network.</li>
       </ul>
-      <p class="setup-error" id="local-setup-error" hidden></p>
+      <p class="setup-error" id="local-setup-error" role="alert" hidden></p>
       <div class="confirm-actions">
         <button id="back-to-choices" type="button">Back</button>
         <button class="primary" id="confirm-local" type="button">Install local services</button>
@@ -708,7 +785,12 @@
     </div>
   </section>
 
-  <div class="operation-status" id="operation-status" hidden aria-live="polite">
+  <!-- Not a live region. `showOperationStatus` calls `say()`, so the phase is
+       already announced through the statement above, once per phase. What is
+       left here is the byte counter and the estimate, which change every
+       second or so: announcing those re-read the whole progress line to a
+       screen reader every tick, for the length of a 473 MB download. -->
+  <div class="operation-status" id="operation-status" hidden>
     <span class="operation-detail" id="operation-detail"></span>
     <span class="operation-meta" id="operation-meta"></span>
   </div>
@@ -716,7 +798,7 @@
   <p class="whisper" id="whisper"></p>
 
   <button class="cta" id="open-app" type="button" hidden>Open Lemma</button>
-  <div id="errwrap" hidden>
+  <div id="errwrap" role="alert" hidden>
     <p class="errbox" id="errdetail"></p>
     <div class="err-actions">
       <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
@@ -730,6 +812,7 @@
   <div class="progress"><div id="bar"></div></div>
   <div class="corner left">
     <button id="toggle-log" type="button">log</button>
+    <button id="open-recovery" type="button">recovery</button>
     <button id="switch-mode" type="button" hidden>use lemma cloud</button>
   </div>
   <div class="corner right" id="runinfo"></div>
@@ -743,12 +826,14 @@
         <button id="close-log" type="button">Close</button>
       </div>
     </div>
-    <div class="log-tabs" id="log-tabs" role="tablist"></div>
-    <pre class="log" id="log"></pre>
+    <div class="log-tabs" id="log-tabs" role="tablist" aria-label="Log sources"></div>
+    <pre class="log" id="log" role="tabpanel" tabindex="0"></pre>
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { deriveScreen, diagnosticSourceForState } from "./screen-state.mjs";
+
   // ---- bridge: Tauri when available, scripted demo otherwise ------------
   (function () {
     const tauri = window.__TAURI__;
@@ -768,6 +853,7 @@
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
         getState: () => invoke("get_state"),
         recoveryOptions: () => invoke("local_recovery_options"),
+        openRecovery: () => invoke("open_control_center", { page: "recovery" }),
         resetLocalData: () => invoke("reset_local_data"),
         resetFullReinstall: () => invoke("reset_full_reinstall"),
         onLog: (cb) => { tauri.event.listen("lemma:log", (e) => cb(e.payload)); },
@@ -829,6 +915,7 @@
 
   // ---- the script: poetic line + honest mono subtitle per real phase ----
   const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+  document.getElementById("local-network-permission").hidden = IS_WINDOWS;
   const DEVICE = IS_WINDOWS ? "PC" : "Mac";
   /** Any sentence about the machine, said the way this machine's owner would. */
   function forThisDevice(text) {
@@ -850,6 +937,11 @@
     stopped:    ["Asleep.", "services stopped"],
   };
   const READY_LINE = "It's ready. Opening Lemma.";
+  const openIntent = new URLSearchParams(location.search).get("intent");
+  // This window was opened to watch something stop. The daemon can still emit
+  // a snapshot taken before the stop began, and acting on its `ready` would
+  // navigate the user into a workspace whose services are going away.
+  const isShuttingDown = openIntent === "quit" || openIntent === "stop";
 
   const scene = document.getElementById("scene");
   const lineEl = document.getElementById("line");
@@ -978,6 +1070,7 @@
     openBtn.removeAttribute("aria-busy");
   }
   function scheduleReadyOpen() {
+    if (isShuttingDown) return;
     clearTimeout(readyOpenTimer);
     readyOpenTimer = setTimeout(async () => {
       if (!lastState?.ready || lastState.error) return;
@@ -993,28 +1086,42 @@
   }
   function renderState(s) {
     if (!s) return;
-    // Neither of these may return silently. This function is the only thing that
-    // draws the screen and the only thing that schedules the move to the
-    // workspace, so a state it declines to handle leaves the bare static logo up
-    // for good -- which is exactly what a stuck first run looked like.
-    //
-    // A state with no phase is still a state: fall back to the boot phase rather
-    // than rendering nothing.
-    if (!s.phaseKey) s = { ...s, phaseKey: lastPhase || "boot" };
-    // Undecided means the user has not picked a connection mode. Show them the
-    // choice instead of an empty screen.
-    if (s.mode === "undecided") {
+    if (openIntent === "quit") {
+      clearTimeout(readyOpenTimer);
+      stopWhispers();
+      hideConnectionChoice();
+      switchModeBtn.hidden = true;
+      openBtn.hidden = true;
+      prepareWindowsBtn.hidden = true;
+      showRecoveryButtons(false, false);
+      say(s.error ? "Lemma could not finish stopping." : "Stopping Lemma.");
+      truth.textContent = s.phaseKey === "stopping" ? s.status : "Waiting for local work to stop safely";
+      errwrap.hidden = !s.error;
+      errdetail.textContent = s.error ? s.status : "";
+      retryBtn.textContent = "Retry shutdown";
+      retryBtn.hidden = !s.error;
+      progressEl.classList.toggle("active", !s.error);
+      return;
+    }
+    // `deriveScreen` may not decline a state. This function is the only thing
+    // that draws the screen and the only thing that schedules the move to the
+    // workspace, so a state nothing handles leaves the bare static logo up for
+    // good -- which is exactly what a stuck first run looked like. A state with
+    // no phase is still a state, and `lastPhase` is how it keeps one.
+    const screen = deriveScreen(s, { lastPhase, sawSetup, isShuttingDown });
+
+    if (screen.screen === "choosing") {
       showChooser();
       return;
     }
     lastState = s;
     switchModeBtn.hidden = s.mode !== "local";
     if (s.running || s.ready) hideConnectionChoice();
-    if (s.setup) sawSetup = true;
-    lastPhase = s.phaseKey;
+    sawSetup = screen.sawSetup;
+    lastPhase = screen.phaseKey;
 
-    if (s.error) {
-      if (logPanel.hidden) activeLogSource = diagnosticSourceForState(s);
+    if (screen.screen === "error") {
+      if (logPanel.hidden) activeLogSource = screen.logSource;
       clearTimeout(readyOpenTimer);
       clearPrimaryBusy();
       hideOperationStatus();
@@ -1022,30 +1129,23 @@
       window.__orb?.stall();
       scene.classList.add("stalled");
       scene.classList.remove("awake");
-      const needsWindowsSetup = ["wsl-required", "wsl-setup-denied"].includes(s.errorCode);
-      const needsWindowsRestart = s.errorCode === "wsl-reboot-required";
-      say(needsWindowsSetup
+      say(screen.windowsSetup
         ? "Windows needs one permission."
-        : needsWindowsRestart
+        : screen.windowsRestart
           ? "One restart, then Lemma continues."
           : "Something stopped.");
-      truth.textContent = needsWindowsSetup
+      truth.textContent = screen.windowsSetup
         ? "one-time Windows setup · no Docker Desktop or Ubuntu"
-        : needsWindowsRestart
+        : screen.windowsRestart
           ? "restart Windows, then reopen Lemma"
           : "";
-      errdetail.textContent = s.status || "startup failed";
+      errdetail.textContent = screen.errorDetail;
       errwrap.hidden = false;
-      prepareWindowsBtn.hidden = !needsWindowsSetup;
+      prepareWindowsBtn.hidden = !screen.showPrepareWindows;
       prepareWindowsBtn.disabled = false;
       prepareWindowsBtn.textContent = "Set up Windows runtime";
-      // Data this release cannot read: retrying reproduces it exactly, and
-      // offering Try again is how someone learns the app has nothing for them.
-      const dataIsUnreadable = s.errorCode === "local-data-incompatible";
-      const cannotStart = ["locald-start-failed", "locald-disconnected", "runtime-install-failed"]
-        .includes(s.errorCode);
-      showRecoveryButtons(dataIsUnreadable || cannotStart, dataIsUnreadable);
-      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart || dataIsUnreadable;
+      showRecoveryButtons(screen.showResetData, screen.showFullReinstall);
+      retryBtn.hidden = !screen.showRetry;
       openBtn.hidden = true;
       whisper.classList.remove("on");
       return;
@@ -1057,21 +1157,32 @@
     retryBtn.hidden = false;
     showRecoveryButtons(false, false);
 
-    const voice = VOICE[s.phaseKey] || VOICE.boot;
-    if (s.ready) {
+    const voice = VOICE[screen.phaseKey] || VOICE.boot;
+    if (screen.screen === "stopping") {
+      clearPrimaryBusy();
+      say(VOICE.stopping[0]);
+      truth.textContent = VOICE.stopping[1];
+      openBtn.hidden = true;
+      whisper.classList.remove("on");
+      stopWhispers();
+      progressEl.classList.add("active");
+      bar.style.width = "100%";
+      return;
+    }
+    if (screen.screen === "ready") {
       clearPrimaryBusy();
       hideOperationStatus();
       window.__orb?.awake();
       scene.classList.add("awake");
       say(READY_LINE);
       truth.textContent = VOICE.ready[1];
-      primaryAction = "open";
+      primaryAction = screen.primaryAction;
       openBtn.textContent = "Open Lemma";
-      openBtn.hidden = false;
+      openBtn.hidden = !screen.showOpen;
       whisper.classList.remove("on");
       stopWhispers();
       scheduleReadyOpen();
-    } else if (s.phaseKey === "stopped") {
+    } else if (screen.screen === "stopped") {
       clearTimeout(readyOpenTimer);
       clearPrimaryBusy();
       hideOperationStatus();
@@ -1079,9 +1190,9 @@
       scene.classList.add("awake");
       say(VOICE.stopped[0]);
       truth.textContent = VOICE.stopped[1];
-      primaryAction = "start";
+      primaryAction = screen.primaryAction;
       openBtn.textContent = "Start Lemma";
-      openBtn.hidden = false;
+      openBtn.hidden = !screen.showOpen;
       whisper.classList.remove("on");
     } else {
       if (scene.classList.contains("awake")) {
@@ -1103,13 +1214,9 @@
         : "local services are starting";
     }
 
-    bar.style.width = `${Math.min(100, s.progress || 0)}%`;
-    progressEl.classList.toggle("active", !s.ready && !s.error && s.phaseKey !== "stopped");
-    runinfo.textContent = s.ready
-      ? ""
-      : sawSetup
-        ? "first run · only once"
-        : "quick start";
+    bar.style.width = `${screen.progressWidth}%`;
+    progressEl.classList.toggle("active", screen.progressActive);
+    runinfo.textContent = screen.runInfo;
   }
   function formatEta(seconds) {
     return seconds >= 90 ? `${Math.round(seconds / 60)}m` : `${seconds}s`;
@@ -1160,35 +1267,55 @@
   let diagnosticLog = "";
   let diagnosticCursor = null;
   let logRefreshTimer = null;
-  function diagnosticSourceForState(s) {
-    if (s?.logSource) return s.logSource;
-    const text = `${s?.phaseKey || ""} ${s?.status || ""} ${s?.errorCode || ""}`.toLowerCase();
-    if (text.includes("migration")) return "migrations";
-    if (text.includes("frontend") || text.includes("eaddrinuse")) return "frontend";
-    if (text.includes("backend") || text.includes("health gate")) return "backend";
-    if (text.includes("download") || text.includes("artifact") || text.includes("install")) return "installer";
-    if (text.includes("runtime") || text.includes("container") || text.includes("registry") || text.includes("guest")) {
-      return "vm";
-    }
-    return "events";
-  }
   function renderLog() {
     const live = activeLogSource === "events" ? logLines.join("\n") : "";
     const sections = [diagnosticLog, live].filter(Boolean);
     logEl.textContent = sections.join("\n");
     logEl.scrollTop = logEl.scrollHeight;
   }
+  // A `role="tablist"` whose children are plain buttons is worse than no role
+  // at all: it announces a tab list and then nothing inside it is a tab, the
+  // selected one is distinguishable only by colour, and arrow keys do nothing.
   function renderLogTabs(sources) {
+    // Choosing a source re-reads the log, which re-renders these buttons and
+    // destroys the one that was focused -- dropping keyboard focus to the
+    // document. Arrow-keying through the sources would move focus once and
+    // then lose it.
+    const hadFocus = logTabs.contains(document.activeElement);
     logTabs.innerHTML = "";
     for (const source of sources || []) {
       const button = document.createElement("button");
       button.type = "button";
+      button.id = `log-tab-${source.id}`;
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", "log");
+      const selected = source.id === activeLogSource;
+      button.setAttribute("aria-selected", String(selected));
+      // One stop for the whole set, as the tabs pattern requires: Tab reaches
+      // the list, then Left/Right move within it.
+      button.tabIndex = selected ? 0 : -1;
       button.textContent = source.label;
-      button.classList.toggle("active", source.id === activeLogSource);
+      button.classList.toggle("active", selected);
       button.addEventListener("click", () => selectLogSource(source.id));
       logTabs.appendChild(button);
+      if (selected) {
+        logEl.setAttribute("aria-labelledby", button.id);
+        if (hadFocus) button.focus();
+      }
     }
   }
+
+  logTabs.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    const tabs = [...logTabs.querySelectorAll('[role="tab"]')];
+    const current = tabs.indexOf(document.activeElement);
+    if (current < 0) return;
+    event.preventDefault();
+    const next = tabs[(current + step + tabs.length) % tabs.length];
+    next.focus();
+    next.click();
+  });
   async function refreshDiagnosticLog({ append = false } = {}) {
     try {
       const snapshot = await window.lemmaDesktop.diagnosticLogs(
@@ -1304,6 +1431,17 @@
     }
   });
   retryBtn.addEventListener("click", async () => {
+    if (openIntent === "quit") {
+      retryBtn.disabled = true;
+      try {
+        await window.lemmaDesktop.stop(true);
+      } catch (error) {
+        errdetail.textContent = String(error);
+      } finally {
+        retryBtn.disabled = false;
+      }
+      return;
+    }
     errwrap.hidden = true;
     scene.classList.remove("stalled");
     say(VOICE.boot[0]);
@@ -1322,6 +1460,15 @@
    * would read as "cancelled" every time.
    */
   let recoveryOffered = false;
+  document.getElementById("open-recovery").addEventListener("click", () => {
+    window.lemmaDesktop.openRecovery?.().catch((error) => {
+      errdetail.textContent = String(error);
+      // The box this writes into is hidden unless a failing state put it on
+      // screen, and a Local settings window that will not open is not a
+      // failing state. So the reason was written somewhere nobody could read.
+      errwrap.hidden = false;
+    });
+  });
   async function showRecoveryButtons(offer, dataIsUnreadable) {
     if (!offer) {
       resetDataBtn.hidden = true;
@@ -1391,8 +1538,9 @@
   const localSetupError = document.getElementById("local-setup-error");
   const confirmLocalBtn = document.getElementById("confirm-local");
   function showChooser() {
-    // Deliberately not `.choosing`: this is the splash, with a button.
+    const entering = chooseEl.hidden;
     scene.classList.remove("choosing");
+    scene.classList.add("welcoming");
     chooseEl.hidden = false;
     localConfirmEl.hidden = true;
     switchModeBtn.hidden = true;
@@ -1406,15 +1554,11 @@
     // this machine, because nothing has looked yet and a wrong guess here tells
     // someone the app is not for them before they have used it.
     say("Welcome to Lemma.");
-    // Nothing. This used to promise "no local services are installed until you
-    // confirm" — a reassurance against a fear nobody arrives with, referring to
-    // a confirmation step they have not seen, on a screen whose only action is
-    // signing in. It was written for the other path and was invisible here
-    // anyway until this screen stopped being a two-column layout. The gating it
-    // describes is self-evident on the review screen that actually does it.
     truth.textContent = "";
+    if (entering) document.getElementById("choose-cloud").focus({ preventScroll: true });
   }
   function showLocalConfirmation() {
+    scene.classList.remove("welcoming");
     scene.classList.add("choosing");
     chooseEl.hidden = true;
     localConfirmEl.hidden = false;
@@ -1423,9 +1567,14 @@
     hideOperationStatus();
     say("Set up Lemma on this Mac?");
     truth.textContent = "review before installation";
+    // The button that was focused has just been hidden, which drops focus to
+    // <body>: a keyboard user lands nowhere and a screen reader announces
+    // nothing. `showChooser` already moves focus on the way in; this is the
+    // same courtesy on the way forward.
+    confirmLocalBtn.focus({ preventScroll: true });
   }
   function hideConnectionChoice() {
-    scene.classList.remove("choosing");
+    scene.classList.remove("choosing", "welcoming");
     chooseEl.hidden = true;
     localConfirmEl.hidden = true;
   }
@@ -1461,28 +1610,20 @@
   });
 
   // ---- boot ----------------------------------------------------------------
-  lineEl.textContent = VOICE.boot[0];
+  shownLine = openIntent === "quit" ? "Stopping Lemma."
+    : openIntent === "stop" ? VOICE.stopping[0] : VOICE.boot[0];
+  lineEl.textContent = shownLine;
   truth.textContent = "";
   window.lemmaDesktop.onLog(appendLog);
   window.lemmaDesktop.onState(renderState);
   refreshDiagnosticLog();
-  function shouldAutoStart(s) {
-    return Boolean(
-      s &&
-      s.mode === "local" &&
-      (s.phaseKey === "boot" || s.phaseKey === "stopped") &&
-      !s.error &&
-      !s.running &&
-      !s.ready
-    );
-  }
-  // Why this document was opened. The splash reloads with no memory, so
-  // without this it reads "nothing is running" as "start Lemma" — which is
-  // right when the user opened the app and wrong when they asked it to stop.
-  const openIntent = new URLSearchParams(location.search).get("intent");
-
+  // The shell owns launch and connection-mode startup. Loading a document is
+  // only observation: an automatic start here races the shell's request.
+  // Explicit Start and Retry buttons still send their own user actions.
   window.lemmaDesktop.getState().then((s) => {
-    if (s && s.mode === "undecided") {
+    if (openIntent === "quit") {
+      renderState(s);
+    } else if (s && s.mode === "undecided") {
       showChooser();
     } else if (openIntent === "stop") {
       // Say what is actually happening, and never offer to start what the
@@ -1494,9 +1635,6 @@
       bar.style.width = "100%";
     } else {
       renderState(s);
-      if (shouldAutoStart(s)) {
-        requestStart();
-      }
     }
   });
 </script>
@@ -1505,7 +1643,18 @@
   // AnomalousOrb, ported from lemma-frontend/components/ui/anomalous-orb.tsx.
   // Same shaders, geometry, and gold (0x7a5ce0); three.js vendored locally so
   // the splash never depends on the network.
-  import * as THREE from "./vendor/three.module.min.js";
+  //
+  // Imported where it is used rather than at the top of the module. It is
+  // 356 KB of JavaScript to parse before anything else in this file runs, on
+  // the one screen whose whole job is to appear immediately -- and it was
+  // being parsed even when it could not be used: the reduced-motion check
+  // below is what decides whether an orb is drawn at all, and a static import
+  // is fetched and evaluated regardless of what any check afterwards says.
+  // Someone who has told their computer they do not want motion paid the whole
+  // cost for nothing.
+  //
+  // Every caller reaches the orb through `window.__orb?.`, so arriving late is
+  // already the case they handle.
 
   const vertexShader = `
 uniform float time;
@@ -1582,62 +1731,72 @@ void main() {
 
   const container = document.getElementById("orb");
   const prefersReducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
-  camera.position.z = 3.4;
+  // Freezing shader time still redraws every frame, including on software GPUs.
+  // Reduced motion must avoid the rendering loop and its graphics context.
+  if (!prefersReducedMotion) {
+    try {
+      const THREE = await import("./vendor/three.module.min.js");
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+      camera.position.z = 3.4;
 
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setClearColor(0xffffff, 0);
-  container.appendChild(renderer.domElement);
+      const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setClearColor(0xffffff, 0);
+      container.appendChild(renderer.domElement);
 
-  const geometry = new THREE.IcosahedronGeometry(1.15, 8);
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      time: { value: 0 },
-      pointLightPos: { value: new THREE.Vector3(0, 0, 4.5) },
-      color: { value: new THREE.Color(0x7a5ce0) },
-    },
-    vertexShader,
-    fragmentShader,
-    wireframe: true,
-    transparent: true,
-    depthWrite: false,
-  });
-  const mesh = new THREE.Mesh(geometry, material);
-  scene.add(mesh);
+      const geometry = new THREE.IcosahedronGeometry(1.15, 8);
+      const material = new THREE.ShaderMaterial({
+        uniforms: {
+          time: { value: 0 },
+          pointLightPos: { value: new THREE.Vector3(0, 0, 4.5) },
+          color: { value: new THREE.Color(0x7a5ce0) },
+        },
+        vertexShader,
+        fragmentShader,
+        wireframe: true,
+        transparent: true,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      scene.add(mesh);
 
-  let speed = 1;
-  const targetColor = new THREE.Color(0x7a5ce0);
-  window.__orb = {
-    awake() { speed = 2.4; targetColor.set(0xeab451); setTimeout(() => { speed = 1.3; }, 1800); },
-    stall() { speed = 0.12; targetColor.set(0xb0a48d); },
-    resume() { speed = 1; targetColor.set(0x7a5ce0); },
-  };
+      let speed = 1;
+      const targetColor = new THREE.Color(0x7a5ce0);
+      window.__orb = {
+        awake() { speed = 2.4; targetColor.set(0xeab451); setTimeout(() => { speed = 1.3; }, 1800); },
+        stall() { speed = 0.12; targetColor.set(0xb0a48d); },
+        resume() { speed = 1; targetColor.set(0x7a5ce0); },
+      };
 
-  const resize = () => {
-    const { width, height } = container.getBoundingClientRect();
-    camera.aspect = Math.max(1, width) / Math.max(1, height);
-    camera.updateProjectionMatrix();
-    renderer.setSize(Math.max(1, width), Math.max(1, height), false);
-  };
-  new ResizeObserver(resize).observe(container);
-  resize();
+      const resize = () => {
+        const { width, height } = container.getBoundingClientRect();
+        camera.aspect = Math.max(1, width) / Math.max(1, height);
+        camera.updateProjectionMatrix();
+        renderer.setSize(Math.max(1, width), Math.max(1, height), false);
+      };
+      new ResizeObserver(resize).observe(container);
+      resize();
 
-  let clock = 0;
-  let last = performance.now();
-  const animate = (now) => {
-    const dt = now - last;
-    last = now;
-    clock += dt * (prefersReducedMotion ? 0 : speed);
-    material.uniforms.time.value = clock * 0.00035;
-    material.uniforms.color.value.lerp(targetColor, 0.04);
-    mesh.rotation.y += prefersReducedMotion ? 0 : 0.0016 * speed;
-    mesh.rotation.x += prefersReducedMotion ? 0 : 0.0008 * speed;
-    renderer.render(scene, camera);
-    requestAnimationFrame(animate);
-  };
-  requestAnimationFrame(animate);
+      let clock = 0;
+      let last = performance.now();
+      const animate = (now) => {
+        const dt = now - last;
+        last = now;
+        clock += dt * speed;
+        material.uniforms.time.value = clock * 0.00035;
+        material.uniforms.color.value.lerp(targetColor, 0.04);
+        mesh.rotation.y += 0.0016 * speed;
+        mesh.rotation.x += 0.0008 * speed;
+        if (!document.hidden && container.getClientRects().length) renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      };
+      requestAnimationFrame(animate);
+    } catch {
+      // Decorative graphics must never prevent setup on machines without WebGL.
+      container.hidden = true;
+    }
+  }
 </script>
 </body>
 </html>

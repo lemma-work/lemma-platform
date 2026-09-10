@@ -194,11 +194,15 @@ async def test_enqueue_file_processing_covers_disabled_and_duplicate_paths(monke
     queue = SimpleNamespace(enqueue=AsyncMock(return_value=False))
     monkeypatch.setattr(handlers, "get_datastore_reindex_queue", lambda: queue)
 
-    monkeypatch.setattr(handlers.settings, "e2e_disable_worker_file_autoindex", True)
+    monkeypatch.setattr(
+        handlers.datastore_settings, "e2e_disable_worker_file_autoindex", True
+    )
     await handlers._enqueue_file_processing(event, logger)
     queue.enqueue.assert_not_awaited()
 
-    monkeypatch.setattr(handlers.settings, "e2e_disable_worker_file_autoindex", False)
+    monkeypatch.setattr(
+        handlers.datastore_settings, "e2e_disable_worker_file_autoindex", False
+    )
     await handlers._enqueue_file_processing(event, logger)
     queue.enqueue.assert_awaited_once()
     logger.info.assert_not_called()

@@ -99,6 +99,14 @@ class ExecuteFunctionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     input_data: JsonObject = Field(default_factory=dict)
+    revision: str | None = Field(
+        default=None,
+        description=(
+            "Run a specific revision instead of the live one -- a revision "
+            "number ('r12') or a hash prefix. Requires function.update: running "
+            "a superseded build is an authoring action, not an execution one."
+        ),
+    )
 
 
 class FunctionResourcePermissionResponse(BaseModel):
@@ -193,6 +201,48 @@ class FunctionListResponse(BaseModel):
     items: list[FunctionSummaryResponse]
     limit: int
     next_page_token: str | None = None
+
+
+class FunctionRevisionResponse(BaseModel):
+    """One entry in a function's revision history."""
+
+    id: UUID
+    function_id: UUID
+    revision_number: int
+    revision_hash: str
+    label: str | None = None
+    created_by: UUID | None = None
+    created_at: datetime | None
+    is_live: bool = Field(description="True for the revision this function runs.")
+    pruned_at: datetime | None = Field(
+        default=None,
+        description=(
+            "Set when retention removed this revision's artifact. The entry "
+            "stays in the history, but it can no longer be run or promoted."
+        ),
+    )
+    # Only on the single-revision read: listing never pays the storage round trip.
+    code: str | None = None
+    input_schema: JsonObject | None = None
+    output_schema: JsonObject | None = None
+    config_schema: JsonObject | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class FunctionRevisionListResponse(BaseModel):
+    items: list[FunctionRevisionResponse]
+
+
+class FunctionRevisionPromoteResponse(BaseModel):
+    revision: FunctionRevisionResponse
+    schema_changed: bool = Field(
+        description=(
+            "True when this revision's input/output/config schemas differ from "
+            "the ones that were live. The schemas move with the revision, so "
+            "agents and workflows bound to the old contract may need updating."
+        )
+    )
 
 
 class FunctionRunResponse(BaseModel):

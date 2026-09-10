@@ -194,6 +194,26 @@ class ConnectRequestStateRequiredError(ConnectorValidationError):
         self.code = "CONNECT_REQUEST_STATE_REQUIRED"
 
 
+class ConnectRequestIdentityMismatchError(ConnectorValidationError):
+    """A follow-up leg came back as somebody else.
+
+    The second leg of a two-part connect -- GitHub's install step -- is not
+    PKCE-protected, because the provider builds its authorize step itself and
+    there is nowhere to put a challenge. `followup_attributes` records which
+    provider identity is expected instead, and this is what refusing an
+    unexpected one looks like: without it, a leaked `state` plus a code minted
+    for the attacker's own account would store their GitHub identity onto
+    somebody else's Lemma user.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "This link was started for a different GitHub account. Nothing was "
+            "changed. Start the connection again from Lemma."
+        )
+        self.code = "CONNECT_REQUEST_IDENTITY_MISMATCH"
+
+
 class OAuthWorkflowError(ConnectorValidationError):
     def __init__(self, message: str, details: object | None = None):
         ConnectorDomainError.__init__(

@@ -22,6 +22,7 @@ from app.modules.agent_surfaces.platforms.resend.inbound import (
     normalize_resend_inbound,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.identity.config import identity_settings
 
 
 def _request(body: bytes, *, content_type: str = "application/json") -> Request:
@@ -177,13 +178,14 @@ async def test_platform_webhook_verifies_and_publishes_versioned_event():
 async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
     monkeypatch,
 ):
-    from app.core.config import settings
     from app.modules.agent_surfaces.config import surface_settings
     from app.modules.identity.domain.events import (
         WhatsAppMobileVerificationReceivedEvent,
     )
 
-    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", True)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", True
+    )
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")
@@ -220,10 +222,11 @@ async def test_signed_reserved_whatsapp_message_publishes_only_identity_event(
 async def test_reserved_whatsapp_text_routes_normally_when_verification_is_disabled(
     monkeypatch,
 ):
-    from app.core.config import settings
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(settings, "auth_whatsapp_mobile_verification_enabled", False)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", False
+    )
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "global-phone")
     security = SimpleNamespace(

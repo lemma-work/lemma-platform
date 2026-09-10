@@ -1,0 +1,9 @@
+[Unit]
+Description=Lemma private virtual socket for service %i
+
+[Socket]
+ListenStream=vsock::%i
+Accept=no
+
+[Install]
+WantedBy=sockets.target

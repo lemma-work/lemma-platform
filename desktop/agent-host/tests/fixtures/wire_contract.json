@@ -22,8 +22,15 @@
     "`rawInput: {}` and sends the real arguments moments later on a",
     "status-less `tool_call_update`, which the backend dropped. Every streamed",
     "tool call rendered with empty arguments, and views built from them had",
-    "nothing to build from."
+    "nothing to build from.",
+    "",
+    "`protocol_version` is `lemma_agent_host::PROTOCOL_VERSION` and",
+    "`AGENT_HOST_PROTOCOL_VERSION`. Two literals, in two languages, that the",
+    "host sends and the backend compares against -- and nothing tied them, so",
+    "raising one and not the other makes every host of the old version look",
+    "unrecognised, silently, from the moment the backend deploys."
   ],
+  "protocol_version": 2,
   "event_types": [
     "run_state",
     "user_message",
@@ -208,5 +215,31 @@
       },
       "tool_result": "# Lemma"
     }
-  ]
+  ],
+  "limits": {
+    "_why": "Bounds the backend enforces on the wire. A host that exceeds one of these does not degrade: an over-long object_id gets its batch refused and the transcript discarded, and an over-large max_runs makes every poll 422 so the host reports itself offline for ever.",
+    "object_id_max_length": 255,
+    "max_runs": 128
+  },
+  "run_spec": {
+    "_why": "The START_RUN payload is a run spec in two languages, and only one of them declares every field. `mcp` is on the wire but is deliberately not a field of the Python model: it rests in the command row as `encrypted_mcp` and `_wire_command` decrypts it into `mcp` as the command is handed to the host, so a model field would be somewhere a run-scoped credential could be persisted in plaintext. Nothing tied the two field lists together, which made that deliberate absence indistinguishable from a field somebody forgot -- and made adding a field on one side and not the other invisible until a run behaved oddly.",
+    "fields": [
+      "agent_run_id",
+      "conversation_id",
+      "harness_id",
+      "profile_revision",
+      "model_name",
+      "config_selections",
+      "system_prompt",
+      "prompt",
+      "resume_session_id",
+      "workspace_cwd",
+      "context",
+      "run_deadline",
+      "system_prompt_delivery"
+    ],
+    "added_on_delivery": {
+      "mcp": "Run-scoped Lemma MCP configuration, decrypted from `encrypted_mcp` by AgentHostDispatchRepository._wire_command when the command is delivered."
+    }
+  }
 }

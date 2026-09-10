@@ -1,4 +1,7 @@
 "use client";
+import { ChatUsage } from "@/components/usage/chat-usage";
+import { usePod } from "@/lib/hooks/use-pods";
+
 
 import { useRouter } from "next/navigation";
 import {
@@ -186,6 +189,9 @@ function buildControllerView(
     selectConversation: assistant.selectConversation,
     sendMessage: assistant.sendMessage,
     steerMessage: assistant.steerMessage,
+    queuedSteers: assistant.queuedSteers,
+    sendQueuedSteersNow: assistant.sendQueuedSteersNow,
+    discardQueuedSteer: assistant.discardQueuedSteer,
     retryFailedMessage: assistant.retryFailedMessage,
     uploadFiles: assistant.uploadFiles,
     removePendingFile: assistant.removePendingFile,
@@ -262,6 +268,10 @@ function PodAssistantSurface({
 }) {
   const assistant = useAIAssistant();
   const mentionPodId = assistant.conversationPodId || assistant.podContext?.pod?.id;
+  const { data: usagePod } = usePod(mentionPodId || undefined);
+  const usageOrganizationId = assistant.conversationOrganizationId !== undefined
+    ? assistant.conversationOrganizationId
+    : usagePod?.organization_id ?? assistant.podContext?.pod?.organization_id;
   const { data: tablesData } = useTables(mentionPodId || undefined, DEFAULT_DATASTORE_NAME);
   const { data: filesData } = useDatastoreFiles(
     mentionPodId || undefined,
@@ -320,6 +330,14 @@ function PodAssistantSurface({
         showConversationList={showConversationList}
         showModelPicker={showModelPicker}
         composerModelControl={composerModelControl}
+        composerTrailingControls={
+          <ChatUsage
+            organizationId={usageOrganizationId ?? undefined}
+            errorCode={assistant.errorReason === "configuration" ? null : assistant.errorCode}
+            running={controller.isActiveConversationRunning}
+            conversationId={controller.activeConversationId}
+          />
+        }
         showNewConversationButton={showNewConversationButton}
         showHeader={showHeader}
         appearance="minimal"

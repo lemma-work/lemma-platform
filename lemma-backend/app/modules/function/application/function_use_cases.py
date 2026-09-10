@@ -14,6 +14,15 @@ ctx).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.modules.function.application.function_definition_compiler import (
+        FunctionDefinitionCompiler,
+    )
+
+from app.modules.function.config import revision_settings
+
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -23,8 +32,8 @@ from app.core.authorization.scope import context_scope, pod_context_scope, uow_s
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.function.application.function_definition_compiler import (
-    FunctionDefinitionCompiler,
+from app.modules.function.application.function_revision_use_cases import (
+    FunctionRevisionUseCasesMixin,
 )
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
@@ -56,7 +65,7 @@ from app.core.log.log import get_logger
 logger = get_logger(__name__)
 
 
-class FunctionUseCases:
+class FunctionUseCases(FunctionRevisionUseCasesMixin):
     """Owns the function sagas. Built from a uow_factory + a per-phase bound
     service builder + the sandbox execution engine."""
 
@@ -102,10 +111,8 @@ class FunctionUseCases:
         function.output_schema = schemas.output
         function.config_schema = schemas.config
         function.revision_hash = function.pending_artifact.revision_hash
-        function.code_path = (
-            f"revisions/{function.revision_hash.removeprefix('sha256:')}/function.py"
-        )
-        # Source activation is content-addressed. A failed update can leave an
+        function.code_path = function.pending_artifact.code_path
+        # Each upload has its own storage generation. A failed update can leave an
         # unreferenced artifact/source, but it cannot overwrite the code belonging
         # to the still-active database revision.
         await self._compiler.write_code(function.id, function.code_path, code)
@@ -124,9 +131,7 @@ class FunctionUseCases:
             code,
             python_packages=tuple(parse_python_packages(code)),
         )
-        revision_code_path = (
-            f"revisions/{artifact.revision_hash.removeprefix('sha256:')}/function.py"
-        )
+        revision_code_path = artifact.code_path
         await self._compiler.write_code(function.id, revision_code_path, code)
 
         async with uow_scope(self._uow_factory) as uow:
@@ -136,6 +141,9 @@ class FunctionUseCases:
                 revision_hash=artifact.revision_hash,
                 code_path=revision_code_path,
             )
+            if activated is not None and activated.code_path == revision_code_path:
+                activated.pending_artifact = artifact
+                await self._build(uow).persist_create(activated)
         if activated is None or activated.revision_hash is None:
             raise FunctionValidationError(
                 "Function revision migration did not activate an executable revision"
@@ -202,6 +210,7 @@ class FunctionUseCases:
                 include_code=False,
                 ctx=scope2.ctx,
             )
+        await self._compiler.discard_unused_artifact(created)
         return refreshed or created
 
     async def update_function(
@@ -235,9 +244,48 @@ class FunctionUseCases:
             refreshed = await service.persist_update(
                 plan, pod_id=pod_id, name=name, ctx=scope2.ctx
             )
+        await self._compiler.discard_unused_artifact(plan.function)
         # Icon cleanup is a storage call — run it with no connection held.
         await service.delete_old_icon(plan.old_icon_url, refreshed.icon_url)
+        if plan.code is not None:
+            # A code save is when this function's storage grows by an artifact,
+            # so it is when surplus revisions are worth removing. Best-effort:
+            # the new revision is already live, and the daily sweep retries.
+            await self._prune_revisions_quietly(refreshed)
         return refreshed
+
+    async def _prune_revisions_quietly(self, function: FunctionEntity) -> None:
+
+        if not revision_settings.function_revision_retention_enabled:
+            return
+
+        from app.modules.function.services.function_revision_retention import (
+            PRUNE_FAILURES,
+            FunctionRevisionRetention,
+        )
+
+        if function.id is None:
+            return
+        try:
+            async with uow_scope(self._uow_factory) as uow:
+                service = self._build(uow)
+                retention = FunctionRevisionRetention(
+                    service.repository, service.storage_factory
+                )
+                prune_plan = await retention.plan(function)
+            # Storage deletes hold no pooled connection.
+            await retention.execute(prune_plan)
+            async with self._uow_factory() as completed_uow:
+                await self._build(completed_uow).repository.mark_revisions_purged(
+                    prune_plan.version_ids
+                )
+                await completed_uow.commit()
+        except PRUNE_FAILURES:
+            logger.warning(
+                "function.use_cases.revision_retention.degraded",
+                function_id=str(function.id),
+                exc_info=True,
+            )
 
     async def upsert_function_for_import(
         self,
@@ -333,6 +381,10 @@ class FunctionUseCases:
                     )
                     old_icon_url = plan.old_icon_url
 
+        compiled = created if operation == "create" else plan.function
+        if compiled is not None:
+            await self._compiler.discard_unused_artifact(compiled)
+        await self._prune_revisions_quietly(result)
         await service.delete_old_icon(old_icon_url, result.icon_url)
         return result
 
@@ -346,8 +398,13 @@ class FunctionUseCases:
             function = await service.resolve_delete(
                 pod_id, name, user_id, ctx=scope.ctx
             )
-        # Icon cleanup is a storage call — no connection held.
+        # Icon and artifact cleanup are storage calls — no connection held. The
+        # function's rows (and its revision history) are already gone, so this is
+        # the last chance anything can find these objects; failing to run it
+        # orphans them permanently.
         await service.delete_icon(function.icon_url)
+        if function.id is not None:
+            await self._build_revisions(scope.uow).cleanup_function_storage(function.id)
 
     async def execute_function(
         self,
@@ -359,13 +416,20 @@ class FunctionUseCases:
         user_email: str | None,
         request: Request,
         run_as_workload: RunAsWorkload | None = None,
+        revision_ref: str | None = None,
     ) -> FunctionRunEntity:
         async def resolve_once() -> ResolvedExecution:
             async with pod_context_scope(
                 self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
             ) as scope:
                 return await self._build(scope.uow).resolve_execute(
-                    pod_id, name, input_data, user_id, user_email, ctx=scope.ctx
+                    pod_id,
+                    name,
+                    input_data,
+                    user_id,
+                    user_email,
+                    ctx=scope.ctx,
+                    revision_ref=revision_ref,
                 )
 
         resolved = await self._resolve_with_revision_backfill(resolve_once)

@@ -898,6 +898,40 @@ class TestTerminalMapping:
 
 
 class TestPermissionRequest:
+    def test_permission_input_is_saved_before_the_approval_is_published(self) -> None:
+        n = _normalizer()
+        opening = n.normalize(
+            _event(
+                1,
+                AgentHostEventType.TOOL_CALL_UPSERT,
+                {"title": "Read file", "kind": "read", "status": "pending"},
+                object_id="read-project",
+            )
+        )
+        assert _messages(opening) == []
+        permission = n.normalize(
+            _event(
+                2,
+                AgentHostEventType.PERMISSION_REQUEST,
+                {
+                    "toolCall": {
+                        "toolCallId": "read-project",
+                        "title": "Read README.md",
+                        "rawInput": {"path": "README.md"},
+                    },
+                    "options": [{"optionId": "once", "kind": "allow_once"}],
+                },
+                object_id="read-project",
+            )
+        )
+        calls = _messages(permission)
+        assert [call.data.tool_call_id for call in calls] == [
+            "read-project",
+            "agent-host-permission:read-project",
+        ]
+        assert calls[0].data.tool_args == {"path": "README.md"}
+        assert calls[0].data.metadata["tool_title"] == "Read README.md"
+
     def test_permission_request_becomes_a_request_approval_call(self) -> None:
         """The pause is rendered as an ordinary Lemma approval, so every client
         that already knows how to show one needs no Agent Host special case."""

@@ -16,15 +16,15 @@ export type PublishStartRequest = {
      */
     ai_readme?: boolean;
     /**
-     * CREATE refuses an existing repository. UPDATE requires an existing repository and replaces only Lemma-managed files.
+     * Both modes require the repository to exist -- publishing does not create one. CREATE refuses a repository Lemma has already published to (one carrying a publish manifest), so it is what you use for a repository you just made. UPDATE requires that manifest and replaces only Lemma-managed files.
      */
     mode?: PublishMode;
     /**
-     * Create the repo as private.
+     * Recorded on the job and reported back, but not acted on: the repository already exists, so its visibility is whatever it was created with.
      */
     private?: boolean;
     /**
-     * GitHub repository name (letters, numbers, dot, dash, underscore).
+     * GitHub repository to publish into, as `name` or `owner/name`. It must already exist and be covered by the Lemma app's installation -- publishing does not create repositories, because a GitHub App cannot.
      */
     repo_name: string;
 };

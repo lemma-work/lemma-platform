@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -104,7 +103,7 @@ async def _seed_agent_owned_connector(
         description="Agent owned connector e2e",
         kinds=[
             {
-                "kind": "package",
+                "kind": "http",
                 "auth_scheme": "API_KEY",
                 "system_default_available": True,
             }
@@ -117,7 +116,7 @@ async def _seed_agent_owned_connector(
         organization_id=organization_id,
         connector_id=connector_id,
         name=connector_id,
-        kind="package",
+        kind="http",
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
     )
@@ -479,14 +478,16 @@ async def test_named_agent_connector_access_uses_core_roles_and_resource_grants(
         agent_id=agent["id"],
         agent_name=agent["name"],
     )
-    mock_execution_client = SimpleNamespace(
-        list_operations=AsyncMock(return_value=[SimpleNamespace(name="echo")]),
-        get_operation=AsyncMock(return_value=SimpleNamespace(descriptor=None)),
-        execute_operation=AsyncMock(return_value={"ok": True}),
-    )
+
+    # `http` connectors reach their provider through the OpenAPI executor, so
+    # that is the seam standing in for the upstream here.
+    async def mock_execute(_self, **_kwargs):
+        return {"ok": True}
+
     with patch(
-        "app.modules.connectors.infrastructure.adapters.lemma_operation_gateway.create_lemma_execution_client",
-        return_value=mock_execution_client,
+        "app.modules.connectors.infrastructure.adapters.openapi_http_executor."
+        "OpenApiHttpExecutor.execute",
+        new=mock_execute,
     ):
         app_execution = await async_client.post(
             (
@@ -594,15 +595,17 @@ async def test_named_agent_connector_access_resolves_dynamic_account_with_app_id
         agent_id=agent["id"],
         agent_name=agent["name"],
     )
-    mock_execution_client = SimpleNamespace(
-        list_operations=AsyncMock(return_value=[SimpleNamespace(name="echo")]),
-        get_operation=AsyncMock(return_value=SimpleNamespace(descriptor=None)),
-        execute_operation=AsyncMock(return_value={"ok": True}),
-    )
+    seen: dict = {}
+
+    async def mock_execute(_self, *, third_party_credentials, **_kwargs):
+        seen["credentials"] = third_party_credentials
+        return {"ok": True}
+
     with patch(
-        "app.modules.connectors.infrastructure.adapters.lemma_operation_gateway.create_lemma_execution_client",
-        return_value=mock_execution_client,
-    ) as create_execution_client:
+        "app.modules.connectors.infrastructure.adapters.openapi_http_executor."
+        "OpenApiHttpExecutor.execute",
+        new=mock_execute,
+    ):
         app_execution = await async_client.post(
             (
                 f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -613,8 +616,5 @@ async def test_named_agent_connector_access_resolves_dynamic_account_with_app_id
         )
     assert app_execution.status_code == status.HTTP_200_OK, app_execution.text
     assert app_execution.json()["result"] == {"ok": True}
-    assert (
-        create_execution_client.call_args.args[1]["api_key"] == "dynamic-agent-secret"
-    )
-    mock_execution_client.execute_operation.assert_awaited_once()
+    assert seen["credentials"]["api_key"] == "dynamic-agent-secret"
     assert str(account.user_id) == fixed_test_user["id"]

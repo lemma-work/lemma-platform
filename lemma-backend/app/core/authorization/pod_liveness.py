@@ -13,6 +13,7 @@ has no import back.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from fastapi import Request
@@ -22,6 +23,22 @@ from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 
 
 _OPERATIONS_A_DELETED_POD_STILL_ANSWERS = frozenset({"pod.delete"})
+
+
+#: Answers "is this pod still live", for the one caller below.
+#:
+#: Core owns the *rule* -- a deleted pod stops answering for its contents -- and
+#: `mod:pod` owns the row that says so. It was a function-local import of the
+#: `Pod` model, which made `app/core` depend on a module to read one boolean.
+PodLivenessReader = Callable[[UnitOfWorkFactory, UUID], Awaitable[bool]]
+
+_pod_liveness_reader: PodLivenessReader | None = None
+
+
+def declare_pod_liveness_reader(reader: PodLivenessReader) -> None:
+    """Register the module that can answer whether a pod is live."""
+    global _pod_liveness_reader
+    _pod_liveness_reader = reader
 
 
 def _refuse_a_deleted_pod(request: Request, ctx: Context) -> None:
@@ -85,10 +102,13 @@ async def _assert_pod_is_live(
     if pod_id is None:
         return
     from app.core.domain.errors import DomainError
-    from app.modules.pod.infrastructure.models import Pod
 
-    async with uow_factory() as uow:
-        pod = await uow.session.get(Pod, pod_id)
-        is_live = pod is not None and not pod.is_deleted
-    if not is_live:
+    if _pod_liveness_reader is None:
+        raise RuntimeError(
+            "no pod-liveness reader is registered: `mod:pod` declares it and "
+            "`configure_pod_liveness` collects it at assembly. Without one this "
+            "check cannot tell a live pod from a deleted one, and answering "
+            "either way would be a guess."
+        )
+    if not await _pod_liveness_reader(uow_factory, pod_id):
         raise DomainError("Pod not found", code="POD_NOT_FOUND", status_code=404)

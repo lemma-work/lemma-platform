@@ -112,21 +112,29 @@ class TestSetConfigIsRejected:
         "query",
         [
             # The reported exploit, verbatim in shape.
-            "WITH escalate AS MATERIALIZED ("
-            "SELECT set_config('app.current_user_is_pod_admin','true','true')"
-            ") SELECT t.* FROM escalate, expenses t",
+            (
+                "WITH escalate AS MATERIALIZED ("
+                "SELECT set_config('app.current_user_is_pod_admin','true','true')"
+                ") SELECT t.* FROM escalate, expenses t"
+            ),
             # Impersonating another user rather than escalating.
-            "WITH s AS MATERIALIZED ("
-            "SELECT set_config('app.current_user_id','00000000-0000-0000-0000-000000000001','true')"
-            ") SELECT t.* FROM s, expenses t",
+            (
+                "WITH s AS MATERIALIZED ("
+                "SELECT set_config('app.current_user_id','00000000-0000-0000-0000-000000000001','true')"
+                ") SELECT t.* FROM s, expenses t"
+            ),
             "SELECT set_config('app.current_user_is_pod_admin','true',true)",
             "SELECT pg_catalog.set_config('app.current_user_is_pod_admin','true',true)",
             "SELECT SET_CONFIG('app.current_user_is_pod_admin','true',true)",
             # Buried in a subquery and in a projection expression.
-            "SELECT * FROM expenses WHERE id IN ("
-            "SELECT set_config('app.current_user_is_pod_admin','true',true)::int)",
-            "SELECT id, coalesce("
-            "set_config('app.current_user_is_pod_admin','true',true), '') FROM expenses",
+            (
+                "SELECT * FROM expenses WHERE id IN ("
+                "SELECT set_config('app.current_user_is_pod_admin','true',true)::int)"
+            ),
+            (
+                "SELECT id, coalesce("
+                "set_config('app.current_user_is_pod_admin','true',true), '') FROM expenses"
+            ),
         ],
     )
     def test_set_config_rejected_anywhere_in_the_tree(self, query):

@@ -24,6 +24,9 @@ class RedisSurfaceEventDedupStore:
         self._ttl_seconds = (
             ttl_seconds or surface_settings.surface_event_dedupe_ttl_seconds
         )
+        self._stranger_window_seconds = (
+            surface_settings.surface_stranger_reply_window_seconds
+        )
         self._redis: Redis | None = None
         self._lock = asyncio.Lock()
 
@@ -76,6 +79,57 @@ class RedisSurfaceEventDedupStore:
             ),
             "1",
             ex=self._ttl_seconds,
+            nx=True,
+        )
+        return bool(claimed)
+
+    def _stranger_key(
+        self,
+        *,
+        platform: str,
+        surface_installation_id: UUID | None,
+        sender_external_user_id: str,
+    ) -> str:
+        surface_key = (
+            str(surface_installation_id) if surface_installation_id else "unrouted"
+        )
+        return (
+            "agent_surfaces:stranger_reply:"
+            f"{platform.lower()}:{surface_key}:{sender_external_user_id}"
+        )
+
+    async def claim_stranger_reply(
+        self,
+        *,
+        platform: str,
+        surface_installation_id: UUID | None,
+        sender_external_user_id: str | None,
+    ) -> bool:
+        """One "here is how to get access" per sender per window, not per message.
+
+        ``claim_message`` is keyed on the message id, so it stops a redelivery
+        and nothing else: fifty messages from someone we cannot place earned
+        fifty replies. On the shared number that is Lemma sending unsolicited
+        messages from an address whose sender reputation every pod shares, and
+        in a channel it is the same nudge, in public, every time that person
+        speaks.
+
+        A sender with no external id gets through, exactly as an event with no
+        message id gets through ``claim_message`` -- there is no key to hold the
+        window on, and message-level dedupe still applies.
+        """
+        if not sender_external_user_id:
+            return True
+
+        redis = await self._get_redis()
+        claimed = await redis.set(
+            self._stranger_key(
+                platform=platform,
+                surface_installation_id=surface_installation_id,
+                sender_external_user_id=sender_external_user_id,
+            ),
+            "1",
+            ex=self._stranger_window_seconds,
             nx=True,
         )
         return bool(claimed)

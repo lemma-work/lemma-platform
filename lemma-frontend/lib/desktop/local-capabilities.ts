@@ -191,6 +191,24 @@ export function desktopBridgeAvailable(): boolean {
 }
 
 /**
+ * Whether this page is being rendered inside the Lemma desktop app.
+ *
+ * A different question from `desktopBridgeAvailable`, which asks whether the
+ * page may use the *privileged local* commands and so requires the deployment
+ * to be local as well. Someone running a cloud workspace in the desktop app is
+ * in the desktop app; they just have no local stack to command.
+ *
+ * Conflating the two made every cloud-mode desktop user report as a web
+ * visitor, which is the one thing the client name exists to distinguish.
+ */
+export function runningInDesktopApp(): boolean {
+  return (
+    typeof window !== "undefined"
+    && typeof window.__TAURI__?.core?.invoke === "function"
+  );
+}
+
+/**
  * Whether an app embedded in an iframe would still be signed in.
  *
  * On macOS it is not, and no cookie attribute can change that. `localhost` is
@@ -220,6 +238,16 @@ export function desktopBridgeAvailable(): boolean {
  */
 export function crossSiteFramesCarryCookies(): boolean {
   if (typeof window === "undefined") return true;
-  if (window.__LEMMA_DESKTOP__?.platform !== "macos") return true;
+  const desktop = window.__LEMMA_DESKTOP__;
+  // Not the desktop shell at all: an ordinary browser, a LAN visitor, a public
+  // link. Chromium and Firefox keep their iframes.
+  if (!desktop) return true;
+  // Windows and its WebView2 treat `*.localhost` as same-site.
+  if (desktop.platform && desktop.platform !== "macos") return true;
+  // macOS, or a shell too old to say. `platform` is optional because locald
+  // serves a frontend pack that updates independently of the shell, so a newer
+  // pack can run inside an older shell that never injected it. Assuming the
+  // permissive case there brings back a permanently signed-out iframe that
+  // retries for ever; assuming the restrictive one costs a window.
   return !window.location.hostname.endsWith(".localhost");
 }

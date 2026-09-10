@@ -116,7 +116,7 @@ class TestOAuthClientSwap:
     def test_swapping_the_org_oauth_app_invalidates_every_token(self):
         # Tokens are bound to the client that issued them.
         _, invalidates = _effects(
-            ConnectorKind.PACKAGE,
+            ConnectorKind.HTTP,
             {"oauth2_credentials": {"client_id": "old", "client_secret": "s1"}},
             {"oauth2_credentials": {"client_id": "new", "client_secret": "s2"}},
         )
@@ -124,7 +124,7 @@ class TestOAuthClientSwap:
 
     def test_rotating_only_the_secret_still_invalidates(self):
         _, invalidates = _effects(
-            ConnectorKind.PACKAGE,
+            ConnectorKind.HTTP,
             {"oauth2_credentials": {"client_id": "same", "client_secret": "old"}},
             {"oauth2_credentials": {"client_id": "same", "client_secret": "new"}},
         )
@@ -141,7 +141,7 @@ class TestOAuthClientSwap:
 
     def test_an_unrelated_key_leaves_accounts_alone(self):
         _, invalidates = _effects(
-            ConnectorKind.PACKAGE,
+            ConnectorKind.HTTP,
             {
                 "oauth2_credentials": {"client_id": "same", "client_secret": "s"},
                 "label": "a",

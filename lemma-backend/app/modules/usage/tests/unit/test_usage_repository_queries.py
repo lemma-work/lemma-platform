@@ -8,6 +8,7 @@ than in Python, and that a listing is always bounded.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -58,7 +59,7 @@ def _bucket(key, *, inp, out, units=0.0, cost=0.0, count=1):
         input_tokens=inp,
         output_tokens=out,
         units=units,
-        cost_usd=cost,
+        cost_usd=Decimal(str(cost)),
         record_count=count,
     )
 

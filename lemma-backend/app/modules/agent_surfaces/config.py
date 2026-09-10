@@ -203,6 +203,16 @@ class SurfaceSettings(BaseSettings):
         default=900,
         description="Short TTL for Redis-based agent surface webhook dedupe keys.",
     )
+    surface_stranger_reply_window_seconds: int = Field(
+        default=3600,
+        description=(
+            "How long before a sender we cannot place is told again how to get "
+            "access. Message-level dedupe stops a redelivery and nothing else, "
+            "so without this every message from a stranger earned its own reply. "
+            "An hour is long enough that someone retrying is not told twice, and "
+            "short enough that coming back later still gets an answer."
+        ),
+    )
     surface_runtime_history_max_messages: int = Field(
         default=40,
         description=(

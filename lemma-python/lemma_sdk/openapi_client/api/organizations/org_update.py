@@ -14,7 +14,7 @@ from ...types import Response
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     body: OrganizationUpdateRequest,
 ) -> dict[str, Any]:
@@ -22,8 +22,8 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "patch",
-        "url": "/organizations/{org_id}".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}".format(
+            organization_id=quote(str(organization_id), safe=""),
         ),
     }
 
@@ -66,7 +66,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationUpdateRequest,
@@ -76,7 +76,7 @@ def sync_detailed(
      Update an organization's name or join policy (owner only)
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationUpdateRequest): Organization update request schema (owner-only).
 
     Raises:
@@ -88,7 +88,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         body=body,
     )
 
@@ -100,7 +100,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationUpdateRequest,
@@ -110,7 +110,7 @@ def sync(
      Update an organization's name or join policy (owner only)
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationUpdateRequest): Organization update request schema (owner-only).
 
     Raises:
@@ -122,14 +122,14 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         client=client,
         body=body,
     ).parsed
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationUpdateRequest,
@@ -139,7 +139,7 @@ async def asyncio_detailed(
      Update an organization's name or join policy (owner only)
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationUpdateRequest): Organization update request schema (owner-only).
 
     Raises:
@@ -151,7 +151,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         body=body,
     )
 
@@ -161,7 +161,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     body: OrganizationUpdateRequest,
@@ -171,7 +171,7 @@ async def asyncio(
      Update an organization's name or join policy (owner only)
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         body (OrganizationUpdateRequest): Organization update request schema (owner-only).
 
     Raises:
@@ -184,7 +184,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             client=client,
             body=body,
         )

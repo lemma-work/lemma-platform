@@ -22,7 +22,7 @@ from app.modules.agent_surfaces.platforms.email_text import plain_text_from_html
 
 try:
     import markdown as markdown_lib
-except Exception:  # pragma: no cover - optional dependency fallback
+except ImportError:  # pragma: no cover - optional dependency fallback
     markdown_lib = None
 
 EmailReplyContentType = Literal["text", "markdown", "html"]

@@ -48,18 +48,18 @@ class _FakeAdapter:
 
 
 class _FakeFileService:
-    """Stands in for the datastore, including its refusal of a duplicate path."""
+    """Stands in for the datastore writer, including its refusal of a duplicate path."""
 
     def __init__(self):
         self.created: list[dict] = []
         self.taken: set[str] = set()
 
-    async def create_file(
+    async def write(
         self,
         *,
         pod_id,
         name,
-        file_content,
+        content,
         ctx,
         directory_path,
         search_enabled=True,
@@ -73,7 +73,7 @@ class _FakeFileService:
             {
                 "pod_id": pod_id,
                 "name": name,
-                "size": len(file_content),
+                "size": len(content),
                 "directory_path": directory_path,
             }
         )
@@ -81,10 +81,10 @@ class _FakeFileService:
 
 
 def _direct_store(file_service):
-    """The unit-test `store`: no transaction, just hand the fake service over."""
+    """The unit-test `store`: no transaction, just hand the fake writer over."""
 
     async def _store(persist_ingested_attachment):
-        return await persist_ingested_attachment(file_service)
+        return await persist_ingested_attachment(file_service.write)
 
     return _store
 
@@ -350,7 +350,7 @@ async def test_no_transaction_is_open_while_an_attachment_downloads():
     async def _store(persist):
         order.append("open")
         try:
-            return await persist(file_service)
+            return await persist(file_service.write)
         finally:
             order.append("close")
 
@@ -389,7 +389,7 @@ async def test_a_failed_download_opens_no_transaction_at_all():
     async def _store(persist):
         nonlocal opened
         opened += 1
-        return await persist(_FakeFileService())
+        return await persist(_FakeFileService().write)
 
     outcome = await service._ingest_all(
         adapter=_FailingAdapter(),

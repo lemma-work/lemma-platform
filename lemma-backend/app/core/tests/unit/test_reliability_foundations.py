@@ -14,7 +14,7 @@ from opentelemetry import trace
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 from pydantic import BaseModel, ValidationError
 
-from app.app import RequestBodyLimitMiddleware
+from app.middleware import RequestBodyLimitMiddleware
 from app.core.api.uploads import (
     UPLOAD_MEMORY_SPOOL_BYTES,
     UploadBudget,

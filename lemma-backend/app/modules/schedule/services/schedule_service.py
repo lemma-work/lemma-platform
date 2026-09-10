@@ -33,7 +33,7 @@ from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
 )
 from app.modules.schedule.services.time_schedule_policy import (
-    validate_time_schedule_config,
+    validated_time_schedule_config,
 )
 from app.modules.schedule.services.schedule_run_service import ScheduleRunService
 from app.modules.schedule.services.schedule_target_policy import (
@@ -87,11 +87,11 @@ class ScheduleService:
         # fact assembled at the composition root, which a module may not import.
         self.webhook_sources = webhook_sources
         if datastore_policy is None:
-            from app.composition.schedule_datastore_policy import (
-                SqlAlchemyDatastoreSchedulePolicy,
+            from app.modules.schedule.infrastructure.adapters.datastore_table_policy import (
+                DatastoreTableSchedulePolicy,
             )
 
-            datastore_policy = SqlAlchemyDatastoreSchedulePolicy(uow)
+            datastore_policy = DatastoreTableSchedulePolicy(uow)
         self.datastore_policy = datastore_policy
         self.run_service = ScheduleRunService(
             uow=uow,
@@ -99,7 +99,7 @@ class ScheduleService:
             datastore_policy=datastore_policy,
         )
         if target_resolver is None:
-            from app.composition.schedule_targets import (
+            from app.modules.schedule.infrastructure.adapters.target_resolver import (
                 SqlAlchemyScheduleTargetResolver,
             )
 
@@ -153,7 +153,7 @@ class ScheduleService:
         await self._require_target_execute(schedule_create, ctx=ctx)
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
-            validate_time_schedule_config(schedule_create.config)
+            await validated_time_schedule_config(schedule_create.config)
         elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
             validate_webhook_source(schedule_create, self.webhook_sources)
         schedule = ScheduleEntity(**schedule_create.model_dump())

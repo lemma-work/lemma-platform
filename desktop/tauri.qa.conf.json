@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lemma Candidate QA",
+  "identifier": "work.lemma.candidate-qa",
+  "bundle": {
+    "resources": {
+      "runtime/bundled/lemma-local.json": "lemma-local.json",
+      "runtime/bundled/host-runtime.zip": "host-runtime.zip",
+      "runtime/bundled/guest-runtime.zip": "guest-runtime.zip"
+    },
+    "macOS": {
+      "hardenedRuntime": true,
+      "entitlements": "app.entitlements.plist"
+    }
+  }
+}

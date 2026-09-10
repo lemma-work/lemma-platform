@@ -1,0 +1,91 @@
+name: Nightly Desktop
+
+# Cuts a nightly Desktop build, every night, from a commit CI has already
+# passed.
+#
+# The nightly channel exists so the in-app update path is exercised before a
+# stable release depends on it: installed nightlies update to the next nightly,
+# which is the only routine rehearsal that path gets. That only works if a
+# nightly actually appears. Until this workflow, nothing scheduled one -- the
+# `share-*` jobs in "Release Local Stack Images" are reachable only by hand, and
+# `workflow_dispatch` failures are not announced, so a nightly that stopped
+# being cut would have stopped silently.
+#
+# This dispatches that workflow rather than adding a `schedule:` trigger to it.
+# Its nightly jobs gate on `github.event_name == 'workflow_dispatch' && share &&
+# !publish`, and `version` is a required input threaded through a dozen steps: a
+# scheduled run would have to be special-cased everywhere those are read. A
+# separate caller keeps the release workflow's own gating exactly as it is, and
+# keeps the schedule visible as its own thing.
+
+on:
+  schedule:
+    # 02:30 UTC. After the day's merges, well clear of the Wednesday protected
+    # E2E cron at 02:41 so the two do not contend for runners.
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  cut:
+    name: Cut a nightly from green main
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Refuse to ship a commit CI has not passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "main is at $sha"
+
+          # `CI passed` is the aggregator every pull request merges behind, so
+          # asking about it asks about the whole required set in one question.
+          # A nightly built from a red commit is worse than no nightly: it is
+          # published to a channel installed nightlies update to *automatically*,
+          # so the breakage arrives on machines rather than in a pull request.
+          conclusion="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name == "CI passed")] | first | .conclusion // "missing"')"
+          echo "CI passed: ${conclusion}"
+
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error::main is at ${sha}, whose 'CI passed' is ${conclusion}." \
+                 "Not cutting a nightly from it."
+            exit 1
+          fi
+
+      - name: Read the version this repository is on
+        id: version
+        run: |
+          set -euo pipefail
+          # The same single source `check_version_consistency.py` holds every
+          # other component to, so a nightly cannot be cut under a version the
+          # rest of the tree disagrees with.
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' desktop/Cargo.toml | head -1)"
+          test -n "${version}" || { echo "::error::no workspace version"; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "cutting nightly for ${version}"
+
+      - name: Dispatch the nightly build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # publish=false keeps this off the stable release; share=true is what
+          # builds the installable macOS and Windows nightlies and publishes
+          # their signed update feed.
+          gh workflow run release-local-images.yml \
+            --ref "${GITHUB_REF_NAME}" \
+            -f version="${{ steps.version.outputs.version }}" \
+            -f publish=false \
+            -f share=true
+          echo "Dispatched. Its own failures are announced separately, because" \
+               "this step succeeds as soon as the run is queued."

@@ -313,6 +313,11 @@ function PodShell({
     const isPodHome = pathname === `/pod/${pod.id}` || pathname === `/pod/${pod.id}/`;
     const isAppViewRoute = pathname.startsWith(`/pod/${pod.id}/app/view`);
     const isConversationRoute = pathname === `/pod/${pod.id}/conversations` || pathname.startsWith(`/pod/${pod.id}/conversations/`);
+    // Only a transcript is a workspace. The list of conversations sits on the
+    // same segment but is an ordinary index page with nothing inside it that
+    // scrolls, so it needs the shell's scroller; taking it away is what left
+    // the list clipped at the fold.
+    const isConversationWorkspaceRoute = pathname.startsWith(`/pod/${pod.id}/conversations/`);
     // Keyed so that moving between the pod's sections mounts a fresh surface and
     // replays `pod-page-enter`. Every conversation is one section, not one
     // surface each: the id enters the path the moment a send creates the
@@ -770,7 +775,7 @@ function PodShell({
                     <div
                         className={cn(
                             "pod-page-scroll min-h-0 flex-1",
-                            isConversationRoute ? "overflow-hidden" : "overflow-auto",
+                            isConversationWorkspaceRoute ? "overflow-hidden" : "overflow-auto",
                             isPodHome
                                 ? "bg-[var(--pod-main-bg)] shadow-none"
                                 : isConversationRoute
@@ -783,7 +788,7 @@ function PodShell({
                             key={pageSurfaceKey}
                             className={cn(
                                 "pod-page-surface",
-                                isConversationRoute && "pod-conversation-workspace-surface",
+                                isConversationWorkspaceRoute && "pod-conversation-workspace-surface",
                             )}
                         >
                             {/* `children` renders while access resolves, not a

@@ -21,7 +21,7 @@ class ConnectorTrigger(StringAuditBase):
     connector_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("connectors.id", ondelete="CASCADE"), nullable=False
     )
-    kind: Mapped[str] = mapped_column(String(50), default="package", nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), default="http", nullable=False)
     # id serves as the name/slug
     event_type: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

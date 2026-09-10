@@ -24,7 +24,6 @@ Run::
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -75,9 +74,7 @@ def connected_account_id(composio_client) -> str:
 def dispatcher() -> KindDispatcher:
     # The package gateway is never reached: every request here is composio-kind.
     return KindDispatcher(
-        build_kind_registry(
-            composio_gateway=ComposioOperationGateway(), package_gateway=AsyncMock()
-        )
+        build_kind_registry(composio_gateway=ComposioOperationGateway())
     )
 
 

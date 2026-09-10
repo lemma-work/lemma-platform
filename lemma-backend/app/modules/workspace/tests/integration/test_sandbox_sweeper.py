@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select, update
 
 from app.modules.workspace.domain.sandbox import (
     SandboxDesiredState,
@@ -22,9 +24,11 @@ from app.modules.workspace.providers.base import (
 from app.modules.workspace.infrastructure.sandbox_repository import (
     SandboxRepository,
 )
+from app.modules.workspace.infrastructure.models import SandboxModel
 from app.modules.workspace.services.sandbox_service import SandboxService
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
 from app.modules.workspace.tests.integration.test_sandbox_service import FakeProvider
+from sandbox_runtime.errors import SandboxUnavailable
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -680,3 +684,224 @@ async def test_the_warm_path_does_not_rewrite_a_row_that_is_already_right(
         after = await SandboxRepository(uow).get(sandbox.id)
 
     assert before.desired_state is after.desired_state is SandboxDesiredState.PRESENT
+
+
+class TestAnUnreachableSandboxStopsBeingRetriedForever:
+    """ "The next sweep will try it again" is the right answer to a blip and the
+    wrong one to a provider object that is never coming back.
+
+    One sandbox failed to release on every hourly sweep for as long as the logs
+    went back, warning identically each time and converging on nothing. Past a
+    long multiple of the idle cutoff the release is recorded locally instead,
+    which keeps the disk — so being wrong costs a cold start — and if the
+    compute really is still running, the orphan sweep destroys a provider object
+    with no live row behind it.
+    """
+
+    @staticmethod
+    def _unreachable(provider: SweepableProvider) -> None:
+        """Fail the *release*, which is where the real one failed.
+
+        Deliberately not `inspect`: `_is_busy` probes first and treats an
+        unreachable sandbox as busy, so a sandbox whose probe fails is skipped
+        before release is ever attempted. The sandbox that warned hourly in
+        production probed fine and would not stop.
+        """
+
+        async def _raise(instance, *, kind, deadline_at):
+            raise SandboxUnavailable("provider is not answering")
+
+        provider.release = _raise  # type: ignore[method-assign]
+
+    @staticmethod
+    async def _last_used_at(uow_factory, sandbox_id: UUID) -> object:
+        async with uow_factory() as uow:
+            row = await uow.session.execute(
+                select(SandboxModel.last_used_at, SandboxModel.desired_state).where(
+                    SandboxModel.id == sandbox_id
+                )
+            )
+            return row.first()
+
+    @staticmethod
+    async def _age(uow_factory, sandbox_id: UUID, *, seconds: int) -> None:
+        async with uow_factory() as uow:
+            await uow.session.execute(
+                update(SandboxModel)
+                .where(SandboxModel.id == sandbox_id)
+                .values(
+                    last_used_at=datetime.now(timezone.utc) - timedelta(seconds=seconds)
+                )
+            )
+            await uow.commit()
+
+    async def test_a_long_idle_sandbox_the_provider_will_not_answer_for_is_let_go(
+        self, sweeper, provider, service, sandbox_uow_factory
+    ) -> None:
+        sandbox = await _workspace(service)
+        await service.ensure(sandbox.id)
+        await self._age(sandbox_uow_factory, sandbox.id, seconds=7200)
+        self._unreachable(provider)
+
+        assert await sweeper.release_idle(idle_after_seconds=600) == 1
+
+        _, desired_state = await self._last_used_at(sandbox_uow_factory, sandbox.id)
+        assert desired_state == SandboxDesiredState.RELEASED.value
+
+    async def test_a_blip_is_still_left_for_the_next_sweep(
+        self, sweeper, provider, service, sandbox_uow_factory
+    ) -> None:
+        """Just past the idle cutoff is not evidence the provider is gone."""
+        sandbox = await _workspace(service)
+        await service.ensure(sandbox.id)
+        await self._age(sandbox_uow_factory, sandbox.id, seconds=700)
+        self._unreachable(provider)
+
+        assert await sweeper.release_idle(idle_after_seconds=600) == 0
+
+        _, desired_state = await self._last_used_at(sandbox_uow_factory, sandbox.id)
+        assert desired_state == SandboxDesiredState.PRESENT.value, (
+            "giving up early would stop compute that is probably still fine"
+        )
+
+
+def _volume(*, name: str, sandbox_id: UUID | None, storage_generation: int | None):
+    return ProviderObject(
+        provider_id=name,
+        name=name,
+        sandbox_id=sandbox_id,
+        epoch=None,
+        running=False,
+        kind="volume",
+        storage_generation=storage_generation,
+    )
+
+
+async def test_a_volume_with_no_row_is_left_alone(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    """An unknown disk may belong to another environment."""
+    orphan = uuid4()
+    name = f"lemma-vol-{orphan.hex}-1"
+    provider.objects = [_volume(name=name, sandbox_id=orphan, storage_generation=1)]
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == ()
+    assert provider.destroyed_volumes == []
+    assert provider.destroyed == []
+
+
+async def test_a_live_sandboxs_volume_survives_an_epoch_bump(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """The regression this rule exists for.
+
+    A volume is the disk every container generation mounts, so judging it by
+    epoch the way a container is judged would delete a live workspace the first
+    time its container restarted.
+    """
+    sandbox = await _workspace(service)
+    first = await service.ensure(sandbox.id)
+    provider.containers.clear()
+    service.forget(sandbox.id)
+    second = await service.ensure(sandbox.id)
+    assert second.epoch > first.epoch
+
+    name = f"lemma-vol-{sandbox.id.hex}-1"
+    provider.objects = [
+        _volume(name=name, sandbox_id=sandbox.id, storage_generation=1),
+        _object(name=second.provider_id, sandbox_id=sandbox.id, epoch=second.epoch),
+    ]
+
+    assert await sweeper.reclaim_orphans() == ()
+    assert provider.destroyed_volumes == []
+
+
+async def test_a_superseded_storage_generation_is_reclaimed(
+    sweeper: SandboxSweeper,
+    provider: SweepableProvider,
+    service: SandboxService,
+    sandbox_uow_factory,
+) -> None:
+    """A new disk generation makes the old disk garbage -- the one thing that
+    genuinely supersedes a volume."""
+    from app.modules.workspace.infrastructure.sandbox_repository import (
+        SandboxRepository,
+    )
+
+    sandbox = await _workspace(service)
+    async with sandbox_uow_factory() as uow:
+        await SandboxRepository(uow).bump_storage_generation(sandbox.id)
+        await uow.commit()
+
+    stale = f"lemma-vol-{sandbox.id.hex}-1"
+    current = f"lemma-vol-{sandbox.id.hex}-2"
+    provider.objects = [
+        _volume(name=stale, sandbox_id=sandbox.id, storage_generation=1),
+        _volume(name=current, sandbox_id=sandbox.id, storage_generation=2),
+    ]
+
+    reclaimed = await sweeper.reclaim_orphans()
+
+    assert reclaimed == (stale,)
+    assert provider.destroyed_volumes == [stale]
+
+
+async def test_a_volume_of_unknown_generation_is_left_alone_while_its_sandbox_lives(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """Pre-cutover volumes embed a random token, so their generation cannot be
+    read. Unparseable means unknown, never "generation zero"."""
+    sandbox = await _workspace(service)
+    provider.objects = [
+        _volume(
+            name="lemma-vol-legacytoken", sandbox_id=sandbox.id, storage_generation=None
+        )
+    ]
+
+    assert await sweeper.reclaim_orphans() == ()
+    assert provider.destroyed_volumes == []
+
+
+async def test_an_unidentifiable_volume_is_left_alone(
+    sweeper: SandboxSweeper, provider: SweepableProvider
+) -> None:
+    provider.objects = [
+        _volume(name="someone-elses-data", sandbox_id=None, storage_generation=None)
+    ]
+
+    assert await sweeper.reclaim_orphans() == ()
+    assert provider.destroyed_volumes == []
+
+
+async def test_containers_are_reclaimed_before_the_volumes_they_mount(
+    sweeper: SandboxSweeper, provider: SweepableProvider, service: SandboxService
+) -> None:
+    """Docker refuses to delete a volume a container still mounts, so taking the
+    container first is what makes the disk collectable in the same sweep."""
+    target = await _reclaimable(service, provider)
+    orphan = target.sandbox_id
+    order: list[str] = []
+    provider.objects = [
+        _volume(
+            name=f"lemma-vol-{orphan.hex}-1", sandbox_id=orphan, storage_generation=1
+        ),
+        _object(name=f"lemma-ws-{orphan.hex}-1", sandbox_id=orphan, epoch=1),
+    ]
+
+    async def record_container(name, *, deadline_at):
+        order.append(f"container:{name}")
+
+    async def record_volume(name, *, deadline_at):
+        order.append(f"volume:{name}")
+
+    provider.destroy = record_container
+    provider.destroy_volume = record_volume
+
+    await sweeper.reclaim_orphans()
+
+    assert order == [
+        f"container:lemma-ws-{orphan.hex}-1",
+        f"volume:lemma-vol-{orphan.hex}-1",
+    ]

@@ -7,6 +7,8 @@
  * network calls from Lemma itself.
  */
 
+import { copyText } from '@/lib/clipboard';
+
 export type ShareTargetId =
     | 'x'
     | 'linkedin'
@@ -149,7 +151,7 @@ export async function shareSubject(
     }
 
     try {
-        await navigator.clipboard.writeText(buildShareClipboardText(subject));
+        await copyText(buildShareClipboardText(subject));
         return 'copied';
     } catch {
         return 'failed';

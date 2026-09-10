@@ -15,6 +15,15 @@ from app.modules.identity.services.auth_abuse import (
 )
 
 
+#: The most an auth request body may be before this middleware refuses it.
+#: `_read_auth_payload` buffers the body whole so it can find an email address,
+#: and it does so *before* the rate-limit check on an unauthenticated endpoint.
+#: The only other ceiling is the global 220MiB request limit, and both the
+#: chunk list and the joined bytes are live at once -- roughly twice that. A
+#: credential payload is a few hundred bytes; anything approaching this is not
+#: a sign-in.
+_MAX_AUTH_BODY_BYTES = 64 * 1024
+
 _EMAIL_ENDPOINTS = {
     "/auth/signup": "signup",
     "/auth/user/email/verify/token": "verification",
@@ -85,15 +94,32 @@ class AuthAbuseMiddleware:
         self.auth_paths_only = auth_paths_only
 
     @staticmethod
-    async def _body(receive) -> tuple[bytes, Any]:
+    async def _body(receive) -> tuple[bytes | None, Any]:
+        """Buffer the request body, or give up on one too large to be a credential.
+
+        `None` means "over the bound": the caller refuses the request rather
+        than replaying a truncated body downstream.
+        """
         chunks: list[bytes] = []
+        total = 0
         more = True
+        oversized = False
         while more:
             message = await receive()
             if message["type"] != "http.request":
                 continue
-            chunks.append(message.get("body", b""))
+            chunk = message.get("body", b"")
+            total += len(chunk)
+            if total > _MAX_AUTH_BODY_BYTES:
+                # Keep draining so the connection is not left mid-message, but
+                # stop accumulating.
+                oversized = True
+                chunks.clear()
+            elif not oversized:
+                chunks.append(chunk)
             more = message.get("more_body", False)
+        if oversized:
+            return None, None
         body = b"".join(chunks)
         sent = False
 
@@ -126,6 +152,8 @@ class AuthAbuseMiddleware:
         if not should_read:
             return {}, receive
         body, replay = await self._body(receive)
+        if body is None:
+            return None, None
         try:
             payload = json.loads(body or b"{}")
         except json.JSONDecodeError, UnicodeDecodeError:
@@ -261,6 +289,11 @@ class AuthAbuseMiddleware:
         store = get_auth_abuse_store()
         ip_hash = store.digest(client_ip(scope))
         payload, receive = await self._read_auth_payload(scope, path, receive)
+        if payload is None:
+            await self._reject(
+                scope, receive, send, 413, "Authentication request is too large"
+            )
+            return
         email = _email_from_body(payload)
         email_hash = store.digest(email) if email else None
 
@@ -286,6 +319,12 @@ class AuthAbuseMiddleware:
             await self._reject(scope, receive, send, 400, str(exc))
             return
 
+        # Capture only where the bytes are used. This wraps all of `/st/**`,
+        # and buffering every response there held whole bodies in memory to
+        # answer a question asked about one path.
+        if path != "/auth/signin":
+            await self.app(scope, receive, send)
+            return
         response_body = await self._call_and_capture(scope, receive, send)
         if path == "/auth/signin":
             await self._record_signin_result(

@@ -2,12 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.core.authorization.current import reset_current_context, set_current_context
-from app.core.authorization.factory import create_authorization_data_service
 from app.core.log.log import get_logger
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
 from app.modules.agent_surfaces.services.display_resource_renderer import (
     parse_callback_id,
 )
@@ -124,33 +119,3 @@ async def _resolve_link_delivery(ingress, parsed, link):
         return None
     credentials = await ingress._resolve_credentials(surface)
     return link, surface, adapter, credentials
-
-
-async def retry_interaction_conversation(
-    *,
-    conversation_service,
-    uow,
-    conversation,
-) -> None:
-    auth_ctx = await create_authorization_data_service(uow).build_user_context(
-        user_id=conversation.user_id,
-        pod_id=conversation.pod_id,
-    )
-    token = set_current_context(auth_ctx)
-    try:
-        retry_service = ConversationRetryService(
-            uow=conversation_service.uow,
-            conversation_repository=conversation_service.conversation_repository,
-            agent_repository=conversation_service.agent_repository,
-            authorization_service=conversation_service.authorization_service,
-            fallback_model_name=conversation_service.fallback_model_name,
-            usage_service=conversation_service.usage_service,
-        )
-        await retry_service.retry_failed_run(
-            conversation_id=conversation.id,
-            user_id=conversation.user_id,
-            pod_id=conversation.pod_id,
-            agent_name=None,
-        )
-    finally:
-        reset_current_context(token)

@@ -26,6 +26,11 @@ export interface UseFunctionSessionResult {
     functionName?: string;
     input?: Record<string, unknown>;
     connect?: boolean;
+    /**
+     * Run a specific built revision instead of the live one -- a revision
+     * number ("r12") or a hash prefix. Requires `function.update`.
+     */
+    revision?: string;
   }) => Promise<FunctionRun>;
   refresh: (runId?: string | null) => Promise<FunctionRun | null>;
   listHistory: (options?: {
@@ -130,6 +135,7 @@ export function useFunctionSession({
     functionName?: string;
     input?: Record<string, unknown>;
     connect?: boolean;
+    revision?: string;
   } = {}): Promise<FunctionRun> => {
     setError(null);
 
@@ -138,6 +144,7 @@ export function useFunctionSession({
 
     const created = await scopedClient.functions.runs.create(name, {
       input: options.input,
+      revision: options.revision,
     });
 
     setRun(created);

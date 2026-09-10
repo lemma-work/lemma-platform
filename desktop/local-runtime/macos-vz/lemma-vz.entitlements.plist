@@ -1,5 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- lemma-vz alone. It is the only binary in Lemma that links
+     Virtualization.framework.
+
+     It ships as a bundle resource rather than an externalBin, and Tauri's sign
+     list holds only frameworks and external binaries, so Tauri never re-signs
+     it. This entitlement reaches the shipped binary through
+     scripts/build-sidecar.sh locally and the release workflows' own signing
+     step, not through the app's signature.
+
+     Deliberately not the app's file: signing the bundle with this granted the
+     entitlement to the process that hosts a WebView and to three sidecars,
+     none of which can use it. See app.entitlements.plist.
+
+     Legacy PyInstaller/JIT and library-validation exceptions are
+     intentionally absent. -->
 <plist version="1.0">
 <dict>
     <key>com.apple.security.virtualization</key>

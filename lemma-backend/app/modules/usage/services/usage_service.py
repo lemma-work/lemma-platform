@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from uuid import UUID
 
 from opentelemetry import metrics
@@ -14,51 +15,42 @@ from app.modules.usage.domain.entities import (
     UsageRecord,
     UsageReservation,
 )
-from app.modules.usage.domain.ports import (
-    UsageLimitPort,
-    UsageLimitValues,
-    normalize_limit_values,
-)
 from app.modules.usage.domain.errors import UsageLimitExceededError
 from app.modules.usage.domain.events import (
     ModelUsageEvent,
     UsageLimitDeniedEvent,
 )
+from app.modules.usage.domain.ports import (
+    UsageLimitPort,
+    UsageLimitValues,
+    normalize_limit_values,
+)
+from app.modules.usage.domain.query_types import (
+    UsageLimits,
+    UsageLimitScope,
+)
 from app.modules.usage.infrastructure.repositories import UsageRepository
-from app.modules.usage.services.usage_context import UsageExecutionContext
 from app.modules.usage.services.pricing import UsagePricing
+from app.modules.usage.services.usage_reporting import UsageReporting
+from app.modules.usage.services.usage_context import UsageExecutionContext
 
 meter = metrics.get_meter(__name__)
-# Every record is already durable in ``usage_records``; these make the same
-# numbers chartable next to latency and error rate instead of only queryable
-# per-trace. Labelled by model and token type only -- organization and pod stay
-# out of the label set, because spend per tenant is a question for the table,
-# not for a metric whose cardinality would then track the customer count.
 token_counter = meter.create_counter("lemma.llm.tokens")
 cost_counter = meter.create_counter("lemma.llm.cost_usd")
 
 
-class UsageService(UsagePricing):
+class UsageService(UsagePricing, UsageReporting):
     """Service for profile-aware usage recording and system-profile limits."""
 
     DEFAULT_RESERVATION_USD = 0.01
 
-    # Per-model rates (USD per 1M tokens). Keyed by both the public model name
-    # and the provider model id so resolution succeeds on either. Starts empty;
-    # provider-specific cloud modules register their pricing at startup via
-    # ``register_model_pricing()``. Unpriced models are still metered, with a
-    # null cost, and never fail solely because price metadata is absent.
+    # Rates are registered at startup; missing prices remain explicitly unknown.
     _SYSTEM_MODEL_PRICING: dict[str, ModelPricing] = {}
     _ENV_METADATA_SOURCE: str | None = None
 
     @classmethod
     def register_model_pricing(cls, pricing: dict[str, ModelPricing]) -> None:
-        """Register additional per-model pricing (e.g. from a cloud module).
-
-        Merges into the class-level pricing table; call at application startup
-        before any agent runs. Keying by both the public name and the provider
-        model id ensures ``_resolve_pricing`` resolves on either form.
-        """
+        """Register rates under both public and provider model names at startup."""
         cls._SYSTEM_MODEL_PRICING.update(pricing)
 
     def __init__(
@@ -66,7 +58,7 @@ class UsageService(UsagePricing):
         *,
         usage_repository: UsageRepository,
         usage_limit_port: UsageLimitPort | None = None,
-    ):
+    ) -> None:
         self.usage_repository = usage_repository
         self.usage_limit_port = usage_limit_port
 
@@ -82,7 +74,7 @@ class UsageService(UsagePricing):
     ) -> UsageReservation | None:
         if not self._is_system_scope(profile_scope):
             return None
-        limit_values = await self._resolve_usage_limit_values(
+        limit_values = await self.resolve_usage_limit_values(
             organization_id=organization_id,
             user_id=user_id,
         )
@@ -194,7 +186,7 @@ class UsageService(UsagePricing):
             (usage_data.metadata or {}).get("cache_read_tokens")
         )
         self._load_environment_metadata()
-        cost_usd, pricing_missing = self._calculate_system_cost(
+        cost_amount, pricing_missing = self._calculate_system_cost(
             profile_scope=profile_scope,
             model_name=model_name,
             provider_model_name=provider_model_name,
@@ -203,6 +195,7 @@ class UsageService(UsagePricing):
             units=usage_data.units,
             cache_read_tokens=cache_read_tokens,
         )
+        cost_usd = float(cost_amount) if cost_amount is not None else None
         metadata = dict(usage_data.metadata or {})
         if provider_model_name:
             metadata["provider_model_name"] = provider_model_name
@@ -226,6 +219,7 @@ class UsageService(UsagePricing):
             output_tokens=usage_data.output_tokens,
             units=usage_data.units,
             cost_usd=cost_usd,
+            cost_amount=cost_amount,
             status=status,
             metadata=metadata,
         )
@@ -238,7 +232,7 @@ class UsageService(UsagePricing):
             cost_usd=cost_usd,
         )
         if reservation is not None:
-            actual_cost = cost_usd or 0.0
+            actual_cost = cost_amount or 0
             await self.usage_repository.consume_reservation(
                 counter_ids=reservation.counter_ids,
                 reserved_usd=reservation.amount_usd,
@@ -256,14 +250,6 @@ class UsageService(UsagePricing):
         output_tokens: int,
         cost_usd: float | None,
     ) -> None:
-        """Mirror one usage record onto the metrics pipeline.
-
-        Split by token type rather than summed: input and output are priced
-        differently and move independently, so one series for both hides the
-        thing you would actually want to see. Cost is emitted separately
-        because an unpriced model still meters tokens with a null cost, and
-        adding zero there would understate spend rather than leave a gap.
-        """
         labels = {
             "gen_ai.request.model": model_name,
             "operation": usage_kind,
@@ -346,84 +332,19 @@ class UsageService(UsagePricing):
             metadata=metadata,
         )
 
-    async def get_organization_usage_summary(
-        self,
-        organization_id: UUID,
-        *,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        pod_id: UUID | None = None,
-        user_id: UUID | None = None,
-        agent_id: UUID | None = None,
-        profile_id: str | None = None,
-        profile_scope: str | None = None,
-        model_name: str | None = None,
-        usage_kind: str | None = None,
-        source_type: str | None = None,
-        status: str | None = None,
-    ):
-        end = end or datetime.now(timezone.utc)
-        start = start or (end - timedelta(days=30))
-        return await self.usage_repository.get_usage_summary(
-            organization_id=organization_id,
-            start=start,
-            end=end,
-            pod_id=pod_id,
-            user_id=user_id,
-            agent_id=agent_id,
-            profile_id=profile_id,
-            profile_scope=profile_scope,
-            model_name=model_name,
-            usage_kind=usage_kind,
-            source_type=source_type,
-            status=status,
+    async def require_remote_budget_support(
+        self, *, organization_id: UUID | None, user_id: UUID, profile_scope: str
+    ) -> None:
+        if not self._is_system_scope(profile_scope):
+            return
+        values = await self.resolve_usage_limit_values(
+            organization_id=organization_id, user_id=user_id
         )
-
-    async def get_usage_events(
-        self,
-        organization_id: UUID,
-        *,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        days: int = 30,
-        pod_id: UUID | None = None,
-        user_id: UUID | None = None,
-        agent_id: UUID | None = None,
-        profile_id: str | None = None,
-        profile_scope: str | None = None,
-        model_name: str | None = None,
-        usage_kind: str | None = None,
-        source_type: str | None = None,
-        status: str | None = None,
-        limit: int = 100,
-    ):
-        end = end or datetime.now(timezone.utc)
-        start = start or (end - timedelta(days=days))
-        return list(
-            await self.usage_repository.list_usage(
-                organization_id=organization_id,
-                start=start,
-                end=end,
-                pod_id=pod_id,
-                user_id=user_id,
-                agent_id=agent_id,
-                profile_id=profile_id,
-                profile_scope=profile_scope,
-                model_name=model_name,
-                usage_kind=usage_kind,
-                source_type=source_type,
-                status=status,
-                limit=limit,
+        if self._has_applicable_limit(values, organization_id):
+            raise UsageLimitExceededError(
+                "This runtime cannot enforce a budget before each provider dispatch. Use a managed runtime or your own provider credentials.",
+                reason="configuration",
             )
-        )
-
-    async def get_usage_stats(self, organization_id: UUID, **kwargs):
-        return list(
-            await self.usage_repository.get_usage_stats(
-                organization_id=organization_id,
-                **kwargs,
-            )
-        )
 
     async def get_usage_limits(
         self,
@@ -432,7 +353,7 @@ class UsageService(UsagePricing):
         user_id: UUID,
         now: datetime | None = None,
         _limit_values: UsageLimitValues | None = None,
-    ) -> dict[str, object]:
+    ) -> UsageLimits:
         now = now or datetime.now(timezone.utc)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         week_start = (now - timedelta(days=now.weekday())).replace(
@@ -441,7 +362,7 @@ class UsageService(UsagePricing):
             second=0,
             microsecond=0,
         )
-        limit_values = _limit_values or await self._resolve_usage_limit_values(
+        limit_values = _limit_values or await self.resolve_usage_limit_values(
             organization_id=organization_id, user_id=user_id
         )
         user_limit_organization_id = (
@@ -452,16 +373,6 @@ class UsageService(UsagePricing):
             if limit_values.user_limit_scope == "global"
             else ()
         )
-        # Six serial aggregates became three. The two user windows are one scan
-        # with a FILTER apiece, and the reserved counters are one grouped read
-        # of all three scopes; only the organization total keeps a statement of
-        # its own, because its predicate is a whole org rather than one user in
-        # it and folding it in would widen the scan to every user.
-        #
-        # Not cached, and not gathered. These numbers gate spending, so a cached
-        # answer lets a caller overspend by the TTL; and six concurrent
-        # checkouts from a pool_size=10, max_overflow=0 pool is a worse trade
-        # than three sequential statements.
         org_used = 0.0
         if organization_id is not None:
             org_used = await self.usage_repository.get_system_cost(
@@ -532,7 +443,7 @@ class UsageService(UsagePricing):
             ),
         }
 
-    async def _resolve_usage_limit_values(
+    async def resolve_usage_limit_values(
         self,
         *,
         organization_id: UUID | None,
@@ -570,7 +481,7 @@ class UsageService(UsagePricing):
         window_start: datetime,
         scope: str,
         counter_organization_id: UUID | None,
-    ) -> dict[str, object]:
+    ) -> UsageLimitScope:
         consumed = used_usd + reserved_usd
         remaining = None if limit_usd is None else max(0.0, limit_usd - consumed)
         return {
@@ -606,16 +517,6 @@ class UsageService(UsagePricing):
         )
 
     def _collect_recorded_event(self, record: UsageRecord) -> None:
-        usage_kind = (
-            record.usage_kind.value
-            if hasattr(record.usage_kind, "value")
-            else str(record.usage_kind)
-        )
-        profile_scope = (
-            record.profile_scope.value
-            if hasattr(record.profile_scope, "value")
-            else str(record.profile_scope)
-        )
         self.usage_repository.uow.collect_events(
             [
                 ModelUsageEvent(
@@ -630,9 +531,17 @@ class UsageService(UsagePricing):
                     source_type=record.source_type,
                     source_id=record.source_id,
                     profile_id=record.profile_id,
-                    profile_scope=profile_scope,
+                    profile_scope=(
+                        record.profile_scope.value
+                        if isinstance(record.profile_scope, Enum)
+                        else record.profile_scope
+                    ),
                     model_name=record.model_name,
-                    usage_kind=usage_kind,
+                    usage_kind=(
+                        record.usage_kind.value
+                        if isinstance(record.usage_kind, Enum)
+                        else record.usage_kind
+                    ),
                     input_tokens=record.input_tokens,
                     output_tokens=record.output_tokens,
                     units=record.units,

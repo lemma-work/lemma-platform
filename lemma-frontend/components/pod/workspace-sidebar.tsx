@@ -74,6 +74,8 @@ import {
     SIDEBAR_CONVERSATION_LIMIT,
     type ConversationMark,
 } from '@/lib/assistant/sidebar-conversations';
+import { readSource } from '@/lib/assistant/conversation-source';
+import { SourceGlyph } from '@/components/lemma/assistant/conversation-source-marks';
 import {
     filterSwitcherPodGroups,
     filterSwitcherPods,
@@ -1376,6 +1378,7 @@ export function ConversationRow({
     pin?: { pinned: boolean; toggle: () => void; unpin: () => void };
 }) {
     const signal = getConversationSignal(conversation);
+    const source = readSource(conversation);
     /* Only an agent gets drawn. The assistant is the default responder — in most
        pods it answers everything — so drawing it put the Lemma mark on all
        fifteen rows at once, which is a logo wall, not identification. Removing
@@ -1552,6 +1555,16 @@ export function ConversationRow({
                 <span className="min-w-0 flex-1 truncate">
                     {typedLabel}
                 </span>
+                {/* A glyph, not a row of metadata: this list is fifteen dense
+                    lines and the source is a second fact about a row that
+                    already carries a responder and a status. Absent for
+                    everything typed here, so it marks the exception. */}
+                {source ? (
+                    <SourceGlyph
+                        source={source}
+                        className="workspace-sidebar-conversation-source"
+                    />
+                ) : null}
             </button>
             {podId ? (
                 /* Quiet until wanted: a column of fifteen rows each wearing a

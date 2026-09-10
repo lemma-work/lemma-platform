@@ -93,48 +93,86 @@ async def test_resolve_slack_config_rejects_an_app_on_another_platform():
 
 async def test_require_own_account_allows_an_account_the_caller_owns():
     user_id, account_id, organization_id = uuid4(), uuid4(), uuid4()
-    connector_service = AsyncMock()
+    owner_check = AsyncMock()
 
     await require_own_account(
         account_id,
         user_id=user_id,
         organization_id=organization_id,
-        connector_service=connector_service,
+        assert_owner=owner_check,
     )
 
-    connector_service.get_account.assert_awaited_once_with(
-        account_id, user_id, organization_id
+    owner_check.assert_awaited_once_with(
+        account_id, user_id=user_id, organization_id=organization_id
     )
 
 
 async def test_require_own_account_is_a_no_op_without_an_account():
     """A SYSTEM-credential surface binds no account, and an update that doesn't
     mention one must not be forced to prove anything about it."""
-    connector_service = AsyncMock()
+    owner_check = AsyncMock()
 
     await require_own_account(
         None,
         user_id=uuid4(),
         organization_id=uuid4(),
-        connector_service=connector_service,
+        assert_owner=owner_check,
     )
 
-    connector_service.get_account.assert_not_awaited()
+    owner_check.assert_not_awaited()
 
 
 async def test_require_own_account_refuses_someone_elses_account():
     """Accounts are personal: an editor binding a colleague's would hand the pod
     a credential its owner never offered."""
-    connector_service = AsyncMock()
-    connector_service.get_account.side_effect = AccountNotFoundError("nope")
 
     with pytest.raises(HTTPException) as caught:
         await require_own_account(
             uuid4(),
             user_id=uuid4(),
             organization_id=uuid4(),
-            connector_service=connector_service,
+            assert_owner=AsyncMock(side_effect=AccountNotFoundError("nope")),
         )
 
     assert caught.value.status_code == 403
     assert "belongs to someone else" in str(caught.value.detail)
+
+
+def test_every_caller_builds_a_surface_config_the_way_it_is_declared():
+    """Regression: a keyword that does not exist is a 500 nobody sees first.
+
+    `publish_home_view` had `channel_routes` renamed to `channel_ids` when the
+    Home tab's list stopped carrying an agent per row. The rename swept up a
+    call to `surface_config_from_input`, whose own `channel_routes` is the
+    surface's stored `list[SurfaceChannelRoute]` and means something else
+    entirely -- so the Telegram managed-bot endpoint raised `TypeError` before
+    it reached Telegram.
+
+    Nothing caught it: `api/controllers/` is outside basedpyright's strict
+    list, and no test builds that endpoint's config. This binds each call's
+    keywords against the real signature, which is the check the type checker
+    would have made.
+    """
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from app.modules.agent_surfaces.api.schemas import surface_config_from_input
+
+    signature = inspect.signature(surface_config_from_input)
+    # The module that declares it, then the module tree that may call it.
+    package = Path(inspect.getfile(surface_config_from_input)).resolve().parents[1]
+
+    calls = [
+        (path, node)
+        for path in package.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "surface_config_from_input"
+    ]
+    assert calls, "the call sites moved; this test is checking nothing"
+
+    for path, call in calls:
+        keywords = [keyword.arg for keyword in call.keywords if keyword.arg]
+        # Positional args stand in as `None`: only the names are under test.
+        signature.bind_partial(*[None] * len(call.args), **dict.fromkeys(keywords))

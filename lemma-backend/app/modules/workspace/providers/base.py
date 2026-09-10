@@ -155,6 +155,15 @@ class ProviderObject:
     epoch: int | None
     running: bool
     legacy: bool = False
+    # Compute or disk. They are judged differently and must be: a container
+    # belongs to one epoch and is superseded by the next, while a volume IS the
+    # workspace's disk and deliberately outlives every container that mounts it.
+    # Reclaiming a volume on an epoch bump would delete a live workspace.
+    kind: str = "container"
+    # Which disk generation this volume holds. None for containers, and for a
+    # volume whose name predates generational naming -- unparseable means "not
+    # judgeable by generation", never "generation zero".
+    storage_generation: int | None = None
 
 
 class ProviderCreateAmbiguous(RuntimeError):

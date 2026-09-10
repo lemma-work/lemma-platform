@@ -13,6 +13,7 @@ Both halves live here so the read and the write cannot drift apart.
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -49,11 +50,9 @@ async def remember_provider_session(
 ) -> bool:
     """Bind the conversation to the provider session the host opened.
 
-    Deliberately outside ``apply_checkpoint``'s state machine. That machine
-    guards *dispatch* safety and drops anything stale or regressive, which is
-    right for a lease and wrong here — a re-sent or late checkpoint still names
-    the same session, and the cost of dropping it is the conversation silently
-    losing its memory.
+    A replay can arrive after a newer turn has opened a replacement session.
+    Serialize metadata updates and retain the newest run's binding independently
+    of the lease state machine, which guards dispatch rather than continuity.
 
     Returns whether the binding actually changed. The host puts the session id
     on *every* checkpoint, and a non-terminal checkpoint is the lease heartbeat
@@ -66,7 +65,12 @@ async def remember_provider_session(
         return False
     binding = (
         await uow.session.execute(
-            select(AgentRunModel.conversation_id, AgentHostRunLeaseModel.harness_id)
+            select(
+                AgentRunModel.conversation_id,
+                AgentHostRunLeaseModel.harness_id,
+                AgentRunModel.created_at,
+                AgentHostRunLeaseModel.host_id,
+            )
             .join(
                 AgentHostRunLeaseModel,
                 AgentHostRunLeaseModel.run_id == AgentRunModel.id,
@@ -76,39 +80,65 @@ async def remember_provider_session(
     ).one_or_none()
     if binding is None:
         return False
-    conversation_id, harness_id = binding
+    conversation_id, harness_id, created_at, host_id = binding
     repository = ConversationRepository(uow)
     stored = await repository.get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
+        for_update=True,
     )
     stored = stored if isinstance(stored, dict) else {}
+    if _binding_is_newer(stored, checkpoint.run_id, created_at):
+        return False
     # Stored with the harness that opened it. A Codex rollout id means nothing
     # to Claude Code, so a conversation moved to another harness starts a fresh
     # session there instead of failing a load every turn.
     binding_value: JsonObject = {
         "harness_id": str(harness_id),
+        "host_id": str(host_id),
         "session_id": session_id,
+        "run_id": str(checkpoint.run_id),
+        "run_created_at": created_at.isoformat(),
     }
-    # Promoted here rather than recorded at dispatch: a run that died before it
-    # prompted — host offline, expired command, adapter that would not start —
-    # delivered nothing, and marking those instructions delivered would keep
-    # every later turn skipping them, silently losing a user's edit for the rest
-    # of the conversation.
-    #
-    # But carrying a `provider_session_id` is NOT that proof. The host writes it
-    # in `before_prompt`, *before* `session/prompt` is sent (`acp.rs`), and the
-    # journal then attaches it to every checkpoint including terminal ones. So a
-    # prompt that failed — a context ceiling, an adapter fault — still reported
-    # FAILED with a session id attached, and this promoted the digest anyway.
-    # Every later turn then dispatched NEW_SESSION_ONLY, and nothing ever
-    # un-promotes a digest: the agent ran without its instructions, permanently.
-    #
-    # Only a state the host cannot reach without having prompted counts. The
-    # asymmetry is the whole point: failing to promote costs one re-send of the
-    # instructions, promoting wrongly costs every future turn.
+    same_session = (
+        stored.get("session_id") == session_id
+        and stored.get("harness_id") == str(harness_id)
+        and stored.get("host_id", str(host_id)) == str(host_id)
+    )
+    binding_value.update(_host_directory_binding(stored, checkpoint, same_session))
+    binding_value.update(_instruction_binding(stored, checkpoint, same_session))
+    if stored == binding_value:
+        return False
+    await repository.set_conversation_metadata_key(
+        conversation_id,
+        AGENT_HOST_SESSION_METADATA_KEY,
+        binding_value,
+    )
+    return True
+
+
+def _host_directory_binding(
+    stored: JsonObject, checkpoint: AgentHostRunCheckpoint, same_session: bool
+) -> JsonObject:
+    # An observation from the leased host, never a filesystem grant or the cwd
+    # for sandbox tools. Heartbeats from older hosts omit the field.
+    cwd = checkpoint.detail.get("host_cwd")
+    if cwd is None and same_session:
+        cwd = stored.get("host_cwd")
+    if isinstance(cwd, str) and cwd and "\0" not in cwd:
+        return {"host_cwd": cwd}
+    return {}
+
+
+def _instruction_binding(
+    stored: JsonObject, checkpoint: AgentHostRunCheckpoint, same_session: bool
+) -> JsonObject:
+    # Opening a session does not prove a prompt landed. Promote only this run's
+    # pending digest after a provider event, and never carry delivery from a
+    # different session. Other runs' pending instructions remain owed.
+    result: JsonObject = {}
     pending = stored.get("pending_instructions")
-    delivered = stored.get("instructions_digest")
+    delivered = stored.get("instructions_digest") if same_session else None
     promoted = (
         checkpoint.state in _STATES_PROVING_THE_PROMPT_LANDED
         and isinstance(pending, dict)
@@ -118,21 +148,22 @@ async def remember_provider_session(
     if promoted:
         delivered = pending["digest"]
     elif pending is not None:
-        # Someone else's promise, still owed. This value is rebuilt from
-        # scratch on every checkpoint, so anything not carried forward here is
-        # silently dropped — and dropping a pending promise would leave the run
-        # that made it unable to record what it delivered.
-        binding_value["pending_instructions"] = pending
+        result["pending_instructions"] = pending
     if isinstance(delivered, str) and delivered:
-        binding_value["instructions_digest"] = delivered
-    if stored == binding_value:
+        result["instructions_digest"] = delivered
+    return result
+
+
+def _binding_is_newer(stored: JsonObject, run_id: UUID, created_at: datetime) -> bool:
+    previous_id = stored.get("run_id")
+    previous_created_at = stored.get("run_created_at")
+    if not isinstance(previous_id, str) or not isinstance(previous_created_at, str):
         return False
-    await repository.set_conversation_metadata_key(
-        conversation_id,
-        AGENT_HOST_SESSION_METADATA_KEY,
-        binding_value,
-    )
-    return True
+    try:
+        previous = (datetime.fromisoformat(previous_created_at), UUID(previous_id).int)
+        return previous > (created_at, run_id.int)
+    except ValueError, TypeError:
+        return False
 
 
 def instructions_digest(system_prompt: str) -> str:
@@ -161,6 +192,7 @@ async def record_pending_instructions(
     stored = await repository.get_conversation_metadata_key(
         conversation_id,
         AGENT_HOST_SESSION_METADATA_KEY,
+        for_update=True,
     )
     binding = dict(stored) if isinstance(stored, dict) else {}
     binding["pending_instructions"] = {"run_id": str(run_id), "digest": digest}

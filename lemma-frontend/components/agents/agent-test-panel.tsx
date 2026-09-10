@@ -36,6 +36,7 @@ import {
     X,
 } from '@/components/ui/icons';
 import { StepLoader } from '@/components/brand/loader';
+import { openExternal } from '@/lib/open-external';
 
 interface AgentTestPanelProps {
     podId: string;
@@ -335,7 +336,7 @@ export function AgentTestPanel({
             setIsConnecting(prev => ({ ...prev, [appId]: true }));
             const response = await createConnectRequest.mutateAsync({ connectorId: appId });
             if (response.authorization_url) {
-                window.open(response.authorization_url, '_blank');
+                openExternal(response.authorization_url);
             }
         } catch (error) {
             console.error('Failed to initiate connection:', error);

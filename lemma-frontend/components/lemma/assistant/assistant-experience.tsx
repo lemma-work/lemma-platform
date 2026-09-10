@@ -28,6 +28,9 @@ import {
 // Rows → turns: the conversation-shaped model (ask, work pill, speech,
 // artifacts, interaction cards) the transcript renders.
 import { buildChatTurns, interactionAnchorId } from "@/lib/assistant/turns";
+import { firstSource, readCounterpart } from "@/lib/assistant/conversation-source";
+import { ConversationSourceBanner } from "./conversation-source-marks";
+import { useLemmaAuth } from "@/lib/hooks/use-lemma-auth";
 import { toast } from "sonner";
 import { thisComputer } from "@/lib/desktop/this-computer";
 import { cn } from "@/lib/utils";
@@ -83,7 +86,7 @@ import {
   isInlineAssistantErrorNoise,
 } from "./assistant-experience-helpers";
 // Self-contained hooks extracted from this file.
-import { useControllableDraft } from "./use-assistant-experience";
+import { useControllableDraft, useDraftPersistence } from "./use-assistant-experience";
 import { useTranscriptScroll } from "./use-transcript-scroll";
 // Presentational subtree views extracted from AssistantExperienceView's render.
 import { AssistantExperienceSidebar } from "./assistant-experience-sidebar";
@@ -92,6 +95,7 @@ import {
   AssistantExperienceConversation,
 } from "./assistant-experience-conversation";
 import { AssistantExperienceComposer } from "./assistant-experience-composer";
+import { AssistantQueuedSteers } from "./assistant-queued-steers";
 import { agentHostBridge, useIsDesktopShell } from "@/lib/desktop/agent-host-bridge";
 import { isLocalAgentSignInFailure } from "@/components/agents/agent-runtime-helpers";
 // getActiveToolBanner moved to assistant-format; re-export to preserve the API.
@@ -119,9 +123,6 @@ export interface ActiveToolBanner {
   activeCount: number;
 }
 
-/** How long typing has to pause before the draft is written to localStorage. */
-const DRAFT_PERSIST_DEBOUNCE_MS = 400;
-
 /**
  * Does the browser grow the composer on its own?
  *
@@ -144,14 +145,6 @@ function cssSizesTheComposer(): boolean {
       && CSS.supports("field-sizing", "content");
   }
   return fieldSizingSupport;
-}
-
-function writeDraft(key: string, draft: string) {
-  if (draft) {
-    localStorage.setItem(key, draft);
-  } else {
-    localStorage.removeItem(key);
-  }
 }
 
 const SPARSE_HISTORY_ROW_TARGET = 8;
@@ -186,6 +179,7 @@ export function AssistantExperienceView({
   headerLeadingActions,
   headerActions,
   composerModelControl,
+  composerTrailingControls,
   className,
   contentWidthClassName,
   composerWidthClassName,
@@ -217,8 +211,6 @@ export function AssistantExperienceView({
   const [draftSelectionStart, setDraftSelectionStart] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const draftRestoredRef = useRef(false);
-  const pendingDraftWriteRef = useRef<{ key: string; draft: string } | null>(null);
   const autoLoadedOlderConversationRef = useRef<string | null>(null);
   const autoLoadedOlderPageCountRef = useRef(0);
   const transcriptScroll = useTranscriptScroll({
@@ -242,42 +234,7 @@ export function AssistantExperienceView({
   const controllerMessages = controller.messages;
   const activeConversationId = controller.activeConversationId;
 
-  // Restore draft from localStorage when conversation changes
-  useEffect(() => {
-    draftRestoredRef.current = true;
-    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
-    const stored = localStorage.getItem(key);
-    setDraft(stored ?? '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConversationId]);
-
-  // Persist draft to localStorage on change (skip the write immediately after a
-  // restore). Deferred rather than written inline: `localStorage` is
-  // synchronous, and this used to run once per keystroke — a main-thread write
-  // between the keypress and the frame that draws it. The draft only has to
-  // survive a reload, so a pause in typing is soon enough, and the cleanup
-  // flushes it if the composer goes away first.
-  useEffect(() => {
-    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
-    // Recorded on every commit, debounced or not, so the unmount flush below
-    // always has the latest draft and the key it belongs to.
-    pendingDraftWriteRef.current = { key, draft };
-    if (draftRestoredRef.current) {
-      draftRestoredRef.current = false;
-      return;
-    }
-    const timer = window.setTimeout(() => writeDraft(key, draft), DRAFT_PERSIST_DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [draft, activeConversationId]);
-
-  // A draft still sitting in the debounce when the composer unmounts would
-  // otherwise be lost, so the last one is written out on the way down.
-  useEffect(() => () => {
-    const pending = pendingDraftWriteRef.current;
-    if (pending) writeDraft(pending.key, pending.draft);
-  }, []);
+  const clearPersistedDraft = useDraftPersistence(activeConversationId, draft, setDraft);
   const hasOlderMessages = controller.hasOlderMessages;
   const isLoadingMessages = controller.isLoadingMessages;
   const isLoadingOlderMessages = controller.isLoadingOlderMessages;
@@ -286,6 +243,9 @@ export function AssistantExperienceView({
   const centerEmptyConversation = emptyStateFillsViewport && isConversationEmpty;
   const sendMessage = controller.sendMessage;
   const steerMessage = controller.steerMessage;
+  const queuedSteers = controller.queuedSteers ?? [];
+  const sendQueuedSteersNow = controller.sendQueuedSteersNow;
+  const discardQueuedSteer = controller.discardQueuedSteer;
   const uploadFiles = controller.uploadFiles;
   const loadOlderMessages = controller.loadOlderMessages;
   const setConversationModel = controller.setConversationModel;
@@ -377,6 +337,22 @@ export function AssistantExperienceView({
       conversationId: activeConversationId,
     }),
     [displayMessageRows, controllerMessages, isConversationBusy, displayResourcePodId, activeConversationId],
+  );
+  // Where this conversation arrived from, and the other human in it. Read off
+  // the messages rather than the conversation row so the bar is right on a
+  // surface the controller opened without a separate fetch; null for the whole
+  // of the history that was typed here.
+  const { user: signedInUser } = useLemmaAuth();
+  const conversationSource = useMemo(
+    () => firstSource(controllerMessages),
+    [controllerMessages],
+  );
+  // Absent whenever the sender is the reader, which is the usual case: a
+  // conversation carries one member's messages and this copy is theirs. Naming
+  // them to themselves is not attribution.
+  const conversationCounterpart = useMemo(
+    () => readCounterpart(controllerMessages, signedInUser),
+    [controllerMessages, signedInUser],
   );
   const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const activePendingApprovalInvocation = findPendingUserApprovalInvocation(displayMessageRows, currentRunLatestUserIndex);
@@ -471,13 +447,14 @@ export function AssistantExperienceView({
     if ((!draft.trim() && !hasPendingFileUploads) || interactionPending) return;
     const message = draft.trim();
     setDraft("");
+    clearPersistedDraft();
     scrollToBottom("smooth");
     // A run already in flight takes the follow-up as a steer: it joins that run
     // rather than starting a second one. Otherwise identical to a send —
     // attachments included, because the two go to the same endpoint shape and a
     // dropped file with no explanation is worse than either outcome.
     await (isConversationBusy ? steerMessage(message) : sendMessage(message));
-  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
+  }, [clearPersistedDraft, draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
 
   // Only the empty state offers suggestions, and it renders under
   // `showEmptyState={isConversationEmpty}` — which requires nothing to be
@@ -713,6 +690,17 @@ export function AssistantExperienceView({
             />
           ) : null}
 
+          {/* Above the scroll area, not inside it. A conversation that arrived
+              from Slack or WhatsApp says so permanently, and a bar outside the
+              scroller can do that without ever covering the messages it is
+              introducing. Absent for everything typed here. */}
+          {conversationSource ? (
+            <ConversationSourceBanner
+              source={conversationSource}
+              counterpart={conversationCounterpart}
+            />
+          ) : null}
+
           <AssistantExperienceConversation
             messagesContainerRef={transcriptContainerRef}
             onScroll={transcriptOnScroll}
@@ -748,6 +736,13 @@ export function AssistantExperienceView({
           />
         </div>
 
+        <AssistantQueuedSteers
+          items={queuedSteers}
+          onSendNow={sendQueuedSteersNow ? () => void sendQueuedSteersNow() : undefined}
+          onDiscard={discardQueuedSteer}
+          className={composerWidthClassName}
+        />
+
         <AssistantExperienceComposer
           composerTone={composerTone}
           composerWidthClassName={composerWidthClassName}
@@ -773,6 +768,7 @@ export function AssistantExperienceView({
           hasPendingFileUploads={hasPendingFileUploads}
           runtimeLabel={runtimeLabel}
           composerModelControl={composerModelControl}
+          composerTrailingControls={composerTrailingControls}
           onUploadSelection={(files) => { void handleUploadSelection(files); }}
           onDraftChange={(event) => {
             setDraft(event.target.value);

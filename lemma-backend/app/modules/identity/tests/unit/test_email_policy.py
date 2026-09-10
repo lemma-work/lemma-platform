@@ -8,6 +8,7 @@ from email_validator import EmailUndeliverableError
 from app.core.config import settings
 from app.modules.identity.services import email_policy
 from app.modules.identity.services.email_policy import EmailPolicyError
+from app.modules.identity.config import identity_settings
 
 
 @pytest.mark.asyncio
@@ -27,13 +28,15 @@ async def test_email_policy_normalizes_and_rejects_invalid_syntax(monkeypatch):
 async def test_email_policy_rejects_disposable_domain_with_allowlist(monkeypatch):
     monkeypatch.setattr(settings, "auth_email_deliverability_checks_enabled", False)
     monkeypatch.setattr(settings, "auth_disposable_email_domains_enabled", True)
-    monkeypatch.setattr(settings, "auth_disposable_email_allowlist", [])
+    monkeypatch.setattr(identity_settings, "auth_disposable_email_allowlist", [])
 
     with pytest.raises(EmailPolicyError) as exc:
         await email_policy.validate_auth_email("person@mailinator.com")
     assert exc.value.rejection.reason == "DISPOSABLE_DOMAIN"
 
-    monkeypatch.setattr(settings, "auth_disposable_email_allowlist", ["mailinator.com"])
+    monkeypatch.setattr(
+        identity_settings, "auth_disposable_email_allowlist", ["mailinator.com"]
+    )
     assert (
         await email_policy.validate_auth_email("person@mailinator.com")
         == "person@mailinator.com"

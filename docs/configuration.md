@@ -307,6 +307,57 @@ FUNCTION_JOB_DEADLINE_SECONDS=600
 FUNCTION_RUNTIME_ENDPOINT_REUSE_SECONDS=60
 ```
 
+## Build retention
+
+Every app deploy stores a whole dist, and every function code save stores a whole
+artifact. Nothing removed either until this existed, so storage grew with every
+deploy for the life of the install. **Retention is on by default and deletes on
+the first run after upgrade** — an app with more than `APP_RELEASE_MAX_KEEP`
+releases will lose the oldest ones. Set the `*_ENABLED` flags to `false` before
+upgrading if you want to look first.
+
+Three knobs, because two are not enough. `KEEP_LAST` is a floor: the N newest
+survive at any age, so an app nobody has deployed in a year can still be rolled
+back the day a bad deploy lands. `KEEP_DAYS` keeps work that is still being
+iterated on. `MAX_KEEP` is the ceiling, and it is what makes the whole thing
+bounded — "keep anything recent" has no upper limit of its own, so fifty deploys
+in one afternoon would mean fifty retained builds for the next thirty days.
+
+The live release and the live revision are exempt at any age or rank, as is any
+revision a PENDING or RUNNING run is pinned to. A pruned entry keeps its row and
+shows as "build removed" rather than vanishing, so the history has no
+unexplained gaps — but its source and build are removed, so it can no longer be
+inspected, previewed, promoted or run. Failed storage deletions remain pending
+until cleanup succeeds, even after the retained count reaches its floor.
+
+```dotenv
+APP_RELEASE_RETENTION_ENABLED=true
+APP_RELEASE_KEEP_LAST=10      # floor: never prune the newest N, whatever their age
+APP_RELEASE_KEEP_DAYS=30      # keep anything younger than this, up to the ceiling
+APP_RELEASE_MAX_KEEP=20       # ceiling: must be >= KEEP_LAST or startup refuses
+APP_RELEASE_RETENTION_CRON="20 4 * * *"
+# Apps per round trip. The sweep pages until the candidate set is drained, so
+# this bounds one query rather than deciding which apps ever get swept.
+APP_RELEASE_RETENTION_BATCH=200
+# Wall-clock budget for one sweep. ZERO MEANS UNLIMITED here, unlike
+# FUNCTION_RUN_RETENTION_BUDGET_SECONDS where zero disables the sweep.
+APP_RELEASE_RETENTION_BUDGET_SECONDS=60
+
+FUNCTION_REVISION_RETENTION_ENABLED=true
+FUNCTION_REVISION_KEEP_LAST=10
+FUNCTION_REVISION_KEEP_DAYS=30
+FUNCTION_REVISION_MAX_KEEP=20
+FUNCTION_REVISION_RETENTION_CRON="40 4 * * *"
+FUNCTION_REVISION_RETENTION_BATCH=200
+FUNCTION_REVISION_RETENTION_BUDGET_SECONDS=60
+```
+
+Pruning also runs inline after a deploy or a code save, which is when storage
+actually grows; the crons are the backstop for a resource that has *stopped*
+being deployed. Watch `apps.tasks.sweep_app_releases.observed`: `examined` high
+while `pruned_apps` stays flat means the sweep is finding candidates it never
+prunes, which is worth investigating.
+
 ## URLs, CORS and cookies
 
 `API_URL` and `FRONTEND_URL` are what a browser uses, so they must be the public
@@ -490,6 +541,12 @@ these and model work that would take an organization or a person past the limit
 is refused with `USAGE_LIMIT_EXCEEDED`, naming which limit was reached. A
 billing or plan module, where one is installed, takes precedence over all of it.
 
+A limit is enforced against a price, and there is not always a trustworthy one.
+By default that work runs rather than being refused — see [When the cost of the
+work cannot be
+established](#when-the-cost-of-the-work-cannot-be-established) below, which
+every deployment that bills for usage needs to read.
+
 ```dotenv
 # USD. Unset means unlimited.
 USAGE_ORG_MONTHLY_LIMIT_USD=
@@ -504,6 +561,59 @@ USAGE_ORG_LIMIT_OVERRIDES_JSON=
 An override entry looks like `{"slug": "acme", "monthly_limit_usd": 5.0}`, or
 `{"slug_prefix": "trial-", "monthly_limit_usd": 0}` to cap a family of
 organizations at once. Slugs are organization handles, not display names.
+
+### When the cost of the work cannot be established
+
+A limit is enforced against a price, and there is not always one to enforce
+against. The price catalog will only back a budget when it matched the model
+through *that provider's own* base URL — so a model served through an
+OpenAI-compatible gateway (vLLM, LiteLLM, OpenRouter, a hosted inference
+provider, a corporate proxy) resolves the **vendor's** list price rather than
+what the gateway charges to serve it, and is deliberately not enforceable.
+`gpt-4o` behind a gateway is as unenforceable as anything else.
+
+```dotenv
+# allow (default) | refuse
+USAGE_UNPRICED_LIMIT_POLICY=allow
+```
+
+`allow` drops the refusal, not the accounting. The request runs and is metered,
+and is still priced with whatever rate the catalog holds — which for a gateway
+is the vendor's list price, so the limit goes on binding *approximately* rather
+than not at all. Only a model the catalog knows no rate for at all is recorded
+with no cost. It is the default because refusing is almost always the wrong
+answer for whoever reaches this: a spend cap set as a guardrail became a total
+outage the moment it was pointed at a gateway.
+
+**`refuse` is what you want if you bill somebody else for this usage** — a
+limit you cannot measure is not a limit — and you have to set it, because the
+default will not. If you run a paid multi-tenant deployment, set it now:
+
+```dotenv
+USAGE_UNPRICED_LIMIT_POLICY=refuse
+```
+
+Either way, the API and worker report at startup which models cannot back a
+limit, so a deployment on the default is told when its limits have stopped
+binding rather than discovering it from a bill.
+
+This setting covers the **price** and nothing else. A request whose *shape* has
+no price — a priority service tier, `extra_body` raising the output ceiling, 1h
+cache writes — is asking the provider for billable work the adapter never sees,
+and is refused under a monetary limit whatever this is set to.
+
+The third option is to state the prices yourself, which makes them enforceable
+and keeps the limit binding:
+
+```dotenv
+LEMMA_SYSTEM_MODEL_METADATA_JSON='{"my-model": {"input_per_million_usd": 0.14, "output_per_million_usd": 0.28}}'
+```
+
+Set a limit without stating prices and the API and worker say so at startup,
+naming the models and the policy in force — look for
+`agent.module.system_models_cannot_back_a_spend_limit.degraded`. It is logged
+only when a limit could actually apply, so a deployment with no limits stays
+quiet.
 `0` refuses all model work for that organization, which is how you park one
 without deleting it.
 

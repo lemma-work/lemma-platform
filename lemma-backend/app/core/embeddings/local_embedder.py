@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from threading import Lock
 from typing import Any, List
@@ -14,6 +15,70 @@ from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
+
+_BACKEND_MODULE = "fastembed"
+_backend_loaded = False
+
+
+def load_extension_modules() -> None:
+    """Import the embedding backend now, on this thread.
+
+    Called at process start, from the entrypoint, before the event loop
+    exists. That timing is the whole point, and on Windows it is the
+    difference between the desktop app starting and never starting at all.
+
+    Imported the ordinary way -- lazily, on first use, from inside the running
+    app -- this import does not finish. Every Windows start reached
+    "worker.lanes.starting" and stopped there: uvicorn binds its listening
+    socket only after the ASGI lifespan returns, so nothing ever listened and
+    locald reported "backend failed health gate: connection timed out". Stacks
+    taken from the stuck process showed a thread inside `create_module` for
+    `numpy._core._multiarray_umath` -- a `LoadLibraryExW` -- and another thread
+    in `Thread.start()` waiting for an anyio worker that could not begin,
+    which is what streaq asking anyio to read its Lua file looks like.
+
+    What is measured, on a real Windows machine, from the installed app:
+
+    * the import takes 5.3s cold and 0.7s warm in a fresh process, and 0.7s
+      even with the whole stack running -- it is not slow;
+    * done lazily from inside the app it did not finish in three minutes, on
+      four consecutive runs, on a worker thread *and* on the loop thread;
+    * done here, at process start, it takes 0.8s and the stack reaches ready
+      in sixteen seconds with the preload fully enabled.
+
+    So the fix is the timing, not the thread: before the loop, before the
+    lifespan, before anything else is holding a lock worth deadlocking on.
+    """
+    global _backend_loaded
+    if _backend_loaded:
+        return
+    importlib.import_module(_BACKEND_MODULE)
+    _backend_loaded = True
+
+
+def load_extension_modules_if_local() -> None:
+    """Do that, but only in a process that will actually embed locally.
+
+    A deployment that embeds through a provider never constructs the class
+    below, and should not pay the import.
+
+    A failure here is not fatal on purpose: an installation missing the
+    backend used to start with local search degraded, and turning that into a
+    process that will not boot would be a worse trade than the one it fixes.
+    """
+    if settings.effective_embedding_provider() != "local":
+        return
+    try:
+        load_extension_modules()
+    except ImportError, OSError:
+        # The two ways importing a package of native extensions fails: it is
+        # not installed, or its shared libraries will not load. Anything else
+        # is not a broken installation and should not be turned into one
+        # silently.
+        logger.warning(
+            "embeddings.local_embedder.backend_import_failed.degraded",
+            exc_info=True,
+        )
 
 
 class FastEmbedLocalEmbedder(Embedder):

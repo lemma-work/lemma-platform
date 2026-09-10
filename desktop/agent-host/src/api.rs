@@ -160,7 +160,7 @@ impl TargetClient {
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(format!("lemma-agent-host/{}", crate::HOST_RELEASE))
             .build()?;
-        let endpoint = endpoint(&base_url, "agent-host/pairings:complete")?;
+        let endpoint = endpoint(&base_url, "agent-host/pairings/complete")?;
         let response = client.post(endpoint).json(&request).send().await?;
         let response: PairingCompleteResponse = decode(response).await?;
         anyhow::ensure!(
@@ -217,7 +217,7 @@ impl TargetClient {
 
     pub async fn append_events(&self, batch: &EventBatch) -> Result<EventAck, ApiError> {
         let response = self
-            .authenticated(Method::POST, "agent-host/events:append", Some(batch))
+            .authenticated(Method::POST, "agent-host/events/append", Some(batch))
             .await?;
         decode(response).await
     }

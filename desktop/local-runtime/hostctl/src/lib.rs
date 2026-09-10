@@ -65,14 +65,53 @@ impl BridgeConfig {
             executable: std::env::var_os("LEMMA_WSL_BIN")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("wsl.exe")),
-            distribution: std::env::var("LEMMA_WSL_DISTRIBUTION")
-                .unwrap_or_else(|_| "LemmaRuntime".into()),
+            distribution: wsl_distribution(std::env::var_os("LEMMA_WSL_DISTRIBUTION"))?,
         };
         Ok(Self {
             capability_file,
             transport,
         })
     }
+}
+
+/// Which private distribution this bridge addresses.
+///
+/// Deliberately without a default. The name is per-installation on purpose:
+/// the runtime manager derives it from the state root so that a second user
+/// profile, a development root, or a reinstall pointed somewhere else each get
+/// a guest of their own. The literal `"LemmaRuntime"` fallback that used to be
+/// here undid that from the other end -- a bridge started without the variable
+/// addressed whatever distribution happens to carry that name, which is
+/// another installation's guest: its capability file, its containers, its data
+/// disk.
+///
+/// An empty value is refused for a sharper reason than tidiness.
+/// `wsl --distribution ""` does not fail; it selects the machine's *default*
+/// distribution. That is the user's own Ubuntu, and Lemma would run guest
+/// commands inside it as root.
+#[cfg(any(windows, test))]
+fn wsl_distribution(configured: Option<std::ffi::OsString>) -> io::Result<String> {
+    let Some(name) = configured else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "LEMMA_WSL_DISTRIBUTION is not set, so the runtime bridge cannot \
+             tell which installation's guest it is meant to address",
+        ));
+    };
+    let name = name.into_string().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "LEMMA_WSL_DISTRIBUTION is not valid UTF-8",
+        )
+    })?;
+    if name.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "LEMMA_WSL_DISTRIBUTION is empty; refusing to fall back to this \
+             machine's default WSL distribution",
+        ));
+    }
+    Ok(name)
 }
 
 pub fn request<R: Read, W: Write>(
@@ -371,6 +410,39 @@ mod tests {
             .unwrap_err()
             .kind(),
             io::ErrorKind::PermissionDenied
+        );
+    }
+
+    /// The distribution name is per-installation so that two installations do
+    /// not quietly share one guest. A literal default here reintroduced that
+    /// from the bridge's side, which is the half nothing checked.
+    #[test]
+    fn an_unset_distribution_is_refused_rather_than_guessed() {
+        let error = wsl_distribution(None).expect_err("there is no safe guess");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            !error.to_string().contains("LemmaRuntime"),
+            "no default to name: {error}"
+        );
+    }
+
+    /// Not tidiness: `wsl --distribution ""` succeeds and selects the
+    /// machine's default distribution -- the user's own Ubuntu -- where Lemma
+    /// would then run guest commands as root.
+    #[test]
+    fn an_empty_distribution_never_becomes_the_machine_default() {
+        for value in ["", "   "] {
+            let error = wsl_distribution(Some(std::ffi::OsString::from(value)))
+                .expect_err("an empty name must not reach wsl.exe");
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+    }
+
+    #[test]
+    fn a_configured_distribution_is_used_as_given() {
+        assert_eq!(
+            wsl_distribution(Some(std::ffi::OsString::from("LemmaRuntime-dev"))).unwrap(),
+            "LemmaRuntime-dev"
         );
     }
 }

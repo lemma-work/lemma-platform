@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
 import pytest
@@ -20,6 +21,10 @@ from app.modules.agent_surfaces.platforms.telegram.update_batching import (
     assemble_telegram_updates as _assemble_telegram_updates,
 )
 from app.modules.agent_surfaces.services import native_receiver_base
+from app.modules.agent_surfaces.services.native_receiver_base import (
+    NativeReceiverConflict,
+)
+from app.modules.agent_surfaces.services import telegram_polling_runner
 from app.modules.agent_surfaces.services.telegram_polling_runner import (
     TelegramPollingReceiverRunner,
 )
@@ -28,6 +33,8 @@ from app.modules.agent_surfaces.services.event_receiver_service import (
     NativeSurfaceReceiverCoordinator,
     ResendPollingReceiverRunner,
     _candidate_from_surface,
+    _conflict_key,
+    _lease_key,
     _publish_native_receiver_event,
     _receiver_key,
 )
@@ -399,3 +406,149 @@ async def test_resend_ingest_skips_when_no_surface_matches(monkeypatch):
     )
 
     assert published == []
+
+
+class _FakeRedis:
+    """Enough of Redis for the lease and the stand-down mark."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.values:
+            return None
+        self.values[key] = value
+        return True
+
+    async def exists(self, key):
+        return 1 if key in self.values else 0
+
+    async def get(self, key):
+        return self.values.get(key)
+
+    async def expire(self, key, ttl):
+        return key in self.values
+
+    async def eval(self, script, numkeys, key, owner):
+        if self.values.get(key) == owner:
+            self.values.pop(key, None)
+        return 1
+
+
+def _telegram_candidate() -> NativeReceiverCandidate:
+    return NativeReceiverCandidate(
+        key=_receiver_key("telegram", "system", "shared-token"),
+        platform=SurfacePlatform.TELEGRAM,
+        surface_ids=(),
+        credential_label="system",
+        credentials={"bot_token": "shared-token"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_polling_names_the_owner_of_the_bot_instead_of_ending_quietly(
+    monkeypatch,
+):
+    """A 409 that outlasts a handover is somebody else's bot, and says so.
+
+    It used to `return` -- indistinguishable from a receiver that had finished
+    its work -- so the coordinator's next scan started it again.
+    """
+    monkeypatch.setattr(telegram_polling_runner, "_TELEGRAM_CONFLICT_GRACE_SECONDS", 0)
+    runner = TelegramPollingReceiverRunner(_telegram_candidate())
+
+    async def fake_telegram_api(client, base_url, method, params):
+        if method == "deleteWebhook":
+            return {"ok": True}
+        request = httpx.Request("POST", f"{base_url}/{method}")
+        raise httpx.HTTPStatusError(
+            "conflict", request=request, response=httpx.Response(409, request=request)
+        )
+
+    runner._telegram_api = fake_telegram_api  # type: ignore[method-assign]
+    with pytest.raises(NativeReceiverConflict):
+        await runner.run()
+
+
+def _conflicted_coordinator(monkeypatch, starts: list[int]):
+    class _ConflictingRunner:
+        def __init__(self, candidate):
+            self._candidate = candidate
+
+        async def run(self):
+            starts.append(1)
+            raise NativeReceiverConflict("another consumer holds this bot")
+
+    coordinator = NativeSurfaceReceiverCoordinator(
+        uow_factory=lambda: None,
+        scan_interval_seconds=1,
+        redis_url="redis://unused",
+        runner_factories={SurfacePlatform.TELEGRAM: _ConflictingRunner},
+    )
+    coordinator._redis = _FakeRedis()
+    candidate = _telegram_candidate()
+    monkeypatch.setattr(
+        coordinator, "_load_candidates", AsyncMock(return_value=[candidate])
+    )
+    return coordinator, candidate
+
+
+async def _reconcile_and_settle(coordinator, key):
+    await coordinator.reconcile()
+    task = coordinator._tasks.get(key)
+    if task is not None:
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_a_receiver_refused_by_upstream_stands_down_instead_of_restarting(
+    monkeypatch, caplog
+):
+    """The Desktop-plus-Cloud case: one bot token, two deployments, two Redises.
+
+    The lease only orders workers within one deployment, so both sides used to
+    take their own lease and poll. The loser gave up after 75 seconds, was
+    started again on the next scan, and spent the next 75 seconds taking
+    updates away from the side that was working -- for as long as the bot was
+    configured in both places, and only ever at debug level.
+    """
+    starts: list[int] = []
+    coordinator, candidate = _conflicted_coordinator(monkeypatch, starts)
+
+    with caplog.at_level(logging.ERROR):
+        await _reconcile_and_settle(coordinator, candidate.key)
+
+    # A handled misconfiguration is not a crashed background task. Letting the
+    # conflict out of the task would have `create_background_task` report it as
+    # one, with a traceback, once per stand-down.
+    assert "background_task.failed" not in caplog.text
+
+    redis = coordinator._redis
+    assert _conflict_key(candidate.key) in redis.values
+    assert _lease_key(candidate.key) not in redis.values, (
+        "the lease has to be released, or the deployment blocks itself too"
+    )
+
+    await coordinator.reconcile()
+    await coordinator.reconcile()
+
+    assert starts == [1], "standing down means standing down, not retrying every scan"
+    assert candidate.key not in coordinator._tasks
+
+
+@pytest.mark.asyncio
+async def test_the_stand_down_expires_so_the_bot_comes_back_on_its_own(monkeypatch):
+    """Nothing else has to be cleared for the takeover to happen.
+
+    If the other consumer is switched off, the mark expiring is the whole of
+    what stands between this side and the bot.
+    """
+    starts: list[int] = []
+    coordinator, candidate = _conflicted_coordinator(monkeypatch, starts)
+    await _reconcile_and_settle(coordinator, candidate.key)
+
+    # What the TTL does, done by hand: nothing here waits ten minutes.
+    coordinator._redis.values.pop(_conflict_key(candidate.key))
+
+    await _reconcile_and_settle(coordinator, candidate.key)
+    assert starts == [1, 1]

@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -44,10 +44,23 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | str | None:
+) -> Any | ErrorResponse | None:
     if response.status_code == 200:
-        response_200 = response.text
+        response_200 = cast(Any, None)
         return response_200
+
+    if response.status_code == 303:
+        response_303 = cast(Any, None)
+        return response_303
+
+    if response.status_code == 307:
+        response_307 = cast(Any, None)
+        return response_307
+
+    if response.status_code == 400:
+        response_400 = ErrorResponse.from_dict(response.json())
+
+        return response_400
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -62,7 +75,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | str]:
+) -> Response[Any | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -76,22 +89,27 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     error: None | str | Unset = UNSET,
     format_: None | str | Unset = UNSET,
-) -> Response[ErrorResponse | str]:
+) -> Response[Any | ErrorResponse]:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
     parameter for security.
+
+    A browser is redirected back into the app (303) carrying the outcome as query parameters: `connect`
+    is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass
+    `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the
+    account as JSON instead.
 
     Args:
         error (None | str | Unset):
-        format_ (None | str | Unset):
+        format_ (None | str | Unset): Set to `json` to receive the account instead of a redirect.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | str]
+        Response[Any | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -111,22 +129,27 @@ def sync(
     client: AuthenticatedClient | Client,
     error: None | str | Unset = UNSET,
     format_: None | str | Unset = UNSET,
-) -> ErrorResponse | str | None:
+) -> Any | ErrorResponse | None:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
     parameter for security.
+
+    A browser is redirected back into the app (303) carrying the outcome as query parameters: `connect`
+    is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass
+    `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the
+    account as JSON instead.
 
     Args:
         error (None | str | Unset):
-        format_ (None | str | Unset):
+        format_ (None | str | Unset): Set to `json` to receive the account instead of a redirect.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | str
+        Any | ErrorResponse
     """
 
     return sync_detailed(
@@ -141,22 +164,27 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     error: None | str | Unset = UNSET,
     format_: None | str | Unset = UNSET,
-) -> Response[ErrorResponse | str]:
+) -> Response[Any | ErrorResponse]:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
     parameter for security.
+
+    A browser is redirected back into the app (303) carrying the outcome as query parameters: `connect`
+    is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass
+    `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the
+    account as JSON instead.
 
     Args:
         error (None | str | Unset):
-        format_ (None | str | Unset):
+        format_ (None | str | Unset): Set to `json` to receive the account instead of a redirect.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | str]
+        Response[Any | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
@@ -174,22 +202,27 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     error: None | str | Unset = UNSET,
     format_: None | str | Unset = UNSET,
-) -> ErrorResponse | str | None:
+) -> Any | ErrorResponse | None:
     """OAuth Callback
 
-     Handle OAuth callback and complete account connection. This endpoint is public and uses state
+     Handle OAuth callback and complete account connection. This endpoint is public and uses the state
     parameter for security.
+
+    A browser is redirected back into the app (303) carrying the outcome as query parameters: `connect`
+    is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass
+    `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the
+    account as JSON instead.
 
     Args:
         error (None | str | Unset):
-        format_ (None | str | Unset):
+        format_ (None | str | Unset): Set to `json` to receive the account instead of a redirect.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | str
+        Any | ErrorResponse
     """
 
     return (

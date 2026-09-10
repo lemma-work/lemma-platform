@@ -10,8 +10,13 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_worker
+from app.modules.function.config import function_settings
+from app.core.infrastructure.jobs.streaq_runtime import streaq_worker
+from app.modules.function.api import dependencies
 from app.modules.function.events import handlers
+from app.modules.function.application.runtime_policy import (
+    FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
+)
 from app.modules.function.domain.errors import FunctionRunQueueUnavailable
 from app.modules.function.domain.identities import function_run_job_id
 from app.modules.function.infrastructure.function_run_queue import (
@@ -66,9 +71,12 @@ async def test_reconcile_does_not_hold_db_connection_during_queue_io(
         def __init__(self, uow):
             assert uow == "uow"
 
-        async def list_pending_async_runs(self, *, now, limit):
+        async def list_pending_async_runs(self, *, now, min_age_seconds, limit):
             assert state["open"] is True
             assert limit == 100
+            # The sweep is recovery, not a second dispatcher: it must always
+            # ask for an age floor, never for every unqueued run it can see.
+            assert min_age_seconds == FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS
             return [run_id]
 
     class _Queue:
@@ -122,11 +130,12 @@ async def test_run_retention_drains_a_backlog_larger_than_one_batch(
     monkeypatch,
 ) -> None:
     """The point of the sweep: a backlog has to clear, not tick down by one batch."""
-    from app.core.config import settings
 
-    monkeypatch.setattr(settings, "function_run_retention_batch_size", 10)
-    monkeypatch.setattr(settings, "function_run_retention_budget_seconds", 60.0)
-    monkeypatch.setattr(settings, "function_run_retention_days", 30)
+    monkeypatch.setattr(function_settings, "function_run_retention_batch_size", 10)
+    monkeypatch.setattr(
+        function_settings, "function_run_retention_budget_seconds", 60.0
+    )
+    monkeypatch.setattr(function_settings, "function_run_retention_days", 30)
     seen: list[dict] = []
     monkeypatch.setattr(
         handlers, "FunctionRunRepository", _retention_repository([10, 10, 3], seen)
@@ -144,11 +153,10 @@ async def test_run_retention_drains_a_backlog_larger_than_one_batch(
 
 @pytest.mark.asyncio
 async def test_run_retention_stops_when_its_budget_is_spent(monkeypatch) -> None:
-    from app.core.config import settings
 
-    monkeypatch.setattr(settings, "function_run_retention_batch_size", 10)
-    monkeypatch.setattr(settings, "function_run_retention_budget_seconds", 5.0)
-    monkeypatch.setattr(settings, "function_run_retention_days", 30)
+    monkeypatch.setattr(function_settings, "function_run_retention_batch_size", 10)
+    monkeypatch.setattr(function_settings, "function_run_retention_budget_seconds", 5.0)
+    monkeypatch.setattr(function_settings, "function_run_retention_days", 30)
     seen: list[dict] = []
     monkeypatch.setattr(
         handlers, "FunctionRunRepository", _retention_repository([10] * 50, seen)
@@ -164,9 +172,8 @@ async def test_run_retention_stops_when_its_budget_is_spent(monkeypatch) -> None
 
 @pytest.mark.asyncio
 async def test_a_zero_retention_budget_disables_the_sweep(monkeypatch) -> None:
-    from app.core.config import settings
 
-    monkeypatch.setattr(settings, "function_run_retention_budget_seconds", 0.0)
+    monkeypatch.setattr(function_settings, "function_run_retention_budget_seconds", 0.0)
     seen: list[dict] = []
     monkeypatch.setattr(
         handlers, "FunctionRunRepository", _retention_repository([10], seen)
@@ -193,16 +200,12 @@ def test_worker_function_service_composition_matches_current_constructor(
 ) -> None:
     storage_factory = object()
     monkeypatch.setattr(
-        AppWorkerContext,
-        "build_function_storage_factory",
-        lambda self: storage_factory,
-    )
-    context = AppWorkerContext(
-        job_queue=AsyncMock(),
-        uow_factory=AsyncMock(),
+        dependencies,
+        "get_function_storage_factory",
+        lambda: storage_factory,
     )
 
-    service = context.build_function_service(
+    service = dependencies.build_function_service(
         SimpleNamespace(session=SimpleNamespace(), set_message_bus=lambda bus: None)
     )
 

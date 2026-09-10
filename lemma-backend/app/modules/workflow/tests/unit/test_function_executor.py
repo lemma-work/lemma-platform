@@ -63,7 +63,21 @@ async def test_pending_run_suspends_regardless_of_type():
     assert outcome.wait.external_ref == str(run_id)
 
 
-async def test_non_dict_result_wrapped_in_advance():
-    outcome = await FunctionExecutor().execute(_node(), _step("plain-string"))
+async def test_settled_run_advances_with_the_run_description():
+    """A run that is already terminal has nothing to wait on, so it advances.
+
+    This used to assert that a *non-mapping* result was wrapped as
+    ``{"result": ...}``. Nothing produced one: `FunctionPort.execute_function`
+    returned a bare `Any`, so the executor guarded at runtime against a shape
+    the only implementation could not return, and the test certified the guard
+    rather than the behaviour. The port now says `dict[str, object]`, and what
+    is left to check is the branch that does occur -- a dispatch that came back
+    settled keeps its description as the node's output.
+    """
+    run_id = uuid4()
+    outcome = await FunctionExecutor().execute(
+        _node(),
+        _step({"run_id": str(run_id), "status": "COMPLETED", "function_type": "JOB"}),
+    )
     assert isinstance(outcome, Advance)
-    assert outcome.output == {"result": "plain-string"}
+    assert outcome.output["run_id"] == str(run_id)

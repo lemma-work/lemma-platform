@@ -7,7 +7,9 @@ from fastapi import Depends
 from app.core.api.dependencies import UoWDep
 from app.core.config import settings
 from app.core.infrastructure.events.message_bus import get_message_bus
-from app.composition.pod_identity import SqlAlchemyPodMembershipAdapter
+from app.modules.identity.infrastructure.adapters.pod_membership_adapter import (
+    SqlAlchemyPodMembershipAdapter,
+)
 from app.modules.identity.domain.ports import PodMembershipPort
 from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
@@ -39,9 +41,7 @@ def get_organization_service(
         organization_repository=OrganizationRepository(uow, message_bus=message_bus),
         user_repository=UserRepository(uow, message_bus=message_bus),
         invitation_accept_base_url=settings.frontend_url,
-        pod_membership_port=SqlAlchemyPodMembershipAdapter(
-            uow, message_bus=message_bus
-        ),
+        pod_membership_port=SqlAlchemyPodMembershipAdapter(uow),
     )
 
 
@@ -52,7 +52,7 @@ OrganizationServiceDep = Annotated[
 
 
 def get_pod_membership_port(uow: UoWDep) -> PodMembershipPort:
-    return SqlAlchemyPodMembershipAdapter(uow, message_bus=get_message_bus())
+    return SqlAlchemyPodMembershipAdapter(uow)
 
 
 PodMembershipDep = Annotated[PodMembershipPort, Depends(get_pod_membership_port)]

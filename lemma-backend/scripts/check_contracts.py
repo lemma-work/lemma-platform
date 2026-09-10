@@ -31,6 +31,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from route_tags import TAG_MODULES
+
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "docs" / "contracts"
 OPENAPI = ROOT.parent / "lemma-python" / "lemma_sdk" / "openapi_spec.json"
@@ -39,45 +41,6 @@ ANALYTICS_CATALOG = ROOT / "app" / "core" / "analytics" / "event_catalog.py"
 
 METHODS = ("get", "post", "put", "patch", "delete")
 
-#: Same mapping the route inventory uses. Kept in step with it deliberately:
-#: two documents disagreeing about which module owns a route is its own bug.
-TAG_MODULES = {
-    "Agent Surfaces": "agent_surfaces",
-    "Agent Surfaces (Ingress)": "agent_surfaces",
-    "Agent Surfaces (Me)": "agent_surfaces",
-    "Apps": "apps",
-    "Auth": "identity",
-    "Connectors": "connectors",
-    "Functions": "function",
-    "Organizations": "identity",
-    "Pod Bundle": "pod_bundle",
-    "Pod Join Requests": "pod",
-    "Pod Members": "pod",
-    "Pod Permissions": "pod",
-    "Pod Resource Access": "pod",
-    "Pod Resource Preview": "pod",
-    "Pod Roles": "pod",
-    "Pods": "pod",
-    "Schedules": "schedule",
-    "Usage": "usage",
-    "Users": "identity",
-    "Widgets": "agent",
-    "Web Logins": "web_login",
-    "Workspace": "workspace",
-    "Workspace Apps": "workspace",
-    "agent-tools": "agent",
-    "agent_conversations": "agent",
-    "agent_host": "agent",
-    "agent_runtime": "agent",
-    "agents": "agent",
-    "files": "datastore",
-    "icons": "icon",
-    "notifications": "agent_surfaces",
-    "query": "datastore",
-    "records": "datastore",
-    "tables": "datastore",
-    "workflows": "workflow",
-}
 
 GENERATED_START = "<!-- generated:operations -- do not edit below -->"
 GENERATED_END = "<!-- /generated:operations -->"
@@ -140,8 +103,10 @@ def render(module: str, rows: list[tuple[str, str, str, str]]) -> str:
     lines = [
         f"# {module} contract",
         "",
-        f"What every `{module}` API operation guarantees: who may call it, what "
-        "must be true first, what changes, what it emits, and how it refuses.",
+        (
+            f"What every `{module}` API operation guarantees: who may call it, what "
+            "must be true first, what changes, what it emits, and how it refuses."
+        ),
         "",
         (
             "The product promises these serve are in "

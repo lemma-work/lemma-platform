@@ -19,10 +19,13 @@ class ConnectRequestInitiateSchema:
     Attributes:
         auth_config_id (None | Unset | UUID): Auth config ID to connect
         connector_id (None | str | Unset): Connector ID to connect
+        return_to (None | str | Unset): Path inside the app to come back to when the flow finishes. Only a rooted path
+            is accepted; anything else is ignored.
     """
 
     auth_config_id: None | Unset | UUID = UNSET
     connector_id: None | str | Unset = UNSET
+    return_to: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,6 +43,12 @@ class ConnectRequestInitiateSchema:
         else:
             connector_id = self.connector_id
 
+        return_to: None | str | Unset
+        if isinstance(self.return_to, Unset):
+            return_to = UNSET
+        else:
+            return_to = self.return_to
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
@@ -47,6 +56,8 @@ class ConnectRequestInitiateSchema:
             field_dict["auth_config_id"] = auth_config_id
         if connector_id is not UNSET:
             field_dict["connector_id"] = connector_id
+        if return_to is not UNSET:
+            field_dict["return_to"] = return_to
 
         return field_dict
 
@@ -80,9 +91,19 @@ class ConnectRequestInitiateSchema:
 
         connector_id = _parse_connector_id(d.pop("connector_id", UNSET))
 
+        def _parse_return_to(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        return_to = _parse_return_to(d.pop("return_to", UNSET))
+
         connect_request_initiate_schema = cls(
             auth_config_id=auth_config_id,
             connector_id=connector_id,
+            return_to=return_to,
         )
 
         connect_request_initiate_schema.additional_properties = d

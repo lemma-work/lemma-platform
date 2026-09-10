@@ -155,13 +155,16 @@ class ConversationRepository(
         self,
         conversation_id: UUID,
         key: str,
+        *,
+        for_update: bool = False,
     ) -> JsonValue | None:
         """Read a single key out of a conversation's metadata JSON blob."""
-        result = await self.session.execute(
-            select(ConversationModel.conversation_metadata).where(
-                ConversationModel.id == conversation_id
-            )
+        statement = select(ConversationModel.conversation_metadata).where(
+            ConversationModel.id == conversation_id
         )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self.session.execute(statement)
         metadata = result.scalar_one_or_none()
         if not isinstance(metadata, dict):
             return None
@@ -472,6 +475,8 @@ class ConversationRepository(
         status: AgentRunStatus,
         conversation_status: ConversationStatus | None = None,
         error: str | None = None,
+        error_code: str | None = None,
+        error_reason: str | None = None,
         output_data: JsonValue | None = None,
     ) -> AgentRunFinishResult | None:
         result = await self.session.execute(
@@ -513,6 +518,11 @@ class ConversationRepository(
 
         model.status = next_status.value
         model.error = error
+        metadata = dict(model.run_metadata or {})
+        metadata.pop("failure", None)
+        if next_status == AgentRunStatus.FAILED and error_code:
+            metadata["failure"] = {"code": error_code, "reason": error_reason}
+        model.run_metadata = metadata
         if output_data is not None:
             model.output_data = output_data
         resolved_conversation_status = conversation_status or ConversationStatus(

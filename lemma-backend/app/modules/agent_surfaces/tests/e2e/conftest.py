@@ -39,6 +39,7 @@ e2e_settings = e2e_fixtures.e2e_settings
 db_manager = e2e_fixtures.db_manager
 test_app = e2e_fixtures.test_app
 async_client = e2e_fixtures.async_client
+e2e_process_clients = e2e_fixtures.e2e_process_clients
 fixed_test_user = e2e_fixtures.fixed_test_user
 authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
@@ -241,6 +242,7 @@ __all__ = [
     "async_client",
     "db_manager",
     "db_session",
+    "e2e_process_clients",
     "e2e_settings",
     "fake_composio_email",
     "fake_composio_server",

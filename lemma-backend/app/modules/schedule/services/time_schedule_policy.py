@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.core.concurrency.offload import run_blocking
 from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.cron import CronSchedule, resolve_zone
 from app.modules.schedule.domain.errors import (
@@ -17,6 +18,10 @@ from app.modules.schedule.domain.errors import (
 _VALIDATION_START = datetime(2024, 1, 1, tzinfo=timezone.utc)
 _VALIDATION_END = datetime(2052, 1, 1, tzinfo=timezone.utc)
 _MAX_VALIDATION_OCCURRENCES = 2_048
+
+#: A TIME schedule's trigger config as it arrives from the API: an open
+#: mapping, because the trigger shape is validated here rather than by type.
+TimeScheduleConfig = dict[str, Any]
 
 
 def validate_cron_expression(
@@ -72,8 +77,25 @@ def zone_name_of(config: Mapping[str, object]) -> str | None:
     return None if zone is None else str(zone)
 
 
+async def validated_time_schedule_config(
+    config: TimeScheduleConfig,
+    *,
+    now: datetime | None = None,
+) -> datetime | CronSchedule:
+    """:func:`validate_time_schedule_config`, off the event loop.
+
+    Policing the frequency floor means walking fire times, and a dense
+    expression walks thousands of them through a pure-Python cron library. Run
+    inline from a request handler that is what a second-long loop stall looks
+    like, so callers on the loop use this.
+    """
+    return await run_blocking(
+        validate_time_schedule_config, config, now=now, limiter="cpu_bound"
+    )
+
+
 def validate_time_schedule_config(
-    config: dict[str, Any],
+    config: TimeScheduleConfig,
     *,
     now: datetime | None = None,
 ) -> datetime | CronSchedule:

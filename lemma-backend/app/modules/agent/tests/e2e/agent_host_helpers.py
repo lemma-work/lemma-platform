@@ -53,7 +53,7 @@ async def pair(
     assert minted.status_code == status.HTTP_200_OK, minted.text
 
     completed = await async_client.post(
-        "/agent-host/pairings:complete",
+        "/agent-host/pairings/complete",
         json={
             "pairing_code": minted.json()["pairing_code"],
             "display_name": display_name,

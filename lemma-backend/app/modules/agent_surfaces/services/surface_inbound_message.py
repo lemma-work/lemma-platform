@@ -7,14 +7,20 @@ transcribed first, recent channel history a group mention needs for context.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 
-from app.composition.surface_agent import ConversationService
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent.contracts.speech import (
+    VoiceClip,
+    VoiceTranscript,
+    transcribe_voice_notes,
+)
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
@@ -46,32 +52,15 @@ _DECISION_NOT_RECORDED = (
 )
 
 
-def _speech_provider() -> Any:
-    """The speech provider, or None when it cannot be reached."""
-    try:
-        from app.composition.surface_agent import get_speech_provider
-
-        return get_speech_provider()
-    except Exception as exc:
-        # Voice notes arrive untranscribed from here on, which is a user-visible
-        # degradation — so it stays a warning, but it has to name the failure.
-        # The line this replaced carried no fields at all, so it could only
-        # report that something was wrong.
-        logger.warning(
-            "agent_surfaces.ingress_service.speech_provider_unavailable",
-            error_type=type(exc).__name__,
-        )
-        return None
-
-
 def _record_transcripts(
-    results: list[tuple[IngestedAttachment, Any]], metadata: dict[str, Any]
+    results: list[tuple[IngestedAttachment, VoiceTranscript | None]],
+    metadata: dict[str, Any],
 ) -> list[str]:
     """The transcripts that came back, with provenance stamped into metadata."""
     transcripts: list[str] = []
     provenance: list[dict[str, Any]] = []
     for item, result in results:
-        text = (getattr(result, "text", "") or "").strip()
+        text = (result.text if result else "").strip()
         if not text:
             provenance.append({"path": item.path, "text": "", "failed": True})
             continue
@@ -80,8 +69,8 @@ def _record_transcripts(
             {
                 "path": item.path,
                 "text": text,
-                "detected_language": getattr(result, "detected_language", None),
-                "duration_seconds": getattr(result, "duration_seconds", None),
+                "detected_language": result.detected_language,
+                "duration_seconds": result.duration_seconds,
             }
         )
     if provenance:
@@ -133,21 +122,23 @@ class SurfaceInboundMessageMixin:
         message_text: str,
         metadata: dict[str, Any],
     ):
-        """Persist the inbound message / resume the paused run in a short UoW."""
+        """Persist the inbound message / resume the paused run in a short UoW.
+
+        The two modes are now one line apart rather than two branches building
+        two different collaborators: every conversation operation takes the unit
+        of work, so the worker's short-scoped session and the request's
+        long-lived one are the same argument.
+        """
         if self._uow_factory is not None:
-            if self._conversation_service_factory is None:
-                raise RuntimeError("Conversation service factory is unavailable")
             async with self._uow_factory() as uow:
-                conversation_service = self._conversation_service_factory(uow)
                 return await self._write_inbound_message(
-                    context, message_text, metadata, uow, conversation_service
+                    context, message_text, metadata, uow
                 )
-        else:
-            if self.uow is None or self.conversation_service is None:
-                raise RuntimeError("Conversation service is unavailable")
-            return await self._write_inbound_message(
-                context, message_text, metadata, self.uow, self.conversation_service
-            )
+        if self.uow is None:
+            raise RuntimeError("Surface ingress has no unit of work")
+        return await self._write_inbound_message(
+            context, message_text, metadata, self.uow
+        )
 
     async def _write_inbound_message(
         self,
@@ -155,7 +146,6 @@ class SurfaceInboundMessageMixin:
         message_text: str,
         metadata: dict[str, Any],
         uow,
-        conversation_service: ConversationService,
     ):
         if context.pod_id is None:
             raise ValueError("Surface chat context requires a pod")
@@ -181,7 +171,7 @@ class SurfaceInboundMessageMixin:
             # how the formatted-text fallback (and any "type your own" reply) gets
             # back into the run as a structured answer.
             outcome = await maybe_resume_pending_interaction(
-                context, message_text, conversation_service=conversation_service
+                context, message_text, uow=uow
             )
             if outcome is ResumeOutcome.FAILED:
                 # They decided and we could not write it down. Starting a turn
@@ -192,7 +182,8 @@ class SurfaceInboundMessageMixin:
                 await self._say_the_decision_was_not_recorded(context)
                 return None
             if outcome is ResumeOutcome.NOT_A_DECISION:
-                return await conversation_service.add_user_message_and_start_run(
+                return await agent_conversations.start_surface_turn(
+                    uow,
                     conversation_id=context.conversation_id,
                     user_id=context.user_id,
                     content=message_text,
@@ -284,20 +275,12 @@ class SurfaceInboundMessageMixin:
 
     async def _transcribe_all(
         self, items: list[IngestedAttachment]
-    ) -> list[tuple[IngestedAttachment, Any]]:
+    ) -> list[tuple[IngestedAttachment, VoiceTranscript | None]]:
         """Transcribe every voice note at once; a failure yields None for that one."""
-        if not items:
-            return []
-        provider = _speech_provider()
-        if provider is None:
-            return []
-
-        async def _one(item: IngestedAttachment) -> tuple[IngestedAttachment, Any]:
-            try:
-                return item, await provider.transcribe(
-                    item.audio_bytes, mime=item.mime or "audio/ogg"
-                )
-            except Exception:
-                return item, None
-
-        return list(await asyncio.gather(*[_one(item) for item in items]))
+        transcripts = await transcribe_voice_notes(
+            [
+                VoiceClip(audio_bytes=item.audio_bytes, mime=item.mime or "audio/ogg")
+                for item in items
+            ]
+        )
+        return list(zip(items, transcripts))

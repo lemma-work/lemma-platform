@@ -79,13 +79,21 @@ def bring_up(
 
     progress("pull", f"fetching Lemma {manifest.version}")
     images.pull_release(runtime, manifest, infra_only=pull_infra_only)
-    release_manifest.pin(paths, manifest)
 
     ctx = AdminContext(paths=paths, config=config)
     specs = ctx.specs(manifest, host_apps=host_apps)
     if service_names is not None:
         specs = [spec for spec in specs if spec.name in service_names]
     lifecycle.up(runtime, specs, manifest, migrate=migrate, on_progress=progress)
+
+    # Pinned after the stack is actually up, not before it is tried.
+    #
+    # `lifecycle.up` runs `alembic upgrade head`, and a failure there leaves the
+    # install on the previous release with the previous schema. Pinning first
+    # recorded the new version anyway, so `release.json` claimed an upgrade that
+    # had not happened -- and every later command, including the next upgrade's
+    # own comparison, believed it.
+    release_manifest.pin(paths, manifest)
 
     if do_register:
         register_local_server(

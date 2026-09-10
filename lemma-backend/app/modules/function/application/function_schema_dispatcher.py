@@ -11,6 +11,7 @@ import httpx
 
 from sandbox_runtime.protocol import AdmissionClass
 
+from app.modules.function.config import function_settings
 from app.core.config import settings
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionToken,
@@ -69,7 +70,7 @@ class FunctionSchemaDispatcher:
         artifact: FunctionArtifact,
     ) -> FunctionSchemaSet:
         deadline_at = self._now() + timedelta(
-            seconds=settings.function_api_deadline_seconds
+            seconds=function_settings.function_api_deadline_seconds
         )
         runtime = self._runtime_http_client_factory()
         function_token = await self._token_cache.get(
@@ -101,6 +102,11 @@ class FunctionSchemaDispatcher:
                         "Authorization": f"Bearer {function_token.value}",
                         "If-Match": f'"{artifact.revision_hash}"',
                         "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
+                        **(
+                            {"X-Lemma-Artifact-Generation": str(artifact.generation)}
+                            if artifact.generation
+                            else {}
+                        ),
                     },
                     timeout=httpx.Timeout(10, read=remaining),
                 )
@@ -180,7 +186,7 @@ class FunctionSchemaDispatcher:
 
     @staticmethod
     def _runtime_gateway_url() -> str:
-        configured = settings.function_runtime_gateway_url or settings.api_url
+        configured = function_settings.function_runtime_gateway_url or settings.api_url
         return configured.rstrip("/")
 
     @staticmethod

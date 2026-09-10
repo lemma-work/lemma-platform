@@ -1,0 +1,104 @@
+# Lemma ingress.
+#
+# Three hostnames, and the split between them is a security boundary rather
+# than a matter of taste:
+#
+#   https://<domain>              the UI
+#   https://<domain>:<api port>   the API
+#   https://<slug>.apps.<domain>  pod apps — user-authored HTML
+#
+# The UI and the API share one hostname on two ports on purpose. Ports do not
+# participate in cookie host matching, so a *host-only* session cookie (see
+# SESSION_COOKIE_DOMAIN= in .env) is sent to both, and is never sent to an app
+# subdomain. Putting the API on api.<domain> instead would force
+# SESSION_COOKIE_DOMAIN=.<domain>, which hands every pod app the operator's
+# session. lemma-stack reaches the same conclusion for desktop, at length, in
+# lemma_stack/config/render.py.
+#
+# Nothing here rewrites paths or invents headers. AppHostRoutingMiddleware
+# resolves an app from the Host header itself and has a branch specifically for
+# a proxy that does not do the rewriting (app/modules/apps/api/host_routing.py).
+# The cloud nginx ingress does rewrite, and both are supported; this one simply
+# passes Host through, which is the smaller contract to keep working.
+#
+# LEMMA_TLS_ARG is written by bootstrap.sh: `internal` (Caddy's own CA — the
+# default, and the only thing that can work without a real domain) or a Let's
+# Encrypt account email. LEMMA_APPS_TLS_OPTS is `on_demand` in the second case
+# and empty in the first, because Caddy's internal CA can sign a wildcard
+# outright while a public one cannot without DNS-01.
+{
+	# Only consulted when the apps site uses on-demand TLS, which is only when
+	# this deployment has a real domain. Answered by the endpoint at the bottom.
+	on_demand_tls {
+		ask http://localhost:9007/check
+	}
+}
+
+# Streaming is the reason this snippet exists. Agent output, run events and
+# every SSE endpoint have to reach the browser as they are produced, so
+# responses are flushed rather than buffered, and a read timeout measured in
+# seconds would cut a long agent run off mid-answer.
+(lemma_upstream) {
+	flush_interval -1
+	transport http {
+		read_timeout 1h
+		write_timeout 1h
+		dial_timeout 5s
+	}
+}
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+https://{$LEMMA_DOMAIN} {
+	tls {$LEMMA_TLS_ARG}
+	request_body {
+		max_size {$LEMMA_MAX_UPLOAD:512MB}
+	}
+
+	reverse_proxy frontend:8080 {
+		import lemma_upstream
+	}
+}
+
+# ── API ───────────────────────────────────────────────────────────────────────
+https://{$LEMMA_DOMAIN}:{$LEMMA_API_PORT} {
+	tls {$LEMMA_TLS_ARG}
+	request_body {
+		max_size {$LEMMA_MAX_UPLOAD:512MB}
+	}
+
+	reverse_proxy api:8000 {
+		import lemma_upstream
+	}
+}
+
+# ── Pod apps ──────────────────────────────────────────────────────────────────
+# One certificate per app hostname, issued the first time somebody loads it.
+# A wildcard certificate would need a DNS-01 challenge, which needs a DNS
+# provider plugin compiled into Caddy; on-demand issuance needs neither.
+https://*.apps.{$LEMMA_DOMAIN} {
+	tls {$LEMMA_TLS_ARG} {
+		{$LEMMA_APPS_TLS_OPTS}
+	}
+	request_body {
+		max_size {$LEMMA_MAX_UPLOAD:512MB}
+	}
+
+	reverse_proxy api:8000 {
+		import lemma_upstream
+	}
+}
+
+# ── on-demand TLS gate ────────────────────────────────────────────────────────
+# Caddy refuses on-demand issuance without one of these, and it is right to:
+# without it, anyone who points a DNS record at this machine can make it ask a
+# certificate authority for a certificate on demand. This one answers 200 only
+# for hostnames under the apps domain.
+#
+# The port is not published in docker-compose.yml, so it is reachable only from
+# the container network Caddy shares with the api and the frontend — and it
+# only answers to the Host `localhost`, which is what Caddy asks itself.
+http://localhost:9007 {
+	@app_host expression {query.domain}.endsWith({env.LEMMA_APPS_SUFFIX})
+	respond @app_host 200
+	respond 403
+}

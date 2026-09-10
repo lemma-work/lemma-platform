@@ -3,9 +3,10 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
+import { ArrowRight, ExternalLink, History, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
+import { AppVersionsPanel } from '@/components/app/app-versions-panel';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
@@ -54,6 +55,9 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
     const { mutateAsync: updateAppVisibility } = useUpdateAppVisibility();
     const { launchRecipe } = useLaunchRecipe(podId);
     const [appPendingDelete, setAppPendingDelete] = useState<AppPageRef | null>(null);
+    // The app whose release history is open. One panel for the grid rather than
+    // one per card: only ever a single history is on screen.
+    const [appPendingVersions, setAppPendingVersions] = useState<AppPageRef | null>(null);
 
     useEffect(() => {
         const page = searchParams.get('page');
@@ -176,7 +180,6 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                         const appShareUrl = typeof window === 'undefined'
                             ? undefined
                             : `${window.location.origin}${viewHref}`;
-                        const hasMenuActions = canShareApp || Boolean(page.url) || canDeleteThisApp;
 
                         return (
                             <article
@@ -241,53 +244,59 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                                                 <ExternalLink className="h-4 w-4" />
                                             </a>
                                         ) : null}
-                                    {hasMenuActions ? (
-                                        <ResourceActionsMenu
-                                            ariaLabel={`Open actions for ${title}`}
-                                            triggerClassName="app-tile-control h-7 w-7 -mr-1 -mt-1 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-                                        >
-                                            {canShareApp ? (
-                                                <ResourceShareButton
-                                                    value={page.visibility}
-                                                    podId={podId}
-                                                    resourceType="app"
-                                                    resourceId={page.id}
-                                                    resourceLabel="apps"
-                                                    resourceName={title}
-                                                    shareUrl={appShareUrl}
-                                                    disabled={!page.id || !appName}
-                                                    onChange={async (visibility: ResourceVisibilityValue) => {
-                                                        await updateAppVisibility({ podId, name: appName, visibility });
-                                                    }}
-                                                    trigger={({ openShare, disabled }) => (
-                                                        <DropdownMenuItem
-                                                            disabled={disabled}
-                                                            onSelect={(event) => {
-                                                                event.preventDefault();
-                                                                openShare();
-                                                            }}
-                                                        >
-                                                            <Share2 className="mr-2 h-4 w-4" />
-                                                            Share
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                />
-                                            ) : null}
-                                            {page.url ? (
-                                                <DropdownMenuItem asChild>
-                                                    <a href={page.url} target="_blank" rel="noreferrer">
-                                                        <ExternalLink className="mr-2 h-4 w-4" />
-                                                        Open live app
-                                                    </a>
-                                                </DropdownMenuItem>
-                                            ) : null}
-                                            {canDeleteThisApp ? (
-                                                <DestructiveResourceActionItem onSelect={() => setAppPendingDelete(page)}>
-                                                    Delete app
-                                                </DestructiveResourceActionItem>
-                                            ) : null}
-                                        </ResourceActionsMenu>
-                                    ) : null}
+                                    <ResourceActionsMenu
+                                        ariaLabel={`Open actions for ${title}`}
+                                        triggerClassName="app-tile-control h-7 w-7 -mr-1 -mt-1 opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                                    >
+                                        {/* Reading a release history needs app.read,
+                                            which anyone looking at this card already
+                                            holds; the panel gates rollback separately
+                                            on app.update. */}
+                                        <DropdownMenuItem onSelect={() => setAppPendingVersions(page)}>
+                                            <History className="mr-2 h-4 w-4" />
+                                            Versions
+                                        </DropdownMenuItem>
+                                        {canShareApp ? (
+                                            <ResourceShareButton
+                                                value={page.visibility}
+                                                podId={podId}
+                                                resourceType="app"
+                                                resourceId={page.id}
+                                                resourceLabel="apps"
+                                                resourceName={title}
+                                                shareUrl={appShareUrl}
+                                                disabled={!page.id || !appName}
+                                                onChange={async (visibility: ResourceVisibilityValue) => {
+                                                    await updateAppVisibility({ podId, name: appName, visibility });
+                                                }}
+                                                trigger={({ openShare, disabled }) => (
+                                                    <DropdownMenuItem
+                                                        disabled={disabled}
+                                                        onSelect={(event) => {
+                                                            event.preventDefault();
+                                                            openShare();
+                                                        }}
+                                                    >
+                                                        <Share2 className="mr-2 h-4 w-4" />
+                                                        Share
+                                                    </DropdownMenuItem>
+                                                )}
+                                            />
+                                        ) : null}
+                                        {page.url ? (
+                                            <DropdownMenuItem asChild>
+                                                <a href={page.url} target="_blank" rel="noreferrer">
+                                                    <ExternalLink className="mr-2 h-4 w-4" />
+                                                    Open live app
+                                                </a>
+                                            </DropdownMenuItem>
+                                        ) : null}
+                                        {canDeleteThisApp ? (
+                                            <DestructiveResourceActionItem onSelect={() => setAppPendingDelete(page)}>
+                                                Delete app
+                                            </DestructiveResourceActionItem>
+                                        ) : null}
+                                    </ResourceActionsMenu>
                                     </div>
                                     </div>
                                 </div>
@@ -296,6 +305,24 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                     })}
                 </section>
             )}
+            <AppVersionsPanel
+                podId={podId}
+                appName={appPendingVersions ? (appPendingVersions.appName || appPendingVersions.title) : null}
+                open={Boolean(appPendingVersions)}
+                onOpenChange={(open) => {
+                    if (!open) setAppPendingVersions(null);
+                }}
+                canPromote={appPendingVersions
+                    ? resourceAllows(appPendingVersions, 'app.update', canUpdateApp)
+                    : false}
+                // No frame to point at from a card grid, so a release opens at its
+                // own host in a new tab. That is also the more honest preview: the
+                // embedded one inherited every cross-site cookie problem the app
+                // frame documents, and this is the same door "Open live app" uses.
+                onPreview={(_release, previewUrl) => {
+                    window.open(previewUrl, '_blank', 'noopener,noreferrer');
+                }}
+            />
             <DestructiveConfirmationDialog
                 open={Boolean(appPendingDelete)}
                 onOpenChange={(open) => {

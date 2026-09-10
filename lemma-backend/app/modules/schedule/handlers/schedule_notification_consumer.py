@@ -97,8 +97,10 @@ def render_schedule_paused_email(
         heading=f"{display_name} needs attention.",
         body=(
             explanation,
-            "Review the underlying error, then re-enable the schedule when the "
-            "cause has been addressed.",
+            (
+                "Review the underlying error, then re-enable the schedule when the "
+                "cause has been addressed."
+            ),
         ),
         action=EmailAction("Review schedule", review_url),
         details=tuple(details),
@@ -126,16 +128,17 @@ async def on_schedule_deactivated(
         return
 
     async def send_notification() -> None:
-        from app.composition.identity_notifications import resolve_user_email
         from app.core.email.email_sender import EmailSender
+        from app.modules.identity.contracts.profiles import user_profile
         from app.modules.schedule.repositories.schedule_repository import (
             ScheduleRepository,
         )
 
         parsed = ScheduleDeactivated.model_validate(event)
         async with uow_factory() as uow:
-            email = await resolve_user_email(uow, parsed.user_id)
+            owner = await user_profile(uow.session, parsed.user_id)
             schedule = await ScheduleRepository(uow=uow).get(parsed.schedule_id)
+        email = owner.email if owner else None
         if email is None:
             logger.debug(
                 "schedule.schedule_notification_consumer.scheduledeactivated_s_has_no_notification.diagnostic",

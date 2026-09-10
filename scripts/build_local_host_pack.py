@@ -24,12 +24,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_WHEEL_PROJECTS = (
     "lemma-pod-bundle",
-    "lemma-backend/lemma-connectors",
     "lemma-backend",
 )
 LOCAL_WHEEL_PACKAGES = (
     "lemma-pod-bundle",
-    "lemma-connectors",
     "lemma-backend",
 )
 
@@ -277,12 +275,155 @@ def prune_python_runtime(python_root: Path) -> None:
         for name in ("test", "idlelib", "turtledemo", "ensurepip"):
             shutil.rmtree(standard_library / name, ignore_errors=True)
         site_packages = standard_library / "site-packages"
-        for package in ("app", "lemma_connectors"):
+        for package in ("app",):
             root = site_packages / package
             if not root.is_dir():
                 continue
             for tests in sorted(root.rglob("tests"), reverse=True):
                 shutil.rmtree(tests, ignore_errors=True)
+        prune_unused_twilio_domains(site_packages)
+
+
+def prune_unused_twilio_domains(site_packages: Path) -> None:
+    """Drop the Twilio REST domains, which this product never calls.
+
+    Twilio is here by accident of the dependency graph. Nothing in `app`
+    imports it; `supertokens_python` does, at module level, so that its
+    passwordless recipe can deliver a one-time code by SMS -- a feature Lemma
+    does not enable. The package cannot simply be removed, because that
+    module-level `from twilio.rest import Client` would then fail at import.
+
+    Its `rest/` tree can. Every domain under it is imported lazily: the
+    top-level names in `twilio/rest/__init__.py` are under `TYPE_CHECKING`, and
+    `Client.api` runs `from twilio.rest.api import Api` only when something
+    reaches for it. Nothing does.
+
+    What this buys is the Windows path budget below. `twilio/rest/api/v2010/
+    account/sip/domain/auth_types/auth_type_registrations/` is a directory tree
+    describing an API nobody here calls, and a source file inside it sat nine
+    characters past the limit -- which fails the build, correctly, because a
+    source file Windows cannot open is a backend that cannot import a module
+    sitting in its own directory listing.
+
+    Verified rather than assumed: with all 39 domain trees removed,
+    `from twilio.rest import Client` and the SuperTokens SMS delivery types
+    both still import.
+    """
+    rest = site_packages / "twilio" / "rest"
+    if not rest.is_dir():
+        return
+    for domain in sorted(rest.iterdir()):
+        if domain.is_dir():
+            shutil.rmtree(domain, ignore_errors=True)
+
+
+# How long a path inside the pack may be, measured from the pack's own root.
+#
+# Windows stops at 260 characters, counting the terminating NUL, so 259 is
+# usable. An installed pack sits under
+# `%LOCALAPPDATA%\Lemma\runtime\releases\<version>-<8 hex>\`, which is 81
+# characters for a 20-character user name, plus a separator. That leaves 177,
+# and this is set below it so the arithmetic has somewhere to move.
+#
+# The failure this prevents is not a build error. Rust addresses files as
+# `\\?\` and writes them happily; everything that does not -- Explorer,
+# PowerShell, and the pack's own Python -- then cannot open them. Measured on a
+# real Windows installation: 1,349 files past the limit, and a backend that
+# could not import a module sitting right there in the directory listing.
+WINDOWS_PATH_BUDGET = 170
+
+
+def installed_path(pack_root: Path, path: Path) -> str:
+    """Where a file in the pack lands, relative to the installed release.
+
+    The same name `archive_pack` writes into the zip, so the budget is measured
+    against what is actually on disk rather than against a guess at the prefix.
+    """
+    return str(Path("local-runtime") / path.relative_to(pack_root))
+
+
+def enforce_windows_path_budget(pack_root: Path) -> None:
+    """Drop cached bytecode that Windows would not be able to open.
+
+    Only bytecode. A `.pyc` past the budget costs the compile of one module on
+    first import, which is what `compile_python_runtime` is buying back for the
+    other forty-four thousand; a *source* file past it cannot be dropped and
+    cannot be read, so it fails the build rather than shipping a pack that is
+    broken on one platform and fine on the other.
+    """
+    over_budget = [
+        path
+        for path in sorted(pack_root.rglob("*"))
+        if path.is_file()
+        and len(installed_path(pack_root, path)) > WINDOWS_PATH_BUDGET
+    ]
+    unshippable = [path for path in over_budget if path.suffix != ".pyc"]
+    if unshippable:
+        listing = "\n  ".join(
+            installed_path(pack_root, path) for path in unshippable[:10]
+        )
+        raise SystemExit(
+            f"{len(unshippable)} file(s) sit more than {WINDOWS_PATH_BUDGET} "
+            f"characters below the pack root, so Windows cannot open them once "
+            f"this is installed:\n  {listing}"
+        )
+    for path in over_budget:
+        path.unlink(missing_ok=True)
+    if over_budget:
+        print(
+            f"+ dropped {len(over_budget)} cached bytecode files past the "
+            f"{WINDOWS_PATH_BUDGET}-character Windows path budget",
+            flush=True,
+        )
+    report_windows_path_headroom(pack_root)
+
+
+# How little headroom is worth saying something about.
+#
+# A dependency update that lands ten characters below the limit has not broken
+# anything, and is one release away from doing so.
+WINDOWS_PATH_HEADROOM_WARNING = 15
+
+
+def report_windows_path_headroom(pack_root: Path) -> None:
+    """Say how close the longest surviving path came.
+
+    The gate above only speaks when something has already crossed the line,
+    which makes every crossing a surprise -- a build that was fine yesterday
+    failing today because a dependency grew a directory level. This is the
+    number that would have made it visible first: a `twilio` file sat nine
+    characters over, and nothing before it had ever reported how much room was
+    left.
+
+    Reported on every build, and loudly when the margin is thin, so the last
+    quiet release before a failure looks different from the ones before it.
+    """
+    longest = max(
+        (
+            (len(installed_path(pack_root, path)), installed_path(pack_root, path))
+            for path in pack_root.rglob("*")
+            if path.is_file()
+        ),
+        default=(0, ""),
+    )
+    length, where = longest
+    headroom = WINDOWS_PATH_BUDGET - length
+    print(
+        f"+ longest installed path is {length} characters, "
+        f"{headroom} below the {WINDOWS_PATH_BUDGET}-character Windows budget",
+        flush=True,
+    )
+    # Negatives included. `enforce_windows_path_budget` raises before this for
+    # a source file over the line, so a negative here means bytecode it dropped
+    # -- still worth saying, and silence would be the wrong answer to the one
+    # number this function exists to report.
+    if headroom < WINDOWS_PATH_HEADROOM_WARNING:
+        print(
+            f"::warning::only {headroom} characters of Windows path budget "
+            f"remain; the next dependency to grow a directory level will fail "
+            f"the build. Longest: {where}",
+            flush=True,
+        )
 
 
 def compile_python_runtime(python_root: Path, executable: Path) -> None:
@@ -537,6 +678,10 @@ def build_frontend(output: Path, explicit_node_root: Path | None) -> None:
 
 
 def archive_pack(output: Path, destination: Path) -> None:
+    # Here rather than at any one call site: three of them archive a pack, and
+    # a pack that is archived without this check is one that cannot be
+    # installed on Windows.
+    enforce_windows_path_budget(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(output.rglob("*")):

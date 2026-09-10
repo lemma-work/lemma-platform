@@ -40,7 +40,6 @@ class ConnectorKindResponseSchema:
             credential_schema (ConnectorKindResponseSchemaCredentialSchemaType0 | None | Unset):
             discovery (str | Unset):  Default: 'none'.
             oauth2_defaults (None | OAuth2DefaultsResponseSchema | Unset):
-            package_name (None | str | Unset):
             supports_org_custom_oauth (bool | Unset):  Default: False.
             system_default_available (bool | Unset):  Default: False.
             toolkit_slug (None | str | Unset):
@@ -54,7 +53,6 @@ class ConnectorKindResponseSchema:
     ) = UNSET
     discovery: str | Unset = "none"
     oauth2_defaults: None | OAuth2DefaultsResponseSchema | Unset = UNSET
-    package_name: None | str | Unset = UNSET
     supports_org_custom_oauth: bool | Unset = False
     system_default_available: bool | Unset = False
     toolkit_slug: None | str | Unset = UNSET
@@ -107,12 +105,6 @@ class ConnectorKindResponseSchema:
         else:
             oauth2_defaults = self.oauth2_defaults
 
-        package_name: None | str | Unset
-        if isinstance(self.package_name, Unset):
-            package_name = UNSET
-        else:
-            package_name = self.package_name
-
         supports_org_custom_oauth = self.supports_org_custom_oauth
 
         system_default_available = self.system_default_available
@@ -140,8 +132,6 @@ class ConnectorKindResponseSchema:
             field_dict["discovery"] = discovery
         if oauth2_defaults is not UNSET:
             field_dict["oauth2_defaults"] = oauth2_defaults
-        if package_name is not UNSET:
-            field_dict["package_name"] = package_name
         if supports_org_custom_oauth is not UNSET:
             field_dict["supports_org_custom_oauth"] = supports_org_custom_oauth
         if system_default_available is not UNSET:
@@ -240,15 +230,6 @@ class ConnectorKindResponseSchema:
 
         oauth2_defaults = _parse_oauth2_defaults(d.pop("oauth2_defaults", UNSET))
 
-        def _parse_package_name(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        package_name = _parse_package_name(d.pop("package_name", UNSET))
-
         supports_org_custom_oauth = d.pop("supports_org_custom_oauth", UNSET)
 
         system_default_available = d.pop("system_default_available", UNSET)
@@ -269,7 +250,6 @@ class ConnectorKindResponseSchema:
             credential_schema=credential_schema,
             discovery=discovery,
             oauth2_defaults=oauth2_defaults,
-            package_name=package_name,
             supports_org_custom_oauth=supports_org_custom_oauth,
             system_default_available=system_default_available,
             toolkit_slug=toolkit_slug,

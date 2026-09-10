@@ -24,4 +24,4 @@ dist/
 # schema shape), which a secret scanner cannot distinguish from real leaked
 # credentials, so keeping it out of history avoids that entirely rather than
 # fighting it with allowlist rules.
-lemma-connectors/openapi_specs/github.json
+openapi_specs/github.json

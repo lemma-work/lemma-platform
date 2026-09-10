@@ -66,22 +66,15 @@ _TYPING_REFRESH_INTERVAL_SECONDS = {
     SurfacePlatform.WHATSAPP.value: 20.0,
 }
 _MAX_TYPING_REFRESH_SECONDS = 15 * 60.0
+
+
 # Email recipients get one composed reply, not a stream of chat messages, and
 # the observer is the only thing that sends it. There used to be a reply tool
 # the agent called instead, with this path as its fallback -- two senders
 # reading two different stores for the same threading headers, and a silent new
-# conversation whenever they drifted.
-#
-# Derived from the platform-capability registry (not hand-maintained) so a
-# newly added email platform is automatically covered here too — a hardcoded
-# set previously let Resend fall through both checks even after it shipped as
-# a full `is_email=True` platform, causing a duplicate auto-echoed send via
-# broken fallback credentials on every real Resend reply.
-_EMAIL_PLATFORMS = {
-    caps.platform for caps in PLATFORM_CAPABILITIES.values() if caps.is_email
-}
-
-
+# conversation whenever they drifted. Which platforms count as email is decided
+# by `is_email` in the capability registry, read through
+# `platforms/common.py::email_reply_instruction`.
 class SurfaceAgentRunProgressObserver(
     ProgressWaitingMixin, ProgressDisplayMixin, TokenStreamMixin
 ):

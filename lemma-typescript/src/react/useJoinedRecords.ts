@@ -139,6 +139,11 @@ export function useJoinedRecords<TRecord extends Record<string, unknown> = Recor
   const queryKey = stringifyComparable(query);
   const shorthandKey = stringifyComparable({ baseTable, shorthandJoins });
   const stableQuery = useMemo(() => query, [queryKey]);
+  // Same reason as `stableQuery` above: `joins` is an array, so a caller
+  // writing it inline hands us a new reference every render. Left raw in
+  // `refresh`'s dependencies it rebuilt the callback each time, which re-ran the
+  // effect below and turned one mount into a query per render.
+  const stableShorthandJoins = useMemo(() => shorthandJoins, [shorthandKey]);
 
   const refresh = useCallback(async (signal?: AbortSignal): Promise<TRecord[]> => {
     if (!enabled) {
@@ -159,8 +164,8 @@ export function useJoinedRecords<TRecord extends Record<string, unknown> = Recor
 
       let resolvedQuery = stableQuery;
 
-      if (hasShorthand && baseTable && shorthandJoins) {
-        resolvedQuery = await buildShorthandQuery(client, podId, baseTable, shorthandJoins);
+      if (hasShorthand && baseTable && stableShorthandJoins) {
+        resolvedQuery = await buildShorthandQuery(client, podId, baseTable, stableShorthandJoins);
       }
 
       if (!resolvedQuery) {
@@ -190,7 +195,7 @@ export function useJoinedRecords<TRecord extends Record<string, unknown> = Recor
     } finally {
       if (!signal?.aborted) setIsLoading(false);
     }
-  }, [client, enabled, hasShorthand, baseTable, podId, shorthandJoins, stableQuery]);
+  }, [client, enabled, hasShorthand, baseTable, podId, stableShorthandJoins, stableQuery]);
 
   useEffect(() => {
     if (!enabled) {

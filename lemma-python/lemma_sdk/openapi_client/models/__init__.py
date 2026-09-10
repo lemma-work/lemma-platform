@@ -14,6 +14,7 @@ _NAME_TO_MODULE = {
     'AccountCreateSchemaPreferencesType0': 'account_create_schema_preferences_type_0',
     'AccountCredentialsUpdateSchema': 'account_credentials_update_schema',
     'AccountCredentialsUpdateSchemaCredentials': 'account_credentials_update_schema_credentials',
+    'AccountInstallationsSchema': 'account_installations_schema',
     'AccountListResponseSchema': 'account_list_response_schema',
     'AccountResponseSchema': 'account_response_schema',
     'AccountResponseSchemaPreferencesType0': 'account_response_schema_preferences_type_0',
@@ -97,6 +98,8 @@ _NAME_TO_MODULE = {
     'AppDetailResponse': 'app_detail_response',
     'AppListResponse': 'app_list_response',
     'AppMessageResponse': 'app_message_response',
+    'AppReleaseListResponse': 'app_release_list_response',
+    'AppReleaseResponse': 'app_release_response',
     'AppStatus': 'app_status',
     'AppTriggerListResponseSchema': 'app_trigger_list_response_schema',
     'AppTriggerResponseSchema': 'app_trigger_response_schema',
@@ -250,6 +253,9 @@ _NAME_TO_MODULE = {
     'FunctionPermissionsResponse': 'function_permissions_response',
     'FunctionResourcePermissionRequest': 'function_resource_permission_request',
     'FunctionResourcePermissionResponse': 'function_resource_permission_response',
+    'FunctionRevisionListResponse': 'function_revision_list_response',
+    'FunctionRevisionPromoteResponse': 'function_revision_promote_response',
+    'FunctionRevisionResponse': 'function_revision_response',
     'FunctionRunListResponse': 'function_run_list_response',
     'FunctionRunResponse': 'function_run_response',
     'FunctionRunStatus': 'function_run_status',
@@ -268,6 +274,10 @@ _NAME_TO_MODULE = {
     'ImportStartRequest': 'import_start_request',
     'ImportStatus': 'import_status',
     'ImportStatusResponse': 'import_status_response',
+    'InstallRequestInitiateSchema': 'install_request_initiate_schema',
+    'InstallRequestResponseSchema': 'install_request_response_schema',
+    'InstallationBindSchema': 'installation_bind_schema',
+    'InstallationChoiceSchema': 'installation_choice_schema',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
     'LiteralInputBinding': 'literal_input_binding',
@@ -283,6 +293,8 @@ _NAME_TO_MODULE = {
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'MyUsageLimitsResponse': 'my_usage_limits_response',
+    'MyUsageLimitsResponsePlanTypeType0': 'my_usage_limits_response_plan_type_type_0',
     'NavigationOrganizationResponse': 'navigation_organization_response',
     'NavigationPodResponse': 'navigation_pod_response',
     'NavigationResponse': 'navigation_response',
@@ -475,6 +487,7 @@ _NAME_TO_MODULE = {
     'UpdateTableRequest': 'update_table_request',
     'UpdateTableRequestConfigType0': 'update_table_request_config_type_0',
     'UploadResponse': 'upload_response',
+    'UsageAllowanceResponse': 'usage_allowance_response',
     'UsageLimitScopeResponse': 'usage_limit_scope_response',
     'UsageLimitsResponse': 'usage_limits_response',
     'UsageListResponse': 'usage_list_response',
@@ -536,6 +549,7 @@ if TYPE_CHECKING:
     from .account_create_schema_preferences_type_0 import AccountCreateSchemaPreferencesType0
     from .account_credentials_update_schema import AccountCredentialsUpdateSchema
     from .account_credentials_update_schema_credentials import AccountCredentialsUpdateSchemaCredentials
+    from .account_installations_schema import AccountInstallationsSchema
     from .account_list_response_schema import AccountListResponseSchema
     from .account_response_schema import AccountResponseSchema
     from .account_response_schema_preferences_type_0 import AccountResponseSchemaPreferencesType0
@@ -619,6 +633,8 @@ if TYPE_CHECKING:
     from .app_detail_response import AppDetailResponse
     from .app_list_response import AppListResponse
     from .app_message_response import AppMessageResponse
+    from .app_release_list_response import AppReleaseListResponse
+    from .app_release_response import AppReleaseResponse
     from .app_status import AppStatus
     from .app_trigger_list_response_schema import AppTriggerListResponseSchema
     from .app_trigger_response_schema import AppTriggerResponseSchema
@@ -772,6 +788,9 @@ if TYPE_CHECKING:
     from .function_permissions_response import FunctionPermissionsResponse
     from .function_resource_permission_request import FunctionResourcePermissionRequest
     from .function_resource_permission_response import FunctionResourcePermissionResponse
+    from .function_revision_list_response import FunctionRevisionListResponse
+    from .function_revision_promote_response import FunctionRevisionPromoteResponse
+    from .function_revision_response import FunctionRevisionResponse
     from .function_run_list_response import FunctionRunListResponse
     from .function_run_response import FunctionRunResponse
     from .function_run_status import FunctionRunStatus
@@ -790,6 +809,10 @@ if TYPE_CHECKING:
     from .import_start_request import ImportStartRequest
     from .import_status import ImportStatus
     from .import_status_response import ImportStatusResponse
+    from .install_request_initiate_schema import InstallRequestInitiateSchema
+    from .install_request_response_schema import InstallRequestResponseSchema
+    from .installation_bind_schema import InstallationBindSchema
+    from .installation_choice_schema import InstallationChoiceSchema
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
     from .literal_input_binding import LiteralInputBinding
@@ -805,6 +828,8 @@ if TYPE_CHECKING:
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .my_usage_limits_response import MyUsageLimitsResponse
+    from .my_usage_limits_response_plan_type_type_0 import MyUsageLimitsResponsePlanTypeType0
     from .navigation_organization_response import NavigationOrganizationResponse
     from .navigation_pod_response import NavigationPodResponse
     from .navigation_response import NavigationResponse
@@ -997,6 +1022,7 @@ if TYPE_CHECKING:
     from .update_table_request import UpdateTableRequest
     from .update_table_request_config_type_0 import UpdateTableRequestConfigType0
     from .upload_response import UploadResponse
+    from .usage_allowance_response import UsageAllowanceResponse
     from .usage_limit_scope_response import UsageLimitScopeResponse
     from .usage_limits_response import UsageLimitsResponse
     from .usage_list_response import UsageListResponse
@@ -1071,6 +1097,7 @@ __all__ = [
     'AccountCreateSchemaPreferencesType0',
     'AccountCredentialsUpdateSchema',
     'AccountCredentialsUpdateSchemaCredentials',
+    'AccountInstallationsSchema',
     'AccountListResponseSchema',
     'AccountResponseSchema',
     'AccountResponseSchemaPreferencesType0',
@@ -1154,6 +1181,8 @@ __all__ = [
     'AppDetailResponse',
     'AppListResponse',
     'AppMessageResponse',
+    'AppReleaseListResponse',
+    'AppReleaseResponse',
     'AppStatus',
     'AppTriggerListResponseSchema',
     'AppTriggerResponseSchema',
@@ -1307,6 +1336,9 @@ __all__ = [
     'FunctionPermissionsResponse',
     'FunctionResourcePermissionRequest',
     'FunctionResourcePermissionResponse',
+    'FunctionRevisionListResponse',
+    'FunctionRevisionPromoteResponse',
+    'FunctionRevisionResponse',
     'FunctionRunListResponse',
     'FunctionRunResponse',
     'FunctionRunStatus',
@@ -1325,6 +1357,10 @@ __all__ = [
     'ImportStartRequest',
     'ImportStatus',
     'ImportStatusResponse',
+    'InstallRequestInitiateSchema',
+    'InstallRequestResponseSchema',
+    'InstallationBindSchema',
+    'InstallationChoiceSchema',
     'InstalledAppSummary',
     'JsonObject',
     'LiteralInputBinding',
@@ -1340,6 +1376,8 @@ __all__ = [
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'MyUsageLimitsResponse',
+    'MyUsageLimitsResponsePlanTypeType0',
     'NavigationOrganizationResponse',
     'NavigationPodResponse',
     'NavigationResponse',
@@ -1532,6 +1570,7 @@ __all__ = [
     'UpdateTableRequest',
     'UpdateTableRequestConfigType0',
     'UploadResponse',
+    'UsageAllowanceResponse',
     'UsageLimitScopeResponse',
     'UsageLimitsResponse',
     'UsageListResponse',

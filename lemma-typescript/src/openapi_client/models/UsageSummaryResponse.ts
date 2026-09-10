@@ -4,6 +4,8 @@
 /* eslint-disable */
 export type UsageSummaryResponse = {
     agent_id?: (string | null);
+    agent_run_id?: (string | null);
+    conversation_id?: (string | null);
     end_date: string;
     organization_id?: (string | null);
     period_days: number;

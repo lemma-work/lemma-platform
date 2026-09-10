@@ -90,8 +90,10 @@ def test_the_gate_actually_fails_on_a_typed_subscriber():
     )
 
     assert _offenders([typed]) == [
-        "app.example.handle_surface_webhook on 'surface_events'/"
-        "'surface-webhook-events' declares `event: SurfaceWebhookReceivedEvent`"
+        (
+            "app.example.handle_surface_webhook on 'surface_events'/"
+            "'surface-webhook-events' declares `event: SurfaceWebhookReceivedEvent`"
+        )
     ]
 
 

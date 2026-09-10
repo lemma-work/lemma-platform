@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -137,21 +137,15 @@ def test_ceiling_is_a_day():
 
 @pytest.fixture
 def suspend_harness(monkeypatch):
-    """Stub the two side effects of a successful snooze: the timer and the row."""
-    scheduled: list[dict] = []
-    created: list[AgentConversationWaitEntity] = []
+    """Stub the one side effect of a successful snooze: the wait row.
 
-    async def _fake_schedule_snooze_wake(*, conversation_id, user_id, wake_at):
-        timer_id = uuid4()
-        scheduled.append(
-            {
-                "timer_id": timer_id,
-                "conversation_id": conversation_id,
-                "user_id": user_id,
-                "wake_at": wake_at,
-            }
-        )
-        return timer_id
+    There used to be two. The other was a one-shot scheduler, reached through
+    `app/composition/agent_snooze_scheduler.py`, and stubbing it is what these
+    tests spent most of their length on. There is no scheduler: the row below
+    carries `scheduled_at` and `external_ref`, and the poller claims from those
+    columns, so the row *is* the timer.
+    """
+    created: list[AgentConversationWaitEntity] = []
 
     class _FakeRepo:
         def __init__(self, uow):
@@ -181,44 +175,64 @@ def suspend_harness(monkeypatch):
     async def _fake_poke_host(host_id):
         poked.append(host_id)
 
-    monkeypatch.setattr(adapter, "schedule_snooze_wake", _fake_schedule_snooze_wake)
     monkeypatch.setattr(adapter, "AgentConversationWaitRepository", _FakeRepo)
     monkeypatch.setattr(
         adapter, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
     )
     monkeypatch.setattr(adapter, "suspend_remote_run", _fake_suspend_remote_run)
     monkeypatch.setattr(adapter, "poke_host", _fake_poke_host)
-    return SimpleNamespace(
-        scheduled=scheduled, created=created, suspended=suspended, poked=poked
-    )
+    return SimpleNamespace(created=created, suspended=suspended, poked=poked)
 
 
 @pytest.mark.asyncio
-async def test_snooze_schedules_a_timer_and_pauses_the_run(suspend_harness):
-    """The success path: one timer, one ACTIVE wait, and the pause signal.
+async def test_snooze_arms_one_active_wait_and_pauses_the_run(suspend_harness):
+    """The success path: one ACTIVE wait that is due, and the pause signal.
 
-    Guards the scheduler call shape. The composition adapter requires
-    ``user_id``, and nothing else here would notice if the call drifted — the
-    tool raises before returning, so a TypeError would surface only in
-    production.
+    The row is the timer, so what has to be right is the row: due at the
+    requested time, ACTIVE so the poller's due query can see it, and carrying a
+    `wait_ref` the fired timer resolves back through.
     """
     ctx = _ctx()
+    before = datetime.now(timezone.utc)
     with pytest.raises(AgentInputRequired) as raised:
         await snooze(ctx, SnoozeRequest(reason="waiting for the build", seconds=600))
 
     assert raised.value.tool_call_id == "tc-1"
     assert raised.value.kind == "snooze"
 
-    (job,) = suspend_harness.scheduled
-    assert job["user_id"] == ctx.deps.user_id
-    assert job["conversation_id"] == ctx.deps.conversation_id
-    # The wake path resolves the fired timer through wait_ref, so the token the
-    # adapter returns must be what lands in external_ref.
     (wait,) = suspend_harness.created
-    assert str(job["timer_id"]) == wait.external_ref
+    assert wait.conversation_id == ctx.deps.conversation_id
     assert wait.status is AgentWaitStatus.ACTIVE
     assert wait.tool_call_id == "tc-1"
     assert wait.spec["note_to_self"] is None
+    # Due when it was asked to be, because `scheduled_at` is what the poller
+    # claims on. A minute of slack, not a fixed clock, so this does not flake.
+    assert (
+        timedelta(seconds=599) <= wait.scheduled_at - before <= timedelta(seconds=660)
+    )
+    # And resolvable to exactly one wait: `external_ref` is what
+    # `find_active_by_external_ref` joins on.
+    assert UUID(wait.external_ref)
+
+
+@pytest.mark.asyncio
+async def test_two_snoozes_in_one_conversation_cannot_resume_each_other(
+    suspend_harness,
+):
+    """`external_ref` is per-wait, not per-conversation.
+
+    A fired timer resolves through it, so two sequential snoozes sharing a token
+    would have the first one to fire wake the wrong turn. Nothing else asserts
+    this now that the token is minted at the call site rather than handed back
+    by a scheduler.
+    """
+    ctx = _ctx()
+    for _ in range(2):
+        with pytest.raises(AgentInputRequired):
+            await snooze(ctx, SnoozeRequest(reason="waiting", seconds=600))
+
+    first, second = suspend_harness.created
+    assert first.external_ref != second.external_ref
 
 
 @pytest.mark.asyncio
@@ -234,10 +248,9 @@ async def test_a_remote_harness_sleeps_too_and_is_told_to_stop(suspend_harness):
     ctx = _ctx(supports_pause_signal=False)
     response = await snooze(ctx, SnoozeRequest(reason="waiting", seconds=600))
 
-    # Armed exactly as it is in-process: same timer, same ACTIVE row, same id.
-    (job,) = suspend_harness.scheduled
+    # Armed exactly as it is in-process: same ACTIVE row, same resolvable token.
     (wait,) = suspend_harness.created
-    assert str(job["timer_id"]) == wait.external_ref
+    assert UUID(wait.external_ref)
     assert wait.status is AgentWaitStatus.ACTIVE
     assert wait.tool_call_id == "tc-1"
 
@@ -485,7 +498,6 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     """
 
     wait = _wait(external_ref=str(uuid4()), spec={"note_to_self": "post it"})
-    removed: list[str] = []
     appended: list[dict] = []
     resumed: list[str] = []
     statuses: list[object] = []
@@ -504,11 +516,7 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
         async def set_conversation_status(self, *, conversation_id, status):
             statuses.append(status)
 
-    async def _fake_cancel(timer_id):
-        removed.append(timer_id)
-
     monkeypatch.setattr(turns, "AgentConversationWaitRepository", _Waits)
-    monkeypatch.setattr(turns, "cancel_snooze_wake", _fake_cancel)
 
     conversations = _Conversations()
     service = turns.TurnCoordinator(
@@ -528,8 +536,12 @@ async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeyp
     conversation = SimpleNamespace(id=wait.conversation_id, status=None)
     await service._cancel_active_snooze(conversation=conversation)
 
+    # CANCELLED is the whole of the cancellation. There is no second system to
+    # tell: the poller's due query filters on ACTIVE and
+    # `find_active_by_external_ref` ignores anything that is not, so this row
+    # is now invisible to both. There used to be a `cancel_snooze_wake` call
+    # here, which by the end was `del timer_id`.
     assert wait.status is AgentWaitStatus.CANCELLED
-    assert removed == [wait.external_ref]
     assert statuses == [turns.ConversationStatus.STOPPED]
     assert conversation.status is turns.ConversationStatus.STOPPED
 

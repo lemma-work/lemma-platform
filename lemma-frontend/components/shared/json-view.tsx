@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react';
 import { Check, ChevronDown, Code, Copy } from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { copyText } from '@/lib/clipboard';
 import {
     describeJsonValue,
     tokenizeJson,
@@ -151,7 +152,7 @@ function JsonBlock({
 
     const handleCopy = async () => {
         try {
-            await navigator.clipboard.writeText(payload.formatted);
+            await copyText(payload.formatted);
             setCopied(true);
             setTimeout(() => setCopied(false), 2000);
         } catch { /* clipboard access denied */ }

@@ -1,15 +1,15 @@
 """Connector catalog entity and the per-kind capability specs.
 
 A connector is a catalog entry (``gmail``, ``slack``, ``sql``). *How* an
-organization talks to it is the **kind**: ``composio`` (Composio brokers auth and
-execution), ``package`` (a vendored ``lemma-connectors`` client), ``http`` (an
-OpenAPI descriptor executed directly), ``sql``, or ``mcp``.
+organization talks to it is the **kind**: ``composio`` (Composio brokers auth
+and execution), ``http`` (an OpenAPI descriptor executed directly), ``sql``, or
+``mcp``.
 
 Kind is the single runtime discriminator. It is stored on the *auth config*, not
 here, because one catalog entry can legitimately be installed either way --
-``gmail``, ``google_drive``, ``slack`` and ``jira`` all ship as both a vendored
-package and a Composio toolkit. The connector row only advertises which kinds it
-supports; an install pins exactly one.
+``gmail`` ships as both a native OpenAPI connector and a Composio toolkit. The
+connector row only advertises which kinds it supports; an install pins exactly
+one.
 
 ``AuthProvider`` survives as a deprecated compatibility shim for callers outside
 this module (agent surfaces, schedule composition, pod bundles) and is removed
@@ -20,7 +20,7 @@ import datetime
 import enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 class AuthScheme(str, enum.Enum):
@@ -36,14 +36,13 @@ class ConnectorKind(str, enum.Enum):
     HTTP = "http"
     SQL = "sql"
     MCP = "mcp"
-    PACKAGE = "package"
 
 
 class DiscoveryMode(str, enum.Enum):
     """Where an install's operation set comes from.
 
-    ``NONE`` means the catalog holds every operation (Composio toolkits, vendored
-    packages, connectors with a spec bundled at import time such as GitHub).
+    ``NONE`` means the catalog holds every operation (Composio toolkits, and
+    connectors with a spec bundled at import time such as GitHub, Slack, Gmail).
     ``MCP``/``OPENAPI`` mean the operations are discovered per install and stored
     against the auth config.
     """
@@ -74,22 +73,6 @@ def kind_to_provider(kind: "ConnectorKind | str") -> AuthProvider:
         AuthProvider.COMPOSIO
         if value == ConnectorKind.COMPOSIO.value
         else AuthProvider.LEMMA
-    )
-
-
-def provider_to_kind(provider: "AuthProvider | str") -> ConnectorKind:
-    """Best-effort inverse of :func:`kind_to_provider`.
-
-    ``LEMMA`` is ambiguous -- it covers package/http/sql/mcp -- so it resolves to
-    ``PACKAGE``, which is what every pre-existing native install actually was.
-    Callers that know the real kind must pass it explicitly rather than rely on
-    this.
-    """
-    value = provider.value if isinstance(provider, AuthProvider) else str(provider)
-    return (
-        ConnectorKind.COMPOSIO
-        if value == AuthProvider.COMPOSIO.value
-        else ConnectorKind.PACKAGE
     )
 
 
@@ -178,16 +161,6 @@ class KindSpecBase(BaseModel):
         """The install-config schema, under its conceptual name."""
         return self.auth_config_schema
 
-    @property
-    def provider(self) -> AuthProvider:
-        """Deprecated. The legacy provider this kind maps onto."""
-        return kind_to_provider(self.kind)
-
-
-class PackageKindSpec(KindSpecBase):
-    kind: Literal[ConnectorKind.PACKAGE] = ConnectorKind.PACKAGE
-    package_name: str | None = None
-
 
 class ComposioKindSpec(KindSpecBase):
     """A toolkit Composio brokers on Lemma's behalf.
@@ -230,7 +203,7 @@ class McpKindSpec(KindSpecBase):
 
 
 KindSpec = Annotated[
-    PackageKindSpec | ComposioKindSpec | HttpKindSpec | SqlKindSpec | McpKindSpec,
+    ComposioKindSpec | HttpKindSpec | SqlKindSpec | McpKindSpec,
     Field(discriminator="kind"),
 ]
 KindSpecAdapter: TypeAdapter[Any] = TypeAdapter(KindSpec)
@@ -265,31 +238,6 @@ class ConnectorEntity(BaseModel):
     created_at: datetime.datetime | None = Field(None, description="Created at")
     updated_at: datetime.datetime | None = Field(None, description="Updated at")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_capabilities(cls, data: Any) -> Any:
-        """Accept ``provider_capabilities=`` from callers not yet migrated.
-
-        The capability classes are already aliases of the kind specs, so the
-        values need no translation -- only the field name moved. A legacy dict
-        carrying ``provider`` but no ``kind`` is mapped the same way an install
-        is: ``COMPOSIO`` to the composio spec, anything else to ``package``.
-        """
-        if not isinstance(data, dict):
-            return data
-        legacy = data.get("provider_capabilities")
-        if data.get("kinds") is not None or legacy is None:
-            return data
-        kinds: list[Any] = []
-        for capability in legacy:
-            if isinstance(capability, dict) and "kind" not in capability:
-                capability = {
-                    **capability,
-                    "kind": provider_to_kind(capability.get("provider", "LEMMA")),
-                }
-            kinds.append(capability)
-        return {**data, "kinds": kinds}
-
     def spec_for(self, kind: ConnectorKind | str) -> KindSpec:
         """Return the spec for ``kind``, or raise ``ValueError``."""
         wanted = kind.value if isinstance(kind, ConnectorKind) else str(kind)
@@ -318,21 +266,13 @@ class ConnectorEntity(BaseModel):
 
     # --- deprecated provider-shaped accessors ------------------------------
 
-    @property
-    def provider_capabilities(self) -> list[KindSpec]:
-        """Deprecated alias for :attr:`kinds`."""
-        return self.kinds
-
     def capability_for(self, provider: AuthProvider | str) -> KindSpec:
         """Deprecated. Use :meth:`spec_for` with a concrete kind."""
         return self.spec_for(self.default_kind_for_provider(provider))
 
 
 # Internal naming aliases retained for call sites that still speak the older
-# auth-scheme / provider vocabulary.
+# auth-scheme vocabulary. `OperationExecutor`, `ProviderCapability` and
+# `ProviderCapabilityAdapter` were three more and had no reader anywhere.
 AuthMethod = AuthScheme
-OperationExecutor = AuthProvider
-ProviderCapability = KindSpec
-ProviderCapabilityAdapter = KindSpecAdapter
-LemmaProviderCapability = PackageKindSpec
 ComposioProviderCapability = ComposioKindSpec

@@ -170,6 +170,10 @@ _ONE_QUESTION = {
 }
 
 
+#: Where `agent` publishes the operations this path calls.
+_OPERATIONS = "app.modules.agent.contracts.conversations_for_surfaces"
+
+
 async def _resume(
     text: str,
     *,
@@ -178,45 +182,46 @@ async def _resume(
     resolve_raises: Exception | None = None,
     lookup_raises: Exception | None = None,
 ):
-    """Run the resume path against a stub conversation service.
+    """Run the resume path with `agent`'s conversation operations doubled.
 
     Returns ``(outcome, resolve_mock)`` so a test can assert both halves: what
     the caller is told to do, and whether a decision was recorded.
+
+    The doubles go on the operations where they are published rather than on
+    the module under test: they are a collaborator in another module, and the
+    real ones reach a database.
     """
+    from contextlib import ExitStack
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, patch
     from uuid import uuid4
 
     from app.modules.agent_surfaces.services.pending_interaction_resume import (
         maybe_resume_pending_interaction,
     )
 
-    conversation = SimpleNamespace(user_id=uuid4(), pod_id=uuid4())
-    resolve = AsyncMock(side_effect=resolve_raises)
-    service = SimpleNamespace(
-        get_pending_user_interaction=AsyncMock(
-            return_value={
-                "tool_call_id": "tool-1",
-                "kind": kind,
-                "tool_args": tool_args if tool_args is not None else {},
-            },
+    resolve = AsyncMock(side_effect=resolve_raises, return_value=True)
+    operations = {
+        "pending_interaction": AsyncMock(
+            return_value=SimpleNamespace(
+                tool_call_id="tool-1",
+                kind=kind,
+                tool_args=tool_args if tool_args is not None else {},
+                agent_run_id=None,
+                is_approval=kind == "request_approval",
+            ),
             side_effect=lookup_raises,
         ),
-        conversation_repository=SimpleNamespace(
-            get_conversation=AsyncMock(return_value=conversation),
-            # `_is_an_answer` asks this when the words do not plainly answer.
-            get_conversation_metadata_key=AsyncMock(return_value=None),
-        ),
-        resolve_user_approval_internal=resolve,
-    )
-    context = SimpleNamespace(
-        conversation_id=uuid4(),
-        user_id=conversation.user_id,
-        pod_id=conversation.pod_id,
-    )
-    outcome = await maybe_resume_pending_interaction(
-        context, text, conversation_service=service
-    )
+        # `_is_an_answer` asks this when the words do not plainly answer.
+        "conversation_metadata_value": AsyncMock(return_value=None),
+        "set_conversation_metadata_value": AsyncMock(),
+        "resolve_pending_interaction": resolve,
+    }
+    context = SimpleNamespace(conversation_id=uuid4(), user_id=uuid4(), pod_id=uuid4())
+    with ExitStack() as doubled:
+        for name, double in operations.items():
+            doubled.enter_context(patch(f"{_OPERATIONS}.{name}", double))
+        outcome = await maybe_resume_pending_interaction(context, text, uow=object())
     return outcome, resolve
 
 

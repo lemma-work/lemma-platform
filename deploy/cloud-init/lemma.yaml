@@ -1,0 +1,107 @@
+#cloud-config
+# Lemma on a fresh Ubuntu VM, from first boot.
+#
+# One file for every provider that speaks cloud-init — DigitalOcean Droplets,
+# Hetzner Cloud, Vultr, Linode, AWS EC2, Scaleway. Not two near-identical
+# copies, because two copies drift and one of them is always the stale one.
+#
+# DigitalOcean: paste into "User data" when creating a Droplet.
+# Hetzner:      paste into "Cloud config" when creating a Server.
+# EC2:          --user-data file://lemma.yaml
+#
+# Size it at 4 vCPU / 8 GB or larger. Agent sandboxes are containers on this
+# same machine and the workspace image alone is 2.5 GB.
+#
+# Setup takes roughly ten minutes, most of it pulling images. Watch it with:
+#   ssh root@<ip> tail -f /var/log/lemma-install.log
+#
+# It serves on https://<public-ip>.sslip.io with a certificate from Caddy's own
+# authority, so the first visit warns. To use a real domain, follow
+# docs/self-hosting.md once this finishes.
+#
+# It installs the latest published release — repository and images from the same
+# tag. Set LEMMA_VERSION to pick a different one. The tag is trusted because
+# GitHub serves it over TLS; this does not verify a signature, so treat it as
+# the same trust decision as `curl | sh` for Docker above.
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - python3
+
+write_files:
+  - path: /usr/local/sbin/lemma-install
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec >>/var/log/lemma-install.log 2>&1
+      echo "=== lemma install $(date -Is) ==="
+
+      # Docker Engine from Docker's own repository. The distribution's
+      # docker.io package lags, and Compose v2 is a separate plugin there.
+      if ! command -v docker >/dev/null 2>&1; then
+        echo "--- installing docker"
+        curl -fsSL https://get.docker.com | sh
+      fi
+      systemctl enable --now docker
+
+      # Pin to a release, not to whatever the default branch says today.
+      #
+      # Two reasons. The scripts below run as root, so "the tip of main" is a
+      # moving target being executed with full privilege on a fresh machine.
+      # And bootstrap.sh installs *released* images either way — cloning main
+      # would pair a compose file from one commit with images from another,
+      # which is the kind of mismatch that only shows up once something breaks.
+      # Set LEMMA_VERSION in the environment to install a specific release.
+      version="${LEMMA_VERSION:-}"
+      if [ -z "$version" ]; then
+        version="$(curl -fsSL https://api.github.com/repos/lemma-work/lemma-platform/releases/latest \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+      fi
+      echo "--- fetching lemma $version"
+      rm -rf /opt/lemma
+      git clone --depth 1 --branch "$version" \
+        https://github.com/lemma-work/lemma-platform.git /opt/lemma
+
+      cd /opt/lemma/deploy/compose
+      echo "--- bootstrapping"
+      ./bootstrap.sh --version "${version#v}"
+
+      echo "--- starting"
+      docker compose up -d
+
+      domain="$(grep -E '^LEMMA_DOMAIN=' .env | cut -d= -f2-)"
+      cat >/etc/motd <<MOTD
+
+        Lemma is installed at /opt/lemma/deploy/compose
+
+          UI      https://${domain}
+          API     https://${domain}:8443
+
+        Agents need a model provider key. Set LEMMA_OPENAI_API_KEY and
+        LEMMA_OPENAI_DEFAULT_MODEL (or the Anthropic pair) in
+        /opt/lemma/deploy/compose/.env, then:
+
+          cd /opt/lemma/deploy/compose && docker compose up -d
+
+        Certificates are self-signed until you set a real domain — see
+        docs/self-hosting.md.
+
+      MOTD
+      echo "=== done $(date -Is) ==="
+
+runcmd:
+  # 80 and 443 for the UI and app subdomains, 8443 for the API. Only applied
+  # where ufw is present and already the active firewall; a provider's own
+  # firewall or security group is the one that matters on most of them.
+  - |
+    if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+      ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 443/udp
+      ufw allow 8443/tcp && ufw allow 8443/udp
+    fi
+  - /usr/local/sbin/lemma-install
+
+final_message: "Lemma install started. Follow /var/log/lemma-install.log; it takes about ten minutes."

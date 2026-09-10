@@ -82,6 +82,10 @@ put it there having to think about it on every operation.
   refuse and shall name the column.
 - If a person adds a record with a value outside a column's fixed set of
   choices, then the system shall refuse and shall list the choices.
+- If a person adds a record whose value, or whose record as a whole, is larger
+  than the system allows, then the system shall refuse, shall name the column
+  and the limit, and shall say that content of that size belongs in a file the
+  record points at.
 
 **Contracts:** `record.create`, `record.get`
 
@@ -92,8 +96,10 @@ put it there having to think about it on every operation.
   sort by column, and page through the result.
 - The system shall return a stable page boundary, so that paging through an
   unchanging table returns every record exactly once.
-- The system shall bound the size of any single page, so that a table with many
-  records cannot be pulled in one request by accident.
+- The system shall publish a maximum page size and refuse a request for more,
+  rather than quietly returning fewer, so that a table with many records cannot
+  be pulled in one request by accident and a caller is never left reading a
+  bounded page as the whole table.
 
 **Contracts:** `record.list`, `record.get`
 

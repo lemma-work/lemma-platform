@@ -7,7 +7,7 @@ that gap, each hiding the next:
 * the global `verify_auth` dependency has an allowlist and `/agent-host` was not
   on it, so every one of these routes 401'd - a paired computer has no user
   session and never will;
-* `pairings:complete` is the one route whose credential *is* its body, and
+* `pairings/complete` is the one route whose credential *is* its body, and
   nothing checked that it works without a session;
 * the idle poll called `asyncio.wait_for(anext(...))`, whose timeout cancels and
   closes the async generator, so the second idle round raised
@@ -129,12 +129,44 @@ async def test_a_pairing_code_is_single_use(authenticated_client, async_client):
         "hello": hello(),
     }
 
-    first = await async_client.post("/agent-host/pairings:complete", json=body)
+    first = await async_client.post("/agent-host/pairings/complete", json=body)
     assert first.status_code == status.HTTP_200_OK, first.text
 
-    replayed = await async_client.post("/agent-host/pairings:complete", json=body)
+    replayed = await async_client.post("/agent-host/pairings/complete", json=body)
     assert replayed.status_code != status.HTTP_200_OK
     assert first.json()["host_secret"] not in replayed.text
+
+
+@pytest.mark.asyncio
+async def test_the_colon_spelling_still_reaches_the_same_handler(
+    authenticated_client, async_client
+):
+    """An already-paired host keeps working after the slash rename.
+
+    `:complete` and `:append` were the shipped spelling, and the desktop app
+    has no auto-updater — an installed host keeps calling whatever it was built
+    with. Both spellings are the same function, so this asserts routing, not
+    behaviour: reaching the handler at all is the whole claim.
+    """
+    minted = await authenticated_client.post(
+        "/me/runtime/agent-host-pairings",
+        json={"display_name": "e2e legacy path", "organization_id": None},
+    )
+    paired = await async_client.post(
+        "/agent-host/pairings:complete",
+        json={
+            "pairing_code": minted.json()["pairing_code"],
+            "display_name": "e2e legacy path",
+            "hello": hello(),
+        },
+    )
+    assert paired.status_code == status.HTTP_200_OK, paired.text
+
+    # The events route is host-authenticated, so an unauthenticated call must
+    # be rejected by the handler rather than by the router. A 404 would mean
+    # the alias is not registered at all, which is the failure this guards.
+    appended = await async_client.post("/agent-host/events:append", json={})
+    assert appended.status_code != status.HTTP_404_NOT_FOUND, appended.text
 
 
 @pytest.mark.asyncio

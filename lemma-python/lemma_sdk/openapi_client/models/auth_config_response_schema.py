@@ -36,6 +36,11 @@ class AuthConfigResponseSchema:
         organization_id (UUID):
         status (str):
         updated_at (datetime.datetime):
+        auth_scheme (None | str | Unset): How this install authenticates, which is not always what the connector's
+            catalog entry says. `mcp` is one catalog entry standing for every server a tenant may point at: the entry says
+            API_KEY, but an install whose server described its own authorization when it was created signs in through a
+            browser and answers OAUTH2 here. Branch on this rather than on the connector's kind when deciding how to connect
+            an install.
         config (AuthConfigResponseSchemaConfigType0 | None | Unset):
         is_default (bool | Unset):  Default: False.
         metadata (AuthConfigResponseSchemaMetadataType0 | None | Unset):
@@ -50,6 +55,7 @@ class AuthConfigResponseSchema:
     organization_id: UUID
     status: str
     updated_at: datetime.datetime
+    auth_scheme: None | str | Unset = UNSET
     config: AuthConfigResponseSchemaConfigType0 | None | Unset = UNSET
     is_default: bool | Unset = False
     metadata: AuthConfigResponseSchemaMetadataType0 | None | Unset = UNSET
@@ -80,6 +86,12 @@ class AuthConfigResponseSchema:
         status = self.status
 
         updated_at = self.updated_at.isoformat()
+
+        auth_scheme: None | str | Unset
+        if isinstance(self.auth_scheme, Unset):
+            auth_scheme = UNSET
+        else:
+            auth_scheme = self.auth_scheme
 
         config: dict[str, Any] | None | Unset
         if isinstance(self.config, Unset):
@@ -114,6 +126,8 @@ class AuthConfigResponseSchema:
                 "updated_at": updated_at,
             }
         )
+        if auth_scheme is not UNSET:
+            field_dict["auth_scheme"] = auth_scheme
         if config is not UNSET:
             field_dict["config"] = config
         if is_default is not UNSET:
@@ -150,6 +164,15 @@ class AuthConfigResponseSchema:
         status = d.pop("status")
 
         updated_at = isoparse(d.pop("updated_at"))
+
+        def _parse_auth_scheme(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        auth_scheme = _parse_auth_scheme(d.pop("auth_scheme", UNSET))
 
         def _parse_config(
             data: object,
@@ -201,6 +224,7 @@ class AuthConfigResponseSchema:
             organization_id=organization_id,
             status=status,
             updated_at=updated_at,
+            auth_scheme=auth_scheme,
             config=config,
             is_default=is_default,
             metadata=metadata,

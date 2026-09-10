@@ -1,4 +1,5 @@
-use std::path::Path;
+#[path = "../build_support/identity.rs"]
+mod identity;
 
 /// Embed `Info.plist` so the daemon's code-signing identifier survives a rebuild.
 ///
@@ -22,16 +23,5 @@ fn main() {
     // would happily reuse an object file compiled without it, and ship
     // telemetry that can never fire while appearing to be configured.
     println!("cargo:rerun-if-env-changed=LEMMA_TELEMETRY_KEY");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
-        return;
-    }
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
-    let plist = Path::new(&manifest).join("Info.plist");
-    println!("cargo:rerun-if-changed={}", plist.display());
-    // Only the shipped binaries: tests and build scripts link their own
-    // executables, and a duplicated section would fail the link.
-    println!(
-        "cargo:rustc-link-arg-bins=-Wl,-sectcreate,__TEXT,__info_plist,{}",
-        plist.display()
-    );
+    identity::embed_info_plist();
 }

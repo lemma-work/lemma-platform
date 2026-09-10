@@ -8,11 +8,20 @@ remain outside this process.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+# First, and before the application package is imported. Not a warm-up: see
+# `load_extension_modules` for what happens when this import runs later, which
+# on Windows is that the process never serves anything at all. Measured there:
+# from here it costs 0.8s; from four lines below, after `app.app`, it does not
+# finish.
+from app.core.embeddings.local_embedder import load_extension_modules_if_local
 
-from app.core.locald_watchdog import install_locald_parent_watchdog
-from app.app import create_app as create_api_app
-from app.standalone import build_standalone_app
+load_extension_modules_if_local()
+
+from fastapi import FastAPI  # noqa: E402
+
+from app.core.locald_watchdog import install_locald_parent_watchdog  # noqa: E402
+from app.app import create_app as create_api_app  # noqa: E402
+from app.standalone import build_standalone_app  # noqa: E402
 
 
 def create_local_app() -> FastAPI:

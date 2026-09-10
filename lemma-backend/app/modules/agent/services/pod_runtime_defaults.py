@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.composition.agent_pod import create_agent_pod_repository
+from app.modules.pod.contracts.agent_access import pod_config
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services.runtime_profile_service import (
@@ -23,7 +23,7 @@ async def default_agent_runtime_for_pod(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID
 ) -> AgentRuntimeConfig:
     """The pod's configured default runtime, or the system one."""
-    config = await create_agent_pod_repository(uow).get_config(pod_id)
+    config = await pod_config(uow, pod_id)
     runtime = PodConfig.from_raw(config).resolved_default_runtime()
     return runtime or AgentRuntimeConfig(
         profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID

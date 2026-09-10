@@ -70,10 +70,36 @@ def capability_bases() -> set[str]:
 
 
 def sdk_bases() -> set[str]:
+    """The domains the SDK treats as a desktop-local server.
+
+    Read out of the file's text rather than imported, and that is not laziness:
+    CI runs this script with whatever `python` the runner provides -- see
+    `check_script_portability.py` -- while `lemma_sdk/config.py` is 3.14 source
+    using PEP 758 `except A, B:`. An old interpreter cannot import it and cannot
+    even `ast.parse` it.
+
+    So the coupling is to a private name in another package's source, which is
+    as fragile as it sounds. Two things make it survivable: the match spans any
+    bracket style and any number of lines, so reformatting does not break it;
+    and `test_desktop_local_bases_stay_where_this_script_can_find_them` in
+    lemma-python fails on the SDK side if the constant is renamed or moved,
+    naming this script.
+    """
+    if not SDK.exists():
+        raise SystemExit(
+            "{} is gone. This check reads `_DESKTOP_LOCAL_BASES` out of it; "
+            "point SDK at the new home rather than deleting the check.".format(SDK)
+        )
     text = SDK.read_text(encoding="utf-8")
-    match = re.search(r"_DESKTOP_LOCAL_BASES = \(([^)]*)\)", text)
+    match = re.search(r"_DESKTOP_LOCAL_BASES\s*=\s*[\(\[{]([^)\]}]*)[\)\]}]", text)
     if not match:
-        raise SystemExit(f"_DESKTOP_LOCAL_BASES not found in {SDK}")
+        raise SystemExit(
+            "`_DESKTOP_LOCAL_BASES` not found in {}. That is this check being "
+            "broken, not the domains disagreeing: it reads the constant out of "
+            "the SDK's source because CI runs this script on an interpreter too "
+            "old to import 3.14 syntax. If the constant moved or was renamed, "
+            "update this function.".format(SDK)
+        )
     return set(re.findall(r'"([^"]+)"', match.group(1)))
 
 

@@ -20,7 +20,9 @@ from app.modules.schedule.infrastructure.adapters.external_schedule_writer impor
     _github_binding,
     defaults_the_author_left_out,
 )
-from app.composition.webhook_sources.github import GitHubWebhookSource
+from app.modules.connectors.infrastructure.webhook_sources.github import (
+    GitHubWebhookSource,
+)
 from app.modules.connectors.config import connector_settings
 from app.modules.schedule.domain.errors import ScheduleValidationError
 from app.modules.schedule.contracts.webhook_source import WebhookDelivery

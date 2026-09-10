@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { MyUsageLimitsResponse } from '../models/MyUsageLimitsResponse.js';
 import type { UsageLimitsResponse } from '../models/UsageLimitsResponse.js';
 import type { UsageListResponse } from '../models/UsageListResponse.js';
 import type { UsageStatsResponse } from '../models/UsageStatsResponse.js';
@@ -11,8 +12,144 @@ import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class UsageService {
     /**
+     * My Events
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageListResponse Successful Response
+     * @throws ApiError
+     */
+    public static usageMeEventsList(
+        organizationId?: (string | null),
+        start?: (string | null),
+        end?: (string | null),
+        days: number = 30,
+        limit: number = 50,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
+    ): CancelablePromise<UsageListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/usage/me/events',
+            query: {
+                'organization_id': organizationId,
+                'start': start,
+                'end': end,
+                'days': days,
+                'limit': limit,
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * My Limits
+     * @param organizationId
+     * @returns MyUsageLimitsResponse Successful Response
+     * @throws ApiError
+     */
+    public static usageMeLimitsGet(
+        organizationId?: (string | null),
+    ): CancelablePromise<MyUsageLimitsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/usage/me/limits',
+            query: {
+                'organization_id': organizationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * My Stats
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageStatsResponse Successful Response
+     * @throws ApiError
+     */
+    public static usageMeStatsGet(
+        organizationId?: (string | null),
+        start?: (string | null),
+        end?: (string | null),
+        days: number = 30,
+        limit: number = 50,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
+    ): CancelablePromise<UsageStatsResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/usage/me/stats',
+            query: {
+                'organization_id': organizationId,
+                'start': start,
+                'end': end,
+                'days': days,
+                'limit': limit,
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * My Summary
+     * @param organizationId
+     * @param start
+     * @param end
+     * @param days
+     * @param limit
+     * @param agentRunId
+     * @param conversationId
+     * @returns UsageSummaryResponse Successful Response
+     * @throws ApiError
+     */
+    public static usageMeSummaryGet(
+        organizationId?: (string | null),
+        start?: (string | null),
+        end?: (string | null),
+        days: number = 30,
+        limit: number = 50,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
+    ): CancelablePromise<UsageSummaryResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/usage/me/summary',
+            query: {
+                'organization_id': organizationId,
+                'start': start,
+                'end': end,
+                'days': days,
+                'limit': limit,
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * List Usage Events
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -31,6 +168,8 @@ export class UsageService {
      */
     public static usageOrganizationEventsList(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -52,6 +191,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,
@@ -94,6 +235,8 @@ export class UsageService {
     /**
      * Get My Usage
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -112,6 +255,8 @@ export class UsageService {
      */
     public static usageOrganizationMeSummaryGet(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -133,6 +278,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,
@@ -155,6 +302,8 @@ export class UsageService {
     /**
      * Get Usage Stats
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -175,6 +324,8 @@ export class UsageService {
      */
     public static usageOrganizationStatsGet(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -198,6 +349,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,
@@ -222,6 +375,8 @@ export class UsageService {
     /**
      * Get Organization Usage Summary
      * @param organizationId
+     * @param agentRunId
+     * @param conversationId
      * @param start
      * @param end
      * @param days
@@ -240,6 +395,8 @@ export class UsageService {
      */
     public static usageOrganizationSummaryGet(
         organizationId: string,
+        agentRunId?: (string | null),
+        conversationId?: (string | null),
         start?: (string | null),
         end?: (string | null),
         days: number = 30,
@@ -261,6 +418,8 @@ export class UsageService {
                 'organization_id': organizationId,
             },
             query: {
+                'agent_run_id': agentRunId,
+                'conversation_id': conversationId,
                 'start': start,
                 'end': end,
                 'days': days,

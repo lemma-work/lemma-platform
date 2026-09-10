@@ -45,3 +45,11 @@ Makefile    text eol=lf
 *.woff2     binary
 *.zip       binary
 *.dmg       binary
+
+# Committed build output. Both are copies of the esbuild bundle, kept in the
+# tree so a browser can load the SDK without a build step, and held byte-exact
+# by a `git diff --exit-code` in ci.yml. Marking them generated keeps them out
+# of diffs and language stats, and out of what GitHub's analyses report on --
+# a finding in a file you are not allowed to edit is noise by construction.
+lemma-typescript/public/lemma-client.js linguist-generated=true
+lemma-typescript/public/lemma-ui.js     linguist-generated=true

@@ -70,6 +70,17 @@ async def _outbox_event_for_file(db_manager, file_id: str) -> DomainEventOutbox:
     return next(row for row in rows if row.payload.get("file_id") == file_id)
 
 
+# 52 seconds against a 45-second pull-request budget, and four times the next
+# slowest test in its shard -- so this is what the lane waits for, not a slow
+# runner. Moved rather than excused: it drives the real Kreuzberg extractor
+# end to end, and the time is the extraction.
+#
+# Upload, convert and index stay covered on every pull request by
+# `test_desktop_local_journey_converts_and_indexes_with_the_real_xberg_wheel`
+# below, which walks the same pipeline in twelve seconds. What moves to the
+# nightly lane is this one's use of the full Kreuzberg path.
+@pytest.mark.slow
+@pytest.mark.timeout(240)
 @pytest.mark.asyncio
 async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
     pod_api: DatastoreApi,

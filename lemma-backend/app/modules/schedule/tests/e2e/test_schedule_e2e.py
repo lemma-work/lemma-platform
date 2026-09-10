@@ -10,7 +10,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.composition.webhook_sources import default_webhook_sources
+from app.modules.connectors.contracts.webhook_sources import default_webhook_sources
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
@@ -169,7 +169,7 @@ async def _seed_connector_trigger(
             Connector(
                 id=connector_id,
                 title=connector_id.replace("_", " ").title(),
-                kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
+                kinds=[{"kind": "http", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )

@@ -46,7 +46,7 @@ dev = [
   # A package that ships py.typed asserts that its annotations are true, and
   # nothing here had ever checked one. Same floor as lemma-backend.
   "basedpyright>=1.39.9",
-  "ruff>=0.14.8,<0.16",
+  "ruff>=0.14.8,<0.17",
   "pytest>=8.3.0",
   # tests/test_function_runtime_context.py is an async test, and the property it
   # proves -- that per-invocation credentials do not leak between concurrent

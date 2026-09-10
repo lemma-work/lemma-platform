@@ -16,6 +16,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.modules.connectors.domain.connector import AuthProvider, ConnectorKind
+
 from app.modules.connectors.application import connector_operation_use_cases as ucmod
 from app.modules.connectors.application.connector_operation_use_cases import (
     ConnectorOperationUseCases,
@@ -127,7 +129,8 @@ async def test_unauthorized_execution_flags_account_for_reauth(events):
     resolved = ResolvedConnectorExecution(
         connector_id="airtable",
         operation_execution_name="AIRTABLE_LIST_BASES",
-        provider="COMPOSIO",
+        kind=ConnectorKind.COMPOSIO,
+        provider=AuthProvider.COMPOSIO.value,
         third_party_credentials={"connection_id": "ca_x"},
         payload={},
         account_id=account_id,
@@ -205,7 +208,8 @@ async def test_a_provider_failure_on_the_credential_retry_still_trips_the_breake
     resolved = ResolvedConnectorExecution(
         connector_id="airtable",
         operation_execution_name="AIRTABLE_LIST_BASES",
-        provider="COMPOSIO",
+        kind=ConnectorKind.COMPOSIO,
+        provider=AuthProvider.COMPOSIO.value,
         third_party_credentials={"connection_id": "ca_x"},
         payload={},
         account_id=uuid4(),
@@ -269,7 +273,8 @@ async def test_a_rejected_credential_alone_never_trips_the_breaker(monkeypatch):
     resolved = ResolvedConnectorExecution(
         connector_id="airtable",
         operation_execution_name="AIRTABLE_LIST_BASES",
-        provider="COMPOSIO",
+        kind=ConnectorKind.COMPOSIO,
+        provider=AuthProvider.COMPOSIO.value,
         third_party_credentials={"connection_id": "ca_x"},
         payload={},
         account_id=uuid4(),

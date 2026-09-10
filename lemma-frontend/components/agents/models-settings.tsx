@@ -524,8 +524,7 @@ function ProfileRow({
         modelCount ? `${modelCount} model${modelCount === 1 ? '' : 's'}` : null,
     ].filter(Boolean).join(' · ');
 
-    const status = profileStatus(profile)
-        ?? (isHarness ? { label: 'Computer not connected', tone: 'muted' as StatusTone } : null);
+    const status = profileStatus(profile);
 
     return (
         <LedgerRow

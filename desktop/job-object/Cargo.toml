@@ -1,0 +1,19 @@
+[package]
+name = "lemma-job-object"
+version.workspace = true
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "A Windows job object, so a process tree dies with the thing that started it"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"

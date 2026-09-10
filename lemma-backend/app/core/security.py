@@ -21,7 +21,7 @@ from app.core.authorization.delegation import (
 )
 from app.core.authorization.delegation_revocation import is_delegation_revoked
 from app.core.log.log import get_logger
-from app.modules.identity.domain.user_entities import AuthUserEntity
+from app.core.domain.entity import AuthenticatedPrincipal
 from app.core.auth_state_cache import (
     AccountStanding,
     get_account_standing,
@@ -201,7 +201,7 @@ EXCLUDED_PATHS = (
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
     # A paired computer has no user session and never will: it authenticates
     # with its own host secret, which `_authenticated_host` checks on every one
-    # of these routes, and `pairings:complete` is authenticated by the one-time
+    # of these routes, and `pairings/complete` is authenticated by the one-time
     # pairing code it consumes. Requiring a session here 401s the only caller
     # these routes have. The user-facing host routes are under `/me/runtime/...`
     # and stay session-protected.
@@ -333,7 +333,7 @@ async def verify_auth(connection: HTTPConnection):
                     },
                 )
 
-            connection.state.user = AuthUserEntity(id=parsed_user_id)
+            connection.state.user = AuthenticatedPrincipal(id=parsed_user_id)
             connection.state.session = session
             # Cheap for every request that is not from a published app: the
             # header check short-circuits before anything else runs.

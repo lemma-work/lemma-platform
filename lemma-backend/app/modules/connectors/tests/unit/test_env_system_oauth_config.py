@@ -5,7 +5,7 @@ import pytest
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     AuthScheme,
-    LemmaProviderCapability,
+    HttpKindSpec,
     OAuth2Defaults,
 )
 from app.modules.connectors.infrastructure.adapters.env_system_oauth_config import (
@@ -17,7 +17,7 @@ def _native_app(connector_id: str) -> ConnectorEntity:
     """A native app row as stored in the DB: LEMMA capability, no OAuth defaults."""
     return ConnectorEntity(
         id=connector_id,
-        provider_capabilities=[LemmaProviderCapability(auth_scheme=AuthScheme.OAUTH2)],
+        kinds=[HttpKindSpec(auth_scheme=AuthScheme.OAUTH2)],
     )
 
 
@@ -29,7 +29,8 @@ def adapter() -> EnvSystemOAuthConfigAdapter:
 @pytest.mark.parametrize(
     ("connector_id", "expected_api_scope"),
     [
-        ("gmail", "https://www.googleapis.com/auth/gmail.modify"),
+        # Gmail is deliberately absent: it declares its own endpoints and
+        # scopes in lemma_apps_config.json now that it installs as `http`.
         ("google_calendar", "https://www.googleapis.com/auth/calendar"),
         ("google_drive", "https://www.googleapis.com/auth/drive"),
         ("google_docs", "https://www.googleapis.com/auth/documents"),
@@ -65,7 +66,7 @@ def test_resolve_oauth2_defaults_prefers_stored_capability_defaults(
     )
     app = ConnectorEntity(
         id="slack",
-        provider_capabilities=[LemmaProviderCapability(oauth2_defaults=stored)],
+        kinds=[HttpKindSpec(oauth2_defaults=stored)],
     )
 
     defaults = adapter.resolve_oauth2_defaults(app)
@@ -84,7 +85,7 @@ def test_system_default_availability_tracks_env_presence(
     adapter: EnvSystemOAuthConfigAdapter,
     monkeypatch,
 ):
-    app = _native_app("gmail")
+    app = _native_app("google_calendar")
 
     monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
@@ -101,7 +102,7 @@ def test_system_default_availability_tracks_env_presence(
     assert config.client_secret == "sys-client-secret"
     # System client is paired with the registry's Google endpoints/scopes.
     assert config.authorization_url == "https://accounts.google.com/o/oauth2/v2/auth"
-    assert "https://www.googleapis.com/auth/gmail.modify" in config.default_scopes
+    assert "https://www.googleapis.com/auth/calendar" in config.default_scopes
 
 
 def test_unknown_app_has_no_system_default(

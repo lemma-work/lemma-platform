@@ -81,28 +81,70 @@ so the answer comes from GitHub rather than from a list maintained here.
 
 ## Connecting an account
 
-The catalog sends people to the App's **installation** page rather than to
-`login/oauth/authorize`:
+The catalog sends people to `login/oauth/authorize`, not to the App's install
+page. That looks backwards and is not: `/apps/{slug}/installations/new` only
+redirects back on a *first* install. Somebody who already has the App is shown
+the configure page and never round-trips a code — which is every reconnect, and
+every second person in an organisation. Authorizing always round-trips.
 
-    https://github.com/apps/{CONNECTOR_GITHUB_APP_SLUG}/installations/new
+**Authorizing is not installing, and that is the whole difficulty.** A GitHub
+App's user token reaches only the repositories the App is installed on, and
+there is no way around it: `GET /user/repos` is not available to App user tokens
+at all, so the only enumeration that exists is `/user/installations` and the
+repositories under one. An account with no installation therefore holds a valid
+token, for the right person, that can read nothing.
 
-The slug is filled from the environment at request time — it identifies one
-particular App, and there is a different one per environment, so it is
-deployment configuration rather than catalog data. If the variable is unset the
-connector reports itself unconfigured, which is the truth: an unfilled URL is a
-404 with no explanation.
+So a connect can end in four states, and the app is told which:
 
-Authorizing without installing is the failure this avoids. A user token from a
-GitHub App can only reach repositories the App is installed on, so
-`login/oauth/authorize` yields a token that works, belongs to the right person,
-and can see nothing.
+| State | What happened | What finishes it |
+|---|---|---|
+| `READY` | one installation, bound | nothing |
+| `INSTALL_REQUIRED` | authorized, nothing installed | the install link below |
+| `CHOOSE_INSTALL` | several installations reachable | the person picks one |
+| `PENDING_APPROVAL` | `setup_action=request` — an organisation member asked | an owner approves |
 
-Because the manifest sets `request_oauth_on_install`, the install redirects back
-carrying `code`, `installation_id` and `setup_action`. The installation id is
-recorded on the **account**, in `external_ref` — not on the install config,
-which every account under it shares. One Lemma install of the App serves every
-organization that authorized it, and each of those has its own installation; a
-shared field would hand one organization's token to another's account.
+The install link is `https://github.com/apps/{CONNECTOR_GITHUB_APP_SLUG}/installations/new?state=…`,
+minted per use by `POST …/connect-requests/install`. **The `state` is
+load-bearing.** Because the manifest sets `request_oauth_on_install`, installing
+redirects back to the OAuth callback carrying `code`, `installation_id` and
+`setup_action`, and GitHub preserves whatever `state` the link carried. Without
+one the callback has no request to claim and rejects the only redirect that ever
+names the installation — which is exactly how this flow used to dead-end.
+
+That second leg has no PKCE: GitHub builds its authorize step itself, so there
+is nowhere to put a challenge. It is bound by identity instead — the follow-up
+request records which provider account is expected, and a code exchanged for
+anybody else is refused. See `followup_attributes`.
+
+The `installation_id` on the callback is never trusted as given. GitHub warns it
+can be spoofed, and `external_ref` is the inbound routing key, so it is proved
+with `GET /user/installations/{id}/repositories` under the token that just came
+back before it is stored.
+
+### Changes made on GitHub, seen without a reconnect
+
+Nothing comes back when an organisation owner approves a request hours later,
+and **nothing at all** when somebody edits an installation's repository list:
+the manifest sets `setup_on_update: false`, and because `request_oauth_on_install`
+is on the Setup URL field is disabled outright, so there is no URL for an update
+to fire at even if it were flipped. There is no API to change repository access
+with either — the endpoints that add or remove a repository from an installation
+take a classic personal access token and nothing else.
+
+So freshness does not rest on redirects. `GithubInstallationReconciler` asks
+`GET /user/installations` with the account's own token whenever there is
+something to learn: at the end of a callback, when the connectors page finds an
+unbound account, and on an explicit refresh. A bound account costs no call.
+Webhooks stay worth having as an accelerant; a dropped delivery costs freshness,
+never correctness.
+
+### What the App cannot do
+
+Create a repository. `POST /user/repos` needs the OAuth `repo` scope and App
+user tokens carry no scopes; GitHub marks the route unavailable to installations
+as well. Neither identity can call it. Pod publish therefore requires the
+repository to exist — `owner/name` to target an organisation — and says so when
+it cannot reach one, rather than failing on a create that could never succeed.
 
 ## Reconnecting after the cutover
 

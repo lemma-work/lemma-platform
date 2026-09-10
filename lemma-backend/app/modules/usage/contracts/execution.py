@@ -21,6 +21,7 @@ from app.modules.usage.services.pydantic_ai_tracking import (
 )
 from app.modules.usage.services.usage_context import (
     UsageExecutionContext,
+    current_usage_context,
     usage_context_from_agent_context,
     usage_execution_context,
 )
@@ -28,10 +29,14 @@ from app.modules.usage.services.usage_service import (
     UsageService,
     assert_system_pricing_covers_catalog,
 )
+from app.modules.usage.services.usage_limit_provider import (
+    usage_limits_are_possible,
+)
 from app.modules.usage.services.usage_service_factory import build_usage_service
 
 __all__ = [
     "UsageExecutionContext",
+    "current_usage_context",
     "UsageService",
     "assert_system_pricing_covers_catalog",
     "build_usage_service",
@@ -39,4 +44,17 @@ __all__ = [
     "reserve_usage_for_runtime",
     "usage_context_from_agent_context",
     "usage_execution_context",
+    "unpriced_limit_policy",
+    "usage_limits_are_possible",
 ]
+
+
+def unpriced_limit_policy() -> str:
+    """What this deployment does with a limit it cannot measure.
+
+    A function rather than the settings object: what a caller outside usage
+    needs is the decision, not the shape of the module's configuration.
+    """
+    from app.modules.usage.config import usage_settings
+
+    return usage_settings.usage_unpriced_limit_policy

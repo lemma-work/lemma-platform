@@ -28,20 +28,41 @@ from app.core.infrastructure.jobs import streaq_runtime
 from app.core.infrastructure.jobs.streaq_runtime import (
     LANE_WORKERS,
     Lane,
-    _install_task_dump_handler,
     lane_for_task,
     lane_queue_name,
 )
+from app.core.infrastructure.jobs.task_dump import install_task_dump_handler
 from app.standalone import build_standalone_app
 
 
+class _FakeNoCronRedis:
+    """A Redis that answers "no crons", which is what a clean queue looks like."""
+
+    async def zrange(self, *_args, **_kwargs):
+        return ()
+
+    async def hkeys(self, *_args, **_kwargs):
+        return ()
+
+
 class _FakeLaneWorker:
-    """Stands in for a streaq Worker without touching Redis."""
+    """Stands in for a streaq Worker without touching Redis.
+
+    The cron keys and registry are part of that shape, not decoration: starting
+    a lane sweeps cron schedules whose function no longer exists, and a double
+    that lacks them would have this suite certify a startup path that cannot
+    run.
+    """
 
     def __init__(self, queue_name: str) -> None:
         self.queue_name = queue_name
         self.handle_signals = True
         self.signal_handler = None
+        self.registry: dict[str, object] = {}
+        self.redis = _FakeNoCronRedis()
+        self.cron_schedule_key = f"streaq:{queue_name}:cron:schedule"
+        self.cron_registry_key = f"streaq:{queue_name}:cron:jobs"
+        self.cron_data_key = f"streaq:{queue_name}:cron:data:"
 
     async def run_async(self, *, task_status=TASK_STATUS_IGNORED) -> None:
         _CONSUMED.append(self.queue_name)
@@ -128,4 +149,4 @@ async def test_task_dump_handler_survives_a_platform_without_sigquit(monkeypatch
     unguarded code the first time it was written.
     """
     monkeypatch.delattr(signal, "SIGQUIT", raising=False)
-    _install_task_dump_handler()  # must not raise
+    install_task_dump_handler()  # must not raise

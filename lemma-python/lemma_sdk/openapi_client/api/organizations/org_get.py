@@ -13,13 +13,13 @@ from ...types import Response
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/organizations/{org_id}".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}".format(
+            organization_id=quote(str(organization_id), safe=""),
         ),
     }
 
@@ -57,7 +57,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | OrganizationResponse]:
@@ -66,7 +66,7 @@ def sync_detailed(
      Get organization details
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -77,7 +77,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
     )
 
     response = client.get_httpx_client().request(
@@ -88,7 +88,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | OrganizationResponse | None:
@@ -97,7 +97,7 @@ def sync(
      Get organization details
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -108,13 +108,13 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         client=client,
     ).parsed
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[ErrorResponse | OrganizationResponse]:
@@ -123,7 +123,7 @@ async def asyncio_detailed(
      Get organization details
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -134,7 +134,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -143,7 +143,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
 ) -> ErrorResponse | OrganizationResponse | None:
@@ -152,7 +152,7 @@ async def asyncio(
      Get organization details
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -164,7 +164,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             client=client,
         )
     ).parsed

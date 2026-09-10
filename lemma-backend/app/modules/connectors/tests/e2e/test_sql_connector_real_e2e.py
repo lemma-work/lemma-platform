@@ -397,11 +397,7 @@ class TestThroughTheDispatcher:
     async def test_sql_kind_executes_end_to_end(self, connection_config, credentials):
         from unittest.mock import AsyncMock
 
-        dispatcher = KindDispatcher(
-            build_kind_registry(
-                composio_gateway=AsyncMock(), package_gateway=AsyncMock()
-            )
-        )
+        dispatcher = KindDispatcher(build_kind_registry(composio_gateway=AsyncMock()))
         request = dispatcher.build_request(
             connector_id="sql",
             kind=ConnectorKind.SQL,

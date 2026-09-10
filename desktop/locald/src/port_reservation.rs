@@ -6,11 +6,17 @@
 //! socket and is released explicitly at the handoff, so the window shrinks to
 //! the single step that genuinely needs the port free.
 //!
-//! A reservation is bound but never listening. A connection that arrives while
-//! one is held is refused exactly as it would be against an idle port, rather
-//! than accepted by a socket that is about to vanish; callers that gate on
-//! "can I connect yet?" therefore keep seeing the answer they would have seen
-//! if the reservation did not exist.
+//! A reservation is bound but never listening, so a connection that arrives
+//! while one is held is not accepted -- which is the property that matters.
+//! Callers gating on "can I connect yet?" keep seeing the answer they would
+//! have seen against an idle port, rather than a handshake completed by a
+//! socket that will never answer.
+//!
+//! How the refusal arrives is the platform's choice, and it is not the same
+//! everywhere: Windows resets, and macOS drops the SYN so the caller sees a
+//! timeout instead. This used to say "refused exactly as it would be against
+//! an idle port", which is what a test asserting `ConnectionRefused` on macOS
+//! turned out to disprove.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};

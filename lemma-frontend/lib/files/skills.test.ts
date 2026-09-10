@@ -8,6 +8,7 @@ import {
     isSkillsRootPath,
     readSkillManifest,
     skillManifestPath,
+    splitSkillDescription,
     skillNameFromPath,
     suggestSkillName,
     validateSkillName,
@@ -102,5 +103,58 @@ describe('buildSkillScaffold', () => {
         const content = buildSkillScaffold('weekly-report', 'Summarize the week: every Monday');
 
         expect(readSkillManifest(content, 'weekly-report').problem).toBeNull();
+    });
+});
+
+describe('splitSkillDescription', () => {
+    it('separates what a skill does from when it loads', () => {
+        const parts = splitSkillDescription(
+            'Test and verify Lemma pod apps through real end-to-end user journeys. '
+            + 'Use when asked to QA, dogfood, or verify a Lemma app. '
+            + 'Use the browser skill for browser command mechanics.'
+        );
+
+        expect(parts.summary).toBe('Test and verify Lemma pod apps through real end-to-end user journeys.');
+        expect(parts.trigger).toBe('Use when asked to QA, dogfood, or verify a Lemma app.');
+    });
+
+    it('drops the routing note that sends you to a neighbouring skill', () => {
+        const parts = splitSkillDescription(
+            'Design and build complete Lemma pods. Use for pod design and import/export. '
+            + 'Do not use for day-to-day operation; use lemma-user instead.'
+        );
+
+        expect(parts.trigger).toBe('Use for pod design and import/export.');
+        expect(parts.summary).not.toContain('Do not use');
+    });
+
+    it('does not mistake a filename for the end of a sentence', () => {
+        const parts = splitSkillDescription(
+            'Design Lemma pod apps. Use when defining DESIGN.md, choosing a visual direction, or polishing an app.'
+        );
+
+        expect(parts.trigger).toBe('Use when defining DESIGN.md, choosing a visual direction, or polishing an app.');
+    });
+
+    it('leaves a description with no trigger clause whole', () => {
+        const parts = splitSkillDescription('Summarize the week every Monday.');
+
+        expect(parts).toEqual({ summary: 'Summarize the week every Monday.', trigger: '' });
+    });
+
+    it('keeps a description that is nothing but a trigger as the summary', () => {
+        const parts = splitSkillDescription('Use when the week needs summarizing.');
+
+        expect(parts.summary).toBe('Use when the week needs summarizing.');
+        expect(parts.trigger).toBe('');
+    });
+
+    it('reads a pointer at a neighbouring skill as a boundary, not a trigger', () => {
+        const parts = splitSkillDescription(
+            'Operate a real browser in a Lemma workspace. Use lemma-app-qa alongside it for release judgment.'
+        );
+
+        expect(parts.summary).toBe('Operate a real browser in a Lemma workspace.');
+        expect(parts.trigger).toBe('');
     });
 });

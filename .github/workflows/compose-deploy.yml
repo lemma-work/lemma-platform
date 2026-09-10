@@ -1,0 +1,239 @@
+name: Compose deployment
+
+# Does the self-hosted compose stack still install and serve?
+#
+# On releases, not on pull requests. The stack it exercises is built from
+# published images pinned by digest in the release manifest, so before a release
+# exists there is nothing to test — and a per-PR run would pull 1.5 GB of images
+# to tell us something about the *previous* release either way.
+#
+# This exists because the thing it guards is exactly the kind that rots quietly.
+# `lemma-backend/nginx.conf` sat in the tree for months describing a compose
+# service no compose file defined, and nothing noticed, because nothing ran it.
+#
+# A failure here means somebody following docs/self-hosting.md today gets a
+# stack that does not come up. It reaches Slack through notify-failure.yml.
+#
+# To exercise a merge to main before anything is tagged — two manual dispatches,
+# because images are built when somebody asks for them, not on every push:
+#
+#   1. Run "Release Local Stack Images" from main with **publish unchecked**.
+#      It pushes images to GHCR and keeps the manifest naming them as an
+#      artifact for 14 days.
+#   2. Run this workflow with **images_run_id** set to that run's id.
+#
+# That installs the images that run built rather than the last release, so the
+# scenario suite in the checkout and the API it is pointed at are the same
+# commit. Against a published release they are the same by construction; against
+# an older release they are not, and the suite fails on routes the image
+# predates.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published release to install (e.g. 0.8.0). Defaults to the latest."
+        required: false
+        type: string
+      images_run_id:
+        description: >-
+          Test images that are not a release yet: the run id of a
+          "Release Local Stack Images" dispatch with publish unchecked. Its
+          lemma-local.json is used instead of a published release, so this
+          installs exactly the images that run built. Takes precedence over
+          version. Usable for a fortnight after that build; the images and the
+          bundle artifact both last that long.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  # Reading the manifest artifact off another workflow run, and pulling the
+  # images it names.
+  actions: read
+  packages: read
+
+concurrency:
+  group: compose-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Install and smoke test
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # The workspace sandbox image alone is 2.5 GB, and a stock runner has
+      # about 14 GB free. The preinstalled Android SDK, .NET and GHC are ~20 GB
+      # of things nothing here uses.
+      - name: Make room for the images
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      # Only when testing images that are not a release yet. A branch-test
+      # dispatch of "Release Local Stack Images" pushes its images to GHCR and
+      # keeps the manifest naming them as an artifact for 14 days; this is how
+      # a merge to main gets exercised end to end before anything is tagged.
+      - name: Fetch the manifest for those images
+        if: inputs.images_run_id != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.images_run_id }}
+        run: |
+          set -euo pipefail
+          # Two artifacts match a loose `lemma-local-test-*`: the manifest on
+          # its own (a few KB, kept a day) and the full runtime bundle that also
+          # carries the host packs and guest runtimes (1.1 GB, kept a fortnight).
+          # Only the JSON is wanted, so ask for it by name and fall back to the
+          # bundle once the small one has expired.
+          gh run download "$RUN_ID" --pattern 'lemma-local-test-manifest-*' \
+            --dir /tmp/manifest 2>/dev/null ||
+            gh run download "$RUN_ID" --pattern 'lemma-local-test-*' --dir /tmp/manifest
+          found="$(find /tmp/manifest -name lemma-local.json -print -quit)"
+          test -n "$found" || {
+            echo "run $RUN_ID has no lemma-local.json artifact. It has to be a" >&2
+            echo "'Release Local Stack Images' dispatch run with publish off." >&2
+            exit 1
+          }
+          cp "$found" /tmp/lemma-local.json
+          python3 -c "import json;m=json.load(open('/tmp/lemma-local.json'));print('manifest version', m['version'])"
+          # The images are in this repository's registry; released ones are
+          # public but a branch-test tag need not be.
+          echo "${{ secrets.GITHUB_TOKEN }}" |
+            docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Bootstrap
+        working-directory: deploy/compose
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          IMAGES_RUN_ID: ${{ inputs.images_run_id }}
+        run: |
+          # 127.0.0.1.sslip.io resolves to loopback, so the runner reaches the
+          # stack on the same hostnames a real deployment uses — including the
+          # app subdomains, which is the half a plain localhost test misses.
+          if [ -n "$IMAGES_RUN_ID" ]; then
+            ./bootstrap.sh --domain 127.0.0.1.sslip.io --manifest /tmp/lemma-local.json
+          elif [ -n "$VERSION" ]; then
+            ./bootstrap.sh --domain 127.0.0.1.sslip.io --version "$VERSION"
+          else
+            ./bootstrap.sh --domain 127.0.0.1.sslip.io
+          fi
+
+          # Nothing is weakened here, and the sign-up scenarios skip as a
+          # result. That is correct rather than unfortunate: `/health/capabilities`
+          # reports a deployment's security posture only in local mode, on the
+          # principle that a deployment on the internet should not answer a
+          # stranger asking which of its abuse controls are off. The suite reads
+          # that endpoint to decide what it can prove, so against a `production`
+          # target it cannot confirm the gates are down and declines to try.
+          # Turning them off in .env would therefore make this deployment less
+          # like a real one and buy no extra coverage.
+
+          sed -E 's/^(POSTGRES_PASSWORD|SECRET_ENCRYPTION_KEY|WORKSPACE_RUNTIME_CREDENTIAL_KEY)=.*/\1=<generated>/' .env
+
+      - name: Start the stack
+        working-directory: deploy/compose
+        shell: bash
+        run: docker compose up -d --wait --wait-timeout 900
+
+      - name: It serves
+        working-directory: deploy/compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Caddy's own CA by default, so the suite and curl need its root.
+          #
+          # Appended to the system bundle, not used instead of it. SSL_CERT_FILE
+          # replaces the trust store outright for every child process, and the
+          # suite shells out to `uv` — which then cannot verify pypi.org and
+          # fails to build the CLI it is trying to test. Measured: four client
+          # conformance scenarios failing with `invalid peer certificate:
+          # UnknownIssuer`, none of them about Lemma.
+          docker compose exec -T caddy \
+            cat /data/caddy/pki/authorities/local/root.crt >"$RUNNER_TEMP/caddy-root.crt"
+          cat /etc/ssl/certs/ca-certificates.crt "$RUNNER_TEMP/caddy-root.crt" \
+            >"$RUNNER_TEMP/ca-bundle.crt"
+
+          check() {
+            printf '%-46s' "$1"
+            code="$(curl -sS --cacert "$RUNNER_TEMP/caddy-root.crt" \
+                      -o /dev/null -w '%{http_code}' --max-time 30 "$2")"
+            echo "$code"
+            [ "$code" = "$3" ] || { echo "expected $3"; exit 1; }
+          }
+
+          check "API readiness"          https://127.0.0.1.sslip.io:8443/health/ready 200
+          check "UI"                     https://127.0.0.1.sslip.io/ 200
+          # A hostname under the apps domain has to reach the backend's app
+          # routing and be told the app does not exist — not reach the UI, and
+          # not fail TLS. That is the whole pod-app ingress path in one request.
+          check "app subdomain routing"  https://nosuchapp.apps.127.0.0.1.sslip.io/ 404
+
+          # Migrations ran as their own container and succeeded.
+          test "$(docker compose ps -a --format '{{.Service}} {{.ExitCode}}' \
+                  | awk '$1 == "migrate" {print $2}')" = "0"
+
+          # Sandboxes must not be able to reach the database. This is a claim
+          # docs/self-hosting.md makes, so it is a claim worth a test.
+          docker run --rm --network lemma-sandbox busybox:stable \
+            nc -z -w 3 api 8000
+          if docker run --rm --network lemma-sandbox busybox:stable \
+               nc -z -w 3 db 5432; then
+            echo "the sandbox network can reach Postgres; it must not" >&2
+            exit 1
+          fi
+
+      - name: Product scenarios against the deployment
+        working-directory: tests/scenarios
+        shell: bash
+        env:
+          SSL_CERT_FILE: ${{ runner.temp }}/ca-bundle.crt
+          REQUESTS_CA_BUNDLE: ${{ runner.temp }}/ca-bundle.crt
+          # A fresh deployment has no cast, which is the one case where making
+          # one is right. Against a deployment that already has one this guard
+          # is what stops a second, parallel cast being created.
+          SCENARIOS_ALLOW_NEW_CAST: "1"
+          # The stack really is ENVIRONMENT=production — that is the point of
+          # testing it. The suite refuses a production target by default so a
+          # mistyped host cannot write into somebody's real deployment; here the
+          # target was created two steps ago and is destroyed two steps later.
+          SCENARIOS_ALLOW_PRODUCTION: "1"
+        run: |
+          set -euo pipefail
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+
+          # Provisioning is itself the test: it registers five people, signs
+          # them in, and builds an organization and its pods over real HTTP.
+          # Nothing in it needs a model, so it runs on every release.
+          uv run python -m harness.provision --base-url https://127.0.0.1.sslip.io:8443
+
+      - name: What went wrong
+        if: failure()
+        working-directory: deploy/compose
+        shell: bash
+        run: |
+          docker compose ps -a
+          for service in migrate sandbox-images api worker caddy frontend supertokens db; do
+            echo "::group::$service"
+            docker compose logs --tail=200 "$service" || true
+            echo "::endgroup::"
+          done
+
+      - name: Stop
+        if: always()
+        working-directory: deploy/compose
+        shell: bash
+        run: docker compose down -v || true

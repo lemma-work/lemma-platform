@@ -10,6 +10,9 @@ import type { FunctionListResponse } from '../models/FunctionListResponse.js';
 import type { FunctionMessageResponse } from '../models/FunctionMessageResponse.js';
 import type { FunctionPermissionsReplaceRequest } from '../models/FunctionPermissionsReplaceRequest.js';
 import type { FunctionPermissionsResponse } from '../models/FunctionPermissionsResponse.js';
+import type { FunctionRevisionListResponse } from '../models/FunctionRevisionListResponse.js';
+import type { FunctionRevisionPromoteResponse } from '../models/FunctionRevisionPromoteResponse.js';
+import type { FunctionRevisionResponse } from '../models/FunctionRevisionResponse.js';
 import type { FunctionRunListResponse } from '../models/FunctionRunListResponse.js';
 import type { FunctionRunResponse } from '../models/FunctionRunResponse.js';
 import type { UpdateFunctionRequest } from '../models/UpdateFunctionRequest.js';
@@ -197,6 +200,84 @@ export class FunctionsService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List Function Revisions
+     * List the built revisions of a function, newest first.
+     * @param podId
+     * @param functionName
+     * @returns FunctionRevisionListResponse Successful Response
+     * @throws ApiError
+     */
+    public static functionRevisionList(
+        podId: string,
+        functionName: string,
+    ): CancelablePromise<FunctionRevisionListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/functions/{function_name}/revisions',
+            path: {
+                'pod_id': podId,
+                'function_name': functionName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Function Revision
+     * Read one revision, including its source and the schemas its code implements. A revision may be addressed by number ('r12') or hash.
+     * @param podId
+     * @param functionName
+     * @param revisionRef
+     * @returns FunctionRevisionResponse Successful Response
+     * @throws ApiError
+     */
+    public static functionRevisionGet(
+        podId: string,
+        functionName: string,
+        revisionRef: string,
+    ): CancelablePromise<FunctionRevisionResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}',
+            path: {
+                'pod_id': podId,
+                'function_name': functionName,
+                'revision_ref': revisionRef,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Promote Function Revision
+     * Make an existing revision the live one. Its input/output/config schemas are restored with it, since they are the contract its code implements.
+     * @param podId
+     * @param functionName
+     * @param revisionRef
+     * @returns FunctionRevisionPromoteResponse Successful Response
+     * @throws ApiError
+     */
+    public static functionRevisionPromote(
+        podId: string,
+        functionName: string,
+        revisionRef: string,
+    ): CancelablePromise<FunctionRevisionPromoteResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote',
+            path: {
+                'pod_id': podId,
+                'function_name': functionName,
+                'revision_ref': revisionRef,
+            },
             errors: {
                 422: `Validation Error`,
             },

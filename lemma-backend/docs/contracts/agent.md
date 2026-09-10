@@ -25,11 +25,11 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.create` | POST | `/pods/{pod_id}/agents` | Create Agent |
 | `agent.delete` | DELETE | `/pods/{pod_id}/agents/{agent_name}` | Delete Agent |
 | `agent.get` | GET | `/pods/{pod_id}/agents/{agent_name}` | Get Agent |
-| `agent.host.events.append` | POST | `/agent-host/events:append` | Append Agent Host Events |
+| `agent.host.events.append` | POST | `/agent-host/events/append` | Append Agent Host Events |
 | `agent.host.harnesses.list` | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | List Agent Host Harnesses |
 | `agent.host.harnesses.publish` | PUT | `/agent-host/harnesses` | Publish Agent Host Harnesses |
 | `agent.host.list` | GET | `/me/runtime/agent-hosts` | List Agent Hosts |
-| `agent.host.pairing.complete` | POST | `/agent-host/pairings:complete` | Complete Agent Host Pairing |
+| `agent.host.pairing.complete` | POST | `/agent-host/pairings/complete` | Complete Agent Host Pairing |
 | `agent.host.pairing.create` | POST | `/me/runtime/agent-host-pairings` | Create Agent Host Pairing |
 | `agent.host.poll` | POST | `/agent-host/poll` | Poll Agent Host Commands |
 | `agent.host.revoke` | DELETE | `/me/runtime/agent-hosts/{host_id}` | Revoke Agent Host |
@@ -37,12 +37,12 @@ The table below is generated from the committed OpenAPI specification by `script
 | `agent.list` | GET | `/pods/{pod_id}/agents` | List Agents |
 | `agent.permissions.get` | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | Get Agent Resource Permissions |
 | `agent.permissions.replace` | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | Replace Agent Resource Permissions |
-| `agent.runtime.profiles.archive` | DELETE | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | Archive Agent Runtime Profile |
-| `agent.runtime.profiles.create` | POST | `/organizations/{org_id}/agent-runtime/profiles` | Create Agent Runtime Profile |
-| `agent.runtime.profiles.get` | GET | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | Get Agent Runtime Profile |
-| `agent.runtime.profiles.list` | GET | `/organizations/{org_id}/agent-runtime/profiles` | List Available Agent Runtime Profiles |
-| `agent.runtime.profiles.restore` | POST | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore` | Restore Agent Runtime Profile |
-| `agent.runtime.profiles.update` | PATCH | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | Update Agent Runtime Profile |
+| `agent.runtime.profiles.archive` | DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Archive Agent Runtime Profile |
+| `agent.runtime.profiles.create` | POST | `/organizations/{organization_id}/agent-runtime/profiles` | Create Agent Runtime Profile |
+| `agent.runtime.profiles.get` | GET | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Get Agent Runtime Profile |
+| `agent.runtime.profiles.list` | GET | `/organizations/{organization_id}/agent-runtime/profiles` | List Available Agent Runtime Profiles |
+| `agent.runtime.profiles.restore` | POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore` | Restore Agent Runtime Profile |
+| `agent.runtime.profiles.update` | PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | Update Agent Runtime Profile |
 | `agent.tool.report_feedback` | POST | `/tools/report-feedback` | Agent Report Feedback |
 | `agent.tool.web_search` | POST | `/tools/web-search` | Agent Web Search |
 | `agent.update` | PATCH | `/pods/{pod_id}/agents/{agent_name}` | Update Agent |

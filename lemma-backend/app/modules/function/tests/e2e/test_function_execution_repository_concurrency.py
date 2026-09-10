@@ -7,6 +7,9 @@ from uuid import UUID, uuid7
 import pytest
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.modules.function.application.runtime_policy import (
+    FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
+)
 from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenKey,
 )
@@ -325,3 +328,62 @@ async def test_running_job_receives_callback_grace_before_reconciliation(
             )
             == 1
         )
+
+
+async def test_a_freshly_created_async_run_is_not_republished_as_unqueued(
+    db_manager,
+    test_pod,
+    fixed_test_user,
+) -> None:
+    """The recovery sweep must not compete with a dispatch already under way.
+
+    Queue publication happens after the creating unit of work closes, so every
+    asynchronous run spends a moment PENDING with a ``job_id`` and no queue
+    entry -- indistinguishable, to a sweep with no age floor, from one whose
+    publication was lost. Picking such a run up starts a second dispatcher for
+    it, and only one of the two can win the PENDING -> RUNNING transition; the
+    loser goes on waiting for a run it no longer owns. That is what made
+    ``test_api_and_job_execute_through_one_per_pod_docker_sandbox`` fail
+    intermittently against the session-scoped worker.
+    """
+
+    pod_id = UUID(test_pod["id"])
+    user_id = UUID(fixed_test_user["id"])
+    async with db_manager.session_factory() as session:
+        run_id = await _seed_run(
+            session,
+            pod_id=pod_id,
+            user_id=user_id,
+            # Well past the age floor, so advancing the clock past that floor
+            # below does not also expire the run and take it out of the result
+            # for the wrong reason.
+            deadline_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            job=True,
+        )
+        # Both assertions are anchored on the row's own ``created_at`` rather
+        # than on a clock read before seeding. ``created_at`` is assigned at
+        # flush, so a wall-clock anchor is only correct while seeding stays
+        # faster than the margin the second assertion leaves -- and this is the
+        # first database touch in the test, so on a loaded runner it is the
+        # slowest. Anchoring here removes the margin instead of widening it,
+        # and lands the second query exactly on the ``<=`` boundary, which is
+        # the edge worth asserting.
+        seeded = await session.get(FunctionRunModel, run_id)
+        assert seeded is not None
+        created_at = seeded.created_at
+
+    floor = timedelta(seconds=FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS)
+    factory = SessionUnitOfWorkFactory(db_manager.session_factory)
+    async with factory() as uow:
+        assert (
+            await FunctionRunRepository(uow).list_pending_async_runs(
+                now=created_at,
+                min_age_seconds=FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
+            )
+            == []
+        )
+    async with factory() as uow:
+        assert await FunctionRunRepository(uow).list_pending_async_runs(
+            now=created_at + floor,
+            min_age_seconds=FUNCTION_RUN_REPUBLISH_MIN_AGE_SECONDS,
+        ) == [run_id]

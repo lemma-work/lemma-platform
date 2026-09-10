@@ -2,6 +2,7 @@ import pytest
 from uuid import UUID, uuid4
 from types import SimpleNamespace
 
+from app.modules.agent.config import agent_settings
 from app.modules.agent.defaults import default_agent_runtime_profile_id
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
@@ -359,8 +360,10 @@ async def test_runtime_lists_configured_system_org_and_owned_personal_profiles(
     monkeypatch.setattr(settings, "environment", "development")
     monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
     # The system model profile has no built-in model default; configure one.
-    monkeypatch.setattr(settings, "lemma_openai_model_names", "gpt-4o,gpt-4o-mini")
-    monkeypatch.setattr(settings, "lemma_openai_default_model", "gpt-4o")
+    monkeypatch.setattr(
+        agent_settings, "lemma_openai_model_names", "gpt-4o,gpt-4o-mini"
+    )
+    monkeypatch.setattr(agent_settings, "lemma_openai_default_model", "gpt-4o")
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
@@ -442,7 +445,7 @@ def test_system_runtime_profiles_return_empty_without_server_credentials(monkeyp
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "lemma_openai_api_key", None)
-    monkeypatch.setattr(settings, "lemma_anthropic_api_key", None)
+    monkeypatch.setattr(agent_settings, "lemma_anthropic_api_key", None)
     monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LEMMA_ANTHROPIC_API_KEY", raising=False)
@@ -468,9 +471,9 @@ def test_system_runtime_profiles_only_include_configured_system_lemma(monkeypatc
     monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
     monkeypatch.delenv("LEMMA_OPENAI_VISION_MODEL_NAMES", raising=False)
     monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
-    monkeypatch.setattr(settings, "lemma_openai_default_model", "model-fast")
+    monkeypatch.setattr(agent_settings, "lemma_openai_default_model", "model-fast")
     monkeypatch.setattr(
-        settings,
+        agent_settings,
         "lemma_openai_model_names",
         "model-fast,model-pro,model-vision",
     )
@@ -523,13 +526,13 @@ def test_system_openai_catalog_declares_vision_per_model(monkeypatch):
     monkeypatch.delenv("LEMMA_OPENAI_VISION_MODEL_NAMES", raising=False)
     monkeypatch.setattr(settings, "lemma_openai_api_key", "lemma-secret")
     monkeypatch.setattr(
-        settings,
+        agent_settings,
         "lemma_openai_model_names",
         "model-vision-a,model-text-a,model-vision-b,model-text-b",
     )
-    monkeypatch.setattr(settings, "lemma_openai_default_model", "model-vision-a")
+    monkeypatch.setattr(agent_settings, "lemma_openai_default_model", "model-vision-a")
     monkeypatch.setattr(
-        settings,
+        agent_settings,
         "lemma_openai_vision_model_names",
         "model-vision-a,model-vision-b",
     )
@@ -1115,7 +1118,10 @@ def test_lemma_harness_builds_dynamic_openai_compatible_model():
     # that the OpenAI-compatible protocol picked an OpenAI chat model at all.
     from pydantic_ai.models.openai import OpenAIChatModel
 
-    assert isinstance(model, OpenAIChatModel)
+    from app.modules.usage.infrastructure.metered_model import MeteredModel
+
+    assert isinstance(model, MeteredModel)
+    assert isinstance(model.wrapped, OpenAIChatModel)
 
 
 def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
@@ -1133,7 +1139,10 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
     )
 
     assert model is not None
-    assert type(model).__name__ == "AnthropicModel"
+    from app.modules.usage.infrastructure.metered_model import MeteredModel
+
+    assert isinstance(model, MeteredModel)
+    assert type(model.wrapped).__name__ == "AnthropicModel"
 
 
 def test_default_runtime_uses_system_profile(monkeypatch, tmp_path):

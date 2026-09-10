@@ -4,13 +4,16 @@ from dataclasses import dataclass
 from typing import Any, Iterable, TypeVar
 from urllib.parse import urlparse
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceEventMode,
     SurfacePlatform,
+)
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    PLATFORM_CAPABILITIES,
 )
 
 # Hosts that are not publicly reachable for inbound webhook delivery.
@@ -242,7 +245,14 @@ def channel_author_label(
     return f"{who} (other participant)"
 
 
-_EMAIL_PLATFORMS = {"RESEND"}
+# Derived from the capability registry rather than hand-maintained. A literal
+# set here is what let Resend fall through this check after it shipped as a full
+# `is_email=True` platform, and the next email platform would repeat it: the
+# instruction below is the only thing telling the agent it gets one send, so a
+# platform missing from this set narrates progress into somebody's inbox.
+_EMAIL_PLATFORMS = {
+    caps.platform for caps in PLATFORM_CAPABILITIES.values() if caps.is_email
+}
 
 
 def email_reply_instruction(platform: str) -> str | None:
@@ -326,7 +336,7 @@ def _normalize_attachments(
         elif isinstance(raw, dict):
             try:
                 attachment = SurfaceFileAttachment.model_validate(raw)
-            except Exception:
+            except ValidationError:
                 continue
         else:
             continue

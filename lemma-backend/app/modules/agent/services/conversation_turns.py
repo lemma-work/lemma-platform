@@ -21,7 +21,6 @@ from uuid import UUID
 from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.composition.agent_snooze_scheduler import cancel_snooze_wake
 from app.modules.usage.contracts import UsageLimitExceededError
 from app.modules.usage.contracts.execution import UsageService
 from app.modules.agent.domain.entities import Conversation, Message
@@ -413,8 +412,11 @@ class TurnCoordinator:
                 note_to_self=(wait.spec or {}).get("note_to_self"),
             ),
         )
-        if wait.external_ref:
-            await cancel_snooze_wake(wait.external_ref)
+        # Nothing to cancel. The wait row is the timer: the poller's due query
+        # filters on ACTIVE, and `find_active_by_external_ref` ignores anything
+        # that is not, so completing the wait above is what stops it firing.
+        # This used to call through `app/composition/agent_snooze_scheduler.py`,
+        # whose `cancel_snooze_wake` had already been reduced to `del timer_id`.
 
     async def _deny_unresolved_pauses(
         self, *, conversation: Conversation, user_id: UUID

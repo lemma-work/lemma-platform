@@ -30,7 +30,7 @@ pytestmark = pytest.mark.unit
 def _github() -> ConnectorEntity:
     return ConnectorEntity(
         id="github",
-        provider_capabilities=[
+        kinds=[
             HttpKindSpec(
                 auth_scheme=AuthScheme.OAUTH2,
                 oauth2_defaults=OAuth2Defaults(

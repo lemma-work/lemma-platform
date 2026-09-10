@@ -14,8 +14,15 @@ present in this branch's git history. It is a vendor doc full of
 realistic-looking example secret values (fake access_token/client_secret/
 webhook_secret strings used purely to illustrate schema shape), not real
 leaked credentials. Path-allowlisted rather than purged from history.
+
+Both paths are listed on purpose. The specs moved out of the vendored
+lemma-connectors tree to lemma-backend/openapi_specs/, so the new path is what
+the scheduled --no-git tree scan can meet on a machine that has fetched the
+file; the old path is what the commit-range scan still meets in history, and
+it stays whatever happens to the working tree.
 '''
 paths = [
+  '''lemma-backend/openapi_specs/github\.json''',
   '''lemma-backend/lemma-connectors/openapi_specs/github\.json''',
 ]
 

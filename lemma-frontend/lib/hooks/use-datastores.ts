@@ -139,7 +139,7 @@ export function normalizeTable(raw: Record<string, unknown>): Table {
         : [];
 
     return {
-        name: String(raw.name || raw.name || ''),
+        name: String(raw.name || ''),
         primary_key_column: String(raw.primary_key_column || 'id'),
         columns,
         visibility: raw.visibility as Table['visibility'],

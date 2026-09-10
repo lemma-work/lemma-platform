@@ -23,7 +23,10 @@ import json
 import pytest
 from pydantic_ai.exceptions import UsageLimitExceeded as PydanticAIUsageLimitExceeded
 
-from app.composition.schedule_filter import _MAX_EVENT_CHARS, SystemModelScheduleFilter
+from app.modules.schedule.infrastructure.adapters.system_model_filter import (
+    _MAX_EVENT_CHARS,
+    SystemModelScheduleFilter,
+)
 from app.modules.usage.contracts import UsageLimitExceededError
 
 pytestmark = pytest.mark.unit

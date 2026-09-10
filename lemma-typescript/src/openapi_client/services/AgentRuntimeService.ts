@@ -17,20 +17,20 @@ import { request as __request } from '../core/request.js';
 export class AgentRuntimeService {
     /**
      * List Available Agent Runtime Profiles
-     * @param orgId
+     * @param organizationId
      * @param includeDisabled
      * @returns AgentRuntimeProfileListResponse Successful Response
      * @throws ApiError
      */
     public static agentRuntimeProfilesList(
-        orgId: string,
+        organizationId: string,
         includeDisabled: boolean = false,
     ): CancelablePromise<AgentRuntimeProfileListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/organizations/{org_id}/agent-runtime/profiles',
+            url: '/organizations/{organization_id}/agent-runtime/profiles',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             query: {
                 'include_disabled': includeDisabled,
@@ -42,20 +42,20 @@ export class AgentRuntimeService {
     }
     /**
      * Create Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param requestBody
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
     public static agentRuntimeProfilesCreate(
-        orgId: string,
+        organizationId: string,
         requestBody: (CreateAgentHostRuntimeProfileRequest | CreateOpenAICompatibleRuntimeProfileRequest | CreateAnthropicCompatibleRuntimeProfileRequest),
     ): CancelablePromise<AgentRuntimeProfileResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/organizations/{org_id}/agent-runtime/profiles',
+            url: '/organizations/{organization_id}/agent-runtime/profiles',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
             },
             body: requestBody,
             mediaType: 'application/json',
@@ -66,20 +66,20 @@ export class AgentRuntimeService {
     }
     /**
      * Archive Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns void
      * @throws ApiError
      */
     public static agentRuntimeProfilesArchive(
-        orgId: string,
+        organizationId: string,
         profileId: string,
     ): CancelablePromise<void> {
         return __request(OpenAPI, {
             method: 'DELETE',
-            url: '/organizations/{org_id}/agent-runtime/profiles/{profile_id}',
+            url: '/organizations/{organization_id}/agent-runtime/profiles/{profile_id}',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
                 'profile_id': profileId,
             },
             errors: {
@@ -89,20 +89,20 @@ export class AgentRuntimeService {
     }
     /**
      * Get Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns AgentRuntimeProfileDetailResponse Successful Response
      * @throws ApiError
      */
     public static agentRuntimeProfilesGet(
-        orgId: string,
+        organizationId: string,
         profileId: string,
     ): CancelablePromise<AgentRuntimeProfileDetailResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/organizations/{org_id}/agent-runtime/profiles/{profile_id}',
+            url: '/organizations/{organization_id}/agent-runtime/profiles/{profile_id}',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
                 'profile_id': profileId,
             },
             errors: {
@@ -112,22 +112,22 @@ export class AgentRuntimeService {
     }
     /**
      * Update Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @param requestBody
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
     public static agentRuntimeProfilesUpdate(
-        orgId: string,
+        organizationId: string,
         profileId: string,
         requestBody: (UpdateAgentHostRuntimeProfileRequest | UpdateOpenAICompatibleRuntimeProfileRequest | UpdateAnthropicCompatibleRuntimeProfileRequest),
     ): CancelablePromise<AgentRuntimeProfileResponse> {
         return __request(OpenAPI, {
             method: 'PATCH',
-            url: '/organizations/{org_id}/agent-runtime/profiles/{profile_id}',
+            url: '/organizations/{organization_id}/agent-runtime/profiles/{profile_id}',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
                 'profile_id': profileId,
             },
             body: requestBody,
@@ -139,20 +139,20 @@ export class AgentRuntimeService {
     }
     /**
      * Restore Agent Runtime Profile
-     * @param orgId
+     * @param organizationId
      * @param profileId
      * @returns AgentRuntimeProfileResponse Successful Response
      * @throws ApiError
      */
     public static agentRuntimeProfilesRestore(
-        orgId: string,
+        organizationId: string,
         profileId: string,
     ): CancelablePromise<AgentRuntimeProfileResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore',
+            url: '/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore',
             path: {
-                'org_id': orgId,
+                'organization_id': organizationId,
                 'profile_id': profileId,
             },
             errors: {

@@ -80,18 +80,61 @@ def test_every_operation_declares_which_token_can_run_it(github_operations):
 def test_the_user_only_operations_are_the_ones_github_says_they_are(
     github_operations,
 ):
-    """Derived from `x-github.enabledForGitHubApps`, not hand-listed. Two of
-    these are load-bearing today -- pod publish calls both."""
+    """Derived from `x-github.enabledForGitHubApps`, not hand-listed."""
     user_only = {
         op["name"]
         for op in github_operations
         if op["execution"]["github_token_kind"] == "user_only"
     }
     assert "users_get_authenticated" in user_only
-    assert "repos_create_for_authenticated_user" in user_only
     assert "gists_create" in user_only
     # And an ordinary repo-scoped call is not.
     assert "issues_create" not in user_only
+
+
+def test_the_two_endpoints_no_app_token_can_use_are_not_offered(
+    github_operations,
+):
+    """`user_only` means "the installation token cannot", not "the user token
+    can". These two are the pair where neither identity works, and shipping
+    them meant an agent could call something that could only ever fail.
+
+    `POST /user/repos` needs the OAuth `repo` scope and App user tokens carry
+    no scopes; GitHub marks it unavailable to installations as well.
+
+    `GET /user/repos` is worse than an error: it is not available to App user
+    tokens, and it does not refuse -- it returns only repositories inside an
+    installation, so an agent asking what repositories somebody has, for an
+    account with no installation, is told *none*.
+    """
+    names = {op["name"] for op in github_operations}
+    assert "repos_create_for_authenticated_user" not in names
+    assert "repos_list_for_authenticated_user" not in names
+
+
+def test_the_enumeration_a_github_app_actually_has_is_offered(github_operations):
+    """Installation is the unit of access, so these are the listings that tell
+    the truth about what the app can reach."""
+    names = {op["name"] for op in github_operations}
+    assert "apps_list_repos_accessible_to_installation" in names
+    assert "apps_list_installations_for_authenticated_user" in names
+    assert "apps_list_installation_repos_for_authenticated_user" in names
+
+
+def test_each_identity_gets_its_own_repository_listing(github_operations):
+    """Two identities, two listings, and they are not interchangeable.
+
+    `/installation/repositories` is the installation asking what it covers. Ask
+    it with a user token and GitHub answers 403 "Resource not accessible by
+    integration" -- confirmed against a live App -- so it cannot stand in for
+    the user-facing question. `/user/installations/{id}/repositories` is that
+    one, and is available to user tokens.
+    """
+    kinds = {
+        op["name"]: op["execution"]["github_token_kind"] for op in github_operations
+    }
+    assert kinds["apps_list_repos_accessible_to_installation"] == "installation_ok"
+    assert kinds["apps_list_installation_repos_for_authenticated_user"] == "user_only"
 
 
 def test_output_schemas_are_pruned_to_one_level(github_operations):

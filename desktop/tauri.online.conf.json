@@ -5,7 +5,7 @@
     },
     "macOS": {
       "hardenedRuntime": true,
-      "entitlements": "entitlements.plist"
+      "entitlements": "app.entitlements.plist"
     }
   }
 }

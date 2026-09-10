@@ -16,6 +16,7 @@ from __future__ import annotations
 import pytest
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.instrumented import InstrumentedModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.wrapper import WrapperModel
@@ -102,26 +103,51 @@ def test_limits_that_never_asked_are_returned_unchanged() -> None:
     assert usage_limits_for(_openai_compatible(), limits) is limits
 
 
+def test_real_provider_classes_are_classified_correctly() -> None:
+    """Guards the assumption against a pydantic-ai upgrade changing it."""
+    assert OpenAIChatModel.count_tokens is Model.count_tokens
+    assert AnthropicModel.count_tokens is not Model.count_tokens
+
+
 @pytest.mark.parametrize(
-    "module_path, attribute",
+    "module_path, attribute, routed_through",
     [
-        ("app.composition.schedule_filter", "FILTER_USAGE_LIMITS"),
+        (
+            "app.modules.schedule.infrastructure.adapters.system_model_filter",
+            "FILTER_USAGE_LIMITS",
+            "resolve_system_runtime",
+        ),
         (
             "app.modules.agent.services.conversation_title_service",
             "_TITLE_USAGE_LIMITS",
+            "usage_limits_for",
         ),
     ],
 )
 def test_every_declared_precount_still_goes_through_the_helper(
-    module_path: str, attribute: str
+    module_path: str, attribute: str, routed_through: str
 ) -> None:
     """These constants ask for the pre-count, so each one is only safe because
-    its call site routes it through `usage_limits_for`. If a constant stops
-    asking, this test has become noise; if a call site stops routing, the
-    grep below is what notices."""
+    its call site routes it through `usage_limits_for` — directly, or through
+    `resolve_system_runtime`, which is where a caller outside `agent` hands its
+    ceiling over and gets back the part of it the model can honour. If a
+    constant stops asking, this test has become noise; if a call site stops
+    routing, the grep below is what notices."""
     import importlib
     import inspect
 
     module = importlib.import_module(module_path)
     assert getattr(module, attribute).count_tokens_before_request is True
-    assert "usage_limits_for" in inspect.getsource(module)
+    assert routed_through in inspect.getsource(module)
+
+
+def test_the_published_operation_is_where_a_caller_outside_agent_routes() -> None:
+    """`resolve_system_runtime` is the only way out of `agent` for a caller's
+    ceiling now, so it is the one place the reduction above has to happen. The
+    two modules that used to do it themselves reached four service names each
+    through `app/composition` to manage it."""
+    import inspect
+
+    from app.modules.agent.contracts import model_runtime
+
+    assert "usage_limits_for" in inspect.getsource(model_runtime)

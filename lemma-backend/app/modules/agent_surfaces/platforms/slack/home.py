@@ -168,7 +168,7 @@ class SlackHomeSurface:
         user_id: str,
         pod_name: str | None,
         agent_name: str,
-        channel_routes: list,
+        channel_ids: list[str],
         agents: list | None = None,
         apps: list | None = None,
         workspace_url: str | None = None,
@@ -187,7 +187,7 @@ class SlackHomeSurface:
                 view=app_home_view(
                     pod_name=pod_name,
                     agent_name=agent_name,
-                    channel_routes=channel_routes,
+                    channel_ids=channel_ids,
                     agents=agents,
                     apps=apps,
                     workspace_url=workspace_url,

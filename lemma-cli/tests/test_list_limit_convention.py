@@ -17,7 +17,7 @@ import importlib
 import pytest
 import typer.main
 
-from lemma_cli.cli_core.app import LAZY_GROUPS
+from lemma_cli.app import LAZY_GROUPS
 
 pytestmark = pytest.mark.unit
 
@@ -35,6 +35,13 @@ COMPLETE_SET_LISTINGS = {
 
 def _commands() -> dict[str, set[str]]:
     """Every leaf command in the app, mapped to the option strings it declares.
+
+    `LAZY_GROUPS` comes from `lemma_cli.app`, the console-script entry point,
+    rather than from `cli_core.app` underneath it. The two share one dict and
+    the entry point `setdefault`s the `tui` group into it, so importing the
+    lower module walks 352 commands alone and 353 when an earlier test
+    imported the entry point first — what this guard checked depended on test
+    ordering.
 
     Groups are found by duck typing rather than `isinstance(cmd, click.Group)`:
     typer vendors its own click, so a `TyperGroup` is not an instance of the

@@ -1,6 +1,6 @@
 """Pure OpenAPI spec-walking helpers — no descriptor building, no I/O.
 
-Ported from ``lemma-connectors/scripts/generate_openapi_metadata.py`` (which
+Ported from the vendored connector package's metadata generator (which
 lives under ``scripts/`` and is not importable, and whose ``generate_metadata``/
 ``sanitize_spec`` are codegen-coupled and force request bodies to
 ``application/json`` — destroying multipart). Reimplemented here so the walk is

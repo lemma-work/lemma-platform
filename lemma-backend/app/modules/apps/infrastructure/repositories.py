@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from uuid import UUID
+from datetime import datetime, timezone
+from uuid import UUID, uuid7
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, func, select, update
+from sqlalchemy.dialects.postgresql import Insert, insert
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -20,6 +22,27 @@ from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.events import AppCreatedEvent
 from app.modules.apps.domain.ports import AppRepositoryPort
 from app.modules.apps.infrastructure.models import AppModel, AppReleaseModel
+
+
+def _record_release_statement(entity: AppReleaseEntity) -> Insert:
+    """Allocate a deployment number while the caller holds the parent lock."""
+    values = entity.model_dump(
+        exclude_unset=True,
+        exclude={"id", "created_at", "release_number", "pruned_at"},
+    )
+    statement = insert(AppReleaseModel).values(
+        id=uuid7(),
+        created_at=datetime.now(timezone.utc),
+        # Allocated inside the INSERT, not read first. The caller holds a lock on
+        # the parent app row, so max+1 is an allocation rather than a guess.
+        release_number=select(
+            func.coalesce(func.max(AppReleaseModel.release_number), 0) + 1
+        )
+        .where(AppReleaseModel.app_id == entity.app_id)
+        .scalar_subquery(),
+        **values,
+    )
+    return statement.returning(AppReleaseModel)
 
 
 class AppRepository(AppRepositoryPort):
@@ -196,11 +219,34 @@ class AppRepository(AppRepositoryPort):
         result = await self.session.execute(stmt)
         return result.rowcount > 0
 
-    async def create_release(self, entity: AppReleaseEntity) -> AppReleaseEntity:
-        model = AppReleaseModel(**entity.model_dump(exclude_unset=True))
-        self.session.add(model)
-        await self.session.flush()
-        return model.to_entity()
+    async def get_for_update(self, app_id: UUID) -> AppEntity | None:
+        model = (
+            await self.session.execute(
+                select(AppModel)
+                .where(AppModel.id == app_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        return model.to_entity() if model else None
+
+    async def mark_releases_purged(self, release_ids: tuple[UUID, ...]) -> None:
+        await self.session.execute(
+            update(AppReleaseModel)
+            .where(
+                AppReleaseModel.id.in_(release_ids),
+                AppReleaseModel.pruned_at.is_not(None),
+            )
+            .values(purged_at=datetime.now(timezone.utc))
+        )
+
+    async def record_release(self, entity: AppReleaseEntity) -> AppReleaseEntity:
+        """Record a new deployment under the parent lock, allocating its number atomically."""
+        await self.session.execute(
+            select(AppModel.id).where(AppModel.id == entity.app_id).with_for_update()
+        )
+        result = await self.session.execute(_record_release_statement(entity))
+        return result.scalar_one().to_entity()
 
     async def get_release(self, id: UUID) -> AppReleaseEntity | None:
         stmt = select(AppReleaseModel).where(AppReleaseModel.id == id)
@@ -215,15 +261,64 @@ class AppRepository(AppRepositoryPort):
             AppReleaseModel.app_id == app_id,
             AppReleaseModel.version == version,
         )
+        stmt = stmt.order_by(AppReleaseModel.release_number.desc()).limit(1)
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def get_release_by_number(
+        self, app_id: UUID, release_number: int
+    ) -> AppReleaseEntity | None:
+        stmt = select(AppReleaseModel).where(
+            AppReleaseModel.app_id == app_id,
+            AppReleaseModel.release_number == release_number,
+        )
+        result = await self.session.execute(stmt)
+        model = result.scalar_one_or_none()
+        return model.to_entity() if model else None
+
+    async def attach_release_source(
+        self,
+        release_id: UUID,
+        *,
+        source_archive_path: str,
+        source_digest: str | None,
+    ) -> None:
+        await self.session.execute(
+            update(AppReleaseModel)
+            .where(AppReleaseModel.id == release_id)
+            .values(
+                source_archive_path=source_archive_path,
+                source_digest=source_digest,
+            )
+        )
+
+    async def set_current_release(self, app_id: UUID, release_id: UUID) -> None:
+        await self.session.execute(
+            update(AppModel)
+            .where(AppModel.id == app_id)
+            .values(current_release_id=release_id)
+        )
+
+    async def mark_releases_pruned(self, release_ids: list[UUID]) -> None:
+        """Stamp ``pruned_at`` before the bytes go, so a sweep that dies midway
+        never leaves a release the UI still offers to promote."""
+        if not release_ids:
+            return
+        await self.session.execute(
+            update(AppReleaseModel)
+            .where(
+                AppReleaseModel.id.in_(release_ids),
+                AppReleaseModel.pruned_at.is_(None),
+            )
+            .values(pruned_at=datetime.now(timezone.utc))
+        )
 
     async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
         stmt = (
             select(AppReleaseModel)
             .where(AppReleaseModel.app_id == app_id)
-            .order_by(desc(AppReleaseModel.created_at))
+            .order_by(desc(AppReleaseModel.created_at), desc(AppReleaseModel.id))
         )
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]

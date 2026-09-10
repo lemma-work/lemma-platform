@@ -40,6 +40,8 @@ class ConversationResponse:
         instructions (None | str | Unset):
         is_archived (bool | Unset):  Default: False.
         last_run_error (None | str | Unset):
+        last_run_error_code (None | str | Unset):
+        last_run_error_reason (None | str | Unset):
         last_run_finished_at (datetime.datetime | None | Unset):
         last_run_retryable (bool | Unset):  Default: False.
         last_run_status (AgentRunStatus | None | Unset):
@@ -63,6 +65,8 @@ class ConversationResponse:
     instructions: None | str | Unset = UNSET
     is_archived: bool | Unset = False
     last_run_error: None | str | Unset = UNSET
+    last_run_error_code: None | str | Unset = UNSET
+    last_run_error_reason: None | str | Unset = UNSET
     last_run_finished_at: datetime.datetime | None | Unset = UNSET
     last_run_retryable: bool | Unset = False
     last_run_status: AgentRunStatus | None | Unset = UNSET
@@ -122,6 +126,18 @@ class ConversationResponse:
             last_run_error = UNSET
         else:
             last_run_error = self.last_run_error
+
+        last_run_error_code: None | str | Unset
+        if isinstance(self.last_run_error_code, Unset):
+            last_run_error_code = UNSET
+        else:
+            last_run_error_code = self.last_run_error_code
+
+        last_run_error_reason: None | str | Unset
+        if isinstance(self.last_run_error_reason, Unset):
+            last_run_error_reason = UNSET
+        else:
+            last_run_error_reason = self.last_run_error_reason
 
         last_run_finished_at: None | str | Unset
         if isinstance(self.last_run_finished_at, Unset):
@@ -211,6 +227,10 @@ class ConversationResponse:
             field_dict["is_archived"] = is_archived
         if last_run_error is not UNSET:
             field_dict["last_run_error"] = last_run_error
+        if last_run_error_code is not UNSET:
+            field_dict["last_run_error_code"] = last_run_error_code
+        if last_run_error_reason is not UNSET:
+            field_dict["last_run_error_reason"] = last_run_error_reason
         if last_run_finished_at is not UNSET:
             field_dict["last_run_finished_at"] = last_run_finished_at
         if last_run_retryable is not UNSET:
@@ -307,6 +327,28 @@ class ConversationResponse:
             return cast(None | str | Unset, data)
 
         last_run_error = _parse_last_run_error(d.pop("last_run_error", UNSET))
+
+        def _parse_last_run_error_code(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        last_run_error_code = _parse_last_run_error_code(
+            d.pop("last_run_error_code", UNSET)
+        )
+
+        def _parse_last_run_error_reason(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        last_run_error_reason = _parse_last_run_error_reason(
+            d.pop("last_run_error_reason", UNSET)
+        )
 
         def _parse_last_run_finished_at(
             data: object,
@@ -455,6 +497,8 @@ class ConversationResponse:
             instructions=instructions,
             is_archived=is_archived,
             last_run_error=last_run_error,
+            last_run_error_code=last_run_error_code,
+            last_run_error_reason=last_run_error_reason,
             last_run_finished_at=last_run_finished_at,
             last_run_retryable=last_run_retryable,
             last_run_status=last_run_status,

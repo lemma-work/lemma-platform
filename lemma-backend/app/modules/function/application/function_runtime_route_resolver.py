@@ -19,11 +19,11 @@ from sandbox_runtime.protocol import (
     WorkloadKind,
 )
 from sandbox_runtime.errors import SandboxError, SandboxUnavailable
+from app.modules.function.config import function_settings
 from app.modules.workspace.services.local_sandbox_client import (
     LocalSandboxClient,
 )
 
-from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.function.application.function_runtime_endpoint_cache import (
@@ -60,7 +60,7 @@ def endpoint_reuse_seconds() -> int:
     Halving is a margin, not a formula: the sweep runs on a cron, so release
     happens somewhere after its window, never before it.
     """
-    configured = settings.function_runtime_endpoint_reuse_seconds
+    configured = function_settings.function_runtime_endpoint_reuse_seconds
     idle_release = workspace_settings.idle_release_seconds
     if idle_release <= 0:
         return configured
@@ -141,7 +141,7 @@ class FunctionRuntimeRouteResolver:
                     required_valid_until,
                     self._now()
                     + timedelta(
-                        seconds=settings.function_runtime_endpoint_reuse_seconds
+                        seconds=function_settings.function_runtime_endpoint_reuse_seconds
                     ),
                 ),
             ),

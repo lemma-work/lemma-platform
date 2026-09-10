@@ -3,7 +3,7 @@
 import type { ComponentType } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { CheckCircle, Database, Globe2, Pencil, Plus, RefreshCw, Wrench } from '@/components/ui/icons';
+import { CheckCircle, Database, ExternalLink, Globe2, KeyRound, Pencil, Plus, RefreshCw, Wrench } from '@/components/ui/icons';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { StepLoader } from '@/components/brand/loader';
@@ -122,6 +122,9 @@ export function ConnectionRow({
     connector,
     organizationId,
     isBusy,
+    needsSignIn = false,
+    onSignIn,
+    onReplaceCredentials,
     onEdit,
     onRefresh,
     onMakeDefault,
@@ -131,6 +134,26 @@ export function ConnectionRow({
     connector: Connector | null;
     organizationId?: string;
     isBusy: boolean;
+    /**
+     * This install signs in through a browser and nobody has yet.
+     *
+     * The recovery path, and the reason it exists: an MCP server that
+     * negotiated OAuth used to be created here with an empty credential set,
+     * leaving an install nothing could connect and no control that offered to.
+     */
+    needsSignIn?: boolean;
+    onSignIn?: (install: AuthConfig) => void;
+    /**
+     * Replace the token this connection authenticates with.
+     *
+     * Absent until now, and not reachable anywhere else: an account belonging
+     * to a connection is hidden from the accounts list (its row would say the
+     * same thing twice) unless it is already failing, so rotating a bearer
+     * token meant waiting for it to break first. Editing the connection is a
+     * different object entirely — that writes the install's config, not the
+     * account's credentials.
+     */
+    onReplaceCredentials?: (install: AuthConfig) => void;
     onEdit: (install: AuthConfig) => void;
     onRefresh: (install: AuthConfig) => void;
     onMakeDefault: (install: AuthConfig) => void;
@@ -159,13 +182,32 @@ export function ConnectionRow({
                 </div>
                 <p className="truncate text-xs leading-5 text-[var(--text-tertiary)]">
                     {target ?? 'No address recorded'}
-                    {isLoadingOperations
-                        ? null
-                        : ` · ${operationCount} operation${operationCount === 1 ? '' : 's'}`}
+                    {needsSignIn
+                        ? ' · Not signed in'
+                        : isLoadingOperations
+                          ? null
+                          : ` · ${operationCount} operation${operationCount === 1 ? '' : 's'}`}
                 </p>
             </div>
 
-            {!isLoadingOperations && operationCount === 0 ? (
+            {needsSignIn && onSignIn ? (
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    className="h-8 shrink-0"
+                    onClick={() => onSignIn(install)}
+                    disabled={isBusy}
+                >
+                    {isBusy ? (
+                        <StepLoader size="xs" className="mr-1.5" />
+                    ) : (
+                        <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Sign in
+                </Button>
+            ) : null}
+
+            {!needsSignIn && !isLoadingOperations && operationCount === 0 ? (
                 <Button
                     variant="secondary"
                     size="sm"
@@ -206,6 +248,18 @@ export function ConnectionRow({
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Refresh operations
                 </DropdownMenuItem>
+                {onReplaceCredentials ? (
+                    <DropdownMenuItem
+                        disabled={isBusy}
+                        onSelect={(event) => {
+                            event.preventDefault();
+                            onReplaceCredentials(install);
+                        }}
+                    >
+                        <KeyRound className="mr-2 h-4 w-4" />
+                        Replace credentials
+                    </DropdownMenuItem>
+                ) : null}
                 {install.is_default ? null : (
                     <DropdownMenuItem
                         disabled={isBusy}

@@ -68,7 +68,7 @@ function App() {
           You are connected
         </div>
         <p className="greeting">
-          Signed in as <strong>{user?.email ?? user?.name ?? 'your account'}</strong>.
+          Signed in as <strong>{user?.email ?? 'your account'}</strong>.
         </p>
         {tablesQuery.error ? <div className="alert">{asErrorMessage(tablesQuery.error)}</div> : null}
         {tablesQuery.isLoading ? (

@@ -51,11 +51,11 @@ def init_table(
 
 
 @tables_app.command("schema")
-def schema_table() -> None:
+def schema_table(ctx: typer.Context) -> None:
     """Print the JSONC example/shape for a table bundle file."""
     from ._authoring import print_resource_schema
 
-    print_resource_schema("table")
+    print_resource_schema(ctx, "table")
 
 
 @tables_app.command("list")

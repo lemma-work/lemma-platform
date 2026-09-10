@@ -14,6 +14,8 @@ export type ConversationResponse = {
     instructions?: (string | null);
     is_archived?: boolean;
     last_run_error?: (string | null);
+    last_run_error_code?: (string | null);
+    last_run_error_reason?: (string | null);
     last_run_finished_at?: (string | null);
     last_run_retryable?: boolean;
     last_run_status?: (AgentRunStatus | null);

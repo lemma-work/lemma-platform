@@ -52,10 +52,9 @@ async def export_agents(
     # Imported here rather than at module load: `exporter` imports this module,
     # so naming it at the top would be a cycle.
     from app.modules.agent.contracts.provisioning import list_agents, require_agent
-    from app.modules.pod_bundle.infrastructure.exporter import (
-        _agent_response_dict,
-        _extract_large_text,
-    )
+    from lemma_pod_bundle.layout import extract_large_text
+
+    from app.modules.pod_bundle.infrastructure.exporter import _agent_response_dict
 
     agents = await list_agents(uow, pod_id=pod_id, user_id=user_id, ctx=ctx)
     exportable = sorted(
@@ -85,7 +84,7 @@ async def export_agents(
             # for why None differs from [].
             if grants is not None:
                 payload = _attach_permissions_payload(payload, grants)
-        payload = _extract_large_text(
+        payload = extract_large_text(
             payload,
             field_name="instruction",
             file_name="instruction.md",

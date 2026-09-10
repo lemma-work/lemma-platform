@@ -43,3 +43,19 @@ class AppAssetNotFoundError(AppNotFoundError):
 class AppConflictError(AppDomainError):
     def __init__(self, message: str):
         super().__init__(message=message, code="APP_CONFLICT", status_code=409)
+
+
+class AppReleaseNotFoundError(AppDomainError):
+    def __init__(self, message: str = "App release not found"):
+        super().__init__(message=message, code="APP_RELEASE_NOT_FOUND", status_code=404)
+
+
+class AppReleasePrunedError(AppDomainError):
+    """A release whose bytes retention has deleted.
+
+    Distinct from "not found": the release existed and the history still lists
+    it, so saying so beats a bare 404 that reads like a typo in the version.
+    """
+
+    def __init__(self, message: str = "This release's build has been removed"):
+        super().__init__(message=message, code="APP_RELEASE_PRUNED", status_code=410)

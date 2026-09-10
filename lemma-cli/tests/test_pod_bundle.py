@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -401,7 +402,8 @@ def test_export_pod_bundle_skips_excluded_apps(tmp_path: Path):
     assert list((tmp_path / "demo-pod" / "apps").iterdir()) == []
 
 
-def test_download_app_assets_prefers_unpacked_source_over_dist(tmp_path: Path):
+def test_download_app_assets_exports_both_source_and_dist(tmp_path: Path):
+    """Preserve source and build without claiming cross-pod portability."""
     resource_dir = tmp_path / "apps" / "support_app"
     resource_dir.mkdir(parents=True)
 
@@ -410,10 +412,15 @@ def test_download_app_assets_prefers_unpacked_source_over_dist(tmp_path: Path):
         archive.writestr("package.json", '{"name":"app"}\n')
         archive.writestr("src/main.ts", "console.log('app');\n")
 
+    dist_zip = BytesIO()
+    with ZipFile(dist_zip, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", "<html></html>")
+        archive.writestr("assets/app.js", "console.log('built');")
+
     client = FakeClient(
         apps=SimpleNamespace(
             download_source_archive=lambda pod_id, app_name: source_zip.getvalue(),
-            download_dist_archive=lambda pod_id, app_name: b"pretend-dist",
+            download_dist_archive=lambda pod_id, app_name: dist_zip.getvalue(),
         )
     )
 
@@ -429,7 +436,40 @@ def test_download_app_assets_prefers_unpacked_source_over_dist(tmp_path: Path):
 
     assert (resource_dir / "source" / "package.json").exists()
     assert (resource_dir / "source" / "src" / "main.ts").exists()
-    assert not (resource_dir / "dist.zip").exists()
+    assert (resource_dir / "dist.zip").exists()
+    assert not (resource_dir / "dist.json").exists()
+
+
+def test_download_app_assets_preserves_a_dist_only_app(tmp_path: Path):
+    """When source is unavailable, export retains the exact executable bytes."""
+    resource_dir = tmp_path / "apps" / "baked_app"
+    resource_dir.mkdir(parents=True)
+
+    dist_zip = BytesIO()
+    with ZipFile(dist_zip, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("index.html", "<html></html>")
+        archive.writestr("assets/app.js", 'const POD="pod_123";')
+
+    client = FakeClient(
+        apps=SimpleNamespace(
+            download_source_archive=lambda pod_id, app_name: b"",
+            download_dist_archive=lambda pod_id, app_name: dist_zip.getvalue(),
+        )
+    )
+
+    from lemma_cli.cli_app.pod_bundle import _ByteBudget, _download_app_assets
+
+    _download_app_assets(
+        client,
+        "pod_123",
+        "baked_app",
+        resource_dir,
+        app_budget=_ByteBudget(per_item=10_000_000, total=20_000_000, warnings=[]),
+    )
+
+    assert (resource_dir / "dist.zip").read_bytes() == dist_zip.getvalue()
+    assert not (resource_dir / "source").exists()
+    assert not (resource_dir / "dist.json").exists()
 
 
 def test_export_pod_bundle_rejects_unknown_exclude_value(tmp_path: Path):
@@ -906,6 +946,81 @@ def test_fetch_files_index_reports_a_pod_visible_skills_tree():
         if item["path"] == "/skills/research/SKILL.md"
     )
     assert skill["visibility"] == "POD"
+
+
+def test_exporting_the_root_folder_is_refused_out_loud():
+    """`--folder /` selects nothing, and now says so.
+
+    Naming folders exists to avoid publishing a pod's whole file tree, so `/` is
+    refused. The backend already refused it with this warning; the CLI dropped
+    it inside its own copy of the normalizer and returned an empty export with
+    nothing to read. Both shipped the same bytes, so the entire difference was
+    whether the person who typed it found out why nothing came back.
+
+    Asserted on the warning rather than the counts, because the counts were
+    already right -- and being right while silent is the bug.
+    """
+    from lemma_cli.cli_app.pod_bundle import _export_pod_files
+
+    warnings: list[str] = []
+    counts = _export_pod_files(
+        FakeClient(),
+        "pod_123",
+        Path(tempfile.mkdtemp()),
+        file_folders=["/"],
+        warnings=warnings,
+    )
+
+    assert counts == {"folders": 0, "files": 0}
+    assert any("not exportable" in note for note in warnings), warnings
+    assert any("whole file tree" in note for note in warnings), warnings
+
+
+def test_a_published_schedule_does_not_carry_its_authors_installation():
+    """The CLI must strip `installation_id`, and be tested against the copy it ships.
+
+    This is really two claims, and the second is why it is worth a test here when
+    `lemma-pod-bundle` already has one. `installation_id` identifies the author's
+    GitHub App installation; a pod bundle published with it carries a credential
+    handle for somebody else's account. #604 fixed that in the canonical package.
+
+    `lemma-cli` did not see the fix for months. Its dependency on
+    `../lemma-pod-bundle` was a *non-editable* path, so `uv sync` copied a
+    snapshot into the venv and the pinned version gave uv no reason to
+    re-resolve. `uv run pytest` loaded that snapshot; the shipped wheel did not,
+    because `setup.py` re-vendors from source on every build. So the tests were
+    green against code that does not ship -- and the test directly above this one
+    exercises this very function, for a different field list, and passed
+    throughout.
+
+    Run this against the stale copy and it fails, which is the only reason to
+    have it in this package rather than only in the one that owns the function.
+    """
+    from lemma_pod_bundle.normalize import _normalize_schedule_payload
+
+    payload = _normalize_schedule_payload(
+        {
+            "name": "nightly-sync",
+            "schedule_type": "EVENT",
+            "agent_name": "coach",
+            "config": {
+                "source": "github",
+                "event": "pull_request",
+                "installation_id": "158040062",
+                "provider_trigger_id": "trg_1",
+            },
+        }
+    )
+
+    config = payload["config"]
+    assert "installation_id" not in config, (
+        f"a bundle would publish the author's GitHub installation: {config}"
+    )
+    assert "provider_trigger_id" not in config
+    # The parts that say what the schedule *is* survive; only the parts that say
+    # whose copy it was are dropped.
+    assert config["source"] == "github"
+    assert config["event"] == "pull_request"
 
 
 def test_a_schedule_exports_without_where_it_last_ran():

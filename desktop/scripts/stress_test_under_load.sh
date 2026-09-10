@@ -22,6 +22,8 @@
 #   desktop/scripts/stress_test_under_load.sh "desktop_context native_material" 400 12 1800
 
 set -euo pipefail
+# Every background job gets an owned process group, including cargo's children.
+set -m
 
 filter="${1:?usage: $0 <cargo-test-filter> [iterations] [cpu_hogs] [max_runtime_seconds]}"
 iterations="${2:-100}"
@@ -33,12 +35,23 @@ cd "$root"
 
 load_pids=()
 watchdog_pid=""
+test_pid=""
+test_log=""
 
 cleanup() {
+    trap - EXIT
+    if [[ -n "$test_pid" ]]; then
+        kill -- "-$test_pid" 2>/dev/null || true
+        wait "$test_pid" 2>/dev/null || true
+    fi
     if [[ -n "$watchdog_pid" ]]; then
         # The group: killing the subshell leaves its `sleep` behind, idle until
         # the whole timeout elapses.
         kill -- "-$watchdog_pid" 2>/dev/null || kill "$watchdog_pid" 2>/dev/null || true
+        wait "$watchdog_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$test_log" && -f "$test_log" ]]; then
+        echo "Interrupted test log: $test_log"
     fi
     if [[ ${#load_pids[@]} -gt 0 ]]; then
         kill "${load_pids[@]}" 2>/dev/null || true
@@ -49,7 +62,10 @@ cleanup() {
 # bash's default handler terminates *without* running the EXIT trap -- so every
 # CPU hog below survived at 100%, forever, which is the exact failure this
 # script exists to help diagnose.
-trap cleanup EXIT INT TERM HUP
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 echo "Spawning $cpu_hogs CPU load generator(s)…"
 for _ in $(seq 1 "$cpu_hogs"); do
@@ -58,8 +74,17 @@ for _ in $(seq 1 "$cpu_hogs"); do
 done
 echo "Load pids: ${load_pids[*]}"
 
+# Let the load generators get going before anything is timed against them.
+sleep 1
+
 # Hard backstop: if the test loop below hangs, this still tears everything down
 # after max_runtime_seconds rather than running forever.
+#
+# Started *after* the ramp-up above, not before it. Counting a fixed second of
+# setup against the caller's budget makes `max_runtime_seconds` mean something
+# other than what it says, and at small budgets it is most of them: a two
+# second ceiling left under a second for the test to produce any output at all,
+# so on a loaded machine the deadline fired while cargo was still starting.
 #
 # It signals the *load*, not `$$`. `$$` is the original shell's pid even inside
 # a subshell, so in the one scenario no trap can cover -- this script dying
@@ -67,20 +92,35 @@ echo "Load pids: ${load_pids[*]}"
 # hogs kept running. Killing them directly needs nothing of the parent to still
 # be alive.
 (
+    set +m
     sleep "$max_runtime_seconds"
     kill "${load_pids[@]}" 2>/dev/null || true
     kill -TERM $$ 2>/dev/null || true
 ) &
 watchdog_pid=$!
 
-sleep 1
-
 fail=0
+test_log="$(mktemp "${TMPDIR:-/tmp}/lemma-desktop-stress.XXXXXX")"
 for i in $(seq 1 "$iterations"); do
-    if ! cargo test --quiet -- "$filter" --test-threads 16 >/dev/null 2>&1; then
+    cargo test --workspace --quiet -- "$filter" --test-threads 16 >"$test_log" 2>&1 &
+    test_pid=$!
+    status=0
+    wait "$test_pid" || status=$?
+    if [[ "$status" -eq 0 ]] && ! grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "$test_log"; then
+        echo "No tests executed for filter: $filter" >>"$test_log"
+        status=1
+    fi
+    if [[ "$status" -ne 0 ]]; then
         fail=$((fail + 1))
         echo "FAIL run $i"
+        cat "$test_log"
+        echo "Failure log: $test_log"
+        test_log="$(mktemp "${TMPDIR:-/tmp}/lemma-desktop-stress.XXXXXX")"
     fi
+    test_pid=""
 done
+rm -f "$test_log"
+test_log=""
 
 echo "failures=$fail/$iterations"
+test "$fail" -eq 0

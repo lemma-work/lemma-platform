@@ -41,6 +41,7 @@ import pytest
 import pytest_asyncio
 from streaq.task import TaskStatus
 
+from app.modules.datastore.config import datastore_settings
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.infrastructure.jobs.streaq_job_queue import create_streaq_client
@@ -112,7 +113,7 @@ async def cancellable_worker(e2e_settings, mock_llm_latency_ms):
             "WORKER_QUEUE_NAME": queue_name,
             "WORKER_LANES": os.environ.get("_CANCEL_TEST_LANES", ""),
             "DATABASE_URL": e2e_settings.database_url,
-            "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
+            "DATASTORE_DATABASE_URL": datastore_settings.datastore_database_url,
             "REDIS_URL": e2e_settings.redis_url,
             "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
             "SUPERTOKENS_CORE_URL": e2e_settings.supertokens_core_url,

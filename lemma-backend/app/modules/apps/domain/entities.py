@@ -19,11 +19,22 @@ class AppReleaseEntity(BaseModel):
     id: UUID | None = None
     app_id: UUID
     version: str
+    release_number: int | None = None
     dist_root_path: str
     dist_archive_path: str | None = None
+    source_archive_path: str | None = None
+    source_digest: str | None = None
+    created_by: UUID | None = None
+    label: str | None = None
+    pruned_at: datetime | None = None
+    purged_at: datetime | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @property
+    def is_pruned(self) -> bool:
+        return self.pruned_at is not None
 
 
 class AppEntity(BaseModel):

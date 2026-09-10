@@ -46,6 +46,7 @@ from app.modules.identity.services.auth_abuse import get_auth_abuse_store
 from app.core.config import settings
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.test_support.e2e_base import verify_emailpassword_for_tests
+from app.modules.identity.config import identity_settings
 
 pytestmark = pytest.mark.e2e
 
@@ -571,8 +572,10 @@ async def test_signup_altcha_replay_tampering_and_ip_rate_limit(
 ):
     monkeypatch.setattr(settings, "auth_abuse_protection_enabled", True)
     monkeypatch.setattr(settings, "auth_altcha_enabled", True)
-    monkeypatch.setattr(settings, "auth_altcha_hmac_key", SecretStr("e2e-altcha-key"))
-    monkeypatch.setattr(settings, "auth_altcha_max_number", 100)
+    monkeypatch.setattr(
+        identity_settings, "auth_altcha_hmac_key", SecretStr("e2e-altcha-key")
+    )
+    monkeypatch.setattr(identity_settings, "auth_altcha_max_number", 100)
 
     async def challenge() -> dict:
         response = await async_client.get(
@@ -667,7 +670,7 @@ async def test_signed_bounce_events_only_deactivate_on_hard_bounce(
 ):
     webhook_secret = "e2e-bounce-secret"
     monkeypatch.setattr(
-        settings, "auth_bounce_webhook_secret", SecretStr(webhook_secret)
+        identity_settings, "auth_bounce_webhook_secret", SecretStr(webhook_secret)
     )
     # Independent actors -- provisioning them concurrently is safe (see
     # create_role_visibility_context in e2e_authz.py for the argument: no
@@ -754,14 +757,16 @@ async def test_telegram_oidc_verifies_mobile_then_creates_global_cookie_session(
     signup_user,
     monkeypatch,
 ):
-    monkeypatch.setattr(settings, "telegram_oidc_client_id", "telegram-e2e-client")
     monkeypatch.setattr(
-        settings,
+        identity_settings, "telegram_oidc_client_id", "telegram-e2e-client"
+    )
+    monkeypatch.setattr(
+        identity_settings,
         "telegram_oidc_client_secret",
         SecretStr("telegram-e2e-secret"),
     )
     monkeypatch.setattr(
-        settings,
+        identity_settings,
         "telegram_oidc_redirect_uri",
         "http://testserver/auth/telegram/callback",
     )

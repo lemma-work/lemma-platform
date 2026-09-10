@@ -24,6 +24,7 @@ from typing import Any
 from dotenv import dotenv_values
 from pydantic import HttpUrl, SecretStr
 
+from app.modules.agent.config import agent_settings
 from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
 from app.modules.agent.services.context_budget import (
@@ -85,7 +86,7 @@ def _openai_compat_vision_model_names() -> set[str]:
     """
     raw = os.getenv("LEMMA_OPENAI_VISION_MODEL_NAMES")
     if raw is None:
-        raw = settings.lemma_openai_vision_model_names
+        raw = agent_settings.lemma_openai_vision_model_names
     return {name.strip() for name in (raw or "").split(",") if name.strip()}
 
 
@@ -112,11 +113,12 @@ def _build_system_openai_catalog(
     """Build the configured system OpenAI catalog, then customize it."""
     _load_runtime_env()
     raw_model_names = (
-        os.getenv("LEMMA_OPENAI_MODEL_NAMES") or settings.lemma_openai_model_names
+        os.getenv("LEMMA_OPENAI_MODEL_NAMES") or agent_settings.lemma_openai_model_names
     )
     model_names = _csv_setting_or_empty(raw_model_names)
     default_model_name = (
-        os.getenv("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model
+        os.getenv("LEMMA_OPENAI_DEFAULT_MODEL")
+        or agent_settings.lemma_openai_default_model
     ).strip()
     # Folded in before the emptiness check, not after it: a deployment that
     # names only a default model has named a model, and the error below offers
@@ -172,7 +174,7 @@ def _openai_compat_model_capabilities(
 def system_lemma_profile() -> AgentRuntimeProfile | None:
     _load_runtime_env()
     model_type = (
-        os.getenv("LEMMA_DEFAULT_MODEL_TYPE") or settings.lemma_default_model_type
+        os.getenv("LEMMA_DEFAULT_MODEL_TYPE") or agent_settings.lemma_default_model_type
     ).strip()
     if model_type == "anthropic_compat":
         return _system_lemma_anthropic_profile()
@@ -186,7 +188,8 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
     # Configured credentials require at least one explicit model.
     model_catalog = _build_system_openai_catalog()
     default_model_name = (
-        os.getenv("LEMMA_OPENAI_DEFAULT_MODEL") or settings.lemma_openai_default_model
+        os.getenv("LEMMA_OPENAI_DEFAULT_MODEL")
+        or agent_settings.lemma_openai_default_model
     ).strip()
     return AgentRuntimeProfile(
         id=SYSTEM_LEMMA_PROFILE_ID,
@@ -224,16 +227,17 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
 
 def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
     api_key = _env_or_setting(
-        "LEMMA_ANTHROPIC_API_KEY", settings.lemma_anthropic_api_key
+        "LEMMA_ANTHROPIC_API_KEY", agent_settings.lemma_anthropic_api_key
     )
     if not api_key:
         return None
     model_names = _csv_setting_or_empty(
-        os.getenv("LEMMA_ANTHROPIC_MODEL_NAMES") or settings.lemma_anthropic_model_names
+        os.getenv("LEMMA_ANTHROPIC_MODEL_NAMES")
+        or agent_settings.lemma_anthropic_model_names
     )
     default_model_name = (
         os.getenv("LEMMA_ANTHROPIC_DEFAULT_MODEL")
-        or settings.lemma_anthropic_default_model
+        or agent_settings.lemma_anthropic_default_model
     ).strip()
     if default_model_name and default_model_name not in model_names:
         model_names.insert(0, default_model_name)
@@ -270,7 +274,7 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
         config=AnthropicCompatibleRuntimeConfig(
             base_url=HttpUrl(
                 os.getenv("LEMMA_ANTHROPIC_BASE_URL")
-                or settings.lemma_anthropic_base_url
+                or agent_settings.lemma_anthropic_base_url
             ),
         ),
         credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),

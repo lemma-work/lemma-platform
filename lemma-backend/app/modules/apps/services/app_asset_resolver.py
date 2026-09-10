@@ -20,11 +20,13 @@ from app.modules.apps.domain.entities import (
     AppAssetDocument,
     AppEntity,
     AppReleaseEntity,
+    public_app_url,
 )
 from app.modules.apps.domain.errors import AppNotFoundError
 from app.modules.apps.domain.ports import AppRepositoryPort
 from app.modules.apps.services import app_install_assets
 from app.modules.apps.services.app_storage_phase import _AssetReadInputs
+from app.modules.apps.config import apps_settings
 
 logger = structlog.get_logger()
 
@@ -42,6 +44,18 @@ class AppAssetResolver:
     def public_url(app: AppEntity) -> str:
         scheme = urlparse(settings.api_url).scheme or "https"
         return f"{scheme}://{app.public_slug}.{settings.app_base_domain}"
+
+    @staticmethod
+    def preview_url(app: AppEntity, release: AppReleaseEntity) -> str:
+        """The canonical host a specific release is previewed at.
+
+        ``--`` is the separator because ``normalize_public_slug`` collapses runs
+        of ``-``, so no real slug can contain one: the label always splits back
+        into exactly the slug and the release, however many hyphens the slug has.
+        The release number is used even when the caller addressed the release by
+        digest, so one release has one preview URL.
+        """
+        return public_app_url(f"{app.public_slug}--r{release.release_number}")
 
     @staticmethod
     def _quote_etag(etag: str | None) -> str | None:
@@ -99,7 +113,11 @@ class AppAssetResolver:
         public_url: str | None,
         is_entrypoint: bool,
     ) -> dict[str, str] | None:
-        if not is_entrypoint or not public_url or not settings.app_branding_enabled:
+        if (
+            not is_entrypoint
+            or not public_url
+            or not apps_settings.app_branding_enabled
+        ):
             return None
         if self.branding_entitlement is None:
             return runtime_config.build_app_branding(public_url)
@@ -166,16 +184,22 @@ class AppAssetResolver:
         asset_path: str | None,
         request_etag: str | None = None,
         public_url: str | None = None,
+        release: AppReleaseEntity | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
         normalized_asset_path = self._normalize_asset_path(asset_path)
         reserved = self._reserved(app, normalized_asset_path, request_etag)
         if reserved is not None:
             return reserved
 
-        release = await self.current_release(
-            app,
-            raise_not_found_name=raise_not_found_name,
-        )
+        # `release` lets a preview host serve a build that is not live through
+        # exactly this path -- one ETag rule, one branding rule, one runtime
+        # config injection -- instead of a parallel serving implementation that
+        # would drift from the live one.
+        if release is None:
+            release = await self.current_release(
+                app,
+                raise_not_found_name=raise_not_found_name,
+            )
         app_identity = runtime_config.build_runtime_app_identity(
             app.name,
             app.description,

@@ -65,7 +65,7 @@ class PodMCPService:
             Tool(
                 name=exported_tool_name(tool.name),
                 description=tool.description,
-                inputSchema=inline_tool_schema_refs(tool.input_schema),
+                input_schema=inline_tool_schema_refs(tool.input_schema),
                 _meta={"lemma_tool_name": tool.name},
             )
             for tool in tools

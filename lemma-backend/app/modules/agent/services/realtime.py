@@ -102,11 +102,19 @@ def message_payload(
     }
 
 
-def error_payload(agent_run_id: UUID, error: str) -> dict[str, object]:
+def error_payload(
+    agent_run_id: UUID,
+    error: str,
+    *,
+    code: str | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
     return {
         "type": "error",
         "agent_run_id": str(agent_run_id),
         "data": error,
+        **({"error_code": code} if code else {}),
+        **({"error_reason": reason} if reason else {}),
     }
 
 

@@ -18,8 +18,8 @@ from app.modules.connectors.domain.auth_config import (
 from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     ConnectorKind,
-    LemmaProviderCapability,
     McpKindSpec,
+    SqlKindSpec,
 )
 from app.modules.connectors.domain.errors import ConnectorUnauthorizedError
 from app.modules.connectors.services.install_provisioning import (
@@ -36,7 +36,6 @@ def _install(kind: ConnectorKind) -> AuthConfigEntity:
         organization_id=ORG_ID,
         connector_id="mcp",
         kind=kind,
-        provider="LEMMA",
         config_source=AuthConfigSource.SYSTEM_DEFAULT,
         name="an-install",
         config={"server_url": "https://mcp.example.com/mcp"},
@@ -44,7 +43,7 @@ def _install(kind: ConnectorKind) -> AuthConfigEntity:
 
 
 def _connector(spec) -> ConnectorEntity:
-    return ConnectorEntity(id="mcp", provider_capabilities=[spec])
+    return ConnectorEntity(id="mcp", kinds=[spec])
 
 
 def _dispatcher(result):
@@ -71,9 +70,11 @@ async def test_a_refused_discovery_says_so_rather_than_returning_zero():
 
 
 async def test_a_kind_that_discovers_nothing_is_not_a_failure():
+    # `sql` is a kind with no discoverer at all -- an install names its own
+    # database, so there is nothing to interrogate.
     outcome = await discover_install_operations(
-        _install(ConnectorKind.PACKAGE),
-        _connector(LemmaProviderCapability()),
+        _install(ConnectorKind.SQL),
+        _connector(SqlKindSpec()),
         repository=AsyncMock(),
         uow=AsyncMock(),
     )

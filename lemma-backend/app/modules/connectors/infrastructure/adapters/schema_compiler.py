@@ -28,9 +28,6 @@ _PRIMITIVES = {
     "datetime": {"type": "string", "format": "date-time"},
     "date": {"type": "string", "format": "date"},
 }
-_CONTAINER_NAMES = frozenset(
-    {"list", "List", "set", "Set", "tuple", "Tuple", "dict", "Dict"}
-)
 _FIELD_CONSTRAINTS = {
     "description": "description",
     "title": "title",

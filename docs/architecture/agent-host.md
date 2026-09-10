@@ -252,7 +252,27 @@ bugs live between them, which is why they present to a user as "it's slow" or
 | Harness discovery | `runtime.rs` refresh loop | `refresh_generation` | republished on change |
 | Runtime profile | backend | harness id + org | archived |
 | Run | backend dispatch + host journal | run id | terminal state |
-| ACP session | `acp.rs` | session id | agent ends turn |
+| ACP session | `acp.rs` | conversation + provider session id | session is removed or its harness changes |
+
+Immediately after ACP opens or loads a session, Agent Host journals a
+`run_state` event containing its provider session id before dispatching the
+prompt. The backend consumes that event in stream order and commits the
+conversation metadata binding before processing answer events. Follow-up turns
+load that same session in the conversation's persistent working directory.
+Control checkpoints retain the binding for older hosts and recovery, but a late
+checkpoint from an older run cannot replace a newer run's session. Changing to
+a different provider session clears the old session's instruction-delivery
+digest; instructions are acknowledged only after a prompt has landed.
+
+The session binding also records `host_id` and `host_cwd`, reported by the
+leased host at session establishment. `host_cwd` is the exact directory passed
+to ACP for native tools; it is an observation, not a permission grant. The
+existing top-level conversation `cwd` still selects the sandbox directory for
+Lemma MCP execution tools. These filesystems have no implicit mount or sync.
+Agent Host supplies the native cwd in the prompt, and follow-up checkpoints
+without that field preserve it for the same provider session. Conversation
+directories are retained across turns and idle periods; starting another run
+does not delete older conversations' files.
 
 What has to stay true across them:
 

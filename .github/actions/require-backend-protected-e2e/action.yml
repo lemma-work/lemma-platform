@@ -18,17 +18,46 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         RELEASE_SHA: ${{ inputs.sha }}
       run: |
-        run_data="$(
+        successful() {
           gh api --method GET \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/backend-protected-e2e.yml/runs" \
             -f head_sha="${RELEASE_SHA}" \
             -f status=success \
             -f per_page=20 \
             --jq '.workflow_runs | sort_by(.created_at) | reverse | .[0] | [.created_at, .html_url] | @tsv'
-        )"
+        }
+        # Still running is not "does not exist".
+        #
+        # The workflow is triggered by the tag push, so at release time its run
+        # for this commit has usually started and not finished. Failing here
+        # would mean every release failed at its first step and had to be
+        # re-run by hand -- which is the manual step the tag trigger exists to
+        # remove.
+        in_flight() {
+          gh api --method GET \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/backend-protected-e2e.yml/runs" \
+            -f head_sha="${RELEASE_SHA}" \
+            -f per_page=20 \
+            --jq '[.workflow_runs[] | select(.status != "completed")] | length'
+        }
+        run_data="$(successful)"
+        for attempt in $(seq 1 60); do
+          IFS=$'\t' read -r created_at run_url <<< "${run_data}"
+          if [[ -n "${created_at}" && "${created_at}" != "null" ]]; then
+            break
+          fi
+          if [[ "$(in_flight)" == "0" ]]; then
+            break
+          fi
+          echo "Backend protected E2E is still running for ${RELEASE_SHA}; \
+          waiting (${attempt}/60)."
+          sleep 60
+          run_data="$(successful)"
+        done
         IFS=$'\t' read -r created_at run_url <<< "${run_data}"
         if [[ -z "${created_at}" || "${created_at}" == "null" ]]; then
           echo "No successful Backend protected E2E run exists for ${RELEASE_SHA}." >&2
+          echo "It is triggered by the tag push; check its run for this commit." >&2
           exit 1
         fi
         cutoff="$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"

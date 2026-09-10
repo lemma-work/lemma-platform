@@ -27,7 +27,14 @@ crashes the worker.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Protocol
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from pydantic_ai import ModelRequestNode, CallToolsNode
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.run import AgentRun
+from pydantic_ai.result import FinalResult
+from pydantic_graph import End
 from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
@@ -51,19 +58,29 @@ from app.modules.agent.infrastructure.harnesses.pydantic_ai_usage import (
 logger = get_logger(__name__)
 
 
-class NodeLoop:
+class FinalOutputWriter(Protocol):
+    def __call__(
+        self, *, output: object, tool_name: str | None, tool_call_id: str | None
+    ) -> MessageDraft | None:
+        """Persist final output when it produces a user-facing message."""
+
+
+class NodeLoop[DepsT]:
     """Drives one attempt at a pydantic-ai run into an event queue."""
 
     def __init__(
         self,
         *,
-        run_context: Any,
+        run_context: Callable[
+            [list[ModelMessage] | None],
+            AbstractAsyncContextManager[AgentRun[DepsT, object]],
+        ],
         queue: asyncio.Queue[tuple[str, object]],
         streamer: ModelRequestStreamer,
-        options: HarnessOptions,
+        options: HarnessOptions[DepsT],
         agent_run_id: UUID,
         conversation_id: UUID,
-        final_output_message: Any,
+        final_output_message: FinalOutputWriter,
     ) -> None:
         self.run_context = run_context
         self.queue = queue
@@ -78,13 +95,13 @@ class NodeLoop:
         self.emitted_tool_response_ids: set[str] = set()
         # Set per attempt by `drive_once`, so a terminal branch can bill without
         # the run being threaded down into every pump method.
-        self._run: object | None = None
+        self._run: AgentRun[DepsT, object] | None = None
         self._carried_usage: dict[str, int] = {}
         self._usage_emitted = False
 
     async def drive_once(
         self,
-        resume_history: list[object] | None,
+        resume_history: list[ModelMessage] | None,
         state: dict[str, object],
         carried_usage: dict[str, int],
     ) -> None:
@@ -153,7 +170,12 @@ class NodeLoop:
             )
         )
 
-    async def _pump_model_request(self, node, run, state: dict[str, object]) -> bool:
+    async def _pump_model_request(
+        self,
+        node: ModelRequestNode[DepsT, object],
+        run: AgentRun[DepsT, object],
+        state: dict[str, object],
+    ) -> bool:
         """Stream one model request, holding its messages until the node completes.
 
         True when the caller should stop consuming nodes."""
@@ -210,7 +232,9 @@ class NodeLoop:
             await self.queue.put(("event", held))
         return False
 
-    async def _pump_tool_calls(self, node, run) -> bool:
+    async def _pump_tool_calls(
+        self, node: CallToolsNode[DepsT, object], run: AgentRun[DepsT, object]
+    ) -> bool:
         """Relay the tool calls and returns this node produced."""
         async for event in self.streamer._stream_tool_calls(
             node,
@@ -230,7 +254,7 @@ class NodeLoop:
                 return True
         return False
 
-    async def _pump_end_node(self, node) -> bool:
+    async def _pump_end_node(self, node: End[FinalResult[object]]) -> bool:
         """Emit whatever the run ended with."""
         if node.data.tool_call_id:
             if node.data.tool_call_id not in self.emitted_tool_response_ids:

@@ -68,6 +68,11 @@ describe('a stack with no guest to warm', () => {
     it('is terminal, and says nothing', () => {
         // Supervisor mode manages no sandbox images. Polling on for an answer
         // that cannot change is the shape this state exists to end.
+        expect(sandboxImageNotice(null, status('not-prepared')).kind).toBe('none');
+        // The whole point of the state: nothing was asked for, so nothing is
+        // announced, and the workspace stops asking rather than polling a
+        // question only a person in Settings can answer.
+        expect(shouldKeepPolling('not-prepared')).toBe(false);
         expect(sandboxImageNotice(null, status('unsupported')).kind).toBe('none');
         expect(shouldKeepPolling('unsupported')).toBe(false);
     });

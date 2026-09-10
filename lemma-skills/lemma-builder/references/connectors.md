@@ -30,12 +30,12 @@ Four entities stack up — find the one you need and address it by **name**:
    are **kind-specific** — see below.
 
 **Kind — how a connector is implemented.** A connector advertises one or more
-**kinds**: `package` (native Lemma), `composio`, `http` (OpenAPI), `sql`, `mcp`.
-Several connectors (gmail, slack, googledrive, jira) ship as both `package` and
-`composio`. The org picks a kind with `--kind` when it creates the auth config,
-and **that choice determines the operation and trigger set** — operation ids *and*
-payload shapes differ between kinds. A payload that works on `composio` will not
-work on `package`. The auth-config *name* encodes the choice, which is why every
+**kinds**: `http` (an OpenAPI descriptor Lemma executes directly — this is what
+"native" means), `composio`, `sql`, `mcp`. Several connectors (gmail, slack)
+ship as both `http` and `composio`. The org picks a kind with `--kind` when it
+creates the auth config, and **that choice determines the operation and trigger
+set** — operation ids *and* payload shapes differ between kinds. A payload that
+works on `composio` will not work on `http`. The auth-config *name* encodes the choice, which is why every
 command is keyed by it.
 
 **Kind is one discriminator over three independent axes**, and knowing which axis a
@@ -44,8 +44,8 @@ question belongs to saves a lot of guessing:
 | Axis | What it says | Where it lives |
 | --- | --- | --- |
 | **Auth** | `OAUTH2`, `API_KEY`, or `NOAUTH` — and whether the org may bring its own OAuth client or must use Lemma's system credentials | the kind's `auth_scheme` on the catalog entry |
-| **Discovery** | where the operation list comes from: `none` (the catalog already holds them — Composio toolkits, vendored packages, connectors with a bundled spec) or `mcp` / `openapi` (discovered *per install* and stored against the auth config) | the kind's `discovery` |
-| **Execution** | how one operation is actually called — an `execution` descriptor per operation (absent for package-executed ones, always present for discovered ones) | the operation row |
+| **Discovery** | where the operation list comes from: `none` (the catalog already holds them — Composio toolkits, and connectors whose spec is curated at build time such as GitHub, Slack and Gmail) or `mcp` / `openapi` (discovered *per install* and stored against the auth config) | the kind's `discovery` |
+| **Execution** | how one operation is actually called — an `execution` descriptor per operation, always present | the operation row |
 
 They move independently. That is why `auth-configs refresh-operations` exists only
 for MCP/OpenAPI installs (the discovery axis), why an org can hold two installs of
@@ -121,7 +121,7 @@ lemma connectors list
 lemma connectors get gmail
 
 # 2. Create the org auth config (required before any operation/trigger command)
-lemma connectors auth-configs create gmail --name workspace-gmail --kind package   # composio | http | sql | mcp
+lemma connectors auth-configs create gmail --name workspace-gmail --kind http   # composio | http | sql | mcp
 lemma connectors auth-configs list
 lemma connectors auth-configs get workspace-gmail
 
@@ -223,7 +223,7 @@ lemma connectors describe gmail              # kind auto-detected from the auth 
 lemma connectors describe gmail --kind composio   # force a kind
 ```
 
-(SDK: `pod.connectors.apps.skill("gmail", kind="package")`.)
+(SDK: `pod.connectors.apps.skill("gmail", kind="http")`.)
 
 ## From functions and agents
 

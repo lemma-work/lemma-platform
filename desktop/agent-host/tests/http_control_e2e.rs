@@ -116,10 +116,10 @@ async fn pairing_and_all_control_endpoints_interoperate() {
         reject_next_authenticated: Arc::new(AtomicBool::new(false)),
     };
     let app = Router::new()
-        .route("/agent-host/pairings:complete", post(pairing))
+        .route("/agent-host/pairings/complete", post(pairing))
         .route("/agent-host/poll", post(poll))
         .route("/agent-host/harnesses", put(publish))
-        .route("/agent-host/events:append", post(append_events))
+        .route("/agent-host/events/append", post(append_events))
         .route("/agent-host/revoke", post(revoke))
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

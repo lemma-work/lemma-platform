@@ -77,9 +77,11 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.workspace)
         # Any test that (transitively) needs the shared Kreuzberg container asks
         # for the ``kreuzberg_url`` fixture — directly, or via ``kreuzberg_wired``
-        # / ``index_datastore_file``. Mark those ``indexing`` so test-e2e-fast can
-        # exclude them and never boot the RAM-heavy extraction container; they run
-        # in the dedicated test-e2e-indexing job instead.
+        # / ``index_datastore_file``. Mark those ``indexing`` so the packed lanes
+        # can exclude them and never boot the RAM-heavy extraction container.
+        # They run in the ``indexing`` shard instead -- which for a long time
+        # this comment described and nothing provided, so they ran on no pull
+        # request at all.
         if "kreuzberg_url" in fixture_names:
             item.add_marker(pytest.mark.indexing)
         marker_names = {marker.name for marker in item.iter_markers()}

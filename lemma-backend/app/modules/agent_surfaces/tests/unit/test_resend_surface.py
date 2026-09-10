@@ -1190,10 +1190,11 @@ def test_a_non_http_failure_still_reports_something_usable():
 async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
     """The attribution has to survive an inbox list nobody has opened.
 
-    ``attribute()`` puts "Priya, on behalf of Deepak" in the body, which is the
-    right place for it and invisible until the message is opened. The sender
-    column is what a person scans, and it used to say "Lemma" for every agent in
-    every pod.
+    ``attribute()`` puts "On behalf of Deepak" in the body, which is the right
+    place for it and invisible until the message is opened. It does not name the
+    agent — the bot's own identity carries that on chat — so the sender column
+    is the only place "Priya" is ever shown, and it used to say "Lemma" for
+    every agent in every pod.
     """
     service = ResendPlatformService(
         {

@@ -16,25 +16,27 @@ pool is a worse trade than three sequential statements.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.usage.infrastructure.cost_expressions import recorded_cost
 from app.modules.usage.infrastructure.models import UsageLimitCounter
 from app.modules.usage.infrastructure.models import UsageRecord as UsageRecordModel
 
 
 async def system_cost_by_window(
-    session,
+    session: AsyncSession,
     *,
     organization_id: UUID | None,
     user_id: UUID | None,
     window_starts: Mapping[str, datetime],
     end: datetime,
     exclude_organization_ids: Sequence[UUID] = (),
-    apply_filters: Callable,
 ) -> dict[str, float]:
     """System spend for several windows over the same rows, in one scan.
 
@@ -53,10 +55,10 @@ async def system_cost_by_window(
     stmt = select(
         *(
             func.coalesce(
-                func.sum(UsageRecordModel.cost_usd).filter(
+                func.sum(recorded_cost()).filter(
                     UsageRecordModel.occurred_at >= window_start
                 ),
-                0.0,
+                Decimal(0),
             ).label(name)
             for name, window_start in window_starts.items()
         )
@@ -64,12 +66,13 @@ async def system_cost_by_window(
         UsageRecordModel.occurred_at >= min(window_starts.values()),
         UsageRecordModel.occurred_at <= end,
     )
-    stmt = apply_filters(
-        stmt,
-        organization_id=organization_id,
-        user_id=user_id,
-        system_cost_only=True,
+    stmt = stmt.where(
+        UsageRecordModel.profile_scope == "SYSTEM", recorded_cost().is_not(None)
     )
+    if organization_id is not None:
+        stmt = stmt.where(UsageRecordModel.organization_id == organization_id)
+    if user_id is not None:
+        stmt = stmt.where(UsageRecordModel.user_id == user_id)
     if exclude_organization_ids:
         stmt = stmt.where(
             or_(
@@ -87,7 +90,7 @@ async def system_cost_by_window(
 
 
 async def reserved_costs(
-    session,
+    session: AsyncSession,
     *,
     scopes: Sequence[tuple[UUID | None, UUID | None, str, datetime]],
 ) -> dict[str, float]:
@@ -118,7 +121,7 @@ async def reserved_costs(
     stmt = (
         select(
             UsageLimitCounter.window_kind,
-            func.coalesce(func.sum(UsageLimitCounter.reserved_usd), 0.0),
+            func.coalesce(func.sum(UsageLimitCounter.reserved_usd), Decimal(0)),
         )
         .where(or_(*clauses))
         .group_by(UsageLimitCounter.window_kind)

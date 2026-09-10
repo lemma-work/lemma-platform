@@ -74,11 +74,25 @@ export function AppFrameHost({
                     <AppFrame
                         podId={podId}
                         appId={page.id}
-                        appName={page.title}
+                        // The resource name, not the display title: the release
+                        // endpoints are addressed by name (`/apps/{name}/releases`),
+                        // and an app titled "Studio" is named `studio`.
+                        appName={page.appName || page.title}
                         title={page.title}
                         url={page.url as string}
                         visibility={page.visibility}
                         canShare={resourceAllows(page, 'app.update', canUpdateApp)}
+                        // An app is the one resource that *is* a screen, so it gets
+                        // the whole pane and no bar of its own. Versions, sharing
+                        // and deleting live on the Apps list, where you manage an
+                        // app rather than use it.
+                        //
+                        // Explicit rather than left to the `'bar'` default, which
+                        // was silently wrong here twice over: the shell does not
+                        // draw a context bar on this route, and these frames stay
+                        // mounted while hidden, so a claim from one would land
+                        // above whichever app -- or whichever route -- you moved to.
+                        chrome="none"
                     />
                 </div>
             ))}

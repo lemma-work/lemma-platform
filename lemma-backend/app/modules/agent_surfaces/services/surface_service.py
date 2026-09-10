@@ -32,10 +32,6 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAuthConfigPort,
     SurfaceInstallationRepositoryPort,
 )
-from app.composition.surface_connectors import (
-    ConnectorTriggerRepository,
-)
-from app.composition.surface_schedule import ScheduleService
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -81,8 +77,6 @@ class AgentSurfaceService(
         *,
         surface_repository: SurfaceInstallationRepositoryPort,
         account_binding_resolver: SurfaceAccountBindingPort,
-        schedule_service: "ScheduleService | None" = None,
-        connector_trigger_repository: ConnectorTriggerRepository | None = None,
         account_port: SurfaceAccountPort | None = None,
         auth_config_port: SurfaceAuthConfigPort | None = None,
         credential_resolver: "SurfaceCredentialResolver | None" = None,
@@ -90,8 +84,6 @@ class AgentSurfaceService(
     ):
         self.surface_repository = surface_repository
         self.account_binding_resolver = account_binding_resolver
-        self.schedule_service = schedule_service
-        self.connector_trigger_repository = connector_trigger_repository
         self._account_port = account_port
         self._auth_config_port = auth_config_port
         self._credential_resolver = credential_resolver
@@ -206,7 +198,8 @@ class AgentSurfaceService(
         self,
         *,
         pod_id: UUID,
-        agent: Any | None,
+        agent_id: UUID | None,
+        agent_name: str | None,
         platform: SurfacePlatform,
         name: str | None = None,
         config: SurfaceConfig | None = None,
@@ -222,9 +215,8 @@ class AgentSurfaceService(
         straight through is what used to land them on the ``pod-<hex>@``
         fallback: unreadable, and never screened for reserved local parts.
 
-        ``agent`` is the resolved agent or None rather than an id, because the
-        readable half of the address is its *name* and both callers already hold
-        the entity.
+        Takes the agent's id and name rather than the agent, because those are
+        the two things minting needs and both callers already hold them.
         """
         from app.modules.agent_surfaces.services.email_surface_provisioning import (
             create_surface_on_minted_address,
@@ -239,8 +231,8 @@ class AgentSurfaceService(
             # the address is built from and the assistant's stored name is the
             # internal `pod_default` -- that would mint `pod-default.acme@` for
             # a pod that answers at `acme@`.
-            agent_id=getattr(agent, "id", None) or pod_id,
-            agent_name=getattr(agent, "name", None),
+            agent_id=agent_id or pod_id,
+            agent_name=agent_name,
             platform=platform,
             name=name,
             config=config or SurfaceConfig(),

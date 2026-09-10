@@ -1,8 +1,9 @@
-"""The two kinds Lemma brokers rather than the tenant: ``composio`` and ``package``.
+"""The one kind Lemma brokers rather than the tenant: ``composio``.
 
-Neither takes a tenant-supplied endpoint -- Composio fronts the provider, and a
-package is vendored code -- so there is no install target to vet and no
-discovery: their operation sets come from the catalog.
+Composio fronts the provider, so there is no tenant-supplied endpoint to vet and
+nothing to discover -- its operation set comes from the catalog. It sat here
+beside ``package``, which was the same shape for a different reason (vendored
+code rather than a broker) until the vendored connector clients were removed.
 """
 
 from __future__ import annotations
@@ -41,17 +42,6 @@ class ComposioInstaller:
         return validate_install_config(spec, config, config_source)
 
 
-class PackageInstaller:
-    async def validate_install(
-        self,
-        *,
-        spec: KindSpec,
-        config: dict[str, Any],
-        config_source: AuthConfigSource,
-    ) -> dict[str, Any]:
-        return validate_install_config(spec, config, config_source)
-
-
 class ComposioKindExecutor:
     """Runs a Composio tool. The SDK is synchronous and is offloaded inside.
 
@@ -60,22 +50,6 @@ class ComposioKindExecutor:
     omitting it silently sent every Composio call down the vendored-package path,
     where the operation does not exist.
     """
-
-    def __init__(self, gateway: Any):
-        self._gateway = gateway
-
-    async def execute(self, request: ExecutionRequest) -> Any:
-        return await self._gateway.execute_operation(
-            connector_id=request.connector_id,
-            operation_name=request.operation.execution_name,
-            payload=request.payload,
-            third_party_credentials=request.credentials,
-            provider=kind_to_provider(request.kind).value,
-        )
-
-
-class PackageKindExecutor:
-    """Runs an operation through the vendored ``lemma-connectors`` client."""
 
     def __init__(self, gateway: Any):
         self._gateway = gateway

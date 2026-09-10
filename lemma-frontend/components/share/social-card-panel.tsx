@@ -29,6 +29,7 @@ import {
     type ShareTargetId,
 } from '@/lib/share/share-targets';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 /** Marks, not words — every destination then fits one row at any dialog width. */
 const SHARE_TARGET_ICONS: Record<ShareTargetId, LemmaIcon> = {
@@ -150,7 +151,7 @@ export function SocialCardPanel({
             toast.success('Share card copied');
         } catch {
             try {
-                await navigator.clipboard.writeText(
+                await copyText(
                     subject ? buildShareClipboardText(subject) : '',
                 );
                 toast.success('Post copied instead', {

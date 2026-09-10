@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LemmaServiceBridge
 import Virtualization
 
 private let version = "0.1.0"
@@ -101,16 +102,10 @@ private func configuration(
     let configuration = VZVirtualMachineConfiguration()
     let processors = ProcessInfo.processInfo.activeProcessorCount
     configuration.cpuCount = min(4, max(2, processors / 2))
-    let physical = ProcessInfo.processInfo.physicalMemory
-    // VZ allocates guest memory on demand, so expose enough headroom for the
-    // core services and one bounded the sandbox runtime without asking users to manage a
-    // Podman-style reservation. Keep at least half of an 8 GiB Mac for macOS,
-    // then scale automatically on larger machines.
-    let adaptiveMemory = max(UInt64(4 * 1_024 * 1_024 * 1_024), physical / 3)
-    configuration.memorySize = min(UInt64(8 * 1_024 * 1_024 * 1_024), adaptiveMemory)
-    configuration.memoryBalloonDevices = [
-        VZVirtioTraditionalMemoryBalloonDeviceConfiguration()
-    ]
+    // Keep one bounded allocation throughout the guest's lifetime. Changing
+    // guest memory requires lifecycle and workload qualification, not a guess
+    // that zero running sandboxes means the kernel has spare pages to reclaim.
+    configuration.memorySize = 4 * 1_024 * 1_024 * 1_024
 
     let platform = VZGenericPlatformConfiguration()
     platform.machineIdentifier = try machineIdentifier(at: paths.machineIdentifier)
@@ -124,25 +119,27 @@ private func configuration(
         "console=hvc0",
         "panic=1",
         "systemd.volatile=state",
-        "systemd.unit=lemma-runtime.target",
+        "systemd.unit=multi-user.target",
     ].joined(separator: " ")
     configuration.bootLoader = bootLoader
 
+    // Explicit host caching avoids the automatic disk path's Apple Silicon
+    // corruption risk. Full synchronization still honors guest flushes.
     let diskAttachment = try VZDiskImageStorageDeviceAttachment(
         url: paths.disk,
         readOnly: true,
-        cachingMode: .automatic,
+        cachingMode: .cached,
         synchronizationMode: .full
     )
     let dataAttachment = try VZDiskImageStorageDeviceAttachment(
         url: paths.dataDisk,
         readOnly: false,
-        cachingMode: .automatic,
+        cachingMode: .cached,
         synchronizationMode: .full
     )
     configuration.storageDevices = [
         VZVirtioBlockDeviceConfiguration(attachment: diskAttachment),
-        VZVirtioBlockDeviceConfiguration(attachment: dataAttachment),
+        VZNVMExpressControllerDeviceConfiguration(attachment: dataAttachment),
     ]
 
     let network = VZVirtioNetworkDeviceConfiguration()
@@ -173,215 +170,6 @@ private func configuration(
     configuration.serialPorts = [serial]
     try configuration.validate()
     return configuration
-}
-
-/// Hands idle guest memory back to macOS, without asking the guest to do it all
-/// at once and without mistaking "not started yet" for "finished".
-///
-/// This crashed a guest. `active_sandboxes == 0` was read as idle, which is true
-/// once the stack has run something and false during first setup, when there are
-/// no sandboxes because nothing has started. Sixty seconds into the very first
-/// boot — with Postgres mid-`initdb` and migrations running — it asked the guest
-/// to give back 4.5 of its 6 GiB in a single step. The kernel began mass page
-/// migration to comply and took an Oops in `migrate_pages`:
-///
-///     BUG: Bad rss-counter state mm:… type:MM_ANONPAGES val:9      (t+4.5s)
-///     Unable to handle kernel paging request at … kcompactd0       (t+65s)
-///
-/// Setup then failed with every vsock connect reset and migrations timing out
-/// after 300s, none of which named memory.
-///
-/// ## Why it fired then, of all times
-///
-/// The balloon was driven by the *arrival* of health responses: `observe` is
-/// called from `annotate`, which only runs on a `health` reply, and each idle
-/// reply restarted the countdown. locald polls health every 5 seconds — but it
-/// skips the poll entirely while a long local operation is running, which first
-/// setup is. So the only way the countdown ever completed was for the polling to
-/// stop, and the thing that stops it is the guest being busy with work the
-/// sandbox count cannot see. The balloon was not merely wrong about setup; it
-/// was anti-correlated with idleness, and could never have fired on a genuinely
-/// idle machine.
-///
-/// So the clock is its own now. `observe` records what it saw and when;
-/// a repeating timer decides. Silence is read as *unknown*, which is the honest
-/// reading — nobody has told us anything — and unknown is never grounds to
-/// reclaim.
-///
-/// The other two changes: it steps down instead of jumping, so the guest is
-/// never asked to migrate gigabytes in one go; and it holds off for
-/// `bootGraceSeconds` after start rather than until the first sandbox ever runs.
-/// A grace period covers first setup, which is what the crash needed, without
-/// also covering forever — "has never run a sandbox" is a state a machine can
-/// legitimately sit in for its whole life, and such a machine used to keep its
-/// full ceiling permanently while reporting `starting`.
-///
-/// A correct kernel should not Oops however rudely it is ballooned. We can only
-/// stop provoking it.
-private final class MemoryController {
-    private let device: VZVirtioTraditionalMemoryBalloonDevice?
-    private let ceiling: UInt64
-    private let idleTarget = UInt64(1_536 * 1_024 * 1_024)
-    /// The most memory to reclaim in one step, and how long to settle between
-    /// steps. Reclaiming is page migration in the guest, and the cost of it is
-    /// superlinear in how much is asked for at once.
-    private let stepBytes = UInt64(1_024 * 1_024 * 1_024)
-    private let stepSeconds = 20.0
-    /// How long the guest must have been idle before any of it is reclaimed.
-    private let idleSeconds = 60.0
-    /// How long after boot the balloon stays out of the way entirely.
-    ///
-    /// First setup is minutes of real work with nothing running that
-    /// `active_sandboxes` can count: `initdb`, migrations, image pulls. Ten
-    /// minutes clears it comfortably. This replaces "has ever run a sandbox",
-    /// which covered the same case and never expired.
-    private let bootGraceSeconds = 600.0
-    /// How stale an observation may be before it stops meaning anything.
-    ///
-    /// locald polls health every 5 seconds and suppresses the poll while a long
-    /// local operation is in flight. A gap is therefore evidence of work, not of
-    /// quiet, and reclaiming into one is exactly the mistake that crashed a
-    /// guest.
-    private let observationValidSeconds = 30.0
-    /// How often to reconsider. Short relative to `idleSeconds`, so the decision
-    /// is made from what is true now rather than from whenever a reply landed.
-    private let tickSeconds = 5.0
-    private let startedAt = Date()
-    /// When the guest was last observed doing something, or nil if never.
-    private var lastBusyAt: Date?
-    /// When we last heard anything at all about the guest.
-    private var lastObservedAt: Date?
-    /// Whether a walk down to the idle target is already scheduled.
-    private var shrinking = false
-    private(set) var state = "active"
-
-    init(virtualMachine: VZVirtualMachine, ceiling: UInt64) {
-        device = virtualMachine.memoryBalloonDevices.first
-            as? VZVirtioTraditionalMemoryBalloonDevice
-        self.ceiling = ceiling
-        if device == nil {
-            state = "unsupported"
-            return
-        }
-        scheduleTick()
-    }
-
-    /// Reconsider on our own clock, forever.
-    ///
-    /// The whole point of the rewrite: the decision must not be driven by the
-    /// arrival of a health reply, because those stop arriving exactly when the
-    /// guest is busiest.
-    private func scheduleTick() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + tickSeconds) { [weak self] in
-            guard let self else { return }
-            self.reconsider()
-            self.scheduleTick()
-        }
-    }
-
-    func requireCapacity() {
-        dispatchPrecondition(condition: .onQueue(.main))
-        lastBusyAt = Date()
-        lastObservedAt = lastBusyAt
-        shrinking = false
-        guard let device else {
-            state = "unsupported"
-            return
-        }
-        device.targetVirtualMachineMemorySize = ceiling
-        state = "active"
-    }
-
-    /// Record what the guest last said. Decides nothing.
-    func observe(activeSandboxes: Int) {
-        dispatchPrecondition(condition: .onQueue(.main))
-        let now = Date()
-        lastObservedAt = now
-        if activeSandboxes > 0 {
-            requireCapacity()
-            return
-        }
-        guard device != nil else {
-            state = "unsupported"
-            return
-        }
-        // Deliberately does not touch `lastBusyAt`, and deliberately does not
-        // restart anything. Restarting on every idle reply is what made a
-        // completed countdown impossible at 5-second polling: the timer was
-        // reset twelve times for every minute it was asked to wait.
-    }
-
-    /// Decide, from what is true now rather than from when something last
-    /// arrived.
-    private func reconsider() {
-        dispatchPrecondition(condition: .onQueue(.main))
-        guard device != nil else { return }
-        let now = Date()
-
-        // Nothing is reclaimed during first setup. Minutes of `initdb`,
-        // migrations and image pulls, none of it visible as a sandbox.
-        guard now.timeIntervalSince(startedAt) >= bootGraceSeconds else {
-            state = "starting"
-            return
-        }
-        // Silence means a health poll is being suppressed, which locald does
-        // while a long local operation runs. Unknown is not idle.
-        guard let lastObservedAt, now.timeIntervalSince(lastObservedAt) < observationValidSeconds
-        else {
-            state = "unknown"
-            shrinking = false
-            return
-        }
-        // Busy recently enough that reclaiming would only be undone.
-        if let lastBusyAt, now.timeIntervalSince(lastBusyAt) < idleSeconds {
-            return
-        }
-        // A guest that has never been busy still qualifies once the grace period
-        // is behind it: `lastBusyAt == nil` means nothing has run, and after ten
-        // minutes of a live stack that is a fact about the machine rather than a
-        // gap in what we know.
-        guard !shrinking else { return }
-        shrinking = true
-        stepDown()
-    }
-
-    /// Walk the target down one step at a time, rescheduling until it lands.
-    ///
-    /// Abandoned by anything that clears `shrinking` — `requireCapacity` when
-    /// work arrives, and `reconsider` when the guest goes quiet on us — so a
-    /// reclaim nobody wants any more stops rather than finishing.
-    private func stepDown() {
-        dispatchPrecondition(condition: .onQueue(.main))
-        guard shrinking, let device else { return }
-        let floor = min(idleTarget, ceiling)
-        let current = device.targetVirtualMachineMemorySize
-        guard current > floor else {
-            state = "idle"
-            shrinking = false
-            return
-        }
-        let next = current - min(stepBytes, current - floor)
-        device.targetVirtualMachineMemorySize = next
-        state = next > floor ? "idle-shrinking" : "idle-requested"
-        DispatchQueue.main.asyncAfter(deadline: .now() + stepSeconds) { [weak self] in
-            self?.stepDown()
-        }
-    }
-
-    func annotate(_ response: Data) -> Data {
-        dispatchPrecondition(condition: .onQueue(.main))
-        guard var object = try? JSONSerialization.jsonObject(with: response) as? [String: Any],
-              var result = object["result"] as? [String: Any] else {
-            return response
-        }
-        let active = result["active_sandboxes"] as? Int ?? 0
-        observe(activeSandboxes: active)
-        result["balloon_state"] = state
-        result["balloon_target_bytes"] =
-            device?.targetVirtualMachineMemorySize ?? ceiling
-        object["result"] = result
-        return (try? JSONSerialization.data(withJSONObject: object)) ?? response
-    }
 }
 
 private final class VirtualMachineDelegate: NSObject, VZVirtualMachineDelegate {
@@ -508,22 +296,33 @@ private func unixListener(path: String) throws -> Int32 {
 private final class GuestBridge {
     private let socketDevice: VZVirtioSocketDevice
     private let listener: Int32
-    // Virtualization.framework's virtio-vsock transport is designed for a
-    // long-lived RPC channel. Reconnecting for every readiness poll caused
-    // connection churn severe enough to corrupt multiple Linux kernel lines.
-    // Keep one guest connection and serialize the small control-plane calls.
-    private var guestConnection: VZVirtioSocketConnection?
-    private var pendingClients: [Int32] = []
-    private var requestActive = false
-    private let memory: MemoryController
+    // A guest connection per client, not one channel served one request at a
+    // time.
+    //
+    // Sharing a channel is why this used to serialise: two requests on one
+    // connection can hand each caller the other's reply, and a caller that
+    // abandons a slow request leaves an unread response for whoever is next.
+    // Serialising fixed that and introduced a worse one. `core.images` is
+    // allowed seventy-five minutes because a first install really can take
+    // that long on a slow line, and while it held the channel every later
+    // request waited behind it -- including the health probe, which has five
+    // seconds. So the host concluded its own guest had died in the middle of
+    // the pull it had asked for. The guest has served concurrent connections
+    // since it stopped answering them from its accept loop; this was the last
+    // place that funnelled them back into one.
+    //
+    // Bounded, and well under the guest's own limit of 32: a client that
+    // cannot be served yet waits rather than opening a connection nothing will
+    // read. That policy lives in `RequestGate`, in the library target, because
+    // it is the whole of the defect and none of it needs a virtual machine to
+    // exercise.
+    private let gate = RequestGate<Int32>(limit: 8)
 
     init(
         socketDevice: VZVirtioSocketDevice,
-        socketPath: String,
-        memory: MemoryController
+        socketPath: String
     ) throws {
         self.socketDevice = socketDevice
-        self.memory = memory
         listener = try unixListener(path: socketPath)
     }
 
@@ -538,30 +337,26 @@ private final class GuestBridge {
                 }
                 _ = fcntl(client, F_SETFD, FD_CLOEXEC)
                 DispatchQueue.main.async { [self] in
-                    pendingClients.append(client)
-                    processNext()
+                    start(gate.admit(client))
                 }
             }
         }
     }
 
-    private func processNext() {
+    private func start(_ clients: [Int32]) {
         dispatchPrecondition(condition: .onQueue(.main))
-        guard !requestActive, !pendingClients.isEmpty else { return }
-        requestActive = true
-        let client = pendingClients.removeFirst()
-        if let connection = guestConnection {
-            transfer(client: client, connection: connection)
-            return
-        }
-        socketDevice.connect(toPort: guestPort) { [self] result in
-            switch result {
-            case .failure(let error):
-                fputs("lemma-vz: guest connect failed: \(error.localizedDescription)\n", stderr)
-                fail(client: client)
-            case .success(let connection):
-                guestConnection = connection
-                transfer(client: client, connection: connection)
+        for client in clients {
+            socketDevice.connect(toPort: guestPort) { [self] result in
+                switch result {
+                case .failure(let error):
+                    fputs(
+                        "lemma-vz: guest connect failed: \(error.localizedDescription)\n",
+                        stderr
+                    )
+                    fail(client: client)
+                case .success(let connection):
+                    transfer(client: client, connection: connection)
+                }
             }
         }
     }
@@ -574,17 +369,13 @@ private final class GuestBridge {
             } catch {
                 fputs("lemma-vz: client read failed: \(error.localizedDescription)\n", stderr)
                 close(client)
-                finishRequest(keepGuestConnection: true)
+                finishRequest(connection)
                 return
             }
             guard !request.isEmpty else {
                 close(client)
-                finishRequest(keepGuestConnection: true)
+                finishRequest(connection)
                 return
-            }
-            if let object = try? JSONSerialization.jsonObject(with: request) as? [String: Any],
-               object["operation"] as? String == "sandbox.ensure" {
-                DispatchQueue.main.async { [memory] in memory.requireCapacity() }
             }
             do {
                 try writeAll(connection.fileDescriptor, request)
@@ -595,32 +386,24 @@ private final class GuestBridge {
                 guard !response.isEmpty else {
                     throw RuntimeError.invalid("Guest control channel closed")
                 }
-                let delivered: Data
-                if let object = try? JSONSerialization.jsonObject(with: request)
-                    as? [String: Any],
-                   object["operation"] as? String == "health" {
-                    delivered = DispatchQueue.main.sync {
-                        memory.annotate(response)
-                    }
-                } else {
-                    delivered = response
-                }
                 do {
-                    try writeAll(client, delivered)
+                    try writeAll(client, response)
                 } catch {
-                    // A timed-out bridge caller may close its Unix socket while
-                    // the guest operation finishes. The persistent guest
-                    // channel remains valid and must not be discarded.
+                    // A timed-out bridge caller may close its Unix socket
+                    // while the guest operation finishes. Its answer has
+                    // nowhere to go, which is not an error worth failing over:
+                    // the guest did the work, and this connection is this
+                    // request's alone to close either way.
                     fputs("lemma-vz: client write failed: \(error.localizedDescription)\n", stderr)
                 }
                 close(client)
-                finishRequest(keepGuestConnection: true)
+                finishRequest(connection)
             } catch {
                 fputs("lemma-vz: guest bridge failed: \(error.localizedDescription)\n", stderr)
                 let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Guest control channel is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
                 _ = try? writeAll(client, Data(payload.utf8))
                 close(client)
-                finishRequest(keepGuestConnection: false)
+                finishRequest(connection)
             }
         }
     }
@@ -629,18 +412,23 @@ private final class GuestBridge {
         let payload = "{\"ok\":false,\"error\":{\"code\":\"guest_unavailable\",\"message\":\"Private guest is unavailable\",\"retryable\":true,\"status_code\":503}}\n"
         _ = try? writeAll(client, Data(payload.utf8))
         close(client)
-        requestActive = false
-        processNext()
+        finishRequest(nil)
     }
 
-    private func finishRequest(keepGuestConnection: Bool) {
+    /// One request is over: close its guest connection and admit the next.
+    ///
+    /// Closing unconditionally is the difference this rework buys. The shared
+    /// channel had to be kept alive across a caller that gave up -- discarding
+    /// it would have cost every other caller too -- so a failure had to decide
+    /// whether the channel was still good. A connection owned by one request
+    /// is simply finished with when that request is.
+    private func finishRequest(_ connection: VZVirtioSocketConnection?) {
+        // On the main queue, which is the VM's: every other Virtualization
+        // object here is touched there, and closing a connection from the
+        // worker that just used it would be the one exception.
         DispatchQueue.main.async { [self] in
-            if !keepGuestConnection {
-                guestConnection?.close()
-                guestConnection = nil
-            }
-            requestActive = false
-            processNext()
+            connection?.close()
+            start(gate.finish())
         }
     }
 }
@@ -650,6 +438,11 @@ private func argument(_ name: String, in arguments: [String]) throws -> String {
         throw RuntimeError.invalid("Missing required argument \(name)")
     }
     return arguments[index + 1]
+}
+
+private final class RuntimeBridges {
+    var control: GuestBridge?
+    var services: [ServiceBridge] = []
 }
 
 private func serve(arguments: [String]) throws -> Never {
@@ -679,7 +472,6 @@ private func serve(arguments: [String]) throws -> Never {
         paths: runtimePaths,
         controlShare: controlShare
     )
-    let memoryCeiling = vmConfiguration.memorySize
     let vm = VZVirtualMachine(configuration: vmConfiguration)
     let delegate = VirtualMachineDelegate()
     vm.delegate = delegate
@@ -694,7 +486,7 @@ private func serve(arguments: [String]) throws -> Never {
         source.resume()
         signalSources.append(source)
     }
-    var bridge: GuestBridge?
+    let bridges = RuntimeBridges()
     vm.start { result in
         switch result {
         case .failure(let error):
@@ -706,23 +498,30 @@ private func serve(arguments: [String]) throws -> Never {
                 exit(EXIT_FAILURE)
             }
             do {
-                let memory = MemoryController(
-                    virtualMachine: vm,
-                    ceiling: memoryCeiling
-                )
-                bridge = try GuestBridge(
+                for port: UInt32 in [5432, 6379, 3567] {
+                    let service = try ServiceBridge(
+                        path: socketParent.appendingPathComponent("service-\(port).sock").path
+                    ) { completed in
+                        socketDevice.connect(toPort: port) { result in
+                            completed(result.map { connection in
+                                GuestStream(descriptor: connection.fileDescriptor) { connection.close() }
+                            })
+                        }
+                    }
+                    bridges.services.append(service)
+                }
+                bridges.control = try GuestBridge(
                     socketDevice: socketDevice,
-                    socketPath: socketPath,
-                    memory: memory
+                    socketPath: socketPath
                 )
-                bridge?.serve()
+                bridges.control?.serve()
             } catch {
                 fputs("lemma-vz: control bridge failed: \(error.localizedDescription)\n", stderr)
                 exit(EXIT_FAILURE)
             }
         }
     }
-    withExtendedLifetime((vm, delegate, bridge, stopCoordinator, signalSources)) {
+    withExtendedLifetime((vm, delegate, bridges, stopCoordinator, signalSources)) {
         RunLoop.main.run(until: Date.distantFuture)
     }
     fatalError("unreachable")

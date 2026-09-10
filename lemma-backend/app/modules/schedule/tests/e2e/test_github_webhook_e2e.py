@@ -17,7 +17,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.composition.webhook_sources.github import source_event_id
+from app.modules.connectors.infrastructure.webhook_sources.github import source_event_id
 from app.modules.connectors.config import connector_settings
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.infrastructure.models.run import ScheduleRun

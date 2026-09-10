@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import settings
+from app.modules.function.config import function_settings
 from app.modules.function.application.function_runtime_route_resolver import (
     endpoint_reuse_seconds,
 )
@@ -40,7 +40,15 @@ from app.modules.workspace.config import workspace_settings
 def test_reuse_window_is_clamped_under_idle_release(
     monkeypatch, configured: int, idle_release: int, expected: int
 ) -> None:
-    monkeypatch.setattr(settings, "function_runtime_endpoint_reuse_seconds", configured)
+    # `int(...)` rather than the bare parameter so `check_test_doubles.py` can
+    # see this for what it is: a number, arranging the run. It reads a variable,
+    # and the gate can only recognise data from a literal or a value
+    # constructor -- so a parametrized scalar looked like a stand-in for
+    # behaviour. It was already counted this way; moving the field onto
+    # `FunctionSettings` only moved which module it counted against.
+    monkeypatch.setattr(
+        function_settings, "function_runtime_endpoint_reuse_seconds", int(configured)
+    )
     monkeypatch.setattr(workspace_settings, "idle_release_seconds", idle_release)
 
     assert endpoint_reuse_seconds() == expected

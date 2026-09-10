@@ -1,11 +1,10 @@
 'use client';
 
-import { Check } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
+import { SettingsChoiceList } from '@/components/settings/settings-kit';
 import { useSetDefaultSurface, useUserSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
-import { cn } from '@/lib/utils';
 import type { SurfacePlatform } from 'lemma-sdk';
 import { StepLoader } from '@/components/brand/loader';
 
@@ -17,14 +16,40 @@ const PLATFORM_LABEL: Record<string, string> = {
     RESEND: 'Resend',
 };
 
+/**
+ * What the shared inbound identity is *called* on each platform, so the line
+ * that explains the choice names the thing the person actually messages rather
+ * than the abstract "address".
+ */
+const PLATFORM_ADDRESS: Record<string, string> = {
+    SLACK: 'Slack app',
+    TEAMS: 'Teams app',
+    TELEGRAM: 'Telegram bot',
+    WHATSAPP: 'WhatsApp number',
+    RESEND: 'mailbox',
+};
+
 const platformLabel = (platform: string) => PLATFORM_LABEL[platform] ?? platform;
+
+const platformAddress = (platform: string) =>
+    PLATFORM_ADDRESS[platform] ?? `${platformLabel(platform)} address`;
+
+/** "Slack", "Slack and Telegram", "Slack, Telegram and Resend". */
+const joinNames = (names: string[]) =>
+    names.length <= 1
+        ? (names[0] ?? '')
+        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
 /**
  * User-scoped surface routing. When two surfaces answer at the *same* address —
  * Lemma's shared bot or number fronting pods in several orgs — only one of them
- * can take a message, so this panel raises that choice. Surfaces on their own
- * address (a pod's own bot, its own mailbox) are listed but never asked about:
- * a message sent to one of those can only ever arrive there.
+ * can take a message, so this panel raises that choice.
+ *
+ * Only those choices are drawn. A surface on its own address (a pod's own bot,
+ * its own mailbox) can only ever receive what was sent to it, so listing it
+ * asks nothing; naming every such pod turned this panel into a wall of repeated
+ * names that answered no question. The platforms they sit on are named in one
+ * closing line instead, so "which surfaces reach me" still has an answer.
  */
 export function UserSurfacesPanel() {
     const { data, isLoading } = useUserSurfaces();
@@ -32,10 +57,19 @@ export function UserSurfacesPanel() {
     const { mutate: setDefault, isPending, variables } = useSetDefaultSurface();
 
     const groups = data?.groups ?? [];
+    const choices = groups
+        .map((group) => ({
+            group,
+            contended: (group.surfaces ?? []).filter((surface) => surface.shares_address),
+        }))
+        .filter(({ contended }) => contended.length > 1);
+    const settled = groups.filter(
+        (group) => !choices.some(({ group: chosen }) => chosen.platform === group.platform)
+    );
 
     const podLabel = (podId: string) => {
         const pod = podsData?.items.find((candidate) => candidate.id === podId);
-        if (!pod) return 'a pod';
+        if (!pod) return null;
         return pod.organization_name ? `${pod.name} · ${pod.organization_name}` : pod.name;
     };
 
@@ -66,78 +100,58 @@ export function UserSurfacesPanel() {
     }
 
     return (
-        <div className="grid gap-4">
-            {groups.map((group) => {
-                const surfaces = group.surfaces ?? [];
-                const sharing = surfaces.filter((surface) => surface.shares_address);
-                const own = surfaces.filter((surface) => !surface.shares_address);
-                const hasConflict = sharing.length > 1;
+        <div className="grid gap-6">
+            {choices.map(({ group, contended }) => {
+                const label = platformLabel(group.platform);
+                // While a pick is in flight the row the user clicked reads as
+                // chosen: the list re-renders from the server answer, and a
+                // check that jumps back for one round trip reads as a failure.
+                const saving = isPending && variables?.platform === group.platform;
+                const selectedId =
+                    (saving ? variables?.surface_id : group.default_surface_id) ?? '';
 
                 return (
-                    <div
-                        key={group.platform}
-                        className="grid gap-2 rounded-lg border border-[color:var(--border-subtle)] bg-[color:color-mix(in_srgb,var(--surface-2)_42%,transparent)] p-3"
-                    >
-                        <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-medium text-[var(--text-primary)]">{platformLabel(group.platform)}</p>
-                            {hasConflict ? (
+                    <div key={group.platform} className="grid gap-2">
+                        <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium text-[var(--text-primary)]">{label}</p>
+                            {group.default_surface_id ? null : (
                                 <span className="chip chip-sm state-badge-warning shrink-0">Pick one</span>
-                            ) : null}
+                            )}
                         </div>
-
-                        {hasConflict ? (
-                            <>
-                                <p className="text-xs leading-5 text-[var(--text-secondary)]">
-                                    These pods share one {platformLabel(group.platform)} address — choose the one that should answer you.
-                                </p>
-                                <div className="grid gap-1.5">
-                                    {sharing.map((surface) => {
-                                        const isDefault =
-                                            surface.is_default || group.default_surface_id === surface.id;
-                                        const isSaving = isPending && variables?.surface_id === surface.id;
-                                        return (
-                                            <button
-                                                key={surface.id}
-                                                type="button"
-                                                onClick={() => choose(group.platform, surface.id)}
-                                                disabled={isPending}
-                                                className={cn(
-                                                    'surface-picker-button surface-choice-row custom-focus-ring',
-                                                    isDefault && 'is-selected'
-                                                )}
-                                            >
-                                                <span className="surface-choice-icon">
-                                                    {isSaving ? (
-                                                        <StepLoader size="sm" />
-                                                    ) : isDefault ? (
-                                                        <Check className="h-4 w-4" />
-                                                    ) : (
-                                                        <span className="block h-2 w-2 rounded-full bg-[var(--border-strong)]" />
-                                                    )}
-                                                </span>
-                                                <span className="min-w-0 flex-1 text-left">
-                                                    <span className="surface-choice-title">{podLabel(surface.pod_id)}</span>
-                                                    <span className="surface-choice-copy">{surface.name}</span>
-                                                </span>
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </>
-                        ) : null}
-
-                        {own.length ? (
-                            <p className="text-xs leading-5 text-[var(--text-secondary)]">
-                                {own.length === 1
-                                    ? `Answers you from ${podLabel(own[0].pod_id)}.`
-                                    : `${own.length} pods answer you, each at its own address: ${own
-                                          .map((surface) => podLabel(surface.pod_id))
-                                          .join(', ')}.`}
-                            </p>
-                        ) : null}
+                        <p className="text-xs leading-5 text-[var(--text-secondary)]">
+                            {contended.length} pods share one {platformAddress(group.platform)} — choose the one that
+                            answers you.
+                        </p>
+                        <SettingsChoiceList
+                            ariaLabel={`Which pod answers you on ${label}`}
+                            value={selectedId}
+                            disabled={isPending}
+                            onChange={(surfaceId) => choose(group.platform, surfaceId)}
+                            options={contended.map((surface) => {
+                                const title = podLabel(surface.pod_id) ?? surface.name;
+                                // The surface's own name earns a second line only
+                                // when it says something the row does not already:
+                                // inside the WhatsApp group, a surface named
+                                // "whatsapp" is the platform said twice.
+                                const detail =
+                                    surface.name !== title &&
+                                    surface.name.toLowerCase() !== label.toLowerCase()
+                                        ? surface.name
+                                        : undefined;
+                                return { value: surface.id, label: title, description: detail };
+                            })}
+                        />
                     </div>
                 );
             })}
+
+            {settled.length ? (
+                <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                    {joinNames(settled.map((group) => platformLabel(group.platform)))}{' '}
+                    {settled.length === 1 ? 'reaches' : 'reach'} you at{' '}
+                    {settled.length === 1 ? 'its own address' : 'their own addresses'} — nothing to choose there.
+                </p>
+            ) : null}
         </div>
     );
 }

@@ -164,7 +164,7 @@ async def _maybe_deliver_to_surface(
     if not platform_supports_chat_delivery(platform):
         return
 
-    from app.composition.agent_surface_runtime import deliver_display_resource
+    from app.modules.agent_surfaces.contracts.egress import deliver_display_resource
 
     await deliver_display_resource(
         conversation_id=deps.conversation_id,
@@ -185,7 +185,7 @@ def _hold_for_the_one_reply(
     into Lemma, which the agent should be writing into the reply body itself --
     so it is told that rather than being left to think a card went out.
     """
-    from app.composition.agent_surface_runtime import hold_display_for_one_reply
+    from app.modules.agent_surfaces.contracts.egress import hold_display_for_one_reply
 
     if request.type is not DisplayResourceType.FILE or not request.path:
         response.success = False

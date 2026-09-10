@@ -1,0 +1,18 @@
+[package]
+name = "lemma-private-file"
+version.workspace = true
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Files only this user may read, written so a crash cannot leave one half-written"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

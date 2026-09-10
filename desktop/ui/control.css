@@ -35,7 +35,7 @@
   --panel-raised: #f7f5ef;
   --ink: #17181a;
   --muted: #62666b;
-  --faint: #888b90;
+  --faint: #676b71;
 
   /* Alpha hairline rules, not opaque borders: they hold on white, on cream,
      and on a tinted row alike. */
@@ -76,7 +76,7 @@
     --panel-raised: #212120;
     --ink: #f2f0ea;
     --muted: #a3a29c;
-    --faint: #78776f;
+    --faint: #97968d;
     --border: rgb(245 243 237 / 0.13);
     --border-strong: rgb(245 243 237 / 0.30);
     --accent-rgb: 139 122 245;
@@ -235,8 +235,9 @@ h1 { margin: 0; font-size: clamp(28px, 3.5vw, 38px); line-height: 1.08; letter-s
 .state-pill.bad { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, var(--border)); background: var(--red-soft); }
 
 .page { display: none; max-width: 1120px; margin: 0 auto; }
-.page.active { display: block; animation: page-in .16s ease-out; }
-@keyframes page-in { from { opacity: 0; transform: translateY(3px); } }
+/* Child webviews can suspend animation frames while their parent changes.
+   Settings must paint immediately, including recovery and confirmation paths. */
+.page.active { display: block; }
 
 .attention-banner {
   display: grid;
@@ -533,7 +534,7 @@ pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
 .command-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
 .command-row code { padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-raised); }
 .qr-card { display: flex; align-items: center; gap: 18px; margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); }
-.qr-card svg { display: block; width: 132px; height: 132px; border-radius: 5px; }
+.qr-card svg, .qr-card img { display: block; width: 132px; height: 132px; border-radius: 5px; }
 .qr-card p { margin: 4px 0 0; color: var(--muted); }
 
 .config-drawer { border-top: 1px solid var(--border); }
@@ -567,35 +568,6 @@ pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
   font-size: 12px;
 }
 .toast.error { background: var(--red); color: #ffffff; }
-
-.confirm-dialog {
-  width: min(480px, calc(100vw - 40px));
-  margin: auto;
-  padding: 24px;
-  color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: 0 28px 90px rgb(13 15 18 / 0.28);
-}
-.confirm-dialog::backdrop {
-  background: rgb(13 15 18 / 0.52);
-  backdrop-filter: blur(4px);
-}
-.confirm-dialog h2 { margin: 12px 0 6px; font-size: 23px; }
-.confirm-dialog > p { margin: 0 0 18px; color: var(--muted); line-height: 1.55; }
-.confirm-icon {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  color: var(--red);
-  background: var(--red-soft);
-  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border));
-  border-radius: 50%;
-  font-weight: 800;
-}
-.confirm-actions { justify-content: flex-end; margin-top: 20px; }
 
 @media (max-width: 930px) {
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }

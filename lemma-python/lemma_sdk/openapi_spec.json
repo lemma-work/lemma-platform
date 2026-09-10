@@ -102,6 +102,38 @@
         "title": "AccountCredentialsUpdateSchema",
         "type": "object"
       },
+      "AccountInstallationsSchema": {
+        "description": "What an account can actually reach, asked of the provider.",
+        "properties": {
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/InstallationChoiceSchema"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "install_state": {
+            "title": "Install State",
+            "type": "string"
+          },
+          "installation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installation Id"
+          }
+        },
+        "required": [
+          "install_state"
+        ],
+        "title": "AccountInstallationsSchema",
+        "type": "object"
+      },
       "AccountListResponseSchema": {
         "description": "Schema for account list response.",
         "properties": {
@@ -201,6 +233,12 @@
           "id": {
             "format": "uuid",
             "title": "Id",
+            "type": "string"
+          },
+          "install_state": {
+            "default": "READY",
+            "description": "READY, INSTALL_REQUIRED, CHOOSE_INSTALL or PENDING_APPROVAL. Anything but READY means the connection cannot reach resources yet.",
+            "title": "Install State",
             "type": "string"
           },
           "is_default": {
@@ -2528,6 +2566,15 @@
             "type": "array"
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "current_release_id": {
@@ -2669,6 +2716,128 @@
           "message"
         ],
         "title": "AppMessageResponse",
+        "type": "object"
+      },
+      "AppReleaseListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AppReleaseResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AppReleaseListResponse",
+        "type": "object"
+      },
+      "AppReleaseResponse": {
+        "description": "One entry in an app's release history.",
+        "properties": {
+          "app_id": {
+            "format": "uuid",
+            "title": "App Id",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "has_source": {
+            "description": "Whether this release's own source archive is still stored.",
+            "title": "Has Source",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_live": {
+            "description": "True for the release this app currently serves.",
+            "title": "Is Live",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "readOnly": true,
+            "title": "Preview Url"
+          },
+          "pruned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when retention removed this release's build. The entry stays in the history, but it can no longer be previewed or promoted.",
+            "title": "Pruned At"
+          },
+          "release_number": {
+            "title": "Release Number",
+            "type": "integer"
+          },
+          "version": {
+            "description": "sha256 digest of the release's dist archive.",
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "app_id",
+          "release_number",
+          "version",
+          "created_at",
+          "is_live",
+          "has_source",
+          "preview_url"
+        ],
+        "title": "AppReleaseResponse",
         "type": "object"
       },
       "AppStatus": {
@@ -3025,6 +3194,18 @@
       },
       "AuthConfigResponseSchema": {
         "properties": {
+          "auth_scheme": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How this install authenticates, which is not always what the connector's catalog entry says. `mcp` is one catalog entry standing for every server a tenant may point at: the entry says API_KEY, but an install whose server described its own authorization when it was created signs in through a browser and answers OAUTH2 here. Branch on this rather than on the connector's kind when deciding how to connect an install.",
+            "title": "Auth Scheme"
+          },
           "config": {
             "anyOf": [
               {
@@ -3616,6 +3797,18 @@
             ],
             "description": "Connector ID to connect",
             "title": "Connector Id"
+          },
+          "return_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Path inside the app to come back to when the flow finishes. Only a rooted path is accepted; anything else is ignored.",
+            "title": "Return To"
           }
         },
         "title": "ConnectRequestInitiateSchema",
@@ -3819,8 +4012,7 @@
           "composio",
           "http",
           "sql",
-          "mcp",
-          "package"
+          "mcp"
         ],
         "title": "ConnectorKind",
         "type": "string"
@@ -3874,17 +4066,6 @@
                 "type": "null"
               }
             ]
-          },
-          "package_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Package Name"
           },
           "supports_org_custom_oauth": {
             "default": false,
@@ -4177,6 +4358,28 @@
             ],
             "title": "Last Run Error"
           },
+          "last_run_error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run Error Code"
+          },
+          "last_run_error_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run Error Reason"
+          },
           "last_run_finished_at": {
             "anyOf": [
               {
@@ -4448,6 +4651,7 @@
             "title": "Input Schema"
           },
           "instruction": {
+            "maxLength": 60000,
             "minLength": 1,
             "title": "Instruction",
             "type": "string"
@@ -5907,6 +6111,18 @@
         "properties": {
           "input_data": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Run a specific revision instead of the live one -- a revision number ('r12') or a hash prefix. Requires function.update: running a superseded build is an authoring action, not an execution one.",
+            "title": "Revision"
           }
         },
         "title": "ExecuteFunctionRequest",
@@ -7544,6 +7760,167 @@
         "title": "FunctionResourcePermissionResponse",
         "type": "object"
       },
+      "FunctionRevisionListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FunctionRevisionResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "FunctionRevisionListResponse",
+        "type": "object"
+      },
+      "FunctionRevisionPromoteResponse": {
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/FunctionRevisionResponse"
+          },
+          "schema_changed": {
+            "description": "True when this revision's input/output/config schemas differ from the ones that were live. The schemas move with the revision, so agents and workflows bound to the old contract may need updating.",
+            "title": "Schema Changed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "revision",
+          "schema_changed"
+        ],
+        "title": "FunctionRevisionPromoteResponse",
+        "type": "object"
+      },
+      "FunctionRevisionResponse": {
+        "description": "One entry in a function's revision history.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "config_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "function_id": {
+            "format": "uuid",
+            "title": "Function Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_live": {
+            "description": "True for the revision this function runs.",
+            "title": "Is Live",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "output_schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pruned_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when retention removed this revision's artifact. The entry stays in the history, but it can no longer be run or promoted.",
+            "title": "Pruned At"
+          },
+          "revision_hash": {
+            "title": "Revision Hash",
+            "type": "string"
+          },
+          "revision_number": {
+            "title": "Revision Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "function_id",
+          "revision_number",
+          "revision_hash",
+          "created_at",
+          "is_live"
+        ],
+        "title": "FunctionRevisionResponse",
+        "type": "object"
+      },
       "FunctionRunListResponse": {
         "description": "List of function runs.",
         "properties": {
@@ -8463,6 +8840,118 @@
         "title": "ImportStatusResponse",
         "type": "object"
       },
+      "InstallRequestInitiateSchema": {
+        "description": "Which account still needs its provider-side installation.",
+        "properties": {
+          "account_id": {
+            "description": "The connected account the installation is for.",
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
+          },
+          "return_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Path inside the app to come back to. Only a rooted path is accepted; anything else is ignored rather than followed.",
+            "title": "Return To"
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "title": "InstallRequestInitiateSchema",
+        "type": "object"
+      },
+      "InstallRequestResponseSchema": {
+        "description": "Where to send somebody to finish installing.\n\nOnly the URL: like a connect request, the `state` on it is a capability and\ndoes not belong in a response body, browser memory or a HAR capture.",
+        "properties": {
+          "authorization_url": {
+            "description": "Provider URL that completes the installation step.",
+            "title": "Authorization Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url"
+        ],
+        "title": "InstallRequestResponseSchema",
+        "type": "object"
+      },
+      "InstallationBindSchema": {
+        "description": "Which of several installations this account speaks for.",
+        "properties": {
+          "installation_id": {
+            "description": "One of the ids offered by the installations endpoint.",
+            "title": "Installation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id"
+        ],
+        "title": "InstallationBindSchema",
+        "type": "object"
+      },
+      "InstallationChoiceSchema": {
+        "description": "One installation an account could speak for.",
+        "properties": {
+          "account_login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Login"
+          },
+          "account_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Type"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "manage_url": {
+            "description": "Where the person changes this installation's repository access. A link rather than an API call: the endpoints that add or remove a repository accept only classic personal access tokens.",
+            "title": "Manage Url",
+            "type": "string"
+          },
+          "repository_selection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'all' or 'selected'. A selected installation does not pick up newly created repositories, which is the commonest reason a repository is missing.",
+            "title": "Repository Selection"
+          }
+        },
+        "required": [
+          "installation_id",
+          "manage_url"
+        ],
+        "title": "InstallationChoiceSchema",
+        "type": "object"
+      },
       "InstalledAppSummary": {
         "properties": {
           "connector_id": {
@@ -8875,6 +9364,73 @@
         "title": "MessageResponseSchema",
         "type": "object"
       },
+      "MyUsageLimitsResponse": {
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "plan_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Name"
+          },
+          "plan_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "PERSONAL",
+                  "TEAM"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Type"
+          },
+          "warning_percent": {
+            "title": "Warning Percent",
+            "type": "number"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/UsageAllowanceResponse"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "organization_id",
+          "plan_type",
+          "plan_name",
+          "windows",
+          "allowed",
+          "warning_percent"
+        ],
+        "title": "MyUsageLimitsResponse",
+        "type": "object"
+      },
       "NavigationOrganizationResponse": {
         "description": "An organization and the pods the caller can see inside it.",
         "properties": {
@@ -8920,7 +9476,7 @@
         "type": "object"
       },
       "NavigationPodResponse": {
-        "description": "A pod as a listing entry \u2014 enough to draw it, label it, and link to it.\n\nThe line this payload holds is scalars yes, collections no. A pod's own\ncolumns cost nothing to return: they ride along in the query that found the\npod, so the response grows with the number of pods and not with what is\ninside them. Apps, agents and roles are the other side of that line, and\nlive on ``/organizations/{org_id}/home``.",
+        "description": "A pod as a listing entry \u2014 enough to draw it, label it, and link to it.\n\nThe line this payload holds is scalars yes, collections no. A pod's own\ncolumns cost nothing to return: they ride along in the query that found the\npod, so the response grows with the number of pods and not with what is\ninside them. Apps, agents and roles are the other side of that line, and\nlive on ``/organizations/{organization_id}/home``.",
         "properties": {
           "description": {
             "anyOf": [
@@ -11514,16 +12070,16 @@
           "mode": {
             "$ref": "#/components/schemas/PublishMode",
             "default": "CREATE",
-            "description": "CREATE refuses an existing repository. UPDATE requires an existing repository and replaces only Lemma-managed files."
+            "description": "Both modes require the repository to exist -- publishing does not create one. CREATE refuses a repository Lemma has already published to (one carrying a publish manifest), so it is what you use for a repository you just made. UPDATE requires that manifest and replaces only Lemma-managed files."
           },
           "private": {
             "default": false,
-            "description": "Create the repo as private.",
+            "description": "Recorded on the job and reported back, but not acted on: the repository already exists, so its visibility is whatever it was created with.",
             "title": "Private",
             "type": "boolean"
           },
           "repo_name": {
-            "description": "GitHub repository name (letters, numbers, dot, dash, underscore).",
+            "description": "GitHub repository to publish into, as `name` or `owner/name`. It must already exist and be covered by the Lemma app's installation -- publishing does not create repositories, because a GitHub App cannot.",
             "maxLength": 100,
             "minLength": 1,
             "title": "Repo Name",
@@ -14613,6 +15169,7 @@
           "instruction": {
             "anyOf": [
               {
+                "maxLength": 60000,
                 "minLength": 1,
                 "type": "string"
               },
@@ -15295,6 +15852,40 @@
         "title": "UploadResponse",
         "type": "object"
       },
+      "UsageAllowanceResponse": {
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reset_at": {
+            "format": "date-time",
+            "title": "Reset At",
+            "type": "string"
+          },
+          "used_percent": {
+            "title": "Used Percent",
+            "type": "number"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "used_percent",
+          "allowed",
+          "reset_at"
+        ],
+        "title": "UsageAllowanceResponse",
+        "type": "object"
+      },
       "UsageLimitScopeResponse": {
         "properties": {
           "allowed": {
@@ -15459,6 +16050,28 @@
               }
             ],
             "title": "Agent Run Id"
+          },
+          "cache_write_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Write Tokens"
+          },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
           },
           "conversation_id": {
             "anyOf": [
@@ -15734,6 +16347,30 @@
               }
             ],
             "title": "Agent Id"
+          },
+          "agent_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Run Id"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
           },
           "end_date": {
             "format": "date-time",
@@ -16249,7 +16886,7 @@
                 "type": "null"
               }
             ],
-            "description": "For a connector account variable, which of the connector's kinds the source install used ('composio', 'package', 'mcp', 'sql', 'http'), so the importer selects an account of the same kind. Null for non-connector variables.",
+            "description": "For a connector account variable, which of the connector's kinds the source install used ('composio', 'http', 'mcp', 'sql'), so the importer selects an account of the same kind. Null for non-connector variables.",
             "title": "Connector Kind"
           },
           "default": {
@@ -18238,7 +18875,7 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/agent-host/events:append": {
+    "/agent-host/events/append": {
       "post": {
         "description": "Append one ordered batch to the run's stream.\n\nThere is no second lane to publish on: every event type travels the one\nordered stream, and the ack watermark is the stream's last entry.",
         "operationId": "agent.host.events.append",
@@ -18378,7 +19015,7 @@
         }
       }
     },
-    "/agent-host/pairings:complete": {
+    "/agent-host/pairings/complete": {
       "post": {
         "description": "Consume a pairing code and issue the host secret, shown exactly once.",
         "operationId": "agent.host.pairing.complete",
@@ -18658,7 +19295,7 @@
     },
     "/connectors/connect-requests/oauth/callback": {
       "get": {
-        "description": "Handle OAuth callback and complete account connection. This endpoint is public and uses state parameter for security.",
+        "description": "Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security.\n\nA browser is redirected back into the app (303) carrying the outcome as query parameters: `connect` is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the account as JSON instead.",
         "operationId": "connector.oauth.callback",
         "parameters": [
           {
@@ -18678,6 +19315,7 @@
             }
           },
           {
+            "description": "Set to `json` to receive the account instead of a redirect.",
             "in": "query",
             "name": "format",
             "required": false,
@@ -18690,6 +19328,7 @@
                   "type": "null"
                 }
               ],
+              "description": "Set to `json` to receive the account instead of a redirect.",
               "title": "Format"
             }
           }
@@ -18697,13 +19336,25 @@
         "responses": {
           "200": {
             "content": {
-              "text/html": {
+              "application/json": {}
+            },
+            "description": "The connected account, when JSON was requested."
+          },
+          "303": {
+            "description": "Redirect back into the app with the outcome."
+          },
+          "307": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
                 "schema": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "The provider rejected the authorization, or the callback carried no usable state."
           },
           "422": {
             "content": {
@@ -18781,7 +19432,7 @@
     },
     "/connectors/{connector_id}/skill": {
       "get": {
-        "description": "Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.",
+        "description": "Get the skill guide markdown for a connector. Pass `kind=http` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.",
         "operationId": "connector.skill.get",
         "parameters": [
           {
@@ -18794,7 +19445,7 @@
             }
           },
           {
-            "description": "Kind override, e.g. package or composio",
+            "description": "Kind override, e.g. http or composio",
             "in": "query",
             "name": "kind",
             "required": false,
@@ -18807,7 +19458,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Kind override, e.g. package or composio",
+              "description": "Kind override, e.g. http or composio",
               "title": "Kind"
             }
           }
@@ -19578,18 +20229,18 @@
         }
       }
     },
-    "/organizations/{org_id}": {
+    "/organizations/{organization_id}": {
       "get": {
         "description": "Get organization details",
         "operationId": "org.get",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           }
@@ -19634,11 +20285,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           }
@@ -19691,17 +20342,17 @@
         }
       }
     },
-    "/organizations/{org_id}/agent-runtime/profiles": {
+    "/organizations/{organization_id}/agent-runtime/profiles": {
       "get": {
         "operationId": "agent.runtime.profiles.list",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19755,11 +20406,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           }
@@ -19831,17 +20482,17 @@
         }
       }
     },
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}": {
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}": {
       "delete": {
         "operationId": "agent.runtime.profiles.archive",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19890,11 +20541,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -19947,11 +20598,11 @@
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -20032,17 +20683,17 @@
         }
       }
     },
-    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore": {
+    "/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore": {
       "post": {
         "operationId": "agent.runtime.profiles.restore",
         "parameters": [
           {
             "in": "path",
-            "name": "org_id",
+            "name": "organization_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Org Id",
+              "title": "Organization Id",
               "type": "string"
             }
           },
@@ -20091,467 +20742,6 @@
           "resource": "agent.runtime.profiles",
           "result": "entity",
           "verb": "restore"
-        }
-      }
-    },
-    "/organizations/{org_id}/home": {
-      "get": {
-        "description": "One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.",
-        "operationId": "org.home",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationHomeResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Organization Home",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "org",
-          "result": "entity",
-          "verb": "home"
-        }
-      }
-    },
-    "/organizations/{org_id}/invitations": {
-      "get": {
-        "description": "Get all pending invitations for an organization",
-        "operationId": "org.invitation.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/OrganizationInvitationStatus",
-              "default": "PENDING"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationInvitationListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Organization Invitations",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "org.invitation",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
-      "post": {
-        "description": "Invite a user to join the organization",
-        "operationId": "org.invitation.invite",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OrganizationInvitationRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationInvitationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Invite Member",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org.invitation"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org.invitation",
-          "result": "entity",
-          "verb": "invite"
-        }
-      }
-    },
-    "/organizations/{org_id}/join": {
-      "post": {
-        "description": "Join an organization when the current user's email domain is allowed to auto-join",
-        "operationId": "org.join_auto_join",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Join Auto-Join Organization",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org",
-          "result": "entity",
-          "verb": "join_auto_join"
-        }
-      }
-    },
-    "/organizations/{org_id}/members": {
-      "get": {
-        "description": "Get all members of an organization",
-        "operationId": "org.member.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationMemberListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Organization Members",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "org.member",
-          "result": "collection",
-          "verb": "list"
-        }
-      }
-    },
-    "/organizations/{org_id}/members/{member_id}": {
-      "delete": {
-        "description": "Remove a member from the organization",
-        "operationId": "org.member.remove",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "member_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Member Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Remove Member",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org.member"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org.member",
-          "result": "void",
-          "verb": "remove"
-        }
-      }
-    },
-    "/organizations/{org_id}/members/{member_id}/role": {
-      "patch": {
-        "description": "Update a member's role in the organization",
-        "operationId": "org.member.update_role",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "member_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Member Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateMemberRoleRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationMemberResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Update Member Role",
-        "tags": [
-          "Organizations"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "org.member"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "org.member",
-          "result": "entity",
-          "verb": "update_role"
         }
       }
     },
@@ -20981,6 +21171,151 @@
           "resource": "connector.account",
           "result": "entity",
           "verb": "update"
+        }
+      }
+    },
+    "/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations": {
+      "get": {
+        "description": "Which GitHub App installations this account can reach, resolving and recording one when it is unambiguous.",
+        "operationId": "connector.account.installations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ask the provider again rather than trusting what is recorded. Editing an installation's repositories sends no callback and no reliable event, so this is how a change made on GitHub is seen.",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Ask the provider again rather than trusting what is recorded. Editing an installation's repositories sends no callback and no reliable event, so this is how a change made on GitHub is seen.",
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountInstallationsSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Account Installations",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "connector.account",
+          "result": "entity",
+          "verb": "installations"
+        }
+      },
+      "post": {
+        "description": "Bind an account to one of the installations it can reach.",
+        "operationId": "connector.account.bind_installation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Account Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallationBindSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponseSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Account Installation",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.account"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.account",
+          "result": "entity",
+          "verb": "bind_installation"
         }
       }
     },
@@ -21439,6 +21774,70 @@
           "resource": "connector.connect_request",
           "result": "entity",
           "verb": "create"
+        }
+      }
+    },
+    "/organizations/{organization_id}/connectors/connect-requests/install": {
+      "post": {
+        "description": "Start the installation leg for an account that is authorized but not yet installed, returning the URL to send the person to.",
+        "operationId": "connector.connect_request.install",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallRequestInitiateSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallRequestResponseSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Install Step",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.connect_request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.connect_request",
+          "result": "entity",
+          "verb": "install"
         }
       }
     },
@@ -21955,6 +22354,544 @@
         }
       }
     },
+    "/organizations/{organization_id}/home": {
+      "get": {
+        "description": "One organization's landing page: every pod the current user can see, with its apps, its agents, and the user's roles in that pod. Replaces fetching apps and agents per pod. Cached briefly per user.",
+        "operationId": "org.home",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationHomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Organization Home",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "org",
+          "result": "entity",
+          "verb": "home"
+        }
+      }
+    },
+    "/organizations/{organization_id}/invitations": {
+      "get": {
+        "description": "Get all pending invitations for an organization",
+        "operationId": "org.invitation.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/OrganizationInvitationStatus",
+              "default": "PENDING"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationInvitationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Organization Invitations",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "org.invitation",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "description": "Invite a user to join the organization",
+        "operationId": "org.invitation.invite",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationInvitationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationInvitationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Invite Member",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org.invitation"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org.invitation",
+          "result": "entity",
+          "verb": "invite"
+        }
+      }
+    },
+    "/organizations/{organization_id}/join": {
+      "post": {
+        "description": "Join an organization when the current user's email domain is allowed to auto-join",
+        "operationId": "org.join_auto_join",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Join Auto-Join Organization",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org",
+          "result": "entity",
+          "verb": "join_auto_join"
+        }
+      }
+    },
+    "/organizations/{organization_id}/members": {
+      "get": {
+        "description": "Get all members of an organization",
+        "operationId": "org.member.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMemberListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Organization Members",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "org.member",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/organizations/{organization_id}/members/{member_id}": {
+      "delete": {
+        "description": "Remove a member from the organization",
+        "operationId": "org.member.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Member",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org.member",
+          "result": "void",
+          "verb": "remove"
+        }
+      }
+    },
+    "/organizations/{organization_id}/members/{member_id}/role": {
+      "patch": {
+        "description": "Update a member's role in the organization",
+        "operationId": "org.member.update_role",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "member_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Member Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemberRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMemberResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Member Role",
+        "tags": [
+          "Organizations"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "org.member"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "org.member",
+          "result": "entity",
+          "verb": "update_role"
+        }
+      }
+    },
+    "/organizations/{organization_id}/pods": {
+      "get": {
+        "description": "List all pods in an organization",
+        "operationId": "pod.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PodListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pods by Organization",
+        "tags": [
+          "Pods"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "pod",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
     "/pods": {
       "post": {
         "description": "Create a new pod",
@@ -22049,83 +22986,6 @@
           "resource": "pod.bundle",
           "result": "entity",
           "verb": "download"
-        }
-      }
-    },
-    "/pods/organization/{organization_id}": {
-      "get": {
-        "description": "List all pods in an organization",
-        "operationId": "pod.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "organization_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Organization Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "page_token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Page Token"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PodListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List PodS by Organization",
-        "tags": [
-          "Pods"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": true,
-          "resource": "pod",
-          "result": "collection",
-          "verb": "list"
         }
       }
     },
@@ -23409,6 +24269,137 @@
           "resource": "app.dist.archive",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/apps/{app_name}/releases": {
+      "get": {
+        "operationId": "app.release.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "app_name",
+            "required": true,
+            "schema": {
+              "title": "App Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppReleaseListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List App Releases",
+        "tags": [
+          "Apps"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "app.release",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote": {
+      "post": {
+        "description": "Make an existing release the one this app serves. The release keeps its bytes; only the app's current-release pointer moves.",
+        "operationId": "app.release.promote",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "app_name",
+            "required": true,
+            "schema": {
+              "title": "App Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_ref",
+            "required": true,
+            "schema": {
+              "title": "Release Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Promote App Release",
+        "tags": [
+          "Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "app.release"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "app.release",
+          "result": "entity",
+          "verb": "promote"
         }
       }
     },
@@ -28122,6 +29113,207 @@
           "resource": "function.permissions",
           "result": "entity",
           "verb": "replace"
+        }
+      }
+    },
+    "/pods/{pod_id}/functions/{function_name}/revisions": {
+      "get": {
+        "description": "List the built revisions of a function, newest first.",
+        "operationId": "function.revision.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "function_name",
+            "required": true,
+            "schema": {
+              "title": "Function Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRevisionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Function Revisions",
+        "tags": [
+          "Functions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "function.revision",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}": {
+      "get": {
+        "description": "Read one revision, including its source and the schemas its code implements. A revision may be addressed by number ('r12') or hash.",
+        "operationId": "function.revision.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "function_name",
+            "required": true,
+            "schema": {
+              "title": "Function Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_ref",
+            "required": true,
+            "schema": {
+              "title": "Revision Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Function Revision",
+        "tags": [
+          "Functions"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "function.revision",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote": {
+      "post": {
+        "description": "Make an existing revision the live one. Its input/output/config schemas are restored with it, since they are the contract its code implements.",
+        "operationId": "function.revision.promote",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "function_name",
+            "required": true,
+            "schema": {
+              "title": "Function Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_ref",
+            "required": true,
+            "schema": {
+              "title": "Revision Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRevisionPromoteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Promote Function Revision",
+        "tags": [
+          "Functions"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "function.revision"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "function.revision",
+          "result": "entity",
+          "verb": "promote"
         }
       }
     },
@@ -33500,6 +34692,510 @@
         }
       }
     },
+    "/usage/me/events": {
+      "get": {
+        "operationId": "usage.me.events.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Events",
+        "tags": [
+          "Usage"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "usage.me.events",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/usage/me/limits": {
+      "get": {
+        "operationId": "usage.me.limits.get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyUsageLimitsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Limits",
+        "tags": [
+          "Usage"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "usage.me.limits",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/usage/me/stats": {
+      "get": {
+        "operationId": "usage.me.stats.get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageStatsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Stats",
+        "tags": [
+          "Usage"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "usage.me.stats",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/usage/me/summary": {
+      "get": {
+        "operationId": "usage.me.summary.get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "organization_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Organization Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 365,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Summary",
+        "tags": [
+          "Usage"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "usage.me.summary",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
     "/usage/organizations/{organization_id}/events": {
       "get": {
         "operationId": "usage.organization.events.list",
@@ -33512,6 +35208,40 @@
               "format": "uuid",
               "title": "Organization Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
             }
           },
           {
@@ -33821,6 +35551,40 @@
           },
           {
             "in": "query",
+            "name": "agent_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
+            }
+          },
+          {
+            "in": "query",
             "name": "start",
             "required": false,
             "schema": {
@@ -34072,6 +35836,40 @@
               "format": "uuid",
               "title": "Organization Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
             }
           },
           {
@@ -34355,6 +36153,40 @@
               "format": "uuid",
               "title": "Organization Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "conversation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Conversation Id"
             }
           },
           {

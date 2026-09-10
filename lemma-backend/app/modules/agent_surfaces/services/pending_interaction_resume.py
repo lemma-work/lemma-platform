@@ -21,9 +21,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
-from app.modules.agent.services.conversation_service import ConversationService
-from app.modules.agent.tools.user_interaction.models import AskUserRequest
+from app.modules.agent.contracts import AgentRunApprovalDecision, AskUserRequest
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.services.free_text_answer import (
     forget_free_text_answer_wanted,
@@ -47,7 +49,7 @@ class ResumeOutcome(StrEnum):
     FAILED = "FAILED"
 
 
-def _plainly_answers(pending: dict[str, Any], text: str) -> bool:
+def _plainly_answers(pending: PendingInteraction, text: str) -> bool:
     """Is this text unmistakably the answer, rather than a new request?
 
     A person with buttons in front of them may still type "approve", or "2", or
@@ -69,9 +71,9 @@ def _plainly_answers(pending: dict[str, Any], text: str) -> bool:
     stripped = text.strip()
     if not stripped:
         return False
-    if str(pending.get("kind") or "") == "request_approval":
+    if pending.is_approval:
         return _classify_approval_reply(stripped) is not None
-    raw_request = _ask_user_request_dict(pending.get("tool_args"))
+    raw_request = _ask_user_request_dict(pending.tool_args)
     if raw_request is None:
         return False
     try:
@@ -92,10 +94,9 @@ def _plainly_answers(pending: dict[str, Any], text: str) -> bool:
 async def _is_an_answer(
     context: SurfaceChatContext,
     *,
-    conversation_service: ConversationService,
-    pending: dict[str, Any],
+    uow,
+    pending: PendingInteraction,
     text: str,
-    tool_call_id: str,
 ) -> bool:
     """Is this typed message answering the pause, or getting on with something else?
 
@@ -126,14 +127,13 @@ async def _is_an_answer(
     # it was typed — and because it needs nothing but the words.
     if _plainly_answers(pending, text):
         return True
-    repository = conversation_service.conversation_repository
     if await free_text_answer_wanted_for(
-        repository,
+        uow,
         conversation_id=context.conversation_id,
-        tool_call_id=tool_call_id,
+        tool_call_id=pending.tool_call_id,
     ):
         await forget_free_text_answer_wanted(
-            repository, conversation_id=context.conversation_id
+            uow, conversation_id=context.conversation_id
         )
         return True
     return False
@@ -326,8 +326,6 @@ def _classify_approval_reply(text: str) -> "AgentRunApprovalDecision | None":
     yes or no, and the caller must leave the approval pending and deliver the
     message instead of inventing a decision on their behalf.
     """
-    from app.modules.agent.contracts import AgentRunApprovalDecision
-
     normalized = _normalize_decision_reply(text)
     if not normalized:
         return None
@@ -341,7 +339,7 @@ def _classify_approval_reply(text: str) -> "AgentRunApprovalDecision | None":
 
 
 def _settle(
-    kind: str, text: str, pending: dict[str, Any]
+    text: str, pending: PendingInteraction
 ) -> "tuple[AgentRunApprovalDecision, dict[str, Any]] | None":
     """The decision and response this reply resolves the pause with, or None.
 
@@ -349,8 +347,8 @@ def _settle(
     say: an ask_user takes free text, so once `_is_an_answer` has let it
     through there is always an answer to record.
     """
-    if kind == "ask_user":
-        raw_request = _ask_user_request_dict(pending.get("tool_args"))
+    if not pending.is_approval:
+        raw_request = _ask_user_request_dict(pending.tool_args)
         questions = []
         if raw_request is not None:
             try:
@@ -372,7 +370,7 @@ async def maybe_resume_pending_interaction(
     context: SurfaceChatContext,
     message_text: str,
     *,
-    conversation_service: ConversationService,
+    uow,
 ) -> ResumeOutcome:
     """Resume a paused ask_user or request_approval from a typed surface reply.
 
@@ -405,34 +403,20 @@ async def maybe_resume_pending_interaction(
     # not grow, and so there is exactly one place that decides which it was.
     recording = False
     try:
-        pending = await conversation_service.get_pending_user_interaction(
-            conversation_id=context.conversation_id
+        pending = await agent_conversations.pending_interaction(
+            uow, context.conversation_id
         )
-        if not isinstance(pending, dict):
+        if pending is None:
             return ResumeOutcome.NOT_A_DECISION
-        if not await _is_an_answer(
-            context,
-            conversation_service=conversation_service,
-            pending=pending,
-            text=text,
-            tool_call_id=str(pending.get("tool_call_id") or ""),
-        ):
+        if not await _is_an_answer(context, uow=uow, pending=pending, text=text):
             # A new message, not an answer. Falling through is the whole fix:
-            # `add_user_message_and_start_run` supersedes the unanswered pause,
-            # writes the tool return that tells the agent it was never answered
-            # (an approval always as a denial, never an approval), and runs what
-            # the person actually asked for.
-            return ResumeOutcome.NOT_A_DECISION
-        kind = str(pending.get("kind") or "")
-        conversation = (
-            await conversation_service.conversation_repository.get_conversation(
-                context.conversation_id
-            )
-        )
-        if conversation is None:
+            # starting a turn supersedes the unanswered pause, writes the tool
+            # return that tells the agent it was never answered (an approval
+            # always as a denial, never an approval), and runs what the person
+            # actually asked for.
             return ResumeOutcome.NOT_A_DECISION
 
-        settled = _settle(kind, text, pending)
+        settled = _settle(text, pending)
         if settled is None:
             # Not a decision — a question, a correction, a change of plan.
             # Leave the approval pending and let the caller deliver this as an
@@ -444,17 +428,20 @@ async def maybe_resume_pending_interaction(
         decision, response = settled
 
         recording = True
-        # Deferred: a webhook deadline is shorter than an approved command.
-        await conversation_service.resolve_user_approval_internal(
-            conversation=conversation,
-            approval_id=str(pending.get("tool_call_id") or ""),
+        recorded = await agent_conversations.resolve_pending_interaction(
+            uow,
+            conversation_id=context.conversation_id,
+            approval_id=pending.tool_call_id,
             user_id=context.user_id,
             pod_id=context.pod_id,
             decision=decision,
             response=response,
-            defer_reconciliation=True,
         )
-        return ResumeOutcome.CONSUMED
+        # The conversation was deleted between the lookup and the write. Nothing
+        # was recorded and there is no pause left to deny, so the caller may
+        # carry on -- which is what it did for this case before, when the
+        # conversation was loaded a few lines earlier and found missing.
+        return ResumeOutcome.CONSUMED if recorded else ResumeOutcome.NOT_A_DECISION
     except Exception:
         if recording:
             # The person decided and we could not write it down. Never fall

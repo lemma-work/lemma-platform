@@ -202,7 +202,7 @@ async def seed_connector_operation(
             description="Mock app for function e2e",
             kinds=[
                 {
-                    "kind": "package",
+                    "kind": "http",
                     "auth_scheme": "API_KEY",
                     "system_default_available": True,
                 }
@@ -216,7 +216,7 @@ async def seed_connector_operation(
         organization_id=organization_id,
         connector_id=connector_id,
         name=connector_id,
-        kind="package",
+        kind="http",
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
     )
@@ -344,18 +344,25 @@ async def {function_name}(ctx: FunctionContext, data: SendPayloadInput) -> SendP
 
 
 def patch_connector_operation_execution(connector_id: str):
+    """Stand in for the upstream an `http`-kind operation would call.
+
+    The seam is the OpenAPI executor rather than a gateway: `http` is the native
+    kind now, and it reaches its provider directly rather than through one.
+    """
     expected_connector_id = connector_id
 
-    async def fake_execute_operation(
+    async def fake_execute(
         _self,
+        *,
         connector_id,
         operation_name,
+        execution,
         payload,
         third_party_credentials,
-        auth_token=None,
-        api_url=None,
+        connection_config=None,
+        deadline_seconds=None,
     ):
-        del auth_token, api_url
+        del execution, connection_config, deadline_seconds
         assert connector_id == expected_connector_id
         assert operation_name == "send_payload"
         return {
@@ -365,9 +372,9 @@ def patch_connector_operation_execution(connector_id: str):
         }
 
     return patch(
-        "app.modules.connectors.infrastructure.adapters.lemma_operation_gateway."
-        "LemmaOperationGateway.execute_operation",
-        new=fake_execute_operation,
+        "app.modules.connectors.infrastructure.adapters.openapi_http_executor."
+        "OpenApiHttpExecutor.execute",
+        new=fake_execute,
     )
 
 

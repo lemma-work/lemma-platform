@@ -11,6 +11,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { FunctionRevisionsTab } from '@/components/functions/function-revisions-tab';
+import type { FunctionRevision } from '@/lib/hooks/use-function-revisions';
 import { Play, Clock, FunctionSquare, X, RotateCcw, FileJson, TerminalSquare, AlertCircle, CheckCircle2, ChevronRight } from '@/components/ui/icons';
 import type { FunctionRun } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -23,6 +25,8 @@ interface FunctionTestPanelProps {
     initialRunId?: string | null;
     openRunRequestKey?: number;
     onClose?: () => void;
+    /** Gates promoting a revision and pinning a run to a superseded build. */
+    canUpdate?: boolean;
 }
 
 type SchemaProperty = {
@@ -471,11 +475,15 @@ function RunStatusMarker({ status }: { status?: string }) {
     );
 }
 
-export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequestKey, onClose }: FunctionTestPanelProps) {
+export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequestKey, onClose, canUpdate = false }: FunctionTestPanelProps) {
     const { data: functionData } = useFunction(podId, functionId);
     const [inputData, setInputData] = useState('{}');
     const [formData, setFormData] = useState<Record<string, string>>({});
-    const [activeTab, setActiveTab] = useState<'test' | 'history'>('test');
+    const [activeTab, setActiveTab] = useState<'test' | 'history' | 'revisions'>('test');
+    // Set when the user picks "Run this" on an older revision: the run is pinned
+    // to that build instead of the live one. Cleared on a plain run so a pin is
+    // never sticky without the banner saying so.
+    const [pinnedRevision, setPinnedRevision] = useState<FunctionRevision | null>(null);
     const [currentRunId, setCurrentRunId] = useState<string | null>(null);
     const [currentRunSource, setCurrentRunSource] = useState<'new' | 'history' | null>(null);
     const [useRawJson, setUseRawJson] = useState(false);
@@ -527,9 +535,10 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
         rootRef: historyScrollRef,
     });
 
+    const inputSchema = pinnedRevision ? pinnedRevision.input_schema : functionData?.input_schema;
     const schemaProperties = useMemo(
-        () => (functionData?.input_schema?.properties || {}) as Record<string, SchemaProperty>,
-        [functionData?.input_schema?.properties]
+        () => (inputSchema?.properties || {}) as Record<string, SchemaProperty>,
+        [inputSchema?.properties]
     );
 
     const hasSchema = Object.keys(schemaProperties).length > 0;
@@ -601,6 +610,8 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
             const run = await startFunctionRun({
                 functionName: functionData?.name || functionId,
                 input: parsedInput,
+                // Undefined for an ordinary run, so the live revision is used.
+                revision: pinnedRevision ? `r${pinnedRevision.revision_number}` : undefined,
             });
 
             pendingHistoryRefreshRunIdRef.current = run.id ?? null;
@@ -626,7 +637,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
     const showComposer = !currentRun || currentRunSource !== 'history';
 
     const handleTabChange = (value: string) => {
-        const nextTab = value as 'test' | 'history';
+        const nextTab = value as 'test' | 'history' | 'revisions';
         if (nextTab === 'test' && activeTab !== 'test') {
             setCurrentRunId(null);
             setCurrentRunSource(null);
@@ -641,6 +652,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                     <TabsList className="h-7 p-0.5 bg-[var(--bg-subtle)]">
                         <TabsTrigger value="test" className="h-6 text-xs px-2.5 rounded-md">Run</TabsTrigger>
                         <TabsTrigger value="history" className="h-6 text-xs px-2.5 rounded-md">History</TabsTrigger>
+                        <TabsTrigger value="revisions" className="h-6 text-xs px-2.5 rounded-md">Versions</TabsTrigger>
                     </TabsList>
                 </Tabs>
                 {onClose && (
@@ -661,6 +673,24 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
 
             {activeTab === 'test' ? (
                 <div className="flex-1 overflow-y-auto p-4 pt-14 space-y-4">
+                    {pinnedRevision ? (
+                        // A pinned run executes a build that is NOT live, so the
+                        // pin has to be visible for as long as it applies.
+                        <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2">
+                            <p className="text-xs text-[var(--text-secondary)]">
+                                Running <span className="font-medium">r{pinnedRevision.revision_number}</span> instead
+                                of the live version.
+                            </p>
+                            <Button
+                                variant="quiet"
+                                size="sm"
+                                className="h-6 shrink-0 px-2 text-xs"
+                                onClick={() => { setPinnedRevision(null); setFormData({}); setInputData('{}'); }}
+                            >
+                                Use live
+                            </Button>
+                        </div>
+                    ) : null}
                     {showComposer ? (
                         <section className="space-y-3">
                             <div className="flex items-center justify-between">
@@ -785,6 +815,25 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                             </div>
                         </div>
                     )}
+                </div>
+            ) : activeTab === 'revisions' ? (
+                <div className="flex-1 overflow-y-auto p-4 pt-14">
+                    <FunctionRevisionsTab
+                        podId={podId}
+                        functionName={functionId}
+                        canUpdate={canUpdate}
+                        onRunRevision={(revision) => {
+                            // Pin the next run to this build and drop the user on
+                            // the Run tab with the pin visible, rather than
+                            // silently changing what "Run" means.
+                            setPinnedRevision(revision);
+                            setCurrentRunId(null);
+                            setCurrentRunSource(null);
+                            setFormData({});
+                            setInputData('{}');
+                            setActiveTab('test');
+                        }}
+                    />
                 </div>
             ) : (
                 <div className="flex min-h-0 flex-1 flex-col bg-[color:color-mix(in_srgb,_var(--bg-canvas)_40%,_transparent)] p-2 pt-14 dark:bg-[color:color-mix(in_srgb,_var(--bg-canvas)_70%,_transparent)]">

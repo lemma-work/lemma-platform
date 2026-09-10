@@ -96,15 +96,17 @@ async def apply_control_updates(
     changed = 0
     for checkpoint in checkpoints:
         try:
-            if await session_memory.remember_provider_session(uow, checkpoint):
-                changed += 1
-            _, advanced = await _apply_checkpoint(
+            lease, advanced = await _apply_checkpoint(
                 session,
                 host_id=host_id,
                 checkpoint=checkpoint,
                 now=now,
                 lease_seconds=lease_seconds,
             )
+            if lease is not None and await session_memory.remember_provider_session(
+                uow, checkpoint
+            ):
+                changed += 1
             changed += int(advanced)
         except (AgentHostRepositoryError, ValueError) as exc:
             _log_unappliable_update(

@@ -4,7 +4,6 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -23,11 +22,14 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
     ComposioProviderCapability,
     ConnectorKind,
-    LemmaProviderCapability,
+    HttpKindSpec,
 )
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.adapters.schema_compiler import (
     PydanticCodeSchemaCompiler,
+)
+from app.modules.connectors.infrastructure.adapters.openapi_http_executor import (
+    OpenApiHttpExecutionError,
 )
 from app.modules.connectors.infrastructure.adapters.composio_operation_gateway import (
     ComposioOperationGateway,
@@ -67,8 +69,8 @@ def _provider_capability(kind: str, auth_method: str) -> dict:
             auth_scheme=AuthMethod(auth_method),
             toolkit_slug="googlecalendar",
         ).model_dump(mode="json")
-    return LemmaProviderCapability(
-        kind="package",
+    return HttpKindSpec(
+        kind="http",
         auth_scheme=AuthMethod(auth_method),
     ).model_dump(mode="json")
 
@@ -95,7 +97,7 @@ async def _seed_auth_config(
     *,
     app_id: str,
     organization_id: str,
-    kind: str = ConnectorKind.PACKAGE.value,
+    kind: str = ConnectorKind.HTTP.value,
 ) -> AuthConfig:
     auth_config = AuthConfig(
         organization_id=organization_id,
@@ -240,6 +242,12 @@ async def _seed_real_google_calendar_account(db_session, *, user_id) -> str:
     return str(account.id)
 
 
+_HTTP_EXECUTOR_SEAM = (
+    "app.modules.connectors.infrastructure.adapters.openapi_http_executor."
+    "OpenApiHttpExecutor.execute"
+)
+
+
 @pytest.mark.asyncio
 async def test_connector_operations_use_connected_user_account(
     authenticated_client: AsyncClient,
@@ -255,7 +263,7 @@ async def test_connector_operations_use_connected_user_account(
             app_id=app_id,
             title="Test Operation App",
             description="Test App for Operations",
-            kind="package",
+            kind="http",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -264,7 +272,7 @@ async def test_connector_operations_use_connected_user_account(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        kind="package",
+        kind="http",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -303,21 +311,16 @@ async def test_connector_operations_use_connected_user_account(
     )
     await db_session.commit()
 
-    mock_execution_client = AsyncMock()
-    mock_execution_client.list_operations.return_value = [
-        SimpleNamespace(name="test_op")
-    ]
-    mock_execution_client.get_operation.return_value = SimpleNamespace(descriptor=None)
+    # The seam is the OpenAPI executor: `http` connectors reach their provider
+    # directly rather than through a gateway. The operations themselves come
+    # from the rows seeded above, not from the upstream.
+    seen: dict = {}
 
-    async def mock_op(_operation_name, payload):
+    async def mock_execute(_self, *, payload, third_party_credentials, **_kwargs):
+        seen["credentials"] = third_party_credentials
         return f"Processed {payload.get('foo')}"
 
-    mock_execution_client.execute_operation = AsyncMock(side_effect=mock_op)
-
-    with patch(
-        "app.modules.connectors.infrastructure.adapters.lemma_operation_gateway.create_lemma_execution_client",
-        return_value=mock_execution_client,
-    ) as _mock_get_exec:
+    with patch(_HTTP_EXECUTOR_SEAM, new=mock_execute):
         response = await authenticated_client.get(
             operations_url,
             params={"query": "test desc"},
@@ -359,8 +362,8 @@ async def test_connector_operations_use_connected_user_account(
         result = response.json()
         assert result["result"] == "Processed bar"
 
-        assert _mock_get_exec.called
-        assert _mock_get_exec.call_args.args[1] == {"api_key": "secret"}
+        # The connected account's credentials reached the upstream call.
+        assert seen["credentials"] == {"api_key": "secret"}
 
 
 @pytest.mark.asyncio
@@ -377,7 +380,7 @@ async def test_connector_operation_discovery_uses_name_and_description_only(
             app_id=app_id,
             title="Test Search App",
             description="App for operation discovery search",
-            kind="package",
+            kind="http",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -386,7 +389,7 @@ async def test_connector_operation_discovery_uses_name_and_description_only(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        kind="package",
+        kind="http",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -528,7 +531,7 @@ async def test_connector_operation_requires_connected_user_account(
             app_id=app_id,
             title="Missing Account App",
             description="App without connected account",
-            kind="package",
+            kind="http",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -537,7 +540,7 @@ async def test_connector_operation_requires_connected_user_account(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        kind="package",
+        kind="http",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -557,21 +560,12 @@ async def test_connector_operation_requires_connected_user_account(
     )
     await db_session.commit()
 
-    mock_execution_client = AsyncMock()
-    mock_execution_client.list_operations.return_value = [
-        SimpleNamespace(name="test_op")
-    ]
-    mock_execution_client.get_operation.return_value = SimpleNamespace(descriptor=None)
-    mock_execution_client.execute_operation = AsyncMock(return_value={"ok": True})
-
-    with patch(
-        "app.modules.connectors.infrastructure.adapters.lemma_operation_gateway.create_lemma_execution_client",
-        return_value=mock_execution_client,
-    ):
-        response = await authenticated_client.post(
-            f"{operations_url}/test_op/execute",
-            json={"payload": {"foo": "bar"}},
-        )
+    # Deliberately unpatched: the point is that account resolution refuses
+    # before anything reaches an upstream at all.
+    response = await authenticated_client.post(
+        f"{operations_url}/test_op/execute",
+        json={"payload": {"foo": "bar"}},
+    )
 
     assert response.status_code == 400, response.text
     assert response.json()["code"] == "ACCOUNT_RESOLUTION_ERROR"
@@ -584,6 +578,17 @@ async def test_connector_operation_returns_upstream_execution_error_details(
     fixed_test_org,
     db_session,
 ):
+    """A provider's own refusal reaches the caller as one, and says why.
+
+    Two things have to hold together. The status has to be classified -- a
+    revoked token is a 401, not "our fault, 500" -- and the provider's own words
+    have to survive, redacted, because "not_authed" and "channel not found" are
+    the difference between an agent that can correct itself and one that cannot.
+
+    The connectors this exercises used to be served by a vendored client whose
+    gateway deliberately dropped the second half, so their failures were the
+    least legible of any kind. They are `http` now and get what GitHub had.
+    """
     app_id = "test-operation-app-upstream-error"
 
     app = await db_session.get(Connector, app_id)
@@ -592,7 +597,7 @@ async def test_connector_operation_returns_upstream_execution_error_details(
             app_id=app_id,
             title="Test Operation App",
             description="Test App for upstream execution errors",
-            kind="package",
+            kind="http",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -601,7 +606,7 @@ async def test_connector_operation_returns_upstream_execution_error_details(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        kind="package",
+        kind="http",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -633,23 +638,18 @@ async def test_connector_operation_returns_upstream_execution_error_details(
     )
     await db_session.commit()
 
-    mock_execution_client = AsyncMock()
-    mock_execution_client.list_operations.return_value = [
-        SimpleNamespace(name="send_message")
-    ]
-    mock_execution_client.get_operation.return_value = SimpleNamespace(descriptor=None)
-    mock_execution_client.execute_operation = AsyncMock(
-        side_effect=FakeProviderOperationError(
-            "API call failed with status code 200: {'ok': False, 'error': 'not_authed'}",
-            status_code=200,
-            details={"ok": False, "error": "not_authed"},
+    # Slack answers HTTP 200 and reports the failure in the body. The executor
+    # recognises that through the connector's declared response envelope and
+    # maps the provider's own code onto a status -- so what reaches the service
+    # is an ordinary unauthorized, carrying the provider's text.
+    async def mock_execute(_self, **_kwargs):
+        raise OpenApiHttpExecutionError(
+            "send_message failed: not_authed.",
+            status_code=401,
+            details={"error": "not_authed", "status_code": 401},
         )
-    )
 
-    with patch(
-        "app.modules.connectors.infrastructure.adapters.lemma_operation_gateway.create_lemma_execution_client",
-        return_value=mock_execution_client,
-    ):
+    with patch(_HTTP_EXECUTOR_SEAM, new=mock_execute):
         response = await authenticated_client.post(
             f"{operations_url}/send_message/execute",
             json={
@@ -664,13 +664,13 @@ async def test_connector_operation_returns_upstream_execution_error_details(
     assert payload["code"] == "OPERATION_EXECUTION_UNAUTHORIZED"
     assert payload["request_id"]
     assert payload["details"] == {
-        "error_type": "FakeProviderOperationError",
-        "upstream_status": 200,
-        "upstream_code": "not_authed",
+        "error_type": "OpenApiHttpExecutionError",
+        "upstream_status": 401,
+        "upstream_message": "send_message failed: not_authed.",
     }
+    # Whatever else it carries, a response never carries a credential.
     serialized = json.dumps(payload)
-    assert "API call failed" not in serialized
-    assert "{'ok': False" not in serialized
+    assert "secret" not in serialized
 
 
 @pytest.mark.asyncio

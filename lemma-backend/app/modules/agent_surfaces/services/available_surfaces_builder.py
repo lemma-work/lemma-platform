@@ -13,6 +13,7 @@ controller injects the connector service and calls this builder directly.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -42,10 +43,13 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     get_platform_capabilities,
 )
-from app.modules.connectors.contracts import AuthProvider, ConnectorNotFoundError
-from app.composition.surface_connectors import ConnectorService
+from app.modules.connectors.contracts.surfaces import SurfaceConnector
 
 logger = get_logger(__name__)
+
+# Reads one connector out of the catalog. Bound to a unit of work by the caller,
+# so this module never holds one; ``None`` means the connector is not catalogued.
+ReadConnector = Callable[[str], Awaitable[SurfaceConnector | None]]
 
 
 def _supported_credential_modes(
@@ -61,7 +65,7 @@ def _supported_credential_modes(
 
 
 async def _connect_descriptor(
-    connector_service: ConnectorService, connector_id: str
+    read_connector: ReadConnector, connector_id: str
 ) -> tuple[SurfaceConnectDescriptor | None, bool, str | None, str | None, str | None]:
     """Resolve the connector's LEMMA capability into a connect descriptor plus its
     catalog display fields. Returns ``(descriptor, available, title, description,
@@ -69,31 +73,23 @@ async def _connect_descriptor(
     missing, inactive, or exposes no LEMMA capability — so a mis-configured or
     not-yet-catalogued surface degrades to a visible "unavailable" row instead of
     500-ing the whole endpoint."""
-    try:
-        connector = await connector_service.get_connector(connector_id)
-    except ConnectorNotFoundError:
+    connector = await read_connector(connector_id)
+    if connector is None:
         return None, False, None, None, None
-    if not connector.is_active:
-        return None, False, connector.title, connector.description, connector.icon
-    try:
-        capability = connector.capability_for(AuthProvider.LEMMA)
-    except ValueError:
-        logger.debug(
-            "agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic",
-            connector_id=connector_id,
-        )
+    if not connector.is_active or connector.connect is None:
+        if connector.connect is None:
+            logger.debug(
+                "agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic",
+                connector_id=connector_id,
+            )
         return None, False, connector.title, connector.description, connector.icon
 
     descriptor = SurfaceConnectDescriptor(
-        auth_scheme=capability.auth_scheme,
-        auth_config_schema=capability.auth_config_schema,
-        credential_schema=capability.credential_schema,
-        system_oauth_available=bool(
-            getattr(capability, "system_default_available", False)
-        ),
-        supports_org_custom_oauth=bool(
-            getattr(capability, "supports_org_custom_oauth", False)
-        ),
+        auth_scheme=connector.connect.auth_scheme,
+        auth_config_schema=connector.connect.auth_config_schema,
+        credential_schema=connector.connect.credential_schema,
+        system_oauth_available=connector.connect.system_oauth_available,
+        supports_org_custom_oauth=connector.connect.supports_org_custom_oauth,
     )
     return descriptor, True, connector.title, connector.description, connector.icon
 
@@ -178,7 +174,7 @@ def _email_domain(
 
 async def build_available_surfaces(
     *,
-    connector_service: ConnectorService,
+    read_connector: ReadConnector,
     pod_id: UUID | None = None,
     surface_repository: SurfaceInstallationRepositoryPort | None = None,
 ) -> AvailableSurfacesResponse:
@@ -190,7 +186,7 @@ async def build_available_surfaces(
     surfaces: list[AvailableSurface] = []
     for platform, binding in SURFACE_CONNECTOR_BINDINGS.items():
         connect, available, title, description, icon = await _connect_descriptor(
-            connector_service, binding.connector_id
+            read_connector, binding.connector_id
         )
         modes = _supported_credential_modes(platform)
         surfaces.append(

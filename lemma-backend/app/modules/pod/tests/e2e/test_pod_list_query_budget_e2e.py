@@ -45,13 +45,13 @@ async def test_pod_list_query_count_does_not_grow_with_pod_count(
 
     await _create_pods(authenticated_client, org_id, 2)
     with counted_queries() as small:
-        first = await authenticated_client.get(f"/pods/organization/{org_id}")
+        first = await authenticated_client.get(f"/organizations/{org_id}/pods")
     assert first.status_code == status.HTTP_200_OK, first.text
     assert len(first.json()["items"]) == 2
 
     await _create_pods(authenticated_client, org_id, 8)
     with counted_queries() as large:
-        second = await authenticated_client.get(f"/pods/organization/{org_id}")
+        second = await authenticated_client.get(f"/organizations/{org_id}/pods")
     assert second.status_code == status.HTTP_200_OK, second.text
     assert len(second.json()["items"]) == 10
 
@@ -87,7 +87,7 @@ async def test_pod_list_stays_within_its_query_budget(
     await _create_pods(authenticated_client, org_id, pod_count)
 
     with counted_queries() as statements:
-        response = await authenticated_client.get(f"/pods/organization/{org_id}")
+        response = await authenticated_client.get(f"/organizations/{org_id}/pods")
     assert response.status_code == status.HTTP_200_OK, response.text
 
     budget = 4
@@ -141,14 +141,14 @@ async def test_request_cost_decomposition_is_reported(
 
     health = await measure("/health")
     orgs = await measure("/organizations")
-    pods = await measure(f"/pods/organization/{org_id}")
+    pods = await measure(f"/organizations/{org_id}/pods")
 
     with capsys.disabled():
         print("\n  route                       p50      p95   queries")
         for label, (p50, p95, queries) in (
             ("/health (no auth, no db)", health),
             ("/organizations (auth)", orgs),
-            ("/pods/organization (10 pods)", pods),
+            ("/organizations/{id}/pods (10 pods)", pods),
         ):
             print(f"  {label:26} {p50:6.1f}ms {p95:6.1f}ms  {queries:3d}")
         print(

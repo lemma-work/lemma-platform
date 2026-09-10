@@ -337,6 +337,7 @@ export default function FunctionDetailPage({
                                 initialRunId={selectedRunId}
                                 openRunRequestKey={openRunRequestKey}
                                 onClose={() => setIsTestPanelOpen(false)}
+                                canUpdate={canUpdateCurrentFunction}
                             />
                         </div>
                     ) : undefined}

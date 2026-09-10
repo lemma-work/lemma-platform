@@ -818,6 +818,13 @@
   color: var(--collaboration);
 }
 
+/* Skills share the agents' tone deliberately: a skill is not a place of its own
+   in the nav, it is what an agent loads, and a shelf of skills in a third
+   colour would claim a room the product does not have. */
+.lemma-product-icon[data-kind="skills"][data-state] {
+  color: var(--intelligence);
+}
+
 /* Pointer feedback is motion, never weight or fill: every product glyph stays a
    `regular` outline in every state, so a row can answer the cursor without the
    icon changing how much ink it carries. Anchored on the control rather than a
@@ -1061,6 +1068,17 @@ button:focus-visible .lemma-product-icon-glyph {
   position: relative;
   display: flex;
   align-items: center;
+}
+
+/* The mark says who answered, the pip says what the run is doing, and this
+   says where the conversation came from — the trailing edge, because the
+   gutter is spoken for and a source is the least urgent of the three. Sized
+   under the mark so it reads as an annotation on the row, not a second face.
+   Only ever drawn for a conversation that arrived from a surface. */
+.workspace-sidebar-conversation-source {
+  width: var(--space-3-5);
+  height: var(--space-3-5);
+  opacity: 0.75;
 }
 
 /* The mark says who; the pip says what this run is doing. A resting

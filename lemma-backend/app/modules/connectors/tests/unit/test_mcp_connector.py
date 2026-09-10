@@ -107,6 +107,110 @@ def test_build_mcp_headers_prefers_bearer_token():
     assert build_mcp_headers({}, None) == {}
 
 
+class TestSessionSetupIsReplayedOnEverySession:
+    """A session here lasts exactly one call, so setup has to be replayed.
+
+    The client is built, used and closed per operation, which means any
+    server-side state a tool sets up is gone before the next call sees it.
+    Servers that gate their tools behind a session-scoped switch -- Arize
+    Phoenix's `enable_tool_group` -- were therefore unusable: the gated tools
+    were absent from `list_tools()` on a virgin session, so they were never
+    discovered, never stored as operations, and never addressable by name.
+    """
+
+    @staticmethod
+    def _gated_server():
+        """A server whose `hidden` tool only appears once setup has run."""
+        server = FastMCP("gated-server")
+
+        @server.tool
+        def enable_group(group: str) -> dict:
+            """Reveal a group of tools."""
+            server.enable(names={"hidden"})
+            return {"enabled": group}
+
+        @server.tool
+        def hidden() -> dict:
+            """Only reachable after `enable_group`."""
+            return {"secret": 42}
+
+        server.disable(names={"hidden"})
+        return server
+
+    @staticmethod
+    def _conn(server_url: str = "https://mcp.scenarios.example/mcp", **extra):
+        return {"server_url": server_url, **extra}
+
+    SETUP = [{"tool_name": "enable_group", "arguments": {"group": "traces"}}]
+
+    @pytest.mark.asyncio
+    async def test_without_setup_a_gated_tool_is_not_discovered(self):
+        server = self._gated_server()
+        ops = await discover_mcp(
+            connection_config=self._conn(),
+            client_factory=lambda *a, **k: Client(server),
+        )
+        assert "hidden" not in {op.name for op in ops}
+
+    @pytest.mark.asyncio
+    async def test_with_setup_a_gated_tool_becomes_an_operation(self):
+        server = self._gated_server()
+        ops = await discover_mcp(
+            connection_config=self._conn(session_setup=self.SETUP),
+            client_factory=lambda *a, **k: Client(server),
+        )
+        by_name = {op.name: op for op in ops}
+        assert "hidden" in by_name
+        assert by_name["hidden"].execution == {"kind": "mcp", "tool_name": "hidden"}
+
+    @pytest.mark.asyncio
+    async def test_with_setup_a_gated_tool_can_be_executed(self):
+        server = self._gated_server()
+        result = await McpExecutor(
+            client_factory=lambda *a, **k: Client(server)
+        ).execute(
+            connector_id="mcp",
+            operation_name="hidden",
+            execution={"kind": "mcp", "tool_name": "hidden"},
+            payload={},
+            third_party_credentials=None,
+            connection_config=self._conn(session_setup=self.SETUP),
+        )
+        assert result == {"secret": 42}
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_setup_entry_is_skipped_rather_than_fatal(self):
+        """The config is tenant-written JSON. An entry that is not a usable
+        call must not take every operation on the install down with it."""
+        result = await McpExecutor(client_factory=_factory).execute(
+            connector_id="mcp",
+            operation_name="add",
+            execution={"kind": "mcp", "tool_name": "add"},
+            payload={"a": 1, "b": 1},
+            third_party_credentials=None,
+            connection_config=self._conn(
+                session_setup=[
+                    "not-an-object",
+                    {},
+                    {"tool_name": ""},
+                    {"arguments": {}},
+                ]
+            ),
+        )
+        assert result == {"sum": 2}
+
+    def test_setup_steps_are_read_defensively(self):
+        from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+            _session_setup_steps,
+        )
+
+        assert _session_setup_steps(None) == []
+        assert _session_setup_steps({"session_setup": "enable_everything"}) == []
+        assert _session_setup_steps(
+            {"session_setup": [{"tool_name": "go", "arguments": "not-a-map"}]}
+        ) == [("go", {})]
+
+
 class TestTransportFailureClassification:
     """fastmcp buries the real cause; these pin down how we dig it out.
 

@@ -228,6 +228,33 @@ class TestRecords:
             {"body": "no subject"}, to_table=table["name"], in_pod=the_pod
         )
 
+    @scenario("A value too large for a table is refused, and points at files")
+    @proves("PS-DATA-010")
+    @covers("record.create")
+    async def test_an_oversized_value_is_refused(self, pod):
+        """Tables are for tabular data; a document belongs in a file.
+
+        Unenforced, this is what filled the event stream: the row is copied
+        whole into every change event, so a megabyte column costs a megabyte on
+        every write rather than once.
+        """
+        alice, the_pod = pod
+        table = await alice.creates_a_table(
+            in_pod=the_pod, columns=[column("subject"), column("body")]
+        )
+
+        response = await alice.api.call(
+            "POST",
+            f"/pods/{the_pod['id']}/datastore/tables/{table['name']}/records",
+            json={"data": {"subject": "big", "body": "x" * (300 * 1024)}},
+        )
+
+        assert response.status_code >= 400, response.text
+        # The refusal has to name the column and the way out, because this is
+        # where an author meets the rule.
+        assert "body" in response.text
+        assert "FILE_PATH" in response.text
+
     @scenario("A person updates only the columns they named")
     @proves("PS-DATA-012")
     @covers("record.update", "record.get")

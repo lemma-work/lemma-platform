@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 
 from app.core.api.dependencies import CurrentUser
+from app.core.concurrency.offload import run_blocking
 from app.core.api.streaming_multipart import (
     MultipartFileLimit,
     stream_multipart_form,
@@ -81,11 +82,16 @@ async def upload_icon(
             detail="Only PNG, JPEG, GIF, WEBP, or BMP icons are supported",
         )
     try:
-        validate_raster_icon(
+        # Header parsing plus a chunk walk over attacker-supplied bytes: bounded
+        # by the size caps, but measured at 74ms for a hostile PNG and seen in
+        # production stall traces. Off the loop.
+        await run_blocking(
+            validate_raster_icon,
             file_content,
             detected_media_type=sniffed_type,
             max_dimension=icon_settings.icon_max_dimension_pixels,
             max_pixels=icon_settings.icon_max_total_pixels,
+            limiter="cpu_bound",
         )
     except ValueError as exc:
         raise HTTPException(

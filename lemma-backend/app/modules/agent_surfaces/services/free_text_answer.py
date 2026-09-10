@@ -21,6 +21,10 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.modules.agent.contracts import (
+    conversations_for_surfaces as agent_conversations,
+)
+
 #: Holds the ``tool_call_id`` of the pause whose answer is being typed.
 _KEY = "surface_free_text_answer_for"
 
@@ -35,7 +39,7 @@ def tool_call_id_of(plan: Any) -> str:
 
 
 async def remember_answer_will_be_typed(
-    repository: Any,
+    uow,
     *,
     conversation_id: UUID,
     tool_call_id: str,
@@ -49,14 +53,14 @@ async def remember_answer_will_be_typed(
     somebody looking at plain text has nothing to tap.
     """
     await remember_free_text_answer_wanted(
-        repository,
+        uow,
         conversation_id=conversation_id,
         tool_call_id=tool_call_id,
     )
 
 
 async def remember_free_text_answer_wanted(
-    repository: Any,
+    uow,
     *,
     conversation_id: UUID,
     tool_call_id: str,
@@ -64,15 +68,13 @@ async def remember_free_text_answer_wanted(
     """Record that the next typed message answers ``tool_call_id``."""
     if not tool_call_id:
         return
-    await repository.set_conversation_metadata_key(
-        conversation_id,
-        _KEY,
-        tool_call_id,
+    await agent_conversations.set_conversation_metadata_value(
+        uow, conversation_id, _KEY, tool_call_id
     )
 
 
 async def free_text_answer_wanted_for(
-    repository: Any,
+    uow,
     *,
     conversation_id: UUID,
     tool_call_id: str,
@@ -85,21 +87,25 @@ async def free_text_answer_wanted_for(
     """
     if not tool_call_id:
         return False
-    stored = await repository.get_conversation_metadata_key(conversation_id, _KEY)
-    return isinstance(stored, str) and stored == tool_call_id
+    stored = await agent_conversations.conversation_metadata_value(
+        uow, conversation_id, _KEY
+    )
+    return stored == tool_call_id
 
 
 async def forget_free_text_answer_wanted(
-    repository: Any,
+    uow,
     *,
     conversation_id: UUID,
 ) -> None:
     """Spend the intent, so it answers one message and not every later one."""
-    await repository.set_conversation_metadata_key(conversation_id, _KEY, None)
+    await agent_conversations.set_conversation_metadata_value(
+        uow, conversation_id, _KEY, None
+    )
 
 
 async def remember_a_prompt_that_arrived_as_words(
-    repository: Any,
+    uow,
     *,
     conversation_id: UUID,
     envelope: Any,
@@ -125,7 +131,7 @@ async def remember_a_prompt_that_arrived_as_words(
     if not {"choices", "decision"}.intersection(receipt.degraded):
         return
     await remember_answer_will_be_typed(
-        repository,
+        uow,
         conversation_id=conversation_id,
         tool_call_id=tool_call_id_of(prompt),
     )

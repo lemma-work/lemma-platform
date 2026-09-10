@@ -87,8 +87,10 @@ def prepare_bulk_deletes(
         prepared.append(
             (
                 record_id,
-                f'DELETE FROM "{ctx.schema_name}"."{ctx.table_name}" '
-                f"WHERE {' AND '.join(where_clauses)} RETURNING *",
+                (
+                    f'DELETE FROM "{ctx.schema_name}"."{ctx.table_name}" '
+                    f"WHERE {' AND '.join(where_clauses)} RETURNING *"
+                ),
                 params,
             )
         )

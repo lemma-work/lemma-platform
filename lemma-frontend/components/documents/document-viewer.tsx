@@ -62,6 +62,7 @@ import {
 } from '@/lib/files/html-preview';
 import { DocumentBodySkeleton, DocumentSkeleton } from '@/components/documents/document-skeleton';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 interface DocumentViewerProps {
     podId: string;
@@ -501,7 +502,7 @@ export function DocumentViewer({
         if (!doc) return;
         try {
             if (isTextEditable) {
-                await navigator.clipboard.writeText(docContent);
+                await copyText(docContent);
                 toast.success('Content copied');
                 return;
             }

@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { AccountCreateSchema } from '../models/AccountCreateSchema.js';
 import type { AccountCredentialsUpdateSchema } from '../models/AccountCredentialsUpdateSchema.js';
+import type { AccountInstallationsSchema } from '../models/AccountInstallationsSchema.js';
 import type { AccountListResponseSchema } from '../models/AccountListResponseSchema.js';
 import type { AccountResponseSchema } from '../models/AccountResponseSchema.js';
 import type { AppTriggerListResponseSchema } from '../models/AppTriggerListResponseSchema.js';
@@ -20,6 +21,9 @@ import type { ConnectorSkillResponse } from '../models/ConnectorSkillResponse.js
 import type { ConnectorStatusResponse } from '../models/ConnectorStatusResponse.js';
 import type { ConnectRequestInitiateSchema } from '../models/ConnectRequestInitiateSchema.js';
 import type { ConnectRequestResponseSchema } from '../models/ConnectRequestResponseSchema.js';
+import type { InstallationBindSchema } from '../models/InstallationBindSchema.js';
+import type { InstallRequestInitiateSchema } from '../models/InstallRequestInitiateSchema.js';
+import type { InstallRequestResponseSchema } from '../models/InstallRequestResponseSchema.js';
 import type { MessageResponseSchema } from '../models/MessageResponseSchema.js';
 import type { OperationDetail } from '../models/OperationDetail.js';
 import type { OperationDetailsBatchRequest } from '../models/OperationDetailsBatchRequest.js';
@@ -57,16 +61,18 @@ export class ConnectorsService {
     }
     /**
      * OAuth Callback
-     * Handle OAuth callback and complete account connection. This endpoint is public and uses state parameter for security.
+     * Handle OAuth callback and complete account connection. This endpoint is public and uses the state parameter for security.
+     *
+     * A browser is redirected back into the app (303) carrying the outcome as query parameters: `connect` is one of `connected`, `install_required`, `pending_approval`, `install_received` or `error`. Pass `format=json` (or an `Accept` header of `application/json` without `text/html`) to receive the account as JSON instead.
      * @param error
-     * @param format
-     * @returns string Successful Response
+     * @param format Set to `json` to receive the account instead of a redirect.
+     * @returns any The connected account, when JSON was requested.
      * @throws ApiError
      */
     public static connectorOauthCallback(
         error?: (string | null),
         format?: (string | null),
-    ): CancelablePromise<string> {
+    ): CancelablePromise<any> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/connectors/connect-requests/oauth/callback',
@@ -75,6 +81,9 @@ export class ConnectorsService {
                 'format': format,
             },
             errors: {
+                303: `Redirect back into the app with the outcome.`,
+                307: `Successful Response`,
+                400: `The provider rejected the authorization, or the callback carried no usable state.`,
                 422: `Validation Error`,
             },
         });
@@ -102,9 +111,9 @@ export class ConnectorsService {
     }
     /**
      * Get Connector Skill
-     * Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.
+     * Get the skill guide markdown for a connector. Pass `kind=http` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.
      * @param connectorId
-     * @param kind Kind override, e.g. package or composio
+     * @param kind Kind override, e.g. http or composio
      * @returns ConnectorSkillResponse Successful Response
      * @throws ApiError
      */
@@ -289,6 +298,63 @@ export class ConnectorsService {
         });
     }
     /**
+     * Account Installations
+     * Which GitHub App installations this account can reach, resolving and recording one when it is unambiguous.
+     * @param organizationId
+     * @param accountId
+     * @param refresh Ask the provider again rather than trusting what is recorded. Editing an installation's repositories sends no callback and no reliable event, so this is how a change made on GitHub is seen.
+     * @returns AccountInstallationsSchema Successful Response
+     * @throws ApiError
+     */
+    public static connectorAccountInstallations(
+        organizationId: string,
+        accountId: string,
+        refresh: boolean = false,
+    ): CancelablePromise<AccountInstallationsSchema> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations',
+            path: {
+                'organization_id': organizationId,
+                'account_id': accountId,
+            },
+            query: {
+                'refresh': refresh,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Bind Account Installation
+     * Bind an account to one of the installations it can reach.
+     * @param organizationId
+     * @param accountId
+     * @param requestBody
+     * @returns AccountResponseSchema Successful Response
+     * @throws ApiError
+     */
+    public static connectorAccountBindInstallation(
+        organizationId: string,
+        accountId: string,
+        requestBody: InstallationBindSchema,
+    ): CancelablePromise<AccountResponseSchema> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations',
+            path: {
+                'organization_id': organizationId,
+                'account_id': accountId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * List Auth Configs
      * @param organizationId
      * @param limit
@@ -453,6 +519,31 @@ export class ConnectorsService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/organizations/{organization_id}/connectors/connect-requests',
+            path: {
+                'organization_id': organizationId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Start Install Step
+     * Start the installation leg for an account that is authorized but not yet installed, returning the URL to send the person to.
+     * @param organizationId
+     * @param requestBody
+     * @returns InstallRequestResponseSchema Successful Response
+     * @throws ApiError
+     */
+    public static connectorConnectRequestInstall(
+        organizationId: string,
+        requestBody: InstallRequestInitiateSchema,
+    ): CancelablePromise<InstallRequestResponseSchema> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/organizations/{organization_id}/connectors/connect-requests/install',
             path: {
                 'organization_id': organizationId,
             },

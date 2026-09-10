@@ -41,6 +41,7 @@ db_manager = e2e_fixtures.db_manager
 test_app = e2e_fixtures.test_app
 db_session = e2e_fixtures.db_session
 async_client = e2e_fixtures.async_client
+e2e_process_clients = e2e_fixtures.e2e_process_clients
 fixed_test_user = e2e_fixtures.fixed_test_user
 authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
@@ -89,7 +90,7 @@ async def test_listing_pods_holds_no_connection_across_slow_work(
     await _create_pod(authenticated_client, fixed_test_org["id"])
     org_id = fixed_test_org["id"]
     async with scoped_connection_guard():
-        response = await authenticated_client.get(f"/pods/organization/{org_id}")
+        response = await authenticated_client.get(f"/organizations/{org_id}/pods")
     assert response.status_code == 200, response.text
 
 

@@ -42,7 +42,7 @@ def _make_app(
                 }
             )
         else:
-            caps.append({"kind": "package", "auth_scheme": "OAUTH2"})
+            caps.append({"kind": "http", "auth_scheme": "OAUTH2"})
     return Connector(
         id=app_id,
         title=title,
@@ -57,7 +57,7 @@ async def _seed_auth_config(
     *,
     app_id: str,
     organization_id: str,
-    kind: str = "package",
+    kind: str = "http",
     name: str | None = None,
 ) -> AuthConfig:
     cfg = AuthConfig(
@@ -136,7 +136,7 @@ async def test_connector_status_shows_installed_apps(
         db_session,
         app_id=app_id,
         organization_id=org_id,
-        kind="package",
+        kind="http",
     )
     await db_session.commit()
 
@@ -152,7 +152,7 @@ async def test_connector_status_shows_installed_apps(
     match = next(i for i in data["installed"] if i["connector_id"] == app_id)
     assert match["name"] == auth_config.name
     assert match["title"] == "Status Test App"
-    assert match["kind"] == "package"
+    assert match["kind"] == "http"
     assert match["status"] is not None
 
 
@@ -222,7 +222,7 @@ async def test_connector_status_dual_provider_app(
         db_session,
         app_id=app_id,
         organization_id=org_id,
-        kind="package",
+        kind="http",
     )
     await db_session.commit()
 
@@ -234,7 +234,7 @@ async def test_connector_status_dual_provider_app(
 
     match = next((i for i in data["installed"] if i["connector_id"] == app_id), None)
     assert match is not None
-    assert match["kind"] == "package"
+    assert match["kind"] == "http"
 
 
 @pytest.mark.asyncio
@@ -355,7 +355,7 @@ async def test_skill_returns_kind_specific_file(
 
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
-    (skills_dir / f"{app_id}.package.md").write_text(
+    (skills_dir / f"{app_id}.http.md").write_text(
         "# Package Skill\nPackage instructions.", encoding="utf-8"
     )
     (skills_dir / f"{app_id}.composio.md").write_text(
@@ -372,12 +372,12 @@ async def test_skill_returns_kind_specific_file(
         # Request LEMMA-specific skill
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"kind": "package"},
+            params={"kind": "http"},
         )
         assert response.status_code == 200, response.text
         data = response.json()
         assert "Package" in data["markdown"]
-        assert data["kind"] == "package"
+        assert data["kind"] == "http"
 
         # Request COMPOSIO-specific skill
         response = await authenticated_client.get(
@@ -421,7 +421,7 @@ async def test_skill_falls_back_to_generic_when_provider_specific_missing(
     ):
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"kind": "package"},
+            params={"kind": "http"},
         )
     assert response.status_code == 200, response.text
     data = response.json()
@@ -453,13 +453,13 @@ def test_resolve_skill_file_kind_specific(tmp_path: Path):
     """_resolve_skill_file returns provider-specific file when it exists."""
     from app.modules.connectors.api.connector_controller import _resolve_skill_file
 
-    (tmp_path / "gmail.package.md").write_text("package", encoding="utf-8")
+    (tmp_path / "gmail.http.md").write_text("http", encoding="utf-8")
     (tmp_path / "gmail.md").write_text("generic", encoding="utf-8")
 
     with patch("app.modules.connectors.api.connector_controller.SKILLS_DIR", tmp_path):
-        result = _resolve_skill_file("gmail", "package")
+        result = _resolve_skill_file("gmail", "http")
     assert result is not None
-    assert result.read_text() == "package"
+    assert result.read_text() == "http"
 
 
 def test_resolve_skill_file_falls_back_to_generic(tmp_path: Path):
@@ -479,7 +479,7 @@ def test_resolve_skill_file_returns_none_when_nothing_exists(tmp_path: Path):
     from app.modules.connectors.api.connector_controller import _resolve_skill_file
 
     with patch("app.modules.connectors.api.connector_controller.SKILLS_DIR", tmp_path):
-        result = _resolve_skill_file("gmail", "package")
+        result = _resolve_skill_file("gmail", "http")
     assert result is None
 
 
@@ -581,8 +581,8 @@ def _app_kinds_pure(app) -> list[str]:
 
 def test_app_kinds_single():
     """A connector installable only as a vendored package lists just that."""
-    app = type("App", (), {"kinds": [{"kind": "package", "auth_scheme": "OAUTH2"}]})()
-    assert _app_kinds_pure(app) == ["package"]
+    app = type("App", (), {"kinds": [{"kind": "http", "auth_scheme": "OAUTH2"}]})()
+    assert _app_kinds_pure(app) == ["http"]
 
 
 def test_app_kinds_dual():
@@ -592,12 +592,12 @@ def test_app_kinds_dual():
         (),
         {
             "kinds": [
-                {"kind": "package", "auth_scheme": "OAUTH2"},
+                {"kind": "http", "auth_scheme": "OAUTH2"},
                 {"kind": "composio", "auth_scheme": "OAUTH2", "toolkit_slug": "gmail"},
             ]
         },
     )()
-    assert set(_app_kinds_pure(app)) == {"package", "composio"}
+    assert set(_app_kinds_pure(app)) == {"http", "composio"}
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +623,7 @@ async def test_operations_filtered_by_lemma_provider(
             id=f"{app_id}:LEMMA:lemma_op",
             connector_id=app_id,
             name="lemma_op",
-            kind="package",
+            kind="http",
             provider_operation_name="LEMMA_OP",
             display_name="Lemma Operation",
             description="Lemma native op",
@@ -651,7 +651,7 @@ async def test_operations_filtered_by_lemma_provider(
         db_session,
         app_id=app_id,
         organization_id=org_id,
-        kind="package",
+        kind="http",
     )
     await db_session.commit()
 
@@ -685,7 +685,7 @@ async def test_operations_filtered_by_composio_provider(
             id=f"{app_id}:LEMMA:lemma_op",
             connector_id=app_id,
             name="lemma_op",
-            kind="package",
+            kind="http",
             provider_operation_name="LEMMA_OP",
             display_name="Lemma Operation",
             description="Lemma native op",

@@ -38,6 +38,7 @@ class _FakeSession:
         self._flush_exc = flush_exc
         self._existing = existing
         self.added = []
+        self.statements = []
 
     def add(self, instance):
         self.added.append(instance)
@@ -50,6 +51,7 @@ class _FakeSession:
         return None
 
     async def execute(self, stmt):
+        self.statements.append(stmt)
         return _FakeResult(self._existing)
 
 
@@ -170,3 +172,49 @@ async def test_update_reraises_unrelated_integrity_error():
 
     with pytest.raises(IntegrityError):
         await repo.update(_account_entity(id=existing.id))
+
+
+class TestEveryAccountReadLoadsItsConnectorEagerly:
+    """`_to_entity` reads `instance.connector`, so a select that does not ask
+    for it raises `MissingGreenlet` the moment it is used.
+
+    Asserted on the statement rather than on a returned entity, because a
+    stubbed session hands back a stand-in whose `connector` attribute answers
+    happily -- which is precisely why this went unnoticed: `promote_next_default`
+    was the one select in the file that omitted the option, and deleting an
+    account that happened to be the default answered 500 in production while
+    this suite stayed green.
+    """
+
+    @staticmethod
+    def _asks_for_the_connector(stmt) -> bool:
+        return any(
+            "connector" in str(getattr(option, "path", option))
+            for option in getattr(stmt, "_with_options", ())
+        )
+
+    async def test_promoting_the_next_default_asks_for_it(self):
+        session = _FakeSession(existing=None)
+        repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+        await repo.promote_next_default(
+            user_id=uuid4(),
+            auth_config_id=uuid4(),
+            exclude_account_id=uuid4(),
+        )
+
+        assert session.statements, "the promotion has to query for a candidate"
+        assert self._asks_for_the_connector(session.statements[0])
+
+    async def test_the_repository_states_the_rule_once_for_every_select(self):
+        """A select added later must not have to rediscover this."""
+        import inspect
+
+        source = inspect.getsource(AccountRepository)
+        selects = source.count("select(Account)")
+        eager = source.count("selectinload(Account.connector)")
+
+        assert eager >= selects, (
+            f"{selects} selects over Account but only {eager} ask for its "
+            "connector; `_to_entity` reads it and will raise MissingGreenlet"
+        )

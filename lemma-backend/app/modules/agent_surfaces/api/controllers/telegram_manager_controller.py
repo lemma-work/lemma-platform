@@ -8,7 +8,7 @@ from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
-from app.composition.surface_agent import AgentServiceDep
+from app.modules.agent.contracts.agents import agent_id_for_name
 from app.modules.agent_surfaces.api.surface_config_resolver import (
     require_surface_agent_action,
     resolve_telegram_config,
@@ -66,7 +66,6 @@ async def start_telegram_managed_bot_setup(
     request: TelegramManagedBotSetupRequest,
     user: CurrentUser,
     uow: UoWDep,
-    agent_service: AgentServiceDep,
     ctx: PodContextDep,
     service: TelegramManagerServiceDep,
 ) -> TelegramManagedBotSetupResponse:
@@ -80,10 +79,9 @@ async def start_telegram_managed_bot_setup(
     if existing is not None:
         raise AgentSurfaceAlreadyExistsError(surface_name)
 
-    agent = (
-        await agent_service.get_agent_by_name(
-            pod_id=pod_id,
-            name=request.default_agent_name,
+    agent_id = (
+        await agent_id_for_name(
+            uow.session, pod_id=pod_id, name=request.default_agent_name
         )
         if request.default_agent_name
         else None
@@ -91,7 +89,7 @@ async def start_telegram_managed_bot_setup(
     await require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
-        agent_id=agent.id if agent else None,
+        agent_id=agent_id,
         action=Permissions.AGENT_UPDATE,
     )
 
@@ -122,7 +120,7 @@ async def start_telegram_managed_bot_setup(
             organization_id=organization_id,
             pod_id=pod_id,
             surface_name=surface_name,
-            agent_id=agent.id if agent else None,
+            agent_id=agent_id,
             surface_config=surface_config,
             is_enabled=request.is_enabled,
             pod_name=pod_name,

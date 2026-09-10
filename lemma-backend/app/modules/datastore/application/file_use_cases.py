@@ -23,7 +23,6 @@ from fastapi import Request
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.scope import pod_context_scope
-from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.file_entities import (
@@ -39,6 +38,7 @@ from app.modules.datastore.services.files.http_cache import (
     if_none_match_matches,
     quote_content_etag,
 )
+from app.modules.datastore.config import datastore_settings
 
 logger = get_logger(__name__)
 
@@ -240,7 +240,7 @@ class FileUseCases:
 
         files = list(cleanup.files)
         enqueued = False
-        if not settings.e2e_disable_worker_file_autoindex:
+        if not datastore_settings.e2e_disable_worker_file_autoindex:
             # When the worker file-path is active, offload the purge; otherwise
             # (e2e without a datastore worker) fall through to in-process cleanup.
             try:

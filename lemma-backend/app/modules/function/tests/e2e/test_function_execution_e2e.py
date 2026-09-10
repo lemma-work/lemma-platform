@@ -21,6 +21,7 @@ from uuid import uuid4
 import pytest
 from fastapi import status
 
+from app.modules.function.config import function_settings
 from app.modules.test_support.e2e.function_helpers import (
     connector_function_code,
     create_function,
@@ -404,7 +405,6 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     test_pod,
     monkeypatch,
 ):
-    from app.core.config import settings as backend_settings
 
     pod_id = test_pod["id"]
     suffix = uuid4().hex[:8]
@@ -451,7 +451,11 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
 
     # Function creation performs schema extraction and prewarms the revision
     # worker. Restrict only the execution whose timeout behavior this test owns.
-    monkeypatch.setattr(backend_settings, "function_api_deadline_seconds", 2)
+    # `function_settings`, not `backend_settings`: this deadline moved to
+    # `FunctionSettings`, and patching it on core's object would create an
+    # attribute nothing reads while the real deadline stayed at its default --
+    # the run would not time out and the test would fail for the wrong reason.
+    monkeypatch.setattr(function_settings, "function_api_deadline_seconds", 2)
     response = await authenticated_client.post(
         f"/pods/{pod_id}/functions/{function_name}/runs",
         json={"input_data": {"title": "should-not-write"}},
@@ -1030,7 +1034,7 @@ async def test_function_runs_a_tenant_connector_operation_for_real(
 # (agent-as-tool) and dispatch_function_for_workflow/cancel_function_run
 # (workflow node control) have no HTTP surface at all -- they're built the same
 # way their real callers build them (app/modules/agent/tools/
-# callable_tool_factory.py, app/composition/workflow_function.py) via
+# callable_tool_factory.py, function/infrastructure/workflow_control.py) via
 # `build_function_use_cases`, against the live e2e database and the real Docker
 # sandbox, same pattern as test_function_sandbox_execution_e2e.py's
 # dispatcher-construction tests.
@@ -1197,7 +1201,7 @@ async def test_dispatch_function_for_workflow_enqueues_and_the_worker_completes_
     authenticated_client, test_pod, fixed_test_user, db_manager, worker
 ):
     """``dispatch_function_for_workflow`` is the workflow-node path
-    (``app/composition/workflow_function.py::FunctionControlAdapter.execute_function``):
+    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.execute_function``):
     it forces ASYNCHRONOUS dispatch even for an API function and returns
     PENDING without running the sandbox inline, so the workflow engine can
     suspend on the run id and let the ``FunctionRunCompleted`` event resume
@@ -1257,7 +1261,7 @@ async def test_cancel_function_run_stops_a_dispatched_run_before_it_completes(
 ):
     """``cancel_function_run`` is used when a workflow run that was waiting on
     a dispatched function is itself cancelled
-    (``app/composition/workflow_function.py::FunctionControlAdapter.cancel_run``),
+    (``function/infrastructure/workflow_control.py::FunctionControlAdapter.cancel_run``),
     so the sandbox stops doing work nobody is waiting for. A run that is still
     PENDING or RUNNING is cancellable; confirm a long JOB run actually ends
     CANCELLED instead of completing."""

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "//": [
+    "Railway config for Lemma. See deploy/README.md -- this is not a one-click",
+    "blueprint like render.yaml or .do/deploy.template.yaml. Railway builds a",
+    "template from services defined in its dashboard; this file configures the",
+    "deploy half of each.",
+    "",
+    "READ THIS FIRST: Railway gives a container no Docker socket, so Lemma",
+    "cannot provision agent sandboxes on the platform itself. Agents, functions",
+    "and workflows are all sandbox work, so a Railway deployment needs E2B: set",
+    "WORKSPACE_PROVIDER=e2b, E2B_API_KEY, and an E2B_METADATA_NAMESPACE unique",
+    "to this deployment. Without it the product runs but its agents cannot.",
+    "",
+    "Add from the dashboard: Postgres twice (lemma and lemma_datastore), Redis,",
+    "and a service from supertokens/supertokens-postgresql with",
+    "POSTGRESQL_CONNECTION_URI and POSTGRESQL_TABLE_SCHEMA=supertokens.",
+    "",
+    "A VM running the compose stack (deploy/cloud-init/lemma.yaml) needs no E2B",
+    "account and provisions sandboxes locally."
+  ],
+  "services": {
+    "api": {
+      "deploy": {
+        "startCommand": "uvicorn app.app:app --host 0.0.0.0 --port $PORT --ws websockets-sansio --no-access-log",
+        "preDeployCommand": ["alembic upgrade head"],
+        "healthcheckPath": "/health/ready",
+        "healthcheckTimeout": 120,
+        "restartPolicyType": "ON_FAILURE",
+        "numReplicas": 1
+      }
+    },
+    "worker": {
+      "deploy": {
+        "startCommand": "python -m app.worker",
+        "restartPolicyType": "ON_FAILURE",
+        "numReplicas": 1
+      }
+    },
+    "frontend": {
+      "deploy": {
+        "restartPolicyType": "ON_FAILURE",
+        "numReplicas": 1
+      }
+    }
+  }
+}

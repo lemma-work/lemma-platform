@@ -132,6 +132,9 @@ def _record_frame(
         "record_id": event.get("record_id"),
         "operation": event.get("operation"),
         "payload": event.get("payload") or {},
+        # An oversized row body is dropped upstream rather than shipped. Say so,
+        # so a client reads the record instead of trusting an empty payload.
+        "payload_truncated": bool(event.get("payload_truncated")),
         "occurred_at": event.get("occurred_at"),
         "stream_id": event.get("_stream_id"),
     }

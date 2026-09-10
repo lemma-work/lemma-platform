@@ -71,7 +71,11 @@ _TARGET_FIELDS: dict[ConnectorKind, tuple[str, ...]] = {
 # Config keys that decide what operations exist. Changing one means the stored
 # operation set describes a server we are no longer talking to.
 _DISCOVERY_FIELDS: dict[ConnectorKind, tuple[str, ...]] = {
-    ConnectorKind.MCP: ("server_url", "extra_headers"),
+    # `session_setup` belongs here for the same reason `extra_headers` does: it
+    # decides which tools the server lists at all, so editing it without
+    # re-discovering leaves the stored operations describing a session nobody
+    # will open again.
+    ConnectorKind.MCP: ("server_url", "extra_headers", "session_setup"),
     ConnectorKind.HTTP: ("server_url", "spec_url", "spec_inline"),
 }
 

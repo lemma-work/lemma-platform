@@ -172,7 +172,14 @@ def _render_frame(state: CliState, frame: dict) -> None:
     table_name = frame.get("table_name") or "?"
     record_id = frame.get("record_id") or ""
     when = _short_time(frame.get("occurred_at"))
-    payload = _compact_payload(frame.get("payload"), full=getattr(state, "full", False))
+    if frame.get("payload_truncated"):
+        # An empty payload here means "too large to send", not "empty row".
+        # Rendering nothing would read as the latter.
+        payload = "[dim](body too large — read the record)[/dim]"
+    else:
+        payload = _compact_payload(
+            frame.get("payload"), full=getattr(state, "full", False)
+        )
     prefix = f"[dim]{when}[/dim] " if when else ""
     console.print(
         f"{prefix}[{style}]{operation:<6}[/{style}] [bold]{table_name}[/bold]"

@@ -2,7 +2,7 @@
 
 **What it checks against.** The server, not PyPI. Releases are mono-version
 (``RELEASING.md``): one tag publishes ``lemma-terminal``, ``lemma-sdk`` and the
-API together, so the ``info.version`` in the server's ``/openapi.json`` — the
+API together, so the ``api_version`` the server reports on ``/health`` — the
 same number ``lemma doctor`` already reads for skew — *is* the released version.
 Checking it adds no host the CLI was not already talking to, and no second
 opinion that can disagree with `doctor`.
@@ -93,10 +93,28 @@ def is_enabled() -> bool:
     return install_kind().can_update
 
 
+#: Where a server states its API version, best source first.
+#:
+#: `/health` is first because it is the only one a real deployment answers.
+#: Production serves no OpenAPI document — `api_docs_served()` is off unless
+#: something turns it on — so reading `info.version` from `/openapi.json` was a
+#: 404 against every server except a local one. Skew went undetected and
+#: `lemma doctor` reported `server_unreachable` for a server it had just
+#: successfully talked to; the same function backs the background update check,
+#: so that notice never fired either.
+#:
+#: `/openapi.json` stays as the fallback for a server older than the `/health`
+#: field, which is every server currently deployed.
+_VERSION_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("/health", ("api_version",)),
+    ("/openapi.json", ("info", "version")),
+)
+
+
 def fetch_server_api_version(
     base_url: str, *, verify_ssl: bool = True, timeout: float = _TIMEOUT_SECONDS
 ) -> tuple[str | None, str | None]:
-    """Return ``(api_version, error)`` from a server's ``/openapi.json``.
+    """Return ``(api_version, error)`` for a server.
 
     stdlib only: this runs on a daemon thread after the command has finished,
     and `lemma doctor` calls it too (``commands/system.py``) — one fetch, one
@@ -106,18 +124,33 @@ def fetch_server_api_version(
     import ssl
     import urllib.request
 
-    url = base_url.rstrip("/") + "/openapi.json"
     context = None
     if not verify_ssl:
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-    try:
-        with urllib.request.urlopen(url, timeout=timeout, context=context) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return str(data.get("info", {}).get("version") or "") or None, None
-    except Exception as exc:  # network/parse errors are diagnostics, not fatal
-        return None, str(exc)
+
+    first_error: str | None = None
+    for path, keys in _VERSION_SOURCES:
+        url = base_url.rstrip("/") + path
+        try:
+            with urllib.request.urlopen(url, timeout=timeout, context=context) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:  # network/parse errors are diagnostics, not fatal
+            # Report what the *preferred* source said. A server that answers
+            # neither is unreachable, and the first attempt is the one that
+            # describes why.
+            first_error = first_error or str(exc)
+            continue
+        for key in keys:
+            data = data.get(key, {}) if isinstance(data, dict) else {}
+        version = str(data or "") or None
+        if version:
+            return version, None
+        # A 200 with no version is not a reason to stop: a server that predates
+        # the `/health` field answers the probe and says nothing about itself.
+        first_error = first_error or f"{path} reported no API version"
+    return None, first_error or "no API version reported"
 
 
 def _release_parts(version: str) -> tuple[int, ...] | None:

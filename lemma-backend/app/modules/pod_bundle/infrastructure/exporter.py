@@ -33,6 +33,8 @@ from lemma_pod_bundle.layout import (
     TABLE_DATA_FILE,
     _record_export_contents,
     _write_json,
+    extract_large_text,
+    normalize_file_folders,
 )
 from lemma_pod_bundle.normalize import (
     _attach_permissions_payload,
@@ -184,7 +186,7 @@ class BundleExporter:
         """
         selected = _normalize_include(include)
         data_tables_set = _normalize_data_tables(data_tables)
-        folder_paths = _normalize_file_folders(file_folders)
+        folder_paths = normalize_file_folders(file_folders)
         wants_data = bool(data_tables_set)
         warnings: list[str] = []
         record_budget = _RecordBudget(
@@ -221,16 +223,12 @@ class BundleExporter:
             list_function_names,
             require_function,
         )
+        from app.modules.pod.contracts.provisioning import get_pod
         from app.modules.schedule.contracts.provisioning import list_schedules
         from app.modules.workflow.contracts.provisioning import (
             get_workflow,
             list_workflow_names,
         )
-        from app.composition.pod_bundle_pod import PodRepository
-
-        from app.core.infrastructure.events.message_bus import get_message_bus
-
-        message_bus = get_message_bus()
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-export-") as tmp:
             root = Path(tmp)
@@ -238,7 +236,7 @@ class BundleExporter:
                 (root / resource_dir).mkdir(parents=True, exist_ok=True)
 
             # --- pod.json ------------------------------------------------------
-            pod = await PodRepository(uow, message_bus=message_bus).get(pod_id)
+            pod = await get_pod(uow, pod_id=pod_id)
             if pod is None:
                 # ctx already authorized POD_READ, so this only happens on a race
                 # with a pod delete — treat as an invalid export.
@@ -331,7 +329,7 @@ class BundleExporter:
                         # _resource_grants_payload for why None differs from [].
                         if grants is not None:
                             payload = _attach_permissions_payload(payload, grants)
-                    payload = _extract_large_text(
+                    payload = extract_large_text(
                         payload,
                         field_name="code",
                         file_name="code.py",
@@ -539,10 +537,12 @@ class BundleExporter:
         ctx: Context,
         byte_budget: _ByteBudget,
     ) -> None:
-        """Bundle an app's code: its source (extracted to ``source/``), or — for a
-        widget/no-source app — its built ``dist.zip``. Best-effort and byte-budgeted:
-        an app with neither archive, or one over budget, exports metadata-only. A
-        one-file app lands as ``source/index.html``; the CLI writes ``html.html``."""
+        """Export source and dist, prioritizing source within the byte budget.
+
+        Source enables rebuilding for another pod; dist preserves the deployed
+        build and is the fallback when source is unavailable. Match the CLI's
+        ``_download_app_assets`` layout without claiming Vite build portability.
+        """
         from app.modules.apps.contracts import AppNotFoundError
         from app.modules.apps.contracts.provisioning import (
             read_app_archive,
@@ -550,8 +550,6 @@ class BundleExporter:
             resolve_app_source_archive,
         )
 
-        # Prefer source (rebuildable in the target pod); the exported vite dist is
-        # baked with the source pod id and is not portable.
         source_bytes: bytes | None = None
         try:
             app_id, source_path = await resolve_app_source_archive(
@@ -563,17 +561,15 @@ class BundleExporter:
         except AppNotFoundError:
             source_bytes = None
 
-        if source_bytes:
-            if byte_budget.allow(
-                name=f"apps/{app_name}/source", size=len(source_bytes)
-            ):
-                await run_blocking(
-                    _extract_zip_bytes,
-                    source_bytes,
-                    dest / "source",
-                    limiter="cpu_bound",
-                )
-            return
+        if source_bytes and byte_budget.allow(
+            name=f"apps/{app_name}/source", size=len(source_bytes)
+        ):
+            await run_blocking(
+                _extract_zip_bytes,
+                source_bytes,
+                dest / "source",
+                limiter="cpu_bound",
+            )
 
         dist_bytes: bytes | None = None
         try:
@@ -740,51 +736,12 @@ def _normalize_include(include: list[str] | None) -> set[str]:
     return resolved or set(_EXPORT_RESOURCE_TYPES)
 
 
-def _normalize_file_folders(file_folders: list[str] | None) -> list[str]:
-    """Folder paths to export, normalized to a leading slash and de-duplicated.
-
-    Order is preserved so warnings come back in the order the caller asked."""
-    if not file_folders:
-        return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for raw in file_folders:
-        if not raw or not raw.strip():
-            continue
-        path = "/" + raw.strip().strip("/")
-        if path in seen:
-            continue
-        seen.add(path)
-        out.append(path)
-    return out
-
-
 def _normalize_data_tables(data_tables: list[str] | None) -> set[str]:
     """The set of table names to seed row data for. ``None``/empty means none
     Blank entries are dropped."""
     if not data_tables:
         return set()
     return {name.strip() for name in data_tables if name and name.strip()}
-
-
-def _extract_large_text(
-    payload: dict[str, Any],
-    *,
-    field_name: str,
-    file_name: str,
-    resource_dir: Path,
-) -> dict[str, Any]:
-    """Extract a large text field (``code``/``instruction``) to a sidecar file
-    referenced by ``$file`` — byte-identical to the CLI's ``_extract_large_text``."""
-    from lemma_pod_bundle.layout import RAW_FILE_REF_KEY
-
-    value = payload.get(field_name)
-    if not isinstance(value, str):
-        return payload
-    (resource_dir / file_name).write_text(value, encoding="utf-8")
-    next_payload = dict(payload)
-    next_payload[field_name] = {RAW_FILE_REF_KEY: file_name}
-    return next_payload
 
 
 def _extract_zip_bytes(data: bytes, dest_dir: Path) -> None:

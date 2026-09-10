@@ -180,18 +180,27 @@ async def test_a_schedule_can_target_a_workflow(watched_table):
     assert reopened.get("workflow_name") == workflow["name"], reopened
 
 
-@scenario("Deleting a schedule's target takes the schedule with it")
+@scenario("A schedule outlives the target it pointed at, and says so")
 @proves("PS-SCHED-030", "PS-SCHED-003")
 @covers("schedule.create", "workflow.delete", "schedule.get", "schedule.run.list")
-async def test_deleting_the_target_takes_the_schedule(watched_table):
-    """The dangling-target state is prevented rather than reported.
+async def test_the_schedule_outlives_its_deleted_target(watched_table):
+    """The dangling-target state is reported, not prevented.
 
-    `PS-SCHED-030`'s unwanted clause asks for a firing recorded as failed,
-    saying the target is missing. For a workflow target that state cannot
-    arise: deleting the workflow removes the schedules pointing at it, so
-    there is no later firing to explain. Prevention is the stronger answer of
-    the two, and this pins it — a schedule left behind pointing at nothing
-    would fire on a timer forever with nobody able to see why it did nothing.
+    `PS-SCHED-030` asks that when a schedule's target no longer exists the
+    firing is recorded as failed and says the target is missing, rather than
+    failing silently. That clause needs the schedule to still be there to fail,
+    so deleting a workflow must not take its schedules.
+
+    Migration 0028 made exactly that choice, deliberately and against the
+    previous behaviour: `schedules.workflow_id` and `schedules.agent_id` moved
+    from `ON DELETE CASCADE` to `SET NULL`, because deleting and recreating a
+    workflow is the normal way to restructure one and the cascade "silently
+    removed the automation that ran it and every record that it had ever run" —
+    `schedule_runs` cascades from `schedules` in turn, so the firing history
+    went with it.
+
+    So what is pinned here is survival: the row is still readable, no longer
+    points at anything, and can be repointed at a new workflow.
     """
     alice, pod, _agent, table = watched_table
     workflow = await alice.creates_a_workflow(in_pod=pod)
@@ -201,18 +210,25 @@ async def test_deleting_the_target_takes_the_schedule(watched_table):
         config={"table_name": table, "operations": ["INSERT"]},
         workflow=workflow["name"],
     )
-    # It really is there and armed before the deletion, so the refusal
-    # afterwards is about the deletion rather than about a schedule that never
-    # existed.
+    # It really is there and armed before the deletion, so what is asserted
+    # afterwards is about the deletion rather than a schedule that never was.
     await alice.opens_schedule(schedule, in_pod=pod)
 
     await alice.deletes_workflow(workflow["name"], in_pod=pod)
 
-    gone = await alice.api.call("GET", f"/pods/{pod['id']}/schedules/{schedule['id']}")
-    assert gone.status_code == 404, (
+    survived = await alice.api.call(
+        "GET", f"/pods/{pod['id']}/schedules/{schedule['id']}"
+    )
+    assert survived.status_code == 200, (
         f"the workflow was deleted and its schedule answered "
-        f"{gone.status_code}; a schedule pointing at nothing fires forever "
-        f"and explains nothing: {gone.text[:200]}"
+        f"{survived.status_code}; a schedule that goes with its target takes "
+        f"the automation and its whole firing history with it: "
+        f"{survived.text[:200]}"
+    )
+    body = survived.json()
+    assert not body.get("workflow_id") and not body.get("workflow_name"), (
+        "the schedule survived but still claims a workflow that was deleted, "
+        f"so nothing can tell it is unpointed: {body}"
     )
 
 

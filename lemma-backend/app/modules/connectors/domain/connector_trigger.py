@@ -1,13 +1,12 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
     kind_to_provider,
-    provider_to_kind,
 )
 
 
@@ -17,7 +16,7 @@ class ConnectorTriggerEntity(BaseModel):
     id: str = Field(..., description="Unique slug/name of the trigger")
     connector_id: str = Field(..., description="ID of the connector")
     kind: ConnectorKind = Field(
-        default=ConnectorKind.PACKAGE,
+        default=ConnectorKind.HTTP,
         description="Install kind that emits this trigger",
     )
     # name field is redundant if id is name-based, but could be useful for display
@@ -35,16 +34,6 @@ class ConnectorTriggerEntity(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_provider(cls, data: Any) -> Any:
-        """Accept ``provider=`` from callers not yet migrated to kinds."""
-        if not isinstance(data, dict):
-            return data
-        if data.get("kind") is None and data.get("provider") is not None:
-            data = {**data, "kind": provider_to_kind(data["provider"])}
-        return data
 
     @property
     def provider(self) -> AuthProvider:

@@ -268,7 +268,7 @@ export function getRunFreshnessTime(run: RunCardRun | null | undefined): number 
 
 export function pickFreshestRun(primary: RunCardRun | null | undefined, secondary: RunCardRun | null | undefined): RunCardRun | null {
     if (!primary) return secondary ?? null;
-    if (!secondary) return primary ?? null;
+    if (!secondary) return primary;
     if (primary.id && secondary.id && primary.id !== secondary.id) return primary;
     return getRunFreshnessTime(secondary) > getRunFreshnessTime(primary) ? secondary : primary;
 }

@@ -15,6 +15,8 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
         "schedule_run_retention_batch_size",
         "schedule_run_retention_budget_seconds",
         "schedule_run_reinspect_after_minutes",
+        # Moved from `app/core/config.py`: this module's own worker loop.
+        "schedule_poll_interval_seconds",
     }
     assert (
         ScheduleSettings.model_fields["schedule_max_consecutive_failures"].default == 5

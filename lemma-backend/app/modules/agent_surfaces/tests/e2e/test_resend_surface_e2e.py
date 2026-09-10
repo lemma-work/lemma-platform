@@ -33,7 +33,9 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -222,7 +224,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
     assert "E2E agent reply [RESEND]" in json.dumps(resend_messages[-1])
 
 
-async def test_a_spoofed_sender_is_offered_signup_rather_than_a_members_identity(
+async def test_a_spoofed_sender_gets_neither_the_members_identity_nor_a_reply(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -240,6 +242,13 @@ async def test_a_spoofed_sender_is_offered_signup_rather_than_a_members_identity
 
     The unit tests cover the parser; this covers the wiring, because the check
     is only worth anything if it is actually reached before the identity cache.
+
+    The spoofed sender now gets *nothing*, which is what the test name used to
+    promise and could not keep: offering signup meant replying to the address
+    in a header we had just refused to believe, so a forged `From:` made this
+    mailbox send mail to whoever the forger named. Not becoming the member is
+    still the guarantee; silence is how it is kept without writing to a
+    stranger.
     """
     monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
     pod_id = test_pod["id"]
@@ -266,8 +275,9 @@ async def test_a_spoofed_sender_is_offered_signup_rather_than_a_members_identity
     assert assistant_address
 
     victim = fixed_test_user["email"]
-    context = await process_ingress_and_run_scripted(
-        db_session,
+    uow = SqlAlchemyUnitOfWork(db_session)
+    handler = build_surface_event_handler(uow)
+    context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(
             source="resend",
             payload=_resend_payload(
@@ -284,12 +294,14 @@ async def test_a_spoofed_sender_is_offered_signup_rather_than_a_members_identity
             ),
             headers={},
         ),
-        script=[script_text("should never run")],
     )
+    await uow.commit()
 
-    # Not a chat: an unauthenticated sender is a stranger, and a stranger is
-    # told how to get access rather than answered as the person they named.
+    # Never the member: the agent does not run as the person the header named.
     assert not isinstance(context, SurfaceChatContext)
+    # And never a reply either. The address belongs to the victim, not the
+    # sender, so answering it is the forgery working -- just with our postage.
+    assert context is None
 
 
 async def test_connecting_email_returns_the_address_the_agent_already_has(

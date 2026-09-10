@@ -16,6 +16,7 @@ from app.modules.workspace.services import (
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
+from app.modules.workspace.config import workspace_settings
 
 
 def _sandbox_info(
@@ -202,7 +203,7 @@ def test_callback_host_is_never_rewritten(monkeypatch) -> None:
     get_env_vars, so a rewrite here would silently point workspaces at the
     wrong host.
     """
-    monkeypatch.setattr(settings, "workspace_callback_api_url", None)
+    monkeypatch.setattr(workspace_settings, "workspace_callback_api_url", None)
     monkeypatch.setattr(settings, "cli_api_url", "http://127-0-0-1.sslip.io:8710")
     assert (
         WorkspaceSandboxService._resolve_workspace_api_url()
@@ -210,7 +211,7 @@ def test_callback_host_is_never_rewritten(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        settings, "workspace_callback_api_url", "http://callback.test:9000"
+        workspace_settings, "workspace_callback_api_url", "http://callback.test:9000"
     )
     assert (
         WorkspaceSandboxService._resolve_workspace_api_url()

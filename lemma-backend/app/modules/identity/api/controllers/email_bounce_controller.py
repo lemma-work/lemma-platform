@@ -22,6 +22,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_cache import get_user_cache
+from app.modules.identity.config import identity_settings
 
 router = APIRouter(
     prefix="/auth/email/bounces",
@@ -137,7 +138,7 @@ async def _deactivate_email_for_hard_bounce(email_address: str) -> None:
 
 @router.post("", include_in_schema=False, status_code=204)
 async def accept_email_bounce(request: Request, event: BounceEvent) -> Response:
-    secret = reveal_secret(settings.auth_bounce_webhook_secret)
+    secret = reveal_secret(identity_settings.auth_bounce_webhook_secret)
     if not secret:
         raise HTTPException(status_code=404, detail="Not found")
     body = await request.body()

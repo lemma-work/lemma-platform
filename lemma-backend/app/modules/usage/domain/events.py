@@ -53,3 +53,19 @@ class UsageLimitDeniedEvent(DomainEvent):
     @classmethod
     def stream_name(cls) -> str:
         return USAGE_EVENTS_STREAM
+
+
+class UsageLimitWarningEvent(DomainEvent):
+    """One committed warning per budget window after confirmed spend crosses its threshold."""
+
+    event_type: str = "usage.limit.warning"
+    counter_id: UUID
+    organization_id: UUID | None = None
+    user_id: UUID | None = None
+    window_kind: str
+    used_usd: float
+    limit_usd: float
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return USAGE_EVENTS_STREAM

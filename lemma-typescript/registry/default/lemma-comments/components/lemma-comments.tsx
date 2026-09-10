@@ -13,7 +13,7 @@ import { Textarea } from "@/components/lemma/ui/textarea"
 import { useReferencingRecords, useCreateRecord } from "lemma-sdk/react"
 import type { LemmaClient } from "lemma-sdk"
 import { cn } from "@/components/lemma/lib/utils"
-import { enumPillClasses, type EnumColorMap } from "./comments-enum-utils"
+import { type EnumColorMap } from "./comments-enum-utils"
 import {
   commentsRadiusClassName,
   type LemmaCommentsAppearance,

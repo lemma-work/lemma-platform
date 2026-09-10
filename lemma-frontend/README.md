@@ -76,6 +76,9 @@ npm run build   # production build (builds the local SDK first)
 ```
 
 `npm run check` is what CI runs; run it before opening a pull request.
+Vitest discovers test and spec files in `app/`, `components/`, and `lib/`,
+including TypeScript JSX. Tests run in Node by default; component interaction
+tests opt into jsdom with a per-file environment directive.
 
 ## Production / Docker
 

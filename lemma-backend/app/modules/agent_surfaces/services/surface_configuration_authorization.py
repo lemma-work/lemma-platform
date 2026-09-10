@@ -11,7 +11,13 @@ from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.factory import create_authorization_data_service
-from app.composition.surface_identity import Pod
+from app.modules.agent.contracts import AgentNotFoundError
+from app.modules.agent.contracts.agents import agent_id_for_name
+from app.modules.agent.contracts.pod_summaries import (
+    PodAgentSummary,
+    list_agent_summaries_by_pod,
+)
+from app.modules.pod.contracts.members import pod_name
 from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
@@ -165,19 +171,28 @@ class SurfaceConfigurationAuthorizationMixin:
     async def _surface_choice_labels(self, authorized) -> list[tuple[str, str]]:
         choices: list[tuple[str, str]] = []
         for surface, _ in authorized:
-            pod = await self.uow.session.get(Pod, surface.pod_id)
-            label = str(getattr(pod, "name", "") or surface.name)
+            label = await pod_name(self.uow.session, surface.pod_id) or surface.name
             choices.append((label, str(surface.id)))
         return choices
 
-    async def _visible_agents(self, *, surface, ctx, action: str):
-        agents, _ = await self.conversation_service.agent_repository.list_by_pod(
-            pod_id=surface.pod_id
+    async def _visible_agents(
+        self, *, surface, ctx, action: str
+    ) -> list[PodAgentSummary]:
+        """This pod's agents that the viewer may see, as listing entries.
+
+        `agent.contracts.pod_summaries` rather than the agent repository the
+        `ConversationService` used to carry: the Home tab prints a name and a
+        description, which is exactly what a summary is. It also arrives in name
+        order and unpaginated, where the repository listing was id-descending
+        and capped at a hundred -- neither of which a rendered list wanted.
+        """
+        summaries = await list_agent_summaries_by_pod(
+            session=self.uow.session, pod_ids=[surface.pod_id]
         )
-        visible = []
-        for agent in agents:
+        visible: list[PodAgentSummary] = []
+        for agent in summaries.get(surface.pod_id, []):
             if await self._can_access_agent(
-                surface=surface, ctx=ctx, agent=agent, action=action
+                surface=surface, ctx=ctx, agent_id=agent.id, action=action
             ):
                 visible.append(agent)
         return visible
@@ -185,23 +200,31 @@ class SurfaceConfigurationAuthorizationMixin:
     async def _validated_agent_choice(
         self, *, surface, ctx, agent_name: str | None, action: str
     ) -> str | None:
+        """The name back again, once it names an agent this viewer may pick.
+
+        The name is returned rather than the row's, because the lookup is an
+        exact match: there is nothing the row could say that the input did not.
+        """
         if not agent_name:
             return None
-        agent = await self.conversation_service.agent_repository.get_by_pod_and_name(
-            pod_id=surface.pod_id, name=agent_name
-        )
-        if agent is None or not await self._can_access_agent(
-            surface=surface, ctx=ctx, agent=agent, action=action
+        try:
+            agent_id = await agent_id_for_name(
+                self.uow.session, pod_id=surface.pod_id, name=agent_name
+            )
+        except AgentNotFoundError:
+            return None
+        if not await self._can_access_agent(
+            surface=surface, ctx=ctx, agent_id=agent_id, action=action
         ):
             return None
-        return agent.name
+        return agent_name
 
-    async def _can_access_agent(self, *, surface, ctx, agent, action: str) -> bool:
+    async def _can_access_agent(self, *, surface, ctx, agent_id, action: str) -> bool:
         return await ctx.can(
             action,
             ResourceRef(
                 resource_type=ResourceType.AGENT,
-                resource_id=agent.id,
+                resource_id=agent_id,
                 pod_id=surface.pod_id,
             ),
         )

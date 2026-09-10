@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-from app.composition.agent_pod import create_agent_pod_repository
+from app.modules.pod.contracts.agent_access import pod_organization_id
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
@@ -277,7 +277,7 @@ class AgentControlAdapter(AgentPort):
         return await default_agent_runtime_for_pod(self.uow, pod_id=pod_id)
 
     async def _get_pod_organization_id(self, pod_id: UUID) -> UUID | None:
-        return await create_agent_pod_repository(self.uow).get_organization_id(pod_id)
+        return await pod_organization_id(self.uow, pod_id)
 
     @staticmethod
     def _normalize_agent_output(output: object) -> dict[str, object]:

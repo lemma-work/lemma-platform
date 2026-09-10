@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from uuid import UUID
 
-from app.app import RequestIdMiddleware
+from app.middleware import RequestIdMiddleware
 from app.core.request_context import current_observability_context
 
 

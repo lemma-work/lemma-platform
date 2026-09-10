@@ -231,6 +231,29 @@ class DatastoreSteps:
             )
         return response.status_code
 
+    async def is_refused_a_page_of(self, size: int, *, table: str, in_pod: JSON) -> int:
+        """Ask for an oversized page and expect to be told no.
+
+        Refused rather than quietly cut down to the cap: a caller handed fewer
+        rows than it asked for, with no error, cannot tell a bounded page from
+        the whole table.
+        """
+        response = await self.api.call(
+            "GET",
+            f"/pods/{in_pod['id']}/datastore/tables/{table}/records",
+            params={"limit": size},
+        )
+        if response.status_code < 400:
+            body = response.json()
+            rows = body.get("items", body) if isinstance(body, dict) else body
+            raise AssertionError(
+                f"{self.label} asked for {size} rows of {table!r} and was not "
+                f"refused ({response.status_code}, {len(rows)} rows). A page "
+                f"silently smaller than the one asked for reads as the whole "
+                f"table."
+            )
+        return response.status_code
+
     async def updates_record(
         self, record: JSON, *, data: JSON, in_table: str, in_pod: JSON
     ) -> JSON:

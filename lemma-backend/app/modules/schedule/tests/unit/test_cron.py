@@ -1,9 +1,17 @@
-"""Cron parsing, held to the behaviour APScheduler's CronTrigger had.
+"""Cron parsing.
 
-This replaced `CronTrigger` so the scheduler package could be deleted, and cron
-is the part of scheduling where a subtle difference is invisible until a
-schedule fires at the wrong time for a week. So the equivalence is asserted
-rather than assumed: the same expressions, the same instants.
+`CronSchedule` replaced APScheduler's `CronTrigger` so the scheduler package
+could be deleted. While both were installed, a parametrised test asserted the
+two agreed instant-for-instant on every expression that pins no day-of-week --
+cron being the part of scheduling where a subtle difference is invisible until
+something fires at the wrong time for a week.
+
+APScheduler is gone, so that test has been too: it did its job, and with nothing
+to compare against it could only ever skip. What is left describes the behaviour
+directly, which is what a test that outlives its migration has to do. The one
+deliberate divergence from `CronTrigger` is still asserted below, because that
+one is about what a person writing an expression means, not about which library
+is installed.
 """
 
 from __future__ import annotations
@@ -14,18 +22,6 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.modules.schedule.domain.cron import CronSchedule
-
-# Expressions that pin no day-of-week. On these the replacement must agree with
-# APScheduler exactly -- any difference here is a regression, not a decision.
-_DAY_OF_WEEK_FREE = [
-    "* * * * *",
-    "*/5 * * * *",
-    "0 * * * *",
-    "30 2 1 * *",
-    "0 0 1 1 *",
-    "5,10,15 * * * *",
-    "0 0 29 2 *",
-]
 
 # The one deliberate difference, and what it now means.
 # APScheduler's `from_crontab` maps day-of-week as 0=Monday. Standard cron --
@@ -42,42 +38,6 @@ _DAY_OF_WEEK_CASES = [
     ("0 9 * * 5", "Friday"),
     ("0 9 * * 6", "Saturday"),
 ]
-
-
-@pytest.mark.parametrize("expression", _DAY_OF_WEEK_FREE)
-def test_matches_apscheduler_where_no_day_of_week_is_pinned(expression: str) -> None:
-    """Everything except day-of-week must be instant-for-instant identical.
-
-    Cron is where a subtle difference is invisible until a schedule fires at the
-    wrong time for a week, so the equivalence is asserted rather than assumed.
-
-    Skips once APScheduler is gone -- at that point this has done its job and
-    the behavioural tests below stand on their own.
-    """
-    apscheduler_cron = pytest.importorskip("apscheduler.triggers.cron")
-    reference = apscheduler_cron.CronTrigger.from_crontab(
-        expression, timezone=timezone.utc
-    )
-    schedule = CronSchedule.parse(expression)
-
-    # Deliberately off a boundary. `get_next_fire_time(None, now)` is inclusive
-    # of `now`, while a poller asks "what fires strictly after the last one" --
-    # comparing those at the first iteration measures the difference between two
-    # questions rather than two implementations.
-    cursor = datetime(2026, 3, 1, 0, 0, 31, tzinfo=timezone.utc)
-    previous = cursor
-    for _ in range(25):
-        expected = reference.get_next_fire_time(previous, cursor)
-        actual = schedule.next_fire_time(cursor)
-        if actual is None:
-            # Past `crontab`'s lookahead horizon (a century out for `29 2`).
-            # Not a disagreement about scheduling, so stop comparing.
-            break
-        assert actual == expected, (
-            f"{expression}: after {cursor.isoformat()} expected "
-            f"{expected.isoformat()} got {actual.isoformat()}"
-        )
-        previous, cursor = expected, expected
 
 
 @pytest.mark.parametrize(("expression", "weekday"), _DAY_OF_WEEK_CASES)

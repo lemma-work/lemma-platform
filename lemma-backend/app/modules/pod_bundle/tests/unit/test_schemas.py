@@ -62,6 +62,14 @@ def test_export_caps_are_conservative_and_shared():
     )
 
 
+def test_publish_accepts_an_organisation_owner():
+    """`owner/name` is what makes an organisation reachable. Publishing used to
+    resolve the connected user's own login and nothing else, so a pod could
+    only ever land in a personal namespace."""
+    request = PublishStartRequest(repo_name="acme-corp/my-pod", account_id=uuid4())
+    assert request.repo_name == "acme-corp/my-pod"
+
+
 def test_publish_requires_account_and_defaults_to_create():
     request = PublishStartRequest(repo_name="my-pod", account_id=uuid4())
     assert request.mode is PublishMode.CREATE
@@ -71,7 +79,7 @@ def test_publish_requires_account_and_defaults_to_create():
 
 
 @pytest.mark.parametrize(
-    "repo_name", ["space name", "owner/repo", ".", "..", "a" * 101]
+    "repo_name", ["space name", "owner//repo", ".", "..", "a" * 101]
 )
 def test_publish_rejects_invalid_repository_names(repo_name: str):
     with pytest.raises(ValidationError):

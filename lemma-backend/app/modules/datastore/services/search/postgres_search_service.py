@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy.sql import text
 
+from app.modules.datastore.config import datastore_settings
 from app.core.config import settings
 from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
 from app.modules.datastore.domain.file_entities import (
@@ -295,11 +296,15 @@ class PostgresSearchService:
         if visibility.matches_nothing:
             return []
 
-        rerank_active = settings.reranker_mode != "off"
+        rerank_active = datastore_settings.reranker_mode != "off"
         # First-stage candidate pool: over-retrieve when reranking so the
         # cross-encoder has material to reorder. Hybrid also over-fetches per
         # side for the RRF merge regardless.
-        pool = max(limit, settings.reranker_retrieve_n) if rerank_active else limit
+        pool = (
+            max(limit, datastore_settings.reranker_retrieve_n)
+            if rerank_active
+            else limit
+        )
 
         if method == SearchMethod.TEXT:
             rows = await self.chunk_repo.text_search(

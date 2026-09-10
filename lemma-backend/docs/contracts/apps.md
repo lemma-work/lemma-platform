@@ -19,6 +19,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `app.dist.archive.get` | GET | `/pods/{pod_id}/apps/{app_name}/dist/archive` | Download App Dist Archive |
 | `app.get` | GET | `/pods/{pod_id}/apps/{app_name}` | Get App |
 | `app.list` | GET | `/pods/{pod_id}/apps` | List Apps |
+| `app.release.list` | GET | `/pods/{pod_id}/apps/{app_name}/releases` | List App Releases |
+| `app.release.promote` | POST | `/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote` | Promote App Release |
 | `app.source.archive.get` | GET | `/pods/{pod_id}/apps/{app_name}/source/archive` | Download App Source Archive |
 | `app.update` | PATCH | `/pods/{pod_id}/apps/{app_name}` | Update App |
 

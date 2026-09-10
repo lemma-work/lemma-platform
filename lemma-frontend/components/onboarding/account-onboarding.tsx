@@ -65,7 +65,7 @@ import {
   FIRST_RUN_DELIGHT,
 } from "@/lib/recipes/recipes";
 
-import { SetupChrome, SetupShell } from "./account-onboarding-chrome";
+import { SetupShell } from "./account-onboarding-chrome";
 import {
   firstPodName,
   hasUsableProfileName,
@@ -1118,19 +1118,7 @@ function SetupAssistant({
   if (step === "boot") {
     return (
       <SetupShell fullBleed>
-        <div className="relative flex min-h-screen w-full flex-col overflow-hidden">
-          <div className="setup-card-glow absolute inset-0" />
-          {/* Country-skyline morph is disabled for now — revisit once the
-              transition into the split-view steps is settled. */}
-          {/* <IntroSkylines /> */}
-          <div className="relative z-10 flex flex-1 flex-col px-5 py-5 sm:px-7 sm:py-6">
-            <SetupChrome />
-            <div className="mx-auto flex flex-1 max-w-4xl flex-col items-center justify-center pb-16">
-              <AnomalousOrb className="static mb-8 h-40 w-40 shrink-0 sm:h-48 sm:w-48" />
-              <BootStep onBegin={handleBegin} />
-            </div>
-          </div>
-        </div>
+        <BootStep onBegin={handleBegin} illustration={<AnomalousOrb className="static mb-6 h-32 w-32 shrink-0" />} />
       </SetupShell>
     );
   }

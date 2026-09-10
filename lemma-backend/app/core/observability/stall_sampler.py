@@ -63,6 +63,34 @@ _PARKED = (
 _MAX_REPORTED_THREADS = 4
 
 
+#: Frames from our own tree. A deep library chain -- `importlib` walking the
+#: filesystem is the one seen most in production -- fills the whole tail with
+#: frames naming no code of ours, and the call that started it sits above the
+#: cut. Keeping one of these turns "an import was slow" into "this import was".
+_FIRST_PARTY = ("lemma-backend/app/", "lemma-platform/")
+
+
+def _is_first_party(frame_summary: traceback.FrameSummary) -> bool:
+    return any(part in frame_summary.filename for part in _FIRST_PARTY)
+
+
+def _clip(text: str, limit: int) -> str:
+    """Trim the middle, not the front.
+
+    Both ends carry the answer: the innermost frames say what blocked, and the
+    outermost first-party frame says whose call it was. Dropping the head threw
+    the second away every time the stack was deep enough to need trimming.
+    """
+    if len(text) <= limit:
+        return text
+    head = limit // 3
+    tail = limit - head - len(_ELISION)
+    return text[:head] + _ELISION + text[-tail:]
+
+
+_ELISION = "\n  ... frames elided ...\n"
+
+
 def _is_interesting(frame_summary: traceback.FrameSummary) -> bool:
     return not any(part in frame_summary.filename for part in _UNINTERESTING)
 
@@ -88,7 +116,10 @@ def format_stall_stack(frames: Iterable[traceback.FrameSummary]) -> str:
 
     Trimmed to the tail because the head is always the same lifespan/task-runner
     scaffolding, and an untrimmed 60-frame dump per incident is how a useful
-    signal becomes something people filter out.
+    signal becomes something people filter out. The innermost first-party frame
+    is always kept, even when the tail is entirely library code -- without it a
+    deep `importlib` chain reports twelve frames of the import machinery and
+    nothing about which of our calls triggered it.
 
     The trim has one exception, and it is the case that made this report useless
     in production. When the *innermost* frame is itself uninteresting, the loop
@@ -108,7 +139,13 @@ def format_stall_stack(frames: Iterable[traceback.FrameSummary]) -> str:
         selected = frames[-12:]
     else:
         selected = interesting[-12:]
-    return "".join(traceback.format_list(selected)).rstrip()[-_MAX_STACK_CHARS:]
+    if not any(_is_first_party(frame) for frame in selected):
+        anchor = next(
+            (frame for frame in reversed(frames) if _is_first_party(frame)), None
+        )
+        if anchor is not None:
+            selected = [anchor, *selected]
+    return _clip("".join(traceback.format_list(selected)).rstrip(), _MAX_STACK_CHARS)
 
 
 class LoopStallSampler:

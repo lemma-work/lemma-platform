@@ -41,8 +41,7 @@ flowchart TB
 
     subgraph backend["lemma-backend"]
         API["API<br/>FastAPI · 14 modules"]
-        WORKER["Worker<br/>streaq jobs"]
-        SCHED["Scheduler<br/>APScheduler"]
+        WORKER["Worker<br/>streaq jobs · cron schedules"]
     end
 
     subgraph state["State"]
@@ -68,7 +67,6 @@ flowchart TB
     API --> ST
     API -.->|domain events| REDIS
     REDIS -->|consume| WORKER
-    SCHED -->|fire| REDIS
     WORKER --> PG
     WORKER --> OBJ
     WORKER --> WS
@@ -86,17 +84,22 @@ A FastAPI application assembled from **14 modules** registered in
 consumers, background tasks, and lifespan hooks; nothing else registers
 centrally.
 
-Three process roles, from the same codebase:
+Two process roles, from the same codebase:
 
 | Process | Entrypoint | Owns |
 |---|---|---|
 | API | `app/app.py` | HTTP, WebSockets, authorization, durable writes |
-| Worker | `app/worker.py` | streaq jobs, event consumers, long I/O |
-| Scheduler | `app/scheduler.py` | time triggers |
+| Worker | `app/worker.py` | streaq jobs, event consumers, long I/O, time triggers |
+
+There is no third scheduler process. Time triggers are streaq crons registered
+on the worker's lanes (`@streaq_cron`,
+`app/core/infrastructure/jobs/streaq_runtime.py`), so they run wherever the
+worker does.
 
 Desktop and `make dev` run an **all-in-one** variant (`local_app.py`) that hosts
-all three in one process. That is a packaging choice, not a different
-architecture — the module boundaries and the event path are identical.
+both in one process; `deploy/compose/` runs them as separate containers. That is
+a packaging choice, not a different architecture — the module boundaries and the
+event path are identical.
 
 → [Module guide](lemma-backend/docs/modules/README.md) · one document per module,
 each naming the tables it owns.

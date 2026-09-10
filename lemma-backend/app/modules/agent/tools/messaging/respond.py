@@ -19,13 +19,15 @@ from pydantic import BaseModel, Field
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.composition.agent_notifications import (
+from app.modules.agent_surfaces.contracts.notifications import (
     notification_form_action,
     record_notification_response,
 )
-from app.composition.agent_workflow_forms import submit_workflow_form as submit_form
 from app.core.log.log import get_logger
 from app.modules.agent.tools.context import BaseAgentContext, BaseToolResponse
+from app.modules.workflow.contracts.forms import (
+    submit_workflow_form as submit_form,
+)
 
 logger = get_logger(__name__)
 

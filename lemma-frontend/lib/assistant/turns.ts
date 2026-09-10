@@ -233,7 +233,7 @@ function interactionIsPending(invocation: AssistantToolInvocation): boolean {
   const result = record(invocation.result);
   if (userApprovalResolvedDecision(result)) return false;
   // ask_user resolves with an `answers` payload even on dismissal.
-  if (record(result.answers) && Object.keys(record(result.answers)).length > 0) return false;
+  if (Object.keys(record(result.answers)).length > 0) return false;
   return true;
 }
 

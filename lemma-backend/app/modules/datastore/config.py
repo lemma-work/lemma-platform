@@ -31,6 +31,41 @@ class DatastoreSettings(BaseSettings):
     datastore_markdown_image_max_bytes: int = Field(default=10 * 1024 * 1024)
     datastore_markdown_batch_max_bytes: int = Field(default=50 * 1024 * 1024)
 
+    # Record value limits. Tables hold tabular data; a document belongs in a pod
+    # file with its path in a FILE_PATH column. Until these existed, every byte
+    # arriving as a file passed a ceiling and every byte arriving as a record
+    # cell passed none -- which is how a multi-megabyte column filled Redis (the
+    # whole row is copied into `datastore.events`, capped by entry count rather
+    # than bytes) and stalled the API event loop decoding it. Production rows
+    # have averaged ~2KB, so 256KB is roughly 100x real use and still makes a
+    # megabyte document impossible. 0 disables the bound.
+    datastore_cell_max_bytes: int = Field(
+        default=256 * 1024,
+        description=(
+            "Largest encoded size (bytes) of a single record value. Exceeding it "
+            "refuses the write. Env: ``DATASTORE_CELL_MAX_BYTES``."
+        ),
+    )
+    datastore_row_max_bytes: int = Field(
+        default=1024 * 1024,
+        description=(
+            "Largest encoded size (bytes) of one record across all its columns, "
+            "so a row of just-legal cells is still bounded. Env: "
+            "``DATASTORE_ROW_MAX_BYTES``."
+        ),
+    )
+    datastore_event_payload_max_bytes: int = Field(
+        default=32 * 1024,
+        description=(
+            "Largest encoded size (bytes) of the row body carried on a record "
+            "change event. Above it the body is dropped and the event is flagged "
+            "truncated; consumers read the row instead. Deliberately far below "
+            "the row limit: a row is stored once, while its event is retained "
+            "50,000 times over in a Redis stream capped by entry count. Env: "
+            "``DATASTORE_EVENT_PAYLOAD_MAX_BYTES``."
+        ),
+    )
+
     # Ad-hoc SQL query guardrails
     datastore_query_role: str = Field(
         default="lemma_datastore_query",
@@ -438,6 +473,77 @@ class DatastoreSettings(BaseSettings):
         if self.document_processor != "auto":
             return self.document_processor
         return "kreuzberg" if (self.kreuzberg_url or "").strip() else "xberg"
+
+    # Moved out of `app/core/config.py`, which was 1,756 lines and 220 fields.
+    # Every production reader of these is in `mod:datastore`; the few elsewhere
+    # are e2e fixtures and the worker subprocess's environment, repointed with
+    # them. The env var names do not change -- no settings class sets
+    # `env_prefix`, so pydantic derives the name from the field identically on
+    # whichever class holds it.
+    datastore_database_url: str = Field(
+        default="postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore",
+        description="Database URL for datastore data storage (each datastore uses schema=datastore_id)",
+    )
+    local_embedding_preload: bool = Field(
+        default=True,
+        description=(
+            "Compatibility switch for local embedding startup. False forces lazy "
+            "initialization; true uses LOCAL_EMBEDDING_STARTUP_MODE."
+        ),
+    )
+    local_embedding_preload_timeout_seconds: float = Field(
+        default=900.0,
+        description=(
+            "Maximum worker-startup time allowed for local model preload, including "
+            "a first-run model download."
+        ),
+    )
+    local_embedding_startup_mode: Literal["blocking", "background", "lazy"] = Field(
+        default="blocking",
+        description=(
+            "How local embeddings initialize. 'blocking' preserves server "
+            "readiness semantics for hosted/developer deployments, 'background' "
+            "warms the model without blocking core API readiness, and 'lazy' "
+            "waits for the first embedding operation."
+        ),
+    )
+    openai_compat_reranker_model: str = Field(
+        default="qwen3-reranker-8b",
+        description="Rerank model used when reranker_mode='openai_compat'.",
+    )
+    reranker_mode: Literal["off", "local", "openai_compat"] = Field(
+        default="off",
+        description=(
+            "Optional second-stage reranker over hybrid retrieval. 'off' is a "
+            "no-op (first-stage order kept); 'local' uses a CPU cross-encoder; "
+            "'openai_compat' uses the LEMMA_OPENAI_BASE_URL /rerank endpoint "
+            "(LEMMA_OPENAI_API_KEY required)."
+        ),
+    )
+    reranker_retrieve_n: int = Field(
+        default=50,
+        description=(
+            "First-stage candidate pool size to rerank down from when reranking "
+            "is active (retrieve N, rerank to the requested limit)."
+        ),
+    )
+    local_reranker_model: str = Field(
+        default="BAAI/bge-reranker-v2-m3",
+        description="CrossEncoder model used when reranker_mode='local' (Apache-2.0, CPU).",
+    )
+
+    # Moved from `app/core/config.py`: a test hook for this module's indexing
+    # path, and nothing else reads it.
+    e2e_disable_worker_file_autoindex: bool = Field(
+        default=False,
+        description=(
+            "TEST HOOK ONLY. When true, the worker does NOT auto-index uploaded "
+            "datastore files (the upload->event->process_datastore_file_task path "
+            "is skipped). e2e indexes explicitly in-process via the index_file "
+            "helper; auto-indexing every upload would otherwise overwhelm the "
+            "single shared Kreuzberg under parallel load. Production leaves False."
+        ),
+    )
 
 
 datastore_settings = DatastoreSettings()

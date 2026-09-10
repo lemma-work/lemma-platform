@@ -1,0 +1,13 @@
+[Unit]
+Description=Report a data disk Lemma could not mount
+# No [Install]: this is reached only through lemma-data.service's OnFailure=,
+# never on its own.
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lemma-data-unavailable
+# The console, because that is the only channel the host reads. See the same
+# directives on lemma-data.service.
+StandardOutput=journal+console
+StandardError=journal+console

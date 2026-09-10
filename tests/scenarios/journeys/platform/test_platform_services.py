@@ -133,7 +133,7 @@ async def test_an_unpaired_host_is_refused(world):
     anonymous = await world.new_person("anonymous", sign_up=False)
 
     polled = await anonymous.api.call("POST", "/agent-host/poll", json={})
-    appended = await anonymous.api.call("POST", "/agent-host/events:append", json={})
+    appended = await anonymous.api.call("POST", "/agent-host/events/append", json={})
 
     assert polled.status_code >= 400, polled.status_code
     assert appended.status_code >= 400, appended.status_code
@@ -240,7 +240,7 @@ async def test_an_unpaired_host_cannot_claim_anything(world):
 
     completed = await anonymous.api.call(
         "POST",
-        "/agent-host/pairings:complete",
+        "/agent-host/pairings/complete",
         json={"pairing_code": "not-a-code", "display_name": "Someone's laptop"},
     )
     published = await anonymous.api.call(

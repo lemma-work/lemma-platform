@@ -243,10 +243,21 @@ pub fn installation_has_data(root: &Path) -> bool {
         |path: PathBuf| std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some());
     // The managed disk is the strongest signal: it only exists once a runtime
     // has been prepared, and it holds the databases.
+    //
+    // Both spellings, because the platforms do not share one. macOS keeps a
+    // sparse `data.raw`; Windows keeps the WSL distribution's `ext4.vhdx`, and
+    // looking only for the first meant a used Windows install with no uploaded
+    // files answered "never ran". The consequence there is the whole reason
+    // this function exists: a missing `infra.secrets.json` would be reminted
+    // beside a database that still held rows encrypted under the old one,
+    // leaving the cluster permanently unopenable, quietly.
+    const MANAGED_DISKS: [&str; 2] = ["data.raw", "ext4.vhdx"];
     if std::fs::read_dir(root.join("runtime")).is_ok_and(|entries| {
-        entries
-            .filter_map(Result::ok)
-            .any(|entry| entry.path().join("data.raw").exists())
+        entries.filter_map(Result::ok).any(|entry| {
+            MANAGED_DISKS
+                .iter()
+                .any(|disk| entry.path().join(disk).exists())
+        })
     }) {
         return true;
     }
@@ -394,6 +405,29 @@ mod tests {
         assert!(
             installation_has_data(root),
             "every table lives in this disk; a new password opens none of them",
+        );
+    }
+
+    /// The same signal on Windows, where the disk is spelled differently.
+    ///
+    /// Looking only for `data.raw` meant a used Windows install with no
+    /// uploaded files answered "never ran" — and this function's whole purpose
+    /// is to stop a missing `infra.secrets.json` being reminted beside a
+    /// database whose rows are encrypted under the old one. Getting it wrong
+    /// there does not fail loudly; it leaves the cluster permanently
+    /// unopenable.
+    #[test]
+    fn a_prepared_windows_runtime_counts_as_data_too() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("data/files")).unwrap();
+        std::fs::create_dir_all(root.join("runtime/wsl")).unwrap();
+        assert!(!installation_has_data(root));
+
+        std::fs::write(root.join("runtime/wsl/ext4.vhdx"), b"").unwrap();
+        assert!(
+            installation_has_data(root),
+            "the WSL distribution's disk holds every table, exactly as data.raw does",
         );
     }
 

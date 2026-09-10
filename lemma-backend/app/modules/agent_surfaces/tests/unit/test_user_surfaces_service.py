@@ -63,15 +63,14 @@ def _service(*, pod_ids, surfaces_by_pod, preferences=None, get_surface=None):
     membership = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=list(pod_ids)),
     )
-    user = SimpleNamespace(preferences=preferences)
     users = SimpleNamespace(
-        get=AsyncMock(return_value=user),
+        preferences=AsyncMock(return_value=preferences or UserPreferences()),
         set_preferences=AsyncMock(),
     )
     service = UserSurfacesService(
         surface_repository=surfaces,
         pod_membership_port=membership,
-        user_repository=users,
+        user_directory=users,
     )
     return service, users
 
@@ -113,7 +112,9 @@ async def test_own_bot_surfaces_never_conflict():
         for index, pod in enumerate(pods)
     }
     service, _ = _service(
-        pod_ids=pods, surfaces_by_pod=surfaces, preferences=UserPreferences()
+        pod_ids=pods,
+        surfaces_by_pod=surfaces,
+        preferences=UserPreferences(),
     )
 
     groups = await service.list_user_surfaces(uuid4())

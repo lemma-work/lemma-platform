@@ -12,6 +12,7 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.domain.entity import CreatedEntity, Entity
 from app.modules.agent.domain.agent_kind import AgentKind
+from app.modules.agent.domain.errors import AgentValidationError
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -24,6 +25,20 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
+
+
+MAX_AGENT_INSTRUCTION_CHARACTERS = 60_000
+
+
+def validate_agent_instruction(instruction: str | None) -> str:
+    """Validate authored text without rejecting historical entities on read."""
+    if instruction is None or not instruction.strip():
+        raise AgentValidationError("Agent instruction is required")
+    if len(instruction) > MAX_AGENT_INSTRUCTION_CHARACTERS:
+        raise AgentValidationError(
+            f"Agent instruction must be at most {MAX_AGENT_INSTRUCTION_CHARACTERS:,} characters"
+        )
+    return instruction
 
 
 class Agent(Entity):
@@ -156,6 +171,8 @@ class Conversation(Entity):
     # can explain a failure without separately fetching runs.
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
+    last_run_error_code: str | None = None
+    last_run_error_reason: str | None = None
     last_run_finished_at: datetime | None = None
     last_run_retryable: bool = False
     messages: list[Message] = Field(default_factory=list)

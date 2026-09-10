@@ -3,7 +3,6 @@
 import * as React from "react"
 import {
   Activity,
-  Calendar,
   Database,
   FileText,
   MessageSquare,
@@ -16,7 +15,7 @@ import { Skeleton } from "@/components/lemma/ui/skeleton"
 import { useRecords } from "lemma-sdk/react"
 import type { LemmaClient } from "lemma-sdk"
 import { cn } from "@/components/lemma/lib/utils"
-import { enumPillClasses, type EnumColorMap } from "./activity-enum-utils"
+import { type EnumColorMap } from "./activity-enum-utils"
 import {
   activityRadiusClassName,
   type LemmaActivityAppearance,

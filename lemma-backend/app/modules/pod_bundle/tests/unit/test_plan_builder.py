@@ -247,7 +247,7 @@ async def test_account_variable_missing_connector_is_rejected(tmp):
             "acct": {
                 "type": "account",
                 "source_value": "x",
-                "connector_kind": "package",
+                "connector_kind": "http",
             },
         },
     )

@@ -29,6 +29,16 @@ from app.modules.pod.domain.pod_entities import (
 
 router = APIRouter(prefix="/pods", tags=["Pods"], redirect_slashes=False)
 
+# Pods are an organization-scoped collection, so they hang off the
+# organization the way connectors and usage already do. Its own router,
+# because the collection path is not under `/pods` -- the same shape
+# `connector_operation_controller` uses for its org-scoped prefix.
+organization_router = APIRouter(
+    prefix="/organizations/{organization_id}/pods",
+    tags=["Pods"],
+    redirect_slashes=False,
+)
+
 
 @router.post(
     "",
@@ -122,11 +132,11 @@ async def delete_pod(
     await pod_service.delete_pod(pod_id, user.id)
 
 
-@router.get(
-    "/organization/{organization_id}",
+@organization_router.get(
+    "",
     status_code=status.HTTP_200_OK,
     operation_id="pod.list",
-    summary="List PodS by Organization",
+    summary="List Pods by Organization",
     description="List all pods in an organization",
     response_model=PodListResponse,
 )

@@ -22,6 +22,13 @@ EXPECTED = [
         "DATASTORE_MARKDOWN_BATCH_MAX_BYTES",
         50 * 1024 * 1024,
     ),
+    ("datastore_cell_max_bytes", "DATASTORE_CELL_MAX_BYTES", 256 * 1024),
+    ("datastore_row_max_bytes", "DATASTORE_ROW_MAX_BYTES", 1024 * 1024),
+    (
+        "datastore_event_payload_max_bytes",
+        "DATASTORE_EVENT_PAYLOAD_MAX_BYTES",
+        32 * 1024,
+    ),
     ("datastore_query_role", "DATASTORE_QUERY_ROLE", "lemma_datastore_query"),
     (
         "datastore_query_statement_timeout_ms",
@@ -125,15 +132,49 @@ def _clear(monkeypatch):
         monkeypatch.delenv(env, raising=False)
 
 
+# Moved out of `app/core/config.py`. Listed here for the same reason as
+# everything above: the field set is exact, so a field arriving or leaving
+# has to be a decision. Defaults transcribed from core before the move and
+# checked against it -- all seventeen came across unchanged.
+MOVED_FROM_CORE = [
+    (
+        "datastore_database_url",
+        "DATASTORE_DATABASE_URL",
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/lemma_datastore",
+    ),
+    ("local_embedding_preload", "LOCAL_EMBEDDING_PRELOAD", True),
+    (
+        "local_embedding_preload_timeout_seconds",
+        "LOCAL_EMBEDDING_PRELOAD_TIMEOUT_SECONDS",
+        900.0,
+    ),
+    ("local_embedding_startup_mode", "LOCAL_EMBEDDING_STARTUP_MODE", "blocking"),
+    (
+        "openai_compat_reranker_model",
+        "OPENAI_COMPAT_RERANKER_MODEL",
+        "qwen3-reranker-8b",
+    ),
+    ("reranker_mode", "RERANKER_MODE", "off"),
+    ("reranker_retrieve_n", "RERANKER_RETRIEVE_N", 50),
+    ("local_reranker_model", "LOCAL_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"),
+    # The 0.8.0 config audit: the last core field only this module read.
+    (
+        "e2e_disable_worker_file_autoindex",
+        "E2E_DISABLE_WORKER_FILE_AUTOINDEX",
+        False,
+    ),
+]
+
+
 def test_datastore_settings_defaults():
     # Declared defaults only — immune to a developer's local .env / os.environ.
-    for field, _env, default in [*EXPECTED, *EXTRA_FIELDS]:
+    for field, _env, default in [*EXPECTED, *EXTRA_FIELDS, *MOVED_FROM_CORE]:
         assert DatastoreSettings.model_fields[field].default == default, field
 
 
 def test_datastore_settings_field_set_is_exact():
     assert set(DatastoreSettings.model_fields) == {
-        f for f, _e, _d in [*EXPECTED, *EXTRA_FIELDS]
+        f for f, _e, _d in [*EXPECTED, *EXTRA_FIELDS, *MOVED_FROM_CORE]
     }
 
 

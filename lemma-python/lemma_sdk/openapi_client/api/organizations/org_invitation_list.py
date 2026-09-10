@@ -16,7 +16,7 @@ from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     status: OrganizationInvitationStatus | Unset = UNSET,
     limit: int | Unset = 100,
@@ -44,8 +44,8 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/organizations/{org_id}/invitations".format(
-            org_id=quote(str(org_id), safe=""),
+        "url": "/organizations/{organization_id}/invitations".format(
+            organization_id=quote(str(organization_id), safe=""),
         ),
         "params": params,
     }
@@ -84,7 +84,7 @@ def _build_response(
 
 
 def sync_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     status: OrganizationInvitationStatus | Unset = UNSET,
@@ -96,7 +96,7 @@ def sync_detailed(
      Get all pending invitations for an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         status (OrganizationInvitationStatus | Unset): Statuses for organization invitations.
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
@@ -110,7 +110,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         status=status,
         limit=limit,
         page_token=page_token,
@@ -124,7 +124,7 @@ def sync_detailed(
 
 
 def sync(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     status: OrganizationInvitationStatus | Unset = UNSET,
@@ -136,7 +136,7 @@ def sync(
      Get all pending invitations for an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         status (OrganizationInvitationStatus | Unset): Statuses for organization invitations.
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
@@ -150,7 +150,7 @@ def sync(
     """
 
     return sync_detailed(
-        org_id=org_id,
+        organization_id=organization_id,
         client=client,
         status=status,
         limit=limit,
@@ -159,7 +159,7 @@ def sync(
 
 
 async def asyncio_detailed(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     status: OrganizationInvitationStatus | Unset = UNSET,
@@ -171,7 +171,7 @@ async def asyncio_detailed(
      Get all pending invitations for an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         status (OrganizationInvitationStatus | Unset): Statuses for organization invitations.
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
@@ -185,7 +185,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        org_id=org_id,
+        organization_id=organization_id,
         status=status,
         limit=limit,
         page_token=page_token,
@@ -197,7 +197,7 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    org_id: UUID,
+    organization_id: UUID,
     *,
     client: AuthenticatedClient | Client,
     status: OrganizationInvitationStatus | Unset = UNSET,
@@ -209,7 +209,7 @@ async def asyncio(
      Get all pending invitations for an organization
 
     Args:
-        org_id (UUID):
+        organization_id (UUID):
         status (OrganizationInvitationStatus | Unset): Statuses for organization invitations.
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
@@ -224,7 +224,7 @@ async def asyncio(
 
     return (
         await asyncio_detailed(
-            org_id=org_id,
+            organization_id=organization_id,
             client=client,
             status=status,
             limit=limit,

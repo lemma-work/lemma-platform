@@ -25,7 +25,7 @@ async def seeded_connector(db_session: AsyncSession):
         id="google_calendar",
         title="Google Calendar",
         description="Calendar connector",
-        kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
+        kinds=[{"kind": "http", "auth_scheme": "OAUTH2"}],
         is_active=True,
     )
     db_session.add(app)
@@ -101,7 +101,7 @@ async def test_get_connector_not_found_returns_domain_payload(
     "kind,expected_config_field",
     [
         (ConnectorKind.COMPOSIO.value, "composio_field"),
-        (ConnectorKind.PACKAGE.value, "lemma_field"),
+        (ConnectorKind.HTTP.value, "lemma_field"),
     ],
 )
 async def test_triggers_filtered_by_auth_config_kind(
@@ -119,7 +119,7 @@ async def test_triggers_filtered_by_auth_config_kind(
             title="Trigger Filter App",
             description="App carrying both LEMMA and COMPOSIO triggers",
             kinds=[
-                {"kind": "package", "auth_scheme": "OAUTH2"},
+                {"kind": "http", "auth_scheme": "OAUTH2"},
                 {
                     "kind": "composio",
                     "auth_scheme": "OAUTH2",
@@ -134,7 +134,7 @@ async def test_triggers_filtered_by_auth_config_kind(
             ConnectorTrigger(
                 id=f"{app_id}:lemma:new_message",
                 connector_id=app_id,
-                kind="package",
+                kind="http",
                 event_type="new_message",
                 description="LEMMA new message",
                 config_schema={

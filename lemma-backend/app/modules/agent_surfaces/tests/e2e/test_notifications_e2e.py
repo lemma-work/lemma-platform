@@ -712,7 +712,7 @@ async def test_the_agent_is_only_told_about_asks_it_can_actually_answer(
     """
     from sqlalchemy import text as sql_text
 
-    from app.composition.agent_notifications import (
+    from app.modules.agent_surfaces.contracts.notifications import (
         open_notifications_for_conversation,
     )
 

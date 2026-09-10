@@ -3,13 +3,14 @@ from datetime import date, datetime, timezone
 from pydantic import EmailStr, field_validator
 
 from app.core.domain.aggregate import AggregateRoot
-from app.core.domain.entity import Entity
+from app.core.domain.entity import AuthenticatedPrincipal
 from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_preferences import UserPreferences
 
 
-class AuthUserEntity(Entity):
-    """Authentication user entity from auth middleware."""
+#: Kept as an alias. The type moved to `app/core/domain/entity.py` because core
+#: is what constructs it -- see `AuthenticatedPrincipal` there.
+AuthUserEntity = AuthenticatedPrincipal
 
 
 class UserEntity(AggregateRoot):

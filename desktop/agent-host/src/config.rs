@@ -15,6 +15,10 @@ pub struct HostPaths {
     pub adapters: PathBuf,
     pub lock: PathBuf,
     pub config_lock: PathBuf,
+    /// Folders the person bound conversations to, written by the desktop shell.
+    /// See `conversation_folders` for why the path is recorded here rather than
+    /// carried on the run.
+    pub folders: PathBuf,
 }
 
 /// Proof that this process is the only Agent Host for its data directory.
@@ -66,6 +70,7 @@ impl HostPaths {
             adapters: root.join("adapters"),
             lock: root.join("agent-host.lock"),
             config_lock: root.join("config.lock"),
+            folders: root.join("conversation-folders.json"),
             root,
         }
     }
@@ -138,6 +143,12 @@ fn home_directory() -> anyhow::Result<PathBuf> {
         .map(PathBuf::from)
         .ok_or_else(|| anyhow::anyhow!("home directory is not set"))
 }
+
+/// The most concurrent runs the backend will accept a claim for.
+///
+/// Mirrors `AgentHostCapacity.max_runs`'s `le=128`. Asserted against the
+/// published contract in `tests/wire_contract.rs`.
+pub const MAX_SUPPORTED_RUNS: u16 = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HostConfig {
@@ -280,6 +291,14 @@ impl HostConfig {
             "installation ID is empty"
         );
         anyhow::ensure!(self.max_runs > 0, "max_runs must be positive");
+        // The backend caps capacity at 128 and rejects a poll that claims more,
+        // so a larger number here does not buy concurrency -- it makes every
+        // poll 422 and leaves the host reporting itself offline for ever, with
+        // nothing on screen naming the config field that did it.
+        anyhow::ensure!(
+            self.max_runs <= MAX_SUPPORTED_RUNS,
+            "max_runs must be at most {MAX_SUPPORTED_RUNS}; Lemma refuses a larger claim"
+        );
         let mut identifiers = std::collections::BTreeSet::new();
         for target in &self.targets {
             anyhow::ensure!(
@@ -418,6 +437,28 @@ mod tests {
         // its predecessor.
         drop(first);
         assert!(paths.lock_single_instance().is_ok());
+    }
+
+    /// Claiming more capacity than the backend accepts is not ambitious, it is
+    /// fatal: every poll 422s on the capacity field and the host reports itself
+    /// offline for ever, with nothing on screen naming the config value that
+    /// caused it. Refusing at load says which field, once.
+    #[test]
+    fn rejects_a_capacity_the_backend_would_refuse_on_every_poll() {
+        let config = |max_runs| HostConfig {
+            installation_id: "installation".into(),
+            max_runs,
+            targets: Vec::new(),
+        };
+
+        assert!(config(MAX_SUPPORTED_RUNS).validate().is_ok());
+        let error = config(MAX_SUPPORTED_RUNS + 1)
+            .validate()
+            .expect_err("a claim the backend rejects must not reach it");
+        assert!(
+            error.to_string().contains("max_runs"),
+            "the message has to name the field: {error}"
+        );
     }
 
     #[test]

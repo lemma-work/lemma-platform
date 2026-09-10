@@ -21,8 +21,12 @@ reasons:
 
 :class:`AppStepRunner` owns the create → build → upload sequencing and the short
 UoW boundaries; :class:`AppSandboxBuilder` owns the (DB-free) sandbox build.
-Both take injected collaborators so the step is unit-testable with a fake
-workspace session and a fake app service.
+:class:`AppSandboxBuilder` takes an injected workspace service so the step is
+unit-testable with a fake sandbox session. The app side is not injected: it is
+`apps/contracts/provisioning.py`, five operations rather than an `AppService`
+this file used to be handed through `app/composition/pod_bundle_apps.py` -- and
+having the object is what let the storage phase reuse a service built inside a
+unit of work that had already closed.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ import os
 import shlex
 import zipfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 from app.core.concurrency.offload import run_blocking
@@ -145,7 +149,7 @@ class AppSandboxBuilder:
     def _service(self) -> Any:
         if self._workspace is not None:
             return self._workspace
-        from app.composition.pod_bundle_apps import (
+        from app.modules.workspace.contracts.tooling import (
             WorkspaceSandboxService,
         )
 
@@ -242,9 +246,6 @@ def _tail(result: dict[str, Any], limit: int = 4000) -> str:
 # --- step runner (owns the short UoW boundaries) -----------------------------
 
 
-AppServiceBuilder = Callable[[Any], Any]
-
-
 class AppStepRunner:
     """Applies an ``APP`` plan step end to end, opening its own short units of work
     around a connectionless build. Used by the apply loop in place of the shared
@@ -255,11 +256,9 @@ class AppStepRunner:
         *,
         uow_factory: Any,
         workspace_service: Any | None = None,
-        service_builder: AppServiceBuilder | None = None,
         sandbox_builder: AppSandboxBuilder | None = None,
     ):
         self._uow_factory = uow_factory
-        self._build_service = service_builder or _default_service_builder
         self._sandbox = sandbox_builder or AppSandboxBuilder(workspace_service)
 
     async def run(
@@ -308,11 +307,11 @@ class AppStepRunner:
         exists fully deployed (a READY current release) so the caller can skip the
         rebuild on replay. ``slug`` is the app's deployed public slug."""
         from app.modules.apps.contracts import AppConflictError, AppEntity, AppStatus
+        from app.modules.apps.contracts.provisioning import create_app, find_app_by_name
 
         async with self._authed_scope(pod_id, user_id) as (uow, ctx):
-            service = self._build_service(uow)
-            existing = await service.get_app_by_name(
-                pod_id, name, user_id, raise_not_found=False, ctx=ctx
+            existing = await find_app_by_name(
+                uow, pod_id=pod_id, name=name, user_id=user_id, ctx=ctx
             )
             if existing is not None:
                 ready = (
@@ -325,8 +324,9 @@ class AppStepRunner:
             last_exc: Exception | None = None
             for slug in slug_candidates(preferred, pod_id=pod_id, app_name=name):
                 try:
-                    created = await service.create_app_with_context(
-                        AppEntity(
+                    created = await create_app(
+                        uow,
+                        app=AppEntity(
                             pod_id=pod_id,
                             user_id=user_id,
                             name=name,
@@ -338,7 +338,7 @@ class AppStepRunner:
                             # app does.
                             visibility=manifest.get("visibility") or "PUBLIC",
                         ),
-                        user_id,
+                        user_id=user_id,
                         ctx=ctx,
                     )
                     await uow.commit()
@@ -365,9 +365,9 @@ class AppStepRunner:
         user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
-        in a sandbox; a static source or a single ``html.html`` is deployed as-is;
-        a bundle carrying only a prebuilt ``dist.zip`` (widget/no-source app) is
-        uploaded with no source."""
+        in a sandbox; a static source is deployed as-is; a bundle carrying only a
+        prebuilt ``dist.zip`` (widget/no-source app) deploys that build as its own
+        source."""
         source_dir = resource_dir / "source"
         html_file = resource_dir / "html.html"
         dist_zip = resource_dir / "dist.zip"
@@ -375,15 +375,15 @@ class AppStepRunner:
         if source_dir.is_dir():
             source_bytes = await run_blocking(zip_dir, source_dir, limiter="cpu_bound")
             tier = classify_source_dir(source_dir)
-            if tier == "vite":
-                dist_bytes = await self._sandbox.build(
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    app_slug=app_slug,
-                    source_zip=source_bytes,
-                )
-            else:  # static: the source *is* the served site.
-                dist_bytes = source_bytes
+            if tier != "vite":
+                # static: the source *is* the served site.
+                return source_bytes, source_bytes
+            dist_bytes = await self._sandbox.build(
+                user_id=user_id,
+                pod_id=pod_id,
+                app_slug=app_slug,
+                source_zip=source_bytes,
+            )
             return source_bytes, dist_bytes
 
         if html_file.is_file():
@@ -394,7 +394,11 @@ class AppStepRunner:
 
         if dist_zip.is_file():
             dist_bytes = await run_blocking(dist_zip.read_bytes, limiter="cpu_bound")
-            return None, dist_bytes
+            # No source/ directory: this bundle carries a prebuilt site with no
+            # build step behind it, so the build IS the source. Importing it with
+            # no source left the app source-less in the target pod, so the next
+            # export dropped its code again -- the same gap, one hop further on.
+            return dist_bytes, dist_bytes
 
         raise AppBuildFailedError(
             f"App '{name}' bundle has no source/ directory, html.html, or dist.zip."
@@ -415,14 +419,19 @@ class AppStepRunner:
         ``AppUseCases.upload_bundle`` so the imported app serves immediately.
         Wraps dist validation into a terminal build error."""
         from app.modules.apps.contracts import AppValidationError
+        from app.modules.apps.contracts.provisioning import (
+            finalize_app_bundle_upload,
+            resolve_app_bundle_upload,
+            write_app_bundle_storage,
+        )
 
         async with self._authed_scope(pod_id, user_id) as (uow, ctx):
-            service = self._build_service(uow)
             try:
-                plan = await service.resolve_upload_bundle(
-                    pod_id,
-                    name,
-                    user_id,
+                plan = await resolve_app_bundle_upload(
+                    uow,
+                    pod_id=pod_id,
+                    name=name,
+                    user_id=user_id,
                     has_source=source_bytes is not None,
                     dist_archive_bytes=dist_bytes,
                     ctx=ctx,
@@ -433,12 +442,17 @@ class AppStepRunner:
                 ) from exc
             await uow.commit()
 
-        # Storage write holds no DB connection.
-        written = await service.write_bundle_storage(plan, source_bytes, dist_bytes)
+        # Storage write holds no DB connection -- and cannot be handed one.
+        written = await write_app_bundle_storage(
+            plan=plan,
+            source_archive_bytes=source_bytes,
+            dist_archive_bytes=dist_bytes,
+        )
 
         async with self._authed_scope(pod_id, user_id) as (uow, ctx):
-            service = self._build_service(uow)
-            await service.finalize_upload_bundle(plan, written, user_id)
+            await finalize_app_bundle_upload(
+                uow, plan=plan, written=written, user_id=user_id
+            )
             await uow.commit()
 
     # --- helpers ---------------------------------------------------------
@@ -468,12 +482,6 @@ class AppStepRunner:
             )
             async with context_scope(ctx):
                 yield uow, ctx
-
-
-def _default_service_builder(uow: Any) -> Any:
-    from app.composition.pod_bundle_apps import build_app_service
-
-    return build_app_service(uow)
 
 
 def _clean_slug(value: Any) -> str | None:

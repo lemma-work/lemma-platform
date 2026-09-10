@@ -8,12 +8,12 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/me/runtime/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
-| DELETE | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.archive` | Archive Agent Runtime Profile |
+| DELETE | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.archive` | Archive Agent Runtime Profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
 | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
-| GET | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |
-| GET | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.get` | Get Agent Runtime Profile |
+| GET | `/organizations/{organization_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |
+| GET | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.get` | Get Agent Runtime Profile |
 | GET | `/pods/{pod_id}/agents` | `agent.list` | List Agents |
 | GET | `/pods/{pod_id}/agents/{agent_name}` | `agent.get` | Get Agent |
 | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.get` | Get Agent Resource Permissions |
@@ -22,16 +22,16 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
-| PATCH | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
+| PATCH | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}` | `agent.runtime.profiles.update` | Update Agent Runtime Profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
 | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.update` | Update Pod Conversation |
-| POST | `/agent-host/events:append` | `agent.host.events.append` | Append Agent Host Events |
-| POST | `/agent-host/pairings:complete` | `agent.host.pairing.complete` | Complete Agent Host Pairing |
+| POST | `/agent-host/events/append` | `agent.host.events.append` | Append Agent Host Events |
+| POST | `/agent-host/pairings/complete` | `agent.host.pairing.complete` | Complete Agent Host Pairing |
 | POST | `/agent-host/poll` | `agent.host.poll` | Poll Agent Host Commands |
 | POST | `/agent-host/revoke` | `agent.host.self_revoke` | Self Revoke Agent Host |
 | POST | `/me/runtime/agent-host-pairings` | `agent.host.pairing.create` | Create Agent Host Pairing |
-| POST | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.create` | Create Agent Runtime Profile |
-| POST | `/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore` | `agent.runtime.profiles.restore` | Restore Agent Runtime Profile |
+| POST | `/organizations/{organization_id}/agent-runtime/profiles` | `agent.runtime.profiles.create` | Create Agent Runtime Profile |
+| POST | `/organizations/{organization_id}/agent-runtime/profiles/{profile_id}/restore` | `agent.runtime.profiles.restore` | Restore Agent Runtime Profile |
 | POST | `/pods/{pod_id}/agents` | `agent.create` | Create Agent |
 | POST | `/pods/{pod_id}/conversations` | `agent.conversation.create` | Create Pod Agent Conversation |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/decision` | `agent.conversation.approval.resolve` | Resolve User Approval |
@@ -88,11 +88,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/apps/{app_name}/assets` | `app.asset.root.get` | Get App Root Asset |
 | GET | `/pods/{pod_id}/apps/{app_name}/assets/{asset_path}` | `app.asset.get` | Get App Asset |
 | GET | `/pods/{pod_id}/apps/{app_name}/dist/archive` | `app.dist.archive.get` | Download App Dist Archive |
+| GET | `/pods/{pod_id}/apps/{app_name}/releases` | `app.release.list` | List App Releases |
 | GET | `/pods/{pod_id}/apps/{app_name}/source/archive` | `app.source.archive.get` | Download App Source Archive |
 | PATCH | `/pods/{pod_id}/apps/{app_name}` | `app.update` | Update App |
 | POST | `/pods/{pod_id}/apps` | `app.create` | Create App |
 | POST | `/pods/{pod_id}/apps/from-widget` | `app.create_from_widget` | Save Widget As App |
 | POST | `/pods/{pod_id}/apps/{app_name}/bundle` | `app.bundle.upload` | Upload App Bundle |
+| POST | `/pods/{pod_id}/apps/{app_name}/releases/{release_ref}/promote` | `app.release.promote` | Promote App Release |
 
 ## connectors
 
@@ -107,6 +109,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/{organization_id}/connector-operations` | `connector.operation.search` | Search Connector Operations Across Installs |
 | GET | `/organizations/{organization_id}/connectors/accounts` | `connector.account.list` | List Accounts |
 | GET | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.get` | Get Account |
+| GET | `/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations` | `connector.account.installations` | Account Installations |
 | GET | `/organizations/{organization_id}/connectors/auth-configs` | `connector.auth_config.list` | List Auth Configs |
 | GET | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.get` | Get Auth Config |
 | GET | `/organizations/{organization_id}/connectors/status` | `connector.status.get` | Get Connector Status |
@@ -117,9 +120,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.update` | Update Account |
 | PATCH | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}` | `connector.auth_config.update` | Update Auth Config |
 | POST | `/organizations/{organization_id}/connectors/accounts` | `connector.account.create` | Create Account |
+| POST | `/organizations/{organization_id}/connectors/accounts/{account_id}/github/installations` | `connector.account.bind_installation` | Bind Account Installation |
 | POST | `/organizations/{organization_id}/connectors/auth-configs` | `connector.auth_config.create` | Create Auth Config |
 | POST | `/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh` | `connector.auth_config.refresh_operations` | Refresh Auth Config Operations |
 | POST | `/organizations/{organization_id}/connectors/connect-requests` | `connector.connect_request.create` | Initiate Connect Request |
+| POST | `/organizations/{organization_id}/connectors/connect-requests/install` | `connector.connect_request.install` | Start Install Step |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/details` | `connector.operation.details.batch` | Get Connector Operation Details In Batch |
 | POST | `/organizations/{organization_id}/connectors/{auth_config_name}/operations/{operation_name}/execute` | `connector.operation.execute` | Execute Connector Operation |
 
@@ -168,10 +173,13 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/functions` | `function.list` | List Functions |
 | GET | `/pods/{pod_id}/functions/{function_name}` | `function.get` | Get Function |
 | GET | `/pods/{pod_id}/functions/{function_name}/permissions` | `function.permissions.get` | Get Function Resource Permissions |
+| GET | `/pods/{pod_id}/functions/{function_name}/revisions` | `function.revision.list` | List Function Revisions |
+| GET | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}` | `function.revision.get` | Get Function Revision |
 | GET | `/pods/{pod_id}/functions/{function_name}/runs` | `function.run.list` | List Runs |
 | GET | `/pods/{pod_id}/functions/{function_name}/runs/{run_id}` | `function.run.get` | Get Run |
 | PATCH | `/pods/{pod_id}/functions/{function_name}` | `function.update` | Update Function |
 | POST | `/pods/{pod_id}/functions` | `function.create` | Create Function |
+| POST | `/pods/{pod_id}/functions/{function_name}/revisions/{revision_ref}/promote` | `function.revision.promote` | Promote Function Revision |
 | POST | `/pods/{pod_id}/functions/{function_name}/runs` | `function.run` | Execute Function |
 | PUT | `/pods/{pod_id}/functions/{function_name}/permissions` | `function.permissions.replace` | Replace Function Resource Permissions |
 
@@ -187,7 +195,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/organizations/invitations/{invitation_id}` | `org.invitation.revoke` | Revoke Invitation |
-| DELETE | `/organizations/{org_id}/members/{member_id}` | `org.member.remove` | Remove Member |
+| DELETE | `/organizations/{organization_id}/members/{member_id}` | `org.member.remove` | Remove Member |
 | GET | `/auth/verify-token` | `auth.verify_token` | Verify access token |
 | GET | `/organizations` | `org.list` | List My Organizations |
 | GET | `/organizations/invitations` | `org.invitation.list_mine` | List My Invitations |
@@ -195,18 +203,18 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/organizations/navigation` | `org.navigation` | List Organizations And Their Pods |
 | GET | `/organizations/slug-availability` | `org.slug_availability` | Check Organization Slug Availability |
 | GET | `/organizations/suggested` | `org.suggested` | Get Suggested Organizations |
-| GET | `/organizations/{org_id}` | `org.get` | Get Organization |
-| GET | `/organizations/{org_id}/home` | `org.home` | Get Organization Home |
-| GET | `/organizations/{org_id}/invitations` | `org.invitation.list` | List Organization Invitations |
-| GET | `/organizations/{org_id}/members` | `org.member.list` | List Organization Members |
+| GET | `/organizations/{organization_id}` | `org.get` | Get Organization |
+| GET | `/organizations/{organization_id}/home` | `org.home` | Get Organization Home |
+| GET | `/organizations/{organization_id}/invitations` | `org.invitation.list` | List Organization Invitations |
+| GET | `/organizations/{organization_id}/members` | `org.member.list` | List Organization Members |
 | GET | `/users/me` | `user.current.get` | Get Current User |
 | GET | `/users/me/profile` | `user.profile.get` | Get User Profile |
-| PATCH | `/organizations/{org_id}` | `org.update` | Update Organization |
-| PATCH | `/organizations/{org_id}/members/{member_id}/role` | `org.member.update_role` | Update Member Role |
+| PATCH | `/organizations/{organization_id}` | `org.update` | Update Organization |
+| PATCH | `/organizations/{organization_id}/members/{member_id}/role` | `org.member.update_role` | Update Member Role |
 | POST | `/organizations` | `org.create` | Create Organization |
 | POST | `/organizations/invitations/{invitation_id}/accept` | `org.invitation.accept` | Accept Invitation |
-| POST | `/organizations/{org_id}/invitations` | `org.invitation.invite` | Invite Member |
-| POST | `/organizations/{org_id}/join` | `org.join_auto_join` | Join Auto-Join Organization |
+| POST | `/organizations/{organization_id}/invitations` | `org.invitation.invite` | Invite Member |
+| POST | `/organizations/{organization_id}/join` | `org.join_auto_join` | Join Auto-Join Organization |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
 
 ## pod
@@ -217,7 +225,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.remove` | Remove Pod Member |
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
-| GET | `/pods/organization/{organization_id}` | `pod.list` | List PodS by Organization |
+| GET | `/organizations/{organization_id}/pods` | `pod.list` | List Pods by Organization |
 | GET | `/pods/{pod_id}` | `pod.get` | Get Pod |
 | GET | `/pods/{pod_id}/join-requests` | `pod.join_request.list` | List Pod Join Requests |
 | GET | `/pods/{pod_id}/join-requests/me` | `pod.join_request.me` | Get My Pod Join Request |
@@ -277,6 +285,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| GET | `/usage/me/events` | `usage.me.events.list` | My Events |
+| GET | `/usage/me/limits` | `usage.me.limits.get` | My Limits |
+| GET | `/usage/me/stats` | `usage.me.stats.get` | My Stats |
+| GET | `/usage/me/summary` | `usage.me.summary.get` | My Summary |
 | GET | `/usage/organizations/{organization_id}/events` | `usage.organization.events.list` | List Usage Events |
 | GET | `/usage/organizations/{organization_id}/limits` | `usage.organization.limits.get` | Get Usage Limits |
 | GET | `/usage/organizations/{organization_id}/me` | `usage.organization.me.summary.get` | Get My Usage |

@@ -15,7 +15,6 @@ cancellation) are re-raised untouched so the framework still handles them. Argum
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import ToolsetTool, WrapperToolset
@@ -43,16 +42,16 @@ def _tool_span_name(name: str) -> str:
     return f"tool.{safe or 'unnamed'}"
 
 
-class GracefulToolset(WrapperToolset[Any]):
+class GracefulToolset[DepsT](WrapperToolset[DepsT]):
     """Delegate to the wrapped toolset, but never let a tool body crash the run."""
 
     async def call_tool(
         self,
         name: str,
-        tool_args: dict[str, Any],
-        ctx: RunContext[Any],
-        tool: ToolsetTool[Any],
-    ) -> Any:
+        tool_args: dict[str, object],
+        ctx: RunContext[DepsT],
+        tool: ToolsetTool[DepsT],
+    ) -> object:
         try:
             with run_phase(_tool_span_name(name)):
                 return await self.wrapped.call_tool(name, tool_args, ctx, tool)

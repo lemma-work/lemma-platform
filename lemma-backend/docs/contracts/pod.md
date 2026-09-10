@@ -18,7 +18,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | `pod.join_request.create` | POST | `/pods/{pod_id}/join-requests` | Create Pod Join Request |
 | `pod.join_request.list` | GET | `/pods/{pod_id}/join-requests` | List Pod Join Requests |
 | `pod.join_request.me` | GET | `/pods/{pod_id}/join-requests/me` | Get My Pod Join Request |
-| `pod.list` | GET | `/pods/organization/{organization_id}` | List PodS by Organization |
+| `pod.list` | GET | `/organizations/{organization_id}/pods` | List Pods by Organization |
 | `pod.member.add` | POST | `/pods/{pod_id}/members` | Add Pod Member |
 | `pod.member.get` | GET | `/pods/{pod_id}/members/{pod_member_id}` | Get Pod Member |
 | `pod.member.list` | GET | `/pods/{pod_id}/members` | List Pod Members |

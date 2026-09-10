@@ -19,12 +19,30 @@ async def _report_system_model_pricing(
     from app.modules.usage.contracts.execution import (
         UsageService,
         assert_system_pricing_covers_catalog,
+        unpriced_limit_policy,
+        usage_limits_are_possible,
     )
 
     UsageService._load_environment_metadata()
     catalog = system_lemma_openai_catalog_model_names()
     unpriced = assert_system_pricing_covers_catalog(catalog)
-    if unpriced:
+    if unpriced and usage_limits_are_possible():
+        # This check has always run and has always known the answer. It
+        # reported it at `debug` with no fields, which `LOG_LEVEL=INFO` drops
+        # before formatting -- so a deployment whose every request was about to
+        # be refused for want of a price was told at boot, invisibly, and found
+        # out from a 429 in the middle of a conversation instead.
+        #
+        # Only when a limit can actually apply. Unpriced models are unremarkable
+        # otherwise: metering still records the tokens, and there is no budget
+        # for the missing price to break.
+        logger.warning(
+            "agent.module.system_models_cannot_back_a_spend_limit.degraded",
+            unpriced_models=",".join(sorted(unpriced)),
+            unpriced_count=len(unpriced),
+            policy=unpriced_limit_policy(),
+        )
+    elif unpriced:
         logger.debug("agent.module.system_lemma_models_will_be.observed")
     yield
 
@@ -61,15 +79,41 @@ def _routers():
 
 def _event_routers():
     from app.modules.agent.events.handlers import router
+    from app.modules.agent.events.notification_settled import (
+        router as notification_settled_router,
+    )
 
-    return [router]
+    return [router, notification_settled_router]
+
+
+def _resource_names():
+    """How this module's resources are addressed by name in a grant.
+
+    A thunk so the ORM import happens at assembly rather than whenever the
+    module registry is imported. `app/core/authorization/resource_names.py`
+    used to hold this table for every module at once.
+    """
+    from app.core.authorization.context import ResourceType
+    from app.core.authorization.resource_names import ResourceNameTable
+    from app.modules.agent.infrastructure.models import AgentModel
+
+    return (
+        (
+            ResourceType.AGENT,
+            ResourceNameTable(AgentModel.id, AgentModel.pod_id, AgentModel.name),
+        ),
+    )
 
 
 module = LemmaModule(
     name="agent",
+    resource_names=_resource_names,
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_report_system_model_pricing,),
+    # The worker is where agent runs actually dispatch, so a deployment
+    # whose models cannot back its spend limit has to hear it there too.
+    worker_lifespans=(_report_system_model_pricing,),
     stream_groups=(
         ("agent_events", "agent-events"),
         # A second group on the datastore's stream, so a memory file written
@@ -79,5 +123,10 @@ module = LemmaModule(
         # an undeclared group silently misses everything published before its
         # first read.
         ("datastore.events", "agent-memory-brief-invalidation"),
+        # A group on surfaces' stream, so the last answer to an agent's asks
+        # starts the asking conversation's next turn. Declared for the same
+        # reason as the one above: a group nobody declared misses everything
+        # published before it first reads.
+        ("surface_events", "agent-notification-settled"),
     ),
 )

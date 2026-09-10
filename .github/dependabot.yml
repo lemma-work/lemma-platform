@@ -10,14 +10,31 @@ version: 2
 # and the security group had nowhere to go, which is how 28 alerts accumulated
 # under a config that reads as correct.
 updates:
+  # Every directory with a `uv.lock`, which is the list `lint-lockfiles`
+  # gates on -- and it has to be, for two separate reasons.
+  #
+  # The sandbox image templates depend on `lemma-cli`, `lemma-pod-bundle` and
+  # `lemma-python` by path, and uv records a path dependency's own dependency
+  # specifiers inside the dependant's lock. So bumping a *dev* pin in
+  # `lemma-python` -- ruff, say, which no image installs -- leaves both
+  # templates' locks stale. Their Dockerfiles run `uv sync --locked`, so that
+  # is not a warning, it fails the image build; the monthly group PR died there
+  # while the lock it needed was in a directory Dependabot did not own.
+  #
+  # `tests/scenarios` has no path dependency and cannot go stale that way. It
+  # is here for the other reason: a directory Dependabot does not read is a
+  # directory a security advisory has no way to reach, which is the failure the
+  # note above about the open-PR limit describes.
   - package-ecosystem: uv
     directories:
       - /lemma-backend
-      - /lemma-backend/lemma-connectors
+      - /lemma-backend/sandbox-images/templates/function-python
+      - /lemma-backend/sandbox-images/templates/workspace-python
       - /lemma-cli
       - /lemma-pod-bundle
       - /lemma-python
       - /lemma-stack
+      - /tests/scenarios
     schedule:
       interval: monthly
       time: "04:00"
@@ -35,6 +52,9 @@ updates:
     directories:
       - /lemma-typescript
       - /lemma-frontend
+      # The desktop UI tests have their own lock. It carried no advisory when it
+      # was added here, which is the only time a directory is cheap to add.
+      - /desktop/ui-tests
     schedule:
       interval: monthly
       time: "04:15"
@@ -78,6 +98,10 @@ updates:
     directories:
       - /lemma-backend
       - /lemma-frontend
+      # The desktop guest image. `FROM ubuntu:24.04`, and nothing was watching
+      # it: the backend image has Trivy in security.yml as a second line, and
+      # this one has no scanner of its own at all.
+      - /desktop/local-runtime/guest-image
     schedule:
       interval: monthly
       time: "04:45"

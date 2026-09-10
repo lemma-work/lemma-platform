@@ -72,9 +72,10 @@ def sender_display_name(
 
     if not _is_real_name(actor):
         actor = ""
-    # An agent-less surface reports its display name as the product already (see
-    # ``_egress_metadata_with_agent_name``). Letting that through would compose
-    # "Lemma (Deepak Jha) via Lemma".
+    # "Lemma (Deepak Jha) via Lemma" — an agent whose name is the deployment's
+    # own product name. That used to be the pod's own agent, which reported the
+    # product as its display name; it answers to `Lem` now, so what is left is a
+    # named agent colliding with a self-hosted instance's `RESEND_FROM_NAME`.
     if agent.casefold() == product.casefold():
         agent = ""
 

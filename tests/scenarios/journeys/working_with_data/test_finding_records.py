@@ -64,10 +64,24 @@ async def test_records_can_be_sorted(table_of_twenty):
 @proves("PS-DATA-011")
 @covers("record.list")
 async def test_a_page_is_bounded(table_of_twenty):
+    """The cap is published and enforced, and asking past it is refused.
+
+    `PS-DATA-011` asks that a table with many records cannot be pulled in one
+    request by accident. The API answers that by publishing a maximum on
+    `limit` -- `maximum: 1000` in the OpenAPI specification, and so in both
+    generated SDKs -- and refusing anything larger.
+
+    Refusing rather than clamping is the half worth pinning. A caller that asks
+    for a hundred thousand rows and is handed a thousand, with no error, has no
+    way to tell a bounded page from the whole table; the accident the promise
+    names would happen quietly and be believed. Twenty other list endpoints
+    across this API publish the same kind of cap, so this is the house rule
+    rather than a rule about records.
+    """
     alice, pod, table = table_of_twenty
 
-    everything = await alice.records_in(table, in_pod=pod, limit=100000)
+    refused = await alice.is_refused_a_page_of(100000, table=table, in_pod=pod)
 
-    assert len(everything) <= 1000, (
-        f"an unbounded page lets one request pull a whole table; got {len(everything)}"
+    assert refused == 422, (
+        f"an oversized page must be refused as a bad request, not answered with {refused}"
     )

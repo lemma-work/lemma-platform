@@ -551,16 +551,20 @@ class FakeSlackServer:
 _AAD_ERROR_RESPONSES: dict[str, tuple[str, str]] = {
     "AADSTS65001": (
         "invalid_grant",
-        "AADSTS65001: The user or administrator has not consented to use the "
-        "application with ID 'fake-teams-app-id'. Send an interactive "
-        "authorization request for this user and resource.",
+        (
+            "AADSTS65001: The user or administrator has not consented to use the "
+            "application with ID 'fake-teams-app-id'. Send an interactive "
+            "authorization request for this user and resource."
+        ),
     ),
     "AADSTS700016": (
         "unauthorized_client",
-        "AADSTS700016: Application with identifier 'fake-teams-app-id' was "
-        "not found in the directory 'fake-teams-tenant'. This can happen if "
-        "the application has not been installed by the administrator of the "
-        "tenant.",
+        (
+            "AADSTS700016: Application with identifier 'fake-teams-app-id' was "
+            "not found in the directory 'fake-teams-tenant'. This can happen if "
+            "the application has not been installed by the administrator of the "
+            "tenant."
+        ),
     ),
 }
 

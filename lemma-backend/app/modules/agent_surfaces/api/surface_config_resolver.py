@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -23,6 +24,10 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.apps.contracts import get_ready_pod_app_by_name
 from app.modules.connectors.contracts import AccountNotFoundError
+
+# Asserts that this person owns this account, raising ``AccountNotFoundError``
+# when they do not. Bound to a unit of work by the caller.
+AssertAccountOwner = Callable[..., Awaitable[None]]
 
 
 async def require_surface_agent_action(
@@ -103,7 +108,7 @@ async def require_own_account(
     *,
     user_id: UUID,
     organization_id: UUID | None,
-    connector_service,
+    assert_owner: AssertAccountOwner,
 ) -> None:
     """A caller may only point a surface at an account they own.
 
@@ -115,12 +120,12 @@ async def require_own_account(
     if account_id is None:
         return
     try:
-        await connector_service.get_account(account_id, user_id, organization_id)
-    # `get_account` answers "not yours" and "no such account" with the same
-    # AccountNotFoundError, which is the whole point: the caller learns nothing
-    # about accounts they do not own. Caught by its own name rather than through
-    # a base class, because which 404 base it carries is exactly what this
-    # branch changes.
+        await assert_owner(account_id, user_id=user_id, organization_id=organization_id)
+    # `assert_owner` answers "not yours" and "no such account" with the
+    # same AccountNotFoundError, which is the whole point: the caller learns
+    # nothing about accounts they do not own. Caught by its own name rather than
+    # through a base class, because which 404 base it carries is exactly what
+    # this branch changes.
     except AccountNotFoundError as exc:
         raise HTTPException(
             status_code=403,
