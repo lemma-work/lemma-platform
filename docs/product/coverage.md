@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 160 |
+| `covered` | 161 |
 | `gap` | 0 |
 | `manual` | 6 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **166** |
+| **total** | **167** |
 
-Scenario tests declaring a promise: 387.
+Scenario tests declaring a promise: 389.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 242 | 249 |
+| OpenAPI operations | 243 | 250 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -158,6 +158,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
+| `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
 
 ## [Operating a deployment](journeys/operating-a-deployment.md)
 

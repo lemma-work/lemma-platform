@@ -160,12 +160,16 @@ def _event(
 
 def _service(cached_user_id):
     """A resolver whose cache is already warm for this sender."""
-    service = SurfaceIdentityResolutionService.__new__(SurfaceIdentityResolutionService)
-    service._users = SimpleNamespace(
+    directory = SimpleNamespace(
         get_id_by_email_insensitive=AsyncMock(return_value=cached_user_id),
         get_ids_by_mobile_numbers=AsyncMock(return_value=[]),
     )
-    service.external_user_repository = SimpleNamespace()
+    service = SurfaceIdentityResolutionService(
+        None,
+        SimpleNamespace(),
+        user_directory=directory,
+        verified_identity_lookup=AsyncMock(return_value=None),
+    )
     service._upsert = AsyncMock(  # type: ignore[method-assign]
         return_value=SimpleNamespace(
             resolved_user_id=cached_user_id,

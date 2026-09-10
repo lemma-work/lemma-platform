@@ -1,0 +1,12 @@
+{
+  "version": "3.1",
+  "screens": [{
+    "id": "ONBOARDING", "title": "Verify your email", "terminal": true, "data": {},
+    "layout": {"type": "SingleColumnLayout", "children": [{
+      "type": "Form", "name": "form", "children": [
+        {"type": "TextInput", "name": "answer", "label": "Six-digit code", "input-type": "number", "required": true},
+        {"type": "Footer", "label": "Verify", "on-click-action": {"name": "complete", "payload": {"answer": "${form.answer}"}}}
+      ]
+    }]}
+  }]
+}

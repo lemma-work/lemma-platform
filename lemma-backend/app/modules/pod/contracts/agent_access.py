@@ -27,6 +27,12 @@ async def pod_organization_id(uow, pod_id: UUID) -> UUID | None:
     ).scalar_one_or_none()
 
 
+async def live_pod_organization_id(uow, pod_id: UUID) -> UUID | None:
+    return await uow.session.scalar(
+        select(Pod.organization_id).where(Pod.id == pod_id, Pod.is_deleted.is_(False))
+    )
+
+
 async def pod_config(uow, pod_id: UUID) -> dict[str, object]:
     """The pod's config blob, empty when the pod is gone or never set one."""
     return (
@@ -34,4 +40,4 @@ async def pod_config(uow, pod_id: UUID) -> dict[str, object]:
     ).scalar_one_or_none() or {}
 
 
-__all__ = ["pod_config", "pod_organization_id"]
+__all__ = ["pod_config", "pod_organization_id", "live_pod_organization_id"]

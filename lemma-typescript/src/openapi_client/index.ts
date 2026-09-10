@@ -165,6 +165,8 @@ export type { FileSignedUrlRequest } from './models/FileSignedUrlRequest.js';
 export type { FileSignedUrlResponse } from './models/FileSignedUrlResponse.js';
 export type { FileSummaryResponse } from './models/FileSummaryResponse.js';
 export type { FileUrlResponse } from './models/FileUrlResponse.js';
+export type { FirstWorkspaceRequest } from './models/FirstWorkspaceRequest.js';
+export { FirstWorkspaceResponse } from './models/FirstWorkspaceResponse.js';
 export type { ForeignKeySpec } from './models/ForeignKeySpec.js';
 export type { FormNode } from './models/FormNode.js';
 export type { FormNodeConfig } from './models/FormNodeConfig.js';

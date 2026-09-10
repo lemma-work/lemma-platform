@@ -45,7 +45,9 @@ class AuthAbuseStore:
         key = reveal_secret(identity_settings.auth_altcha_hmac_key) or "lemma-auth-key"
         return hmac.new(key.encode(), value.encode(), hashlib.sha256).hexdigest()
 
-    async def enforce(self, key: str, *, limit: int, window_seconds: int) -> None:
+    async def enforce(
+        self, key: str, *, limit: int, window_seconds: int, fail_closed: bool = False
+    ) -> None:
         if not settings.auth_abuse_protection_enabled:
             return
         try:
@@ -54,6 +56,8 @@ class AuthAbuseStore:
             )
         except RedisError:
             logger.error("identity.auth_abuse.rate_limit_unavailable", exc_info=True)
+            if fail_closed:
+                raise
             return
         count = int(result[0])
         retry_after = max(1, int(result[1]))

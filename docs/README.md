@@ -12,6 +12,7 @@ read the [README](../README.md) or visit [lemma.work](https://lemma.work).
 | [Self-hosting on a VM](self-hosting.md) | Running Lemma for a team with Docker Compose: install, the URL layout and why it is that shape, domains and TLS, what the Docker socket means, backups, upgrades |
 | [Configuration](configuration.md) | What every operator-facing setting decides and why you would change it |
 | [Observability](observability.md) | Exporting traces, metrics, and logs to any OTLP collector; the local HyperDX + Phoenix stack |
+| [Chat and email-code onboarding](operators/chat-onboarding.md) | Configure shared bots, private installation signup, email codes and WhatsApp Flows |
 | [Authentication hardening](authentication-hardening.md) | Production email, verification, abuse protection, bounce handling, Telegram and WhatsApp verification |
 | [Running the guest VM by hand](local-runtime-vm.md) | Booting Desktop's Linux guest directly, for debugging the `lemma_local` provider |
 

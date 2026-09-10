@@ -63,6 +63,8 @@ import {
 } from "@/components/auth/portal/auth/session-recovery";
 import { VerificationScreen } from "@/components/auth/portal/auth/verification-screen";
 import { PasswordResetScreen } from "@/components/auth/portal/auth/password-reset-screen";
+import { EmailCodeLogin } from "@/components/auth/portal/auth/email-code-login";
+import { Button } from "@/components/ui/button";
 import { AuthProtectionNotice } from "@/components/auth/portal/auth/auth-protection-notice";
 import {
   getDestinationLabel,
@@ -226,6 +228,7 @@ function resolveAuthMode(
 }
 
 function AuthLanding() {
+  const [emailCodeLogin, setEmailCodeLogin] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const session = useSessionContext();
@@ -718,9 +721,14 @@ function AuthLanding() {
   return (
     <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
       <div className="auth-form-stack">
+        {emailCodeLogin ? <EmailCodeLogin onBack={() => setEmailCodeLogin(false)} /> : <>
+        <Button type="button" variant="secondary" onClick={() => setEmailCodeLogin(true)}>
+          Continue with email code
+        </Button>
         <TelegramLoginButton visible={authMode === "signin"} />
         <AuthProtectionNotice />
         {getRoutingComponent([...preBuiltUiList])}
+        </>}
       </div>
     </AuthScreenLayout>
   );

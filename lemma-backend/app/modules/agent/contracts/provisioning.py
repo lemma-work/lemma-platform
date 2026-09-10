@@ -21,6 +21,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.domain.runtime import AgentRuntimeConfig
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.api.dependencies import get_agent_service
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import AgentNotFoundError
@@ -44,6 +45,29 @@ async def provision_pod_default_agent(uow, *, pod_id: UUID, user_id: UUID) -> No
     )
 
     await AgentRepository(uow).create_pod_default(pod_id=pod_id, user_id=user_id)
+
+
+async def pod_default_agent_exists(uow: SqlAlchemyUnitOfWork, *, pod_id: UUID) -> bool:
+    from app.modules.agent.infrastructure.repositories.agent_repository import (
+        AgentRepository,
+    )
+
+    return await AgentRepository(uow).get(pod_id) is not None
+
+
+async def ensure_pod_default_agent(
+    uow: SqlAlchemyUnitOfWork, *, pod_id: UUID, user_id: UUID
+) -> UUID:
+    """Heal a missing assistant while the caller serializes pod provisioning."""
+    from app.modules.agent.infrastructure.repositories.agent_repository import (
+        AgentRepository,
+    )
+
+    repository = AgentRepository(uow)
+    existing = await repository.get(pod_id)
+    if existing is None:
+        existing = await repository.create_pod_default(pod_id=pod_id, user_id=user_id)
+    return existing.id
 
 
 async def list_agents(uow, *, pod_id: UUID, user_id: UUID, ctx: Context) -> list[Agent]:
@@ -172,6 +196,8 @@ async def sync_agent_memory_grant(
 
 
 __all__ = [
+    "ensure_pod_default_agent",
+    "pod_default_agent_exists",
     "create_agent",
     "get_agent",
     "list_agents",

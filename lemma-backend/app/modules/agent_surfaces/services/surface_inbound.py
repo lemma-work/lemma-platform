@@ -209,6 +209,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             adapter=adapter,
             parsed=parsed,
             credentials=await self._resolve_credentials(identity_surface),
+            installation_id=identity_surface.account_id or identity_surface.id,
         )
         matched_surface = await self._select_surface(
             candidates=candidates,
@@ -293,6 +294,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
+                installation_id=(surface.account_id or surface.id) if surface else None,
             )
         display_name = agent_display_name(
             (await self.agent_name_for_surface(surface)) if surface else None
@@ -314,6 +316,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         parsed: ParsedInboundSurfaceEvent,
         adapter: SurfacePlatformAdapterPort,
         resolved_user: ResolvedSurfaceUser | None = None,
+        claim_delivery: bool = True,
     ) -> AgentSurfaceContext | None:
         if self._is_self_email_event(surface=surface, parsed=parsed):
             return None
@@ -344,7 +347,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         # Claimed only with the message in hand: claiming earlier burns it on an
         # attempt that had no body, so the retry is discarded as a duplicate.
         # Enrichment also changes the ids this keys on.
-        claimed = await self.event_dedup_store.claim_message(
+        claimed = not claim_delivery or await self.event_dedup_store.claim_message(
             surface_installation_id=surface.id,
             platform=surface.surface_type,
             external_channel_id=parsed.external_channel_id,
@@ -371,6 +374,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
+                installation_id=surface.account_id or surface.id,
             )
         if resolved_user.internal_user_id is None:
             return unresolved_sender_context(
