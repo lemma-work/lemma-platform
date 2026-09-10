@@ -79,22 +79,38 @@ fn the_installation_guide_names_the_addresses_this_build_asks() {
         .expect("the guide documents where updates are checked");
     let section = section.split("\n## ").next().unwrap_or(section);
 
-    for channel in ["stable", "nightly"] {
-        for endpoint in updater_endpoints(channel) {
-            // The nightly address is written with an ellipsis for the host it
-            // shares with the line above it, so compare on the part that says
-            // which release and which file.
-            let path = endpoint
-                .split_once("lemma-platform")
-                .map(|(_, rest)| rest)
-                .unwrap_or(&endpoint);
-            assert!(
-                section.contains(path),
-                "docs/installation.md does not name the {channel} update \
-                 endpoint {endpoint}",
-            );
-        }
-    }
+    let stable = updater_endpoints("stable");
+    let nightly = updater_endpoints("nightly");
+    assert_eq!((stable.len(), nightly.len()), (1, 1));
+    let (stable, nightly) = (&stable[0], &nightly[0]);
+
+    // Everything before the path: scheme, host and owner. The guide writes it
+    // out once, in the stable URL, and elides it with `...` in the nightly one.
+    let shared = stable
+        .rfind("/releases/")
+        .map(|at| &stable[..at])
+        .expect("a stable endpoint is a releases URL");
+    // Which is only honest if the nightly really does share it. Comparing the
+    // two on their suffixes alone would accept a doc that had quietly moved
+    // one of them to another host.
+    assert!(
+        nightly.starts_with(shared),
+        "the guide elides {shared} from the nightly endpoint, and {nightly} \
+         does not begin with it",
+    );
+
+    // In full, so a documented `https://elsewhere.example/...` with a matching
+    // tail is not read as naming this one.
+    assert!(
+        section.contains(stable.as_str()),
+        "docs/installation.md does not name the stable update endpoint {stable}",
+    );
+    let elided = format!("...{}", &nightly[shared.len()..]);
+    assert!(
+        section.contains(&elided),
+        "docs/installation.md does not name the nightly update endpoint, \
+         written as {elided}",
+    );
 
     // And nothing it names has gone away. Token by token rather than line by
     // line: one of the two addresses is written inside a sentence.
@@ -107,18 +123,15 @@ fn the_installation_guide_names_the_addresses_this_build_asks() {
         if !named.contains("latest.json") || !named.contains("releases/") {
             continue;
         }
-        // The nightly address elides the host it shares with the line above.
-        let path = named
-            .split_once("lemma-platform")
-            .map(|(_, rest)| rest)
-            .unwrap_or(named)
-            .trim_start_matches("...");
+        // An elided address is expanded against the prefix the guide elided,
+        // so what is compared is a whole URL either way.
+        let full = match named.strip_prefix("...") {
+            Some(rest) => format!("{shared}{rest}"),
+            None => named.to_owned(),
+        };
         assert!(
-            ["stable", "nightly"]
-                .iter()
-                .flat_map(|channel| updater_endpoints(channel))
-                .any(|endpoint| endpoint.ends_with(path)),
-            "docs/installation.md names {path}, which no channel reads",
+            [stable, nightly].contains(&&full),
+            "docs/installation.md names {full}, which no channel reads",
         );
     }
 }

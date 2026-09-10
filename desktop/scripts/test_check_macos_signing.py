@@ -93,10 +93,17 @@ class NativeSigningTests(unittest.TestCase):
         """Build a bundle; `entitled` names paths to sign with virtualization.
 
         Keys are the same relative paths as `HELPERS`, plus `"."` for the
-        bundle itself, which is how a real build gets there: Tauri signs the
-        app and each externalBin with one entitlements file.
+        bundle itself, which is how a real build gets there: Tauri signs the app
+        and each externalBin with one entitlements file.
+
+        The default is the shape every real build has -- the entitlement on
+        lemma-vz and nowhere else -- because `check` validates that, and a test
+        that only wanted a signature should not have to know. Pass `{}` to build
+        a bundle without it; the guard for a helper that lost its entitlement is
+        the one case that wants that.
         """
-        entitled = entitled or {}
+        if entitled is None:
+            entitled = {VZ_HELPER: True}
         plist = self.root / f"{name}-virtualization.plist"
         plist.write_bytes(plistlib.dumps({"com.apple.security.virtualization": True}))
         def entitlement_args(relative: str) -> list[str]:
@@ -176,7 +183,7 @@ class NativeSigningTests(unittest.TestCase):
         sign the resource that actually needs one, so the grant can equally go
         missing. Neither shape is visible in a plist.
         """
-        validate_entitlements(self.build("split", 1, "-", {VZ_HELPER: True}))
+        validate_entitlements(self.build("split", 1, "-"))
 
     def test_an_app_that_carries_virtualization_is_refused(self) -> None:
         app = self.build("over", 1, "-", {VZ_HELPER: True, ".": True})
@@ -192,9 +199,13 @@ class NativeSigningTests(unittest.TestCase):
 
     def test_a_helper_signed_without_virtualization_is_refused(self) -> None:
         """The other direction, and the one that ships a broken guest: nothing
-        else in the release would notice a helper that cannot start a VM."""
+        else in the release would notice a helper that cannot start a VM.
+
+        The empty map is deliberate -- it is what asks for a bundle that does
+        not have the entitlement anywhere.
+        """
         with self.assertRaisesRegex(ValueError, "never come up"):
-            validate_entitlements(self.build("under", 1, "-"))
+            validate_entitlements(self.build("under", 1, "-", {}))
 
     def test_a_valid_adhoc_bundle_is_not_a_release_identity(self) -> None:
         app = self.build("adhoc", 1, "-")
