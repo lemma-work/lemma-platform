@@ -121,8 +121,8 @@ fn no_guard_looks_for_the_shell_inside_main() {
 /// read their own source and the bundled UI through `include_str!`. A
 /// needle containing `\n` then matches nothing -- but only sometimes:
 /// `find("\nfn ")` still matches inside `"\r\nfn "`, so most survived and
-/// exactly two did not. The failures appear only on the Windows job, which
-/// is not in the desktop path filter, so each one costs a push to see.
+/// exactly two did not. The failures appear only on the Windows job, the
+/// slowest lane in CI, so each one costs most of a run to see.
 ///
 /// Two defences, and this asserts the one that can be asserted from here:
 /// every `include_str!` bound for searching normalises on the way in.

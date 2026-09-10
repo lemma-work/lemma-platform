@@ -252,7 +252,7 @@ jobs:
           set -euo pipefail
           helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
           codesign --force --timestamp --options runtime \
-            --entitlements desktop/entitlements.plist \
+            --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist \
             --sign "${APPLE_SIGNING_IDENTITY}" \
             "${helper}"
           codesign --verify --strict --verbose=2 "${helper}"
@@ -393,6 +393,26 @@ jobs:
               failed=1
             fi
           }
+          # The inverse of check_grep, for a privilege that must not be there.
+          # A command that fails is still a failure: an entitlements dump that
+          # errors proves nothing, and "no match" would otherwise read as a
+          # pass.
+          check_absent() {
+            local description="$1" pattern="$2"
+            shift 2
+            local output
+            if ! output="$("$@" 2>&1)"; then
+              echo "::error::${description} -- could not be checked: $*"
+              sed 's/^/    /' <<<"${output}"
+              failed=1
+            elif grep -qF "${pattern}" <<<"${output}"; then
+              echo "::error::${description} -- found '${pattern}' in: $*"
+              sed 's/^/    /' <<<"${output}"
+              failed=1
+            else
+              echo "ok: ${description}"
+            fi
+          }
           # Exact whole-line match, for values (like an identifier) where a
           # substring match would also accept "work.lemma.locald.staging".
           check_grep_exact() {
@@ -440,6 +460,20 @@ jobs:
             "Identifier=work.lemma.locald" codesign -dvvv "${locald}"
           check_grep "vz helper has the virtualization entitlement" \
             "com.apple.security.virtualization" codesign -d --entitlements :- "${vz}"
+          # And nothing else does. Tauri applies one entitlements file to the
+          # app and to every externalBin it signs, so the app's file used to
+          # hand this to four processes -- including the one that hosts a
+          # WebView -- for a capability only lemma-vz can use. lemma-vz keeps
+          # it because it ships as a resource, which Tauri does not re-sign.
+          check_absent "the app and its sidecars do not carry it" \
+            "com.apple.security.virtualization" \
+            codesign -d --entitlements :- "${app}"
+          for signed_with_the_app in "${locald}" "${runtime_bridge}" \
+              "${app}/Contents/MacOS/lemma-agent-host"; do
+            check_absent "$(basename "${signed_with_the_app}") does not carry it" \
+              "com.apple.security.virtualization" \
+              codesign -d --entitlements :- "${signed_with_the_app}"
+          done
 
           check "app passes stapler validation" xcrun stapler validate "${app}"
           check "dmg passes stapler validation" xcrun stapler validate "${dmg}"
@@ -495,6 +529,13 @@ jobs:
           tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
           cp "${tarball}" "${artifacts}/Lemma_${VERSION}_aarch64.app.tar.gz"
           cp "${tarball}.sig" "${artifacts}/Lemma_${VERSION}_aarch64.app.tar.gz.sig"
+          # The two halves are checked for presence long before this point, and
+          # never for being halves of the same pair. A rotated private key, or a
+          # tauri.conf.json restored from an older branch, publishes a release
+          # that is signed, notarized and complete, and whose every update the
+          # installed base rejects at the last step.
+          python3 desktop/scripts/check_updater_key.py \
+            --signature-file "${artifacts}/Lemma_${VERSION}_aarch64.app.tar.gz.sig"
           python3 - <<'PY'
           import json, os, pathlib
           from datetime import datetime, timezone
