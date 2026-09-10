@@ -41,9 +41,14 @@ def strip_jsonc(text: str) -> str:
                 i += 1
             continue
         if ch == "/" and i + 1 < n and text[i + 1] == "*":
+            comment_start = i
             while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
                 out.append("\n" if text[i] == "\n" else " ")
                 i += 1
+            if i >= n:
+                raise json.JSONDecodeError(
+                    "Unterminated block comment", text, comment_start
+                )
             # consume the closing */
             i += 2
             out.append("  ")
