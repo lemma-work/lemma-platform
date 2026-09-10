@@ -28,7 +28,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: release-lemma-typescript-${{ github.event.release.tag_name || inputs.version }}
+  group: release-lemma-typescript-${{ github.event.release.tag_name || inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -83,14 +83,14 @@ jobs:
       - name: Check version consistency across components
         working-directory: .
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
         run: python3 scripts/check_version_consistency.py --expect "$RELEASE_VERSION"
 
       - name: Set package version from release tag
         id: version
         shell: bash
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
         run: |
           version="${RELEASE_VERSION#v}"
           if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
