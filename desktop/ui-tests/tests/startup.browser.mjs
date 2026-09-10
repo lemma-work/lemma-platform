@@ -154,7 +154,12 @@ test('opening the log from an error preselects the log for that failure', async 
   });
   await push(page, {
     mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
+    // What the daemon actually sends. It classifies the failure from the raw
+    // error, before anything reshapes it for a person to read, and puts the
+    // answer in the event; this used to omit it and the splash re-derived the
+    // answer by searching the displayed status for words.
     status: 'A database migration failed', errorCode: 'locald-start-failed',
+    logSource: 'migrations',
   });
   await page.getByRole('button', { name: 'View log', exact: true }).click();
   await page.getByText('relation already exists', { exact: false }).waitFor();
@@ -163,6 +168,49 @@ test('opening the log from an error preselects the log for that failure', async 
     // Again, the boot read comes first; what matters is that View log then
     // asks for the source belonging to this failure rather than for events.
     ['events', 'migrations'],
+  );
+});
+
+// An error event with no `log_source` -- an older daemon, or a path that does
+// not set one. The error *code* decides, because it is an enumerated value;
+// the status text beside it is prose and used to be what decided.
+test('an error with no named log falls back to its code, not to its wording', async t => {
+  const page = await splash(t, {
+    logs: {
+      sources: [{ id: 'locald-stderr', label: 'Service manager startup' }],
+      entries: { 'locald-stderr': 'could not bind the control socket' },
+    },
+  });
+  await push(page, {
+    mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
+    status: 'A database migration failed', errorCode: 'locald-start-failed',
+  });
+  await page.getByRole('button', { name: 'View log', exact: true }).click();
+  await page.getByText('could not bind the control socket', { exact: false }).waitFor();
+  assert.deepEqual(
+    (await commandCalls(page, ['diagnostic_logs'])).map(call => call.args.source),
+    ['events', 'locald-stderr'],
+  );
+});
+
+// A source the shell does not serve is not passed through. `read_diagnostic_log`
+// refuses an id it has no file for, so the panel would show an error where the
+// log should be -- and "infrastructure" is what the daemon answered for a
+// crashed guest kernel.
+test('a log source the shell cannot serve falls back to events', async t => {
+  const page = await splash(t, {
+    logs: { sources: [{ id: 'events', label: 'Events' }], entries: { events: 'boot line' } },
+  });
+  await push(page, {
+    mode: 'local', phaseKey: 'error', error: true, running: false, ready: false,
+    status: 'the guest kernel crashed', errorCode: 'host-operation-failed',
+    logSource: 'infrastructure',
+  });
+  await page.getByRole('button', { name: 'View log', exact: true }).click();
+  await page.getByText('boot line', { exact: false }).waitFor();
+  assert.deepEqual(
+    (await commandCalls(page, ['diagnostic_logs'])).map(call => call.args.source),
+    ['events', 'events'],
   );
 });
 
