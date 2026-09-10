@@ -76,7 +76,8 @@ way a scenario says, do not edit the scenario.
 | Scenarios (fast) | `make scenarios` | Nightly, on request, or with the `run-scenarios` label |
 | Scenarios (sandbox) | `make scenarios-sandbox` | Same, after building the workspace images |
 | Scenarios (live) | `make scenarios-live` | Locally, before a release. See [LIVE.md](../tests/scenarios/LIVE.md) |
-| Protected e2e | — | Weekly, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go. |
+| Protected e2e | `make test-e2e-runtime` | Weekly and on every `v*` tag, via `backend-protected-e2e.yml`. Where `@pytest.mark.slow` tests go, and what every Desktop release gate reads. It builds nothing, so a test needing a compiled artifact belongs in the lane that builds it. |
+| Sandbox function benchmark | `make benchmark-functions-docker` | Nightly on Docker, weekly on E2B, via `sandbox-function-benchmark.yml`. Owns `@pytest.mark.benchmark`: wall-clock budgets are trended here and gate nothing. |
 | Real-LLM e2e | `make test-e2e-real-llm` | Locally whenever a change touches the model or pause path. Not in CI. |
 
 The real-LLM lane is worth one paragraph, because its absence used to be
@@ -115,7 +116,11 @@ Over the budget, there are three honest answers and one dishonest one:
 
 - **Mark it `@pytest.mark.slow`.** It moves to the scheduled protected lane.
   Right when the thing under test is a matrix of variations rather than a
-  contract that can break on its own.
+  contract that can break on its own. Two things do not belong there whatever
+  they cost: a test needing something compiled — the protected lane installs no
+  toolchain and builds nothing — and a wall-clock budget, which is
+  `@pytest.mark.benchmark` and belongs to the lane that trends it. Every Desktop
+  release waits on that lane, so a red there has to mean a defect.
 - **Split it.** Keep a cheap test that proves the wiring is connected, and
   move the exhaustive half to `slow`. This is usually the best answer:
   `test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable` (one PDF,
