@@ -1965,6 +1965,8 @@ quality:
 	@$(MAKE) --no-print-directory script-portability-check
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+	@echo "→ Both DMG pipelines verify the same things…"
+	@uv run --no-project --with pyyaml python scripts/check_release_parity.py
 	@echo "→ Test census (no suite has quietly stopped running)…"
 	@python3 scripts/check_pytest_census.py
 	@echo "→ E2E shard layout…"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import plistlib
 import subprocess
 
 
@@ -70,6 +71,37 @@ def designated_requirement(output: str) -> str:
         if line.startswith("designated => "):
             return line.removeprefix("designated => ")
     raise ValueError("signature has no designated requirement")
+
+
+# Without this key macOS never asks. It does not deny loudly either: the app
+# simply cannot reach anything on the local network, which for Lemma means its
+# own loopback services -- the backend, the frontend, the auth service. A build
+# missing it is broken on first launch and looks like a hung startup.
+LOCAL_NETWORK_USAGE_KEY = "NSLocalNetworkUsageDescription"
+
+
+def validate_bundle_metadata(app: Path) -> None:
+    """The Info.plist keys a shipped bundle cannot work without.
+
+    Checked here rather than in a workflow because both DMG pipelines call this
+    file and only one of them was checking it. The nightly asked for this key;
+    the release, which is the one that reaches users, did not.
+    """
+    info = app / "Contents/Info.plist"
+    try:
+        with info.open("rb") as handle:
+            payload = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException) as error:
+        raise ValueError(f"{info} could not be read: {error}") from error
+    description = payload.get(LOCAL_NETWORK_USAGE_KEY)
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError(
+            f"{app.name} has no {LOCAL_NETWORK_USAGE_KEY}. macOS will not ask "
+            f"for local network access, and the app cannot reach its own "
+            f"loopback services -- which looks like a startup that never "
+            f"finishes rather than a permission that was never requested"
+        )
+    print(f"verified {LOCAL_NETWORK_USAGE_KEY} is present")  # noqa: T201 -- CLI report
 
 
 VIRTUALIZATION = "com.apple.security.virtualization"
@@ -151,6 +183,7 @@ def check(
                 str(binary),
             )
         print(f"verified signing continuity: {identifier}")  # noqa: T201 -- CLI report
+    validate_bundle_metadata(app)
     validate_entitlements(app)
 
 

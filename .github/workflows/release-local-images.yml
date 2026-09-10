@@ -1202,7 +1202,10 @@ jobs:
           python3 desktop/scripts/check_online_payload.py --macos-app "${app}"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Identifier=work.lemma.desktop"
-          test -n "$(plutil -extract NSLocalNetworkUsageDescription raw -o - "${app}/Contents/Info.plist")"
+          # NSLocalNetworkUsageDescription used to be asserted here, and only
+          # here -- so the release, which is the pipeline that reaches users,
+          # shipped without the check. It is in check_macos_signing.py above
+          # now, which both pipelines run and which has tests.
           xcrun stapler validate "${app}"
           xcrun stapler validate \
             "desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
