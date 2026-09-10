@@ -121,7 +121,7 @@ class EmailSender:
                 smtp_port=settings.smtp_port,
                 smtp_user=settings.smtp_user or "",
                 smtp_password=reveal_secret(settings.smtp_password) or "",
-                from_email=settings.smtp_from_email or "hello@updates.lemma.work",
+                from_email=settings.smtp_from_email or "lemma@localhost",
                 from_name=settings.smtp_from_name,
                 use_tls=settings.smtp_use_tls,
                 transport="filesystem",
@@ -138,6 +138,15 @@ class EmailSender:
             )
         )
         if not explicit_smtp and resend_api_key:
+            if not settings.resend_from_email:
+                # No default is possible: Resend only accepts a sender on a
+                # domain verified for that account, which differs per
+                # deployment. Anything we picked would be rejected by the relay
+                # or fail the receiving domain's DMARC.
+                raise EmailNotConfiguredError(
+                    "RESEND_API_KEY is set but RESEND_FROM_EMAIL is not. Set it "
+                    "to an address on a domain verified in your Resend account."
+                )
             return cls(
                 smtp_host="smtp.resend.com",
                 smtp_port=465,
@@ -156,12 +165,18 @@ class EmailSender:
                 "SMTP_USER, SMTP_PASSWORD, and SMTP_FROM_EMAIL."
             )
 
+        if not settings.smtp_from_email:
+            raise EmailNotConfiguredError(
+                "SMTP is configured but SMTP_FROM_EMAIL is not, so outgoing "
+                "mail would have no sender address."
+            )
+
         return cls(
             smtp_host=settings.smtp_host,
             smtp_port=settings.smtp_port,
-            smtp_user=settings.smtp_user,  # type: ignore
-            smtp_password=settings.smtp_password,  # type: ignore
-            from_email=settings.smtp_from_email,  # type: ignore
+            smtp_user=settings.smtp_user or "",
+            smtp_password=reveal_secret(settings.smtp_password) or "",
+            from_email=settings.smtp_from_email,
             from_name=settings.smtp_from_name,
             use_tls=settings.smtp_use_tls,
             transport="smtp",
