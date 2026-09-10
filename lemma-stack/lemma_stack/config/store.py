@@ -72,10 +72,63 @@ def new_document() -> TOMLDocument:
     return doc
 
 
+def document_schema(doc: TOMLDocument) -> int:
+    """The schema this document was written against.
+
+    Absent means 1. The template has always written `schema = 1`, so a file
+    without it is either hand-made or predates the field, and in both cases
+    version 1 is what its contents mean.
+
+    A value that is not an integer is a lie about the format, not a version, so
+    it is refused rather than coerced.
+    """
+    declared = doc.get("schema", 1)
+    if isinstance(declared, bool) or not isinstance(declared, int):
+        raise AdminError(
+            f"config has schema = {declared!r}, which is not a version number. "
+            f"Fix or remove the line."
+        )
+    return declared
+
+
+def migrate(doc: TOMLDocument, from_schema: int) -> TOMLDocument:
+    """Bring a document written against an older schema up to this one.
+
+    There is one version, so there is nothing to do yet -- and the seam is the
+    point. A version 2 arriving with no place to put its migration is how a
+    config file gets read as something it is not, and `load` below is the only
+    caller, so a migration written here reaches every command at once.
+    """
+    for step in range(from_schema, SCHEMA_VERSION):
+        raise AdminError(  # pragma: no cover -- no step exists to exercise
+            f"no migration from config schema {step} to {step + 1}"
+        )
+    doc["schema"] = SCHEMA_VERSION
+    return doc
+
+
 def load(paths: LocalPaths) -> TOMLDocument:
     if not paths.config_file.exists():
         raise AdminError(f"no config found at {paths.config_file}; run `lemma-stack install` first")
-    return tomlkit.parse(paths.config_file.read_text(encoding="utf-8"))
+    doc = tomlkit.parse(paths.config_file.read_text(encoding="utf-8"))
+    # Read, not just written. `SCHEMA_VERSION` was declared here and the
+    # template wrote `schema = 1`, and nothing ever compared them -- so a config
+    # written by a newer lemma-stack was parsed as if it were this one, and
+    # whatever that version meant by a field was silently misread. This is the
+    # same shape as an old app opening new data, which is the one thing a local
+    # install must refuse rather than guess at.
+    schema = document_schema(doc)
+    if schema > SCHEMA_VERSION:
+        raise AdminError(
+            f"{paths.config_file} was written by a newer Lemma (config schema "
+            f"{schema}; this one understands {SCHEMA_VERSION}). Upgrade "
+            f"lemma-stack rather than editing the file: the settings it holds "
+            f"are not lost, they are just described in a way this version does "
+            f"not read."
+        )
+    if schema < SCHEMA_VERSION:
+        return migrate(doc, schema)
+    return doc
 
 
 def load_or_create(paths: LocalPaths) -> TOMLDocument:
