@@ -831,7 +831,9 @@
   </div>
 </div>
 
-<script>
+<script type="module">
+  import { deriveScreen, diagnosticSourceForState } from "./screen-state.mjs";
+
   // ---- bridge: Tauri when available, scripted demo otherwise ------------
   (function () {
     const tauri = window.__TAURI__;
@@ -1101,28 +1103,25 @@
       progressEl.classList.toggle("active", !s.error);
       return;
     }
-    // Neither of these may return silently. This function is the only thing that
-    // draws the screen and the only thing that schedules the move to the
-    // workspace, so a state it declines to handle leaves the bare static logo up
-    // for good -- which is exactly what a stuck first run looked like.
-    //
-    // A state with no phase is still a state: fall back to the boot phase rather
-    // than rendering nothing.
-    if (!s.phaseKey) s = { ...s, phaseKey: lastPhase || "boot" };
-    // Undecided means the user has not picked a connection mode. Show them the
-    // choice instead of an empty screen.
-    if (s.mode === "undecided") {
+    // `deriveScreen` may not decline a state. This function is the only thing
+    // that draws the screen and the only thing that schedules the move to the
+    // workspace, so a state nothing handles leaves the bare static logo up for
+    // good -- which is exactly what a stuck first run looked like. A state with
+    // no phase is still a state, and `lastPhase` is how it keeps one.
+    const screen = deriveScreen(s, { lastPhase, sawSetup, isShuttingDown });
+
+    if (screen.screen === "choosing") {
       showChooser();
       return;
     }
     lastState = s;
     switchModeBtn.hidden = s.mode !== "local";
     if (s.running || s.ready) hideConnectionChoice();
-    if (s.setup) sawSetup = true;
-    lastPhase = s.phaseKey;
+    sawSetup = screen.sawSetup;
+    lastPhase = screen.phaseKey;
 
-    if (s.error) {
-      if (logPanel.hidden) activeLogSource = diagnosticSourceForState(s);
+    if (screen.screen === "error") {
+      if (logPanel.hidden) activeLogSource = screen.logSource;
       clearTimeout(readyOpenTimer);
       clearPrimaryBusy();
       hideOperationStatus();
@@ -1130,30 +1129,23 @@
       window.__orb?.stall();
       scene.classList.add("stalled");
       scene.classList.remove("awake");
-      const needsWindowsSetup = ["wsl-required", "wsl-setup-denied"].includes(s.errorCode);
-      const needsWindowsRestart = s.errorCode === "wsl-reboot-required";
-      say(needsWindowsSetup
+      say(screen.windowsSetup
         ? "Windows needs one permission."
-        : needsWindowsRestart
+        : screen.windowsRestart
           ? "One restart, then Lemma continues."
           : "Something stopped.");
-      truth.textContent = needsWindowsSetup
+      truth.textContent = screen.windowsSetup
         ? "one-time Windows setup · no Docker Desktop or Ubuntu"
-        : needsWindowsRestart
+        : screen.windowsRestart
           ? "restart Windows, then reopen Lemma"
           : "";
-      errdetail.textContent = s.status || "startup failed";
+      errdetail.textContent = screen.errorDetail;
       errwrap.hidden = false;
-      prepareWindowsBtn.hidden = !needsWindowsSetup;
+      prepareWindowsBtn.hidden = !screen.showPrepareWindows;
       prepareWindowsBtn.disabled = false;
       prepareWindowsBtn.textContent = "Set up Windows runtime";
-      // Data this release cannot read: retrying reproduces it exactly, and
-      // offering Try again is how someone learns the app has nothing for them.
-      const dataIsUnreadable = s.errorCode === "local-data-incompatible";
-      const cannotStart = ["locald-start-failed", "locald-disconnected", "runtime-install-failed"]
-        .includes(s.errorCode);
-      showRecoveryButtons(dataIsUnreadable || cannotStart, dataIsUnreadable);
-      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart || dataIsUnreadable;
+      showRecoveryButtons(screen.showResetData, screen.showFullReinstall);
+      retryBtn.hidden = !screen.showRetry;
       openBtn.hidden = true;
       whisper.classList.remove("on");
       return;
@@ -1165,11 +1157,8 @@
     retryBtn.hidden = false;
     showRecoveryButtons(false, false);
 
-    const voice = VOICE[s.phaseKey] || VOICE.boot;
-    // A snapshot taken before the stop was admitted still says ready. Saying
-    // so here would offer to open a workspace that is being shut down, and
-    // `scheduleReadyOpen` would then take that offer on the user's behalf.
-    if (s.ready && isShuttingDown) {
+    const voice = VOICE[screen.phaseKey] || VOICE.boot;
+    if (screen.screen === "stopping") {
       clearPrimaryBusy();
       say(VOICE.stopping[0]);
       truth.textContent = VOICE.stopping[1];
@@ -1180,20 +1169,20 @@
       bar.style.width = "100%";
       return;
     }
-    if (s.ready) {
+    if (screen.screen === "ready") {
       clearPrimaryBusy();
       hideOperationStatus();
       window.__orb?.awake();
       scene.classList.add("awake");
       say(READY_LINE);
       truth.textContent = VOICE.ready[1];
-      primaryAction = "open";
+      primaryAction = screen.primaryAction;
       openBtn.textContent = "Open Lemma";
-      openBtn.hidden = false;
+      openBtn.hidden = !screen.showOpen;
       whisper.classList.remove("on");
       stopWhispers();
       scheduleReadyOpen();
-    } else if (s.phaseKey === "stopped") {
+    } else if (screen.screen === "stopped") {
       clearTimeout(readyOpenTimer);
       clearPrimaryBusy();
       hideOperationStatus();
@@ -1201,9 +1190,9 @@
       scene.classList.add("awake");
       say(VOICE.stopped[0]);
       truth.textContent = VOICE.stopped[1];
-      primaryAction = "start";
+      primaryAction = screen.primaryAction;
       openBtn.textContent = "Start Lemma";
-      openBtn.hidden = false;
+      openBtn.hidden = !screen.showOpen;
       whisper.classList.remove("on");
     } else {
       if (scene.classList.contains("awake")) {
@@ -1225,13 +1214,9 @@
         : "local services are starting";
     }
 
-    bar.style.width = `${Math.min(100, s.progress || 0)}%`;
-    progressEl.classList.toggle("active", !s.ready && !s.error && s.phaseKey !== "stopped");
-    runinfo.textContent = s.ready
-      ? ""
-      : sawSetup
-        ? "first run · only once"
-        : "quick start";
+    bar.style.width = `${screen.progressWidth}%`;
+    progressEl.classList.toggle("active", screen.progressActive);
+    runinfo.textContent = screen.runInfo;
   }
   function formatEta(seconds) {
     return seconds >= 90 ? `${Math.round(seconds / 60)}m` : `${seconds}s`;
@@ -1282,18 +1267,6 @@
   let diagnosticLog = "";
   let diagnosticCursor = null;
   let logRefreshTimer = null;
-  function diagnosticSourceForState(s) {
-    if (s?.logSource) return s.logSource;
-    const text = `${s?.phaseKey || ""} ${s?.status || ""} ${s?.errorCode || ""}`.toLowerCase();
-    if (text.includes("migration")) return "migrations";
-    if (text.includes("frontend") || text.includes("eaddrinuse")) return "frontend";
-    if (text.includes("backend") || text.includes("health gate")) return "backend";
-    if (text.includes("download") || text.includes("artifact") || text.includes("install")) return "installer";
-    if (text.includes("runtime") || text.includes("container") || text.includes("registry") || text.includes("guest")) {
-      return "vm";
-    }
-    return "events";
-  }
   function renderLog() {
     const live = activeLogSource === "events" ? logLines.join("\n") : "";
     const sections = [diagnosticLog, live].filter(Boolean);

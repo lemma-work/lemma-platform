@@ -2,9 +2,30 @@
 
 use super::{
     AdapterSpec, BTreeMap, ChronoDuration, ConfigOption, Digest, HarnessCapabilities,
-    HarnessHealth, HarnessSnapshot, HashSet, ResolvedAdapter, SNAPSHOT_TTL, Sha256,
+    HarnessHealth, HarnessSnapshot, HashSet, Path, PathBuf, ResolvedAdapter, SNAPSHOT_TTL, Sha256,
     TRANSIENT_MARKER, Utc, env, executable_search_paths, push_unique,
 };
+
+/// The search path an adapter runs under.
+///
+/// Its own directory first, then the agent's, then everything else. Extracted
+/// so the Node the version check probes is the Node the shim's
+/// `#!/usr/bin/env node` will actually find: the probe used to search only
+/// `executable_search_paths()`, and these two prepended directories are exactly
+/// where a second Node would shadow it.
+pub(crate) fn adapter_search_paths(command: &Path, upstream_command: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    for executable in [command, upstream_command] {
+        if let Some(parent) = executable.parent() {
+            push_unique(&mut paths, &mut seen, parent.to_path_buf());
+        }
+    }
+    for path in executable_search_paths() {
+        push_unique(&mut paths, &mut seen, path);
+    }
+    paths
+}
 
 impl ResolvedAdapter {
     #[must_use]
@@ -15,16 +36,7 @@ impl ResolvedAdapter {
     #[must_use]
     pub fn environment(&self) -> BTreeMap<String, String> {
         let mut environment = BTreeMap::new();
-        let mut paths = Vec::new();
-        let mut seen = HashSet::new();
-        for executable in [&self.command, &self.upstream_command] {
-            if let Some(parent) = executable.parent() {
-                push_unique(&mut paths, &mut seen, parent.to_path_buf());
-            }
-        }
-        for path in executable_search_paths() {
-            push_unique(&mut paths, &mut seen, path);
-        }
+        let paths = adapter_search_paths(&self.command, &self.upstream_command);
         if let Ok(joined) = env::join_paths(paths) {
             environment.insert("PATH".to_owned(), joined.to_string_lossy().into_owned());
         }

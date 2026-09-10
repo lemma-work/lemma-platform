@@ -1095,7 +1095,7 @@ jobs:
           set -euo pipefail
           helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
           codesign --force --timestamp --options runtime \
-            --entitlements desktop/entitlements.plist \
+            --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist \
             --sign "${APPLE_SIGNING_IDENTITY}" \
             "${helper}"
           codesign --verify --strict --verbose=2 "${helper}"
@@ -1261,6 +1261,10 @@ jobs:
           tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
           test -f "${tarball}"
           test -f "${tarball}.sig"
+          # The nightly is the channel that updates itself every night, so it is
+          # where a key that no longer matches the committed public half shows
+          # up first -- and the reason to check here rather than only at release.
+          python3 desktop/scripts/check_updater_key.py --signature-file "${tarball}.sig"
           workdir="$(mktemp -d)"
           tar -xzf "${tarball}" -C "${workdir}"
           app="${workdir}/Lemma.app"

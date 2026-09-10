@@ -60,6 +60,82 @@ fn each_channel_reads_its_own_feed() {
     }
 }
 
+/// The documented endpoints are the endpoints.
+///
+/// `docs/installation.md` tells a reader exactly what leaves their machine when
+/// they open Local settings, and a reader has no way to check it. A URL that
+/// moves in code and not in the doc turns that section from an assurance into a
+/// claim -- which is what the register found: this traffic was not written down
+/// anywhere at all.
+///
+/// Both directions on purpose. A doc naming an address the app no longer uses
+/// is as wrong as a doc missing one it does.
+#[test]
+fn the_installation_guide_names_the_addresses_this_build_asks() {
+    let guide = include_str!("../../../docs/installation.md").replace("\r\n", "\n");
+    let section = guide
+        .split("### Checking for updates")
+        .nth(1)
+        .expect("the guide documents where updates are checked");
+    let section = section.split("\n## ").next().unwrap_or(section);
+
+    let stable = updater_endpoints("stable");
+    let nightly = updater_endpoints("nightly");
+    assert_eq!((stable.len(), nightly.len()), (1, 1));
+    let (stable, nightly) = (&stable[0], &nightly[0]);
+
+    // Everything before the path: scheme, host and owner. The guide writes it
+    // out once, in the stable URL, and elides it with `...` in the nightly one.
+    let shared = stable
+        .rfind("/releases/")
+        .map(|at| &stable[..at])
+        .expect("a stable endpoint is a releases URL");
+    // Which is only honest if the nightly really does share it. Comparing the
+    // two on their suffixes alone would accept a doc that had quietly moved
+    // one of them to another host.
+    assert!(
+        nightly.starts_with(shared),
+        "the guide elides {shared} from the nightly endpoint, and {nightly} \
+         does not begin with it",
+    );
+
+    // In full, so a documented `https://elsewhere.example/...` with a matching
+    // tail is not read as naming this one.
+    assert!(
+        section.contains(stable.as_str()),
+        "docs/installation.md does not name the stable update endpoint {stable}",
+    );
+    let elided = format!("...{}", &nightly[shared.len()..]);
+    assert!(
+        section.contains(&elided),
+        "docs/installation.md does not name the nightly update endpoint, \
+         written as {elided}",
+    );
+
+    // And nothing it names has gone away. Token by token rather than line by
+    // line: one of the two addresses is written inside a sentence.
+    for token in section.split_whitespace() {
+        // Prose punctuation, so a sentence that ends on a URL is not read as
+        // naming a different one.
+        let named = token
+            .trim_matches(|c: char| !c.is_ascii_graphic() || "`,()\"".contains(c))
+            .trim_end_matches('.');
+        if !named.contains("latest.json") || !named.contains("releases/") {
+            continue;
+        }
+        // An elided address is expanded against the prefix the guide elided,
+        // so what is compared is a whole URL either way.
+        let full = match named.strip_prefix("...") {
+            Some(rest) => format!("{shared}{rest}"),
+            None => named.to_owned(),
+        };
+        assert!(
+            [stable, nightly].contains(&&full),
+            "docs/installation.md names {full}, which no channel reads",
+        );
+    }
+}
+
 /// The updater's transport policy is not weakened, and the artifact flag
 /// stays out of the base config.
 /// The key an installed app verifies with is real, and matches its own id.
