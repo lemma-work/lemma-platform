@@ -89,7 +89,7 @@ help:
 	@echo "  make test-e2e          # run all e2e tests"
 	@echo "  make test-e2e-fast     # hermetic API/worker e2e (no slow/workspace/provider/local_cli),"
 	@echo "                         #   parallel via pytest-xdist (E2E_WORKERS=$(E2E_WORKERS); auto|0 to override)"
-	@echo "  make test-e2e-runtime  # run slow worker/workspace/local/provider e2e tests (serial)"
+	@echo "  make test-e2e-runtime  # exactly what backend-protected-e2e.yml runs (serial)"
 	@echo "  make test-module MODULE=pod"
 	@echo "  make coverage-unit     # unit coverage"
 	@echo "  make coverage-e2e      # e2e coverage"
@@ -211,9 +211,14 @@ test-e2e-real-llm:
 # locally to reproduce the protected lane failed on tests CI never runs, and
 # passed on none it does. That lane once did nothing at all for eleven days and
 # blocked every Desktop release; it should be reproducible in one command.
+#
+# What it does not select is argued in the workflow: `local_cli` needs an Agent
+# Host neither this target nor that job builds (`make desktop-agent-host-e2e`
+# does), and `benchmark` is a wall-clock budget owned by
+# `make benchmark-functions-docker`.
 test-e2e-runtime:
 	E2E_REAL=1 E2E_LLM_MODE=mock uv run pytest \
-		-m "e2e and (slow or workspace or indexing or local_cli or protected) and not provider" \
+		-m "e2e and (slow or workspace or indexing or protected) and not provider and not benchmark" \
 		-o timeout=300
 
 test-module:
