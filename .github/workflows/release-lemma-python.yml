@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-lemma-python-${{ github.event.release.tag_name || inputs.version }}
+  group: release-lemma-python-${{ github.event.release.tag_name || inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -74,13 +74,13 @@ jobs:
       - name: Check version consistency across components
         working-directory: .
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
         run: python scripts/check_version_consistency.py --expect "$RELEASE_VERSION"
 
       - name: Set package version from release tag
         shell: python
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
         run: |
           import os
           import pathlib
