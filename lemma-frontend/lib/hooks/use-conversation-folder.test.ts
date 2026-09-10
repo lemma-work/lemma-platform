@@ -44,10 +44,14 @@ describe('choosing a folder', () => {
         const invoke = vi.fn().mockResolvedValue(null);
         withShell(invoke);
 
-        await adoptConversationFolder('conv-1');
+        await adoptConversationFolder('conv-1', 'composer-a');
 
+        // The composer's own slot, not whatever was last parked: a folder
+        // chosen in a composer that was abandoned must not be adopted by the
+        // next new conversation.
         expect(invoke).toHaveBeenCalledWith('adopt_conversation_folder', {
             conversationId: 'conv-1',
+            pendingId: 'composer-a',
         });
     });
 
@@ -55,11 +59,11 @@ describe('choosing a folder', () => {
         // Failing a first message over a folder choice would be the worse
         // outcome: the run works, in the ordinary directory.
         withShell(vi.fn().mockRejectedValue(new Error('no')));
-        await expect(adoptConversationFolder('conv-1')).resolves.toBeUndefined();
+        await expect(adoptConversationFolder('conv-1', 'composer-a')).resolves.toBeUndefined();
     });
 
     it('does nothing at all without a shell', async () => {
-        await expect(adoptConversationFolder('conv-1')).resolves.toBeUndefined();
+        await expect(adoptConversationFolder('conv-1', 'composer-a')).resolves.toBeUndefined();
     });
 });
 

@@ -94,9 +94,16 @@ export interface ProjectPickerProps {
    * this page never names a directory.
    */
   localFolder?: string | null;
-  /** Absent when this installation cannot offer a folder at all. */
-  onPickLocalFolder?: () => void;
-  onClearLocalFolder?: () => void;
+  /**
+   * Absent when this installation cannot offer a folder at all.
+   *
+   * Both return a promise, and the selection changes only once it resolves.
+   * Dismissing the folder dialog has to leave the conversation exactly as it
+   * was, and an unbind that fails must not leave the shell bound to a folder
+   * the picker has stopped showing.
+   */
+  onPickLocalFolder?: () => Promise<string | null>;
+  onClearLocalFolder?: () => Promise<void>;
   /**
    * Is GitHub worth offering?
    *
@@ -148,27 +155,51 @@ export function ProjectPicker({
   }
 
   // Choosing a folder and choosing a repo are the same choice, so each clears
-  // the other: a conversation works in one place.
-  const pickFolder = () => {
-    onChange(null);
-    onPickLocalFolder?.();
+  // the other: a conversation works in one place. Each clears the other only
+  // once the shell has agreed, because the dialog can be dismissed and the
+  // unbind can fail -- and either one changing the selection first leaves the
+  // picker showing something the shell does not believe.
+  const pickFolder = async () => {
     setOpen(false);
+    let chosen: string | null = null;
+    try {
+      // Awaited rather than `.catch`ed: the optional chain guards the call, not
+      // a `.catch` on whatever it returned, so a callback that hands back
+      // something other than a promise threw here instead of being handled.
+      chosen = (await onPickLocalFolder?.()) ?? null;
+    } catch {
+      return;
+    }
+    if (chosen) onChange(null);
   };
 
-  const selectScratchpad = () => {
-    onClearLocalFolder?.();
-    onChange(null);
+  const selectScratchpad = async () => {
     setOpen(false);
+    if (localFolder) {
+      try {
+        await onClearLocalFolder?.();
+      } catch {
+        // Still bound, so still shown as bound.
+        return;
+      }
+    }
+    onChange(null);
   };
 
-  const select = (project: GithubProject | null) => {
-    if (project && localFolder) onClearLocalFolder?.();
+  const select = async (project: GithubProject | null) => {
+    setOpen(false);
+    if (project && localFolder) {
+      try {
+        await onClearLocalFolder?.();
+      } catch {
+        return;
+      }
+    }
     onChange(
       project
         ? { owner: project.owner, repo: project.repo, ref: project.ref, accountId }
         : null,
     );
-    setOpen(false);
   };
 
   return (
@@ -198,13 +229,13 @@ export function ProjectPicker({
           <Command>
             <CommandList>
               <CommandGroup heading="Where this conversation works">
-                <CommandItem value="__scratchpad__" onSelect={() => selectScratchpad()}>
+                <CommandItem value="__scratchpad__" onSelect={() => void selectScratchpad()}>
                   <Folder className="mr-2 size-3.5 shrink-0" />
                   <span className="flex-1 truncate">Scratchpad</span>
                   {!localFolder ? <Check className="size-3.5" /> : null}
                 </CommandItem>
                 {localFolder ? (
-                  <CommandItem value="__bound_folder__" onSelect={() => pickFolder()}>
+                  <CommandItem value="__bound_folder__" onSelect={() => void pickFolder()}>
                     <Folder className="mr-2 size-3.5 shrink-0" />
                     <span className="flex-1 truncate" title={localFolder}>
                       {folderLabel(localFolder)}
@@ -213,7 +244,7 @@ export function ProjectPicker({
                   </CommandItem>
                 ) : null}
                 {onPickLocalFolder ? (
-                  <CommandItem value="__choose_folder__" onSelect={() => pickFolder()}>
+                  <CommandItem value="__choose_folder__" onSelect={() => void pickFolder()}>
                     <Folder className="mr-2 size-3.5 shrink-0" />
                     <span className="flex-1 truncate">
                       {localFolder ? "Choose a different folder…" : "Choose a folder…"}
@@ -254,13 +285,13 @@ export function ProjectPicker({
                 {isLoadingProjects ? "Loading repositories…" : "No repositories found."}
               </CommandEmpty>
               <CommandGroup>
-                <CommandItem value="__scratchpad__" onSelect={() => selectScratchpad()}>
+                <CommandItem value="__scratchpad__" onSelect={() => void selectScratchpad()}>
                   <Folder className="mr-2 size-3.5 shrink-0" />
                   <span className="flex-1 truncate">Scratchpad</span>
                   {value === null && !localFolder ? <Check className="size-3.5" /> : null}
                 </CommandItem>
                 {onPickLocalFolder ? (
-                  <CommandItem value="__choose_folder__" onSelect={() => pickFolder()}>
+                  <CommandItem value="__choose_folder__" onSelect={() => void pickFolder()}>
                     <Folder className="mr-2 size-3.5 shrink-0" />
                     <span className="flex-1 truncate" title={localFolder ?? undefined}>
                       {localFolder ? folderLabel(localFolder) : "Choose a folder…"}
@@ -277,7 +308,7 @@ export function ProjectPicker({
                     <CommandItem
                       key={project.fullName}
                       value={project.fullName}
-                      onSelect={() => select(project)}
+                      onSelect={() => void select(project)}
                     >
                       <span className="flex-1 truncate">{project.fullName}</span>
                       {project.private ? (

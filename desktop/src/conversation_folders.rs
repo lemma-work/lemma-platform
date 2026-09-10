@@ -55,7 +55,30 @@ static WRITER: Mutex<()> = Mutex::new(());
 /// to the page and letting it name the folder when it created the conversation
 /// -- which is the one thing this design exists to avoid. It waits here
 /// instead, under a key no conversation id can collide with.
-const PENDING: &str = "pending";
+///
+/// Keyed per composer rather than globally. One shared slot meant a folder
+/// chosen in a composer that was then abandoned was still sitting there when
+/// the next new conversation started, and that conversation adopted it: a
+/// directory the person chose for something else, and had walked away from.
+const PENDING_PREFIX: &str = "pending:";
+
+/// The slot a composer's waiting choice lives in.
+///
+/// The id is opaque and comes from the page, so it is prefixed rather than used
+/// as a key directly -- a caller passing a conversation's own id would otherwise
+/// be writing that conversation's binding.
+fn pending_key(pending_id: &str) -> Result<String, String> {
+    let trimmed = pending_id.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 128
+        || !trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err("that is not a pending selection".into());
+    }
+    Ok(format!("{PENDING_PREFIX}{trimmed}"))
+}
 
 fn read_bindings() -> Bindings {
     std::fs::read_to_string(bindings_path())
@@ -110,6 +133,15 @@ fn require_local_install(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// The conversation's slot, or the composer's while it has no conversation.
+fn slot(conversation_id: Option<&str>, pending_id: Option<&str>) -> Result<String, String> {
+    match (conversation_id, pending_id) {
+        (Some(id), _) => conversation_key(id),
+        (None, Some(pending)) => pending_key(pending),
+        (None, None) => Err("no conversation and no pending selection".into()),
+    }
+}
+
 fn conversation_key(conversation_id: &str) -> Result<String, String> {
     Uuid::parse_str(conversation_id)
         .map(|id| id.to_string())
@@ -124,13 +156,11 @@ pub(crate) async fn conversation_folder(
     window: Webview,
     app: AppHandle,
     conversation_id: Option<String>,
+    pending_id: Option<String>,
 ) -> Result<Option<String>, String> {
     require_agent_host_caller(&window, &app)?;
     require_local_install(&app)?;
-    let key = match conversation_id.as_deref() {
-        Some(id) => conversation_key(id)?,
-        None => PENDING.to_owned(),
-    };
+    let key = slot(conversation_id.as_deref(), pending_id.as_deref())?;
     tauri::async_runtime::spawn_blocking(move || read_bindings().get(&key).cloned())
         .await
         .map_err(|error| error.to_string())
@@ -150,13 +180,11 @@ pub(crate) async fn bind_conversation_folder(
     window: Webview,
     app: AppHandle,
     conversation_id: Option<String>,
+    pending_id: Option<String>,
 ) -> Result<Option<String>, String> {
     require_agent_host_caller(&window, &app)?;
     require_local_install(&app)?;
-    let key = match conversation_id.as_deref() {
-        Some(id) => conversation_key(id)?,
-        None => PENDING.to_owned(),
-    };
+    let key = slot(conversation_id.as_deref(), pending_id.as_deref())?;
     // `blocking_pick_folder` would block the thread it is called on, and a
     // `#[tauri::command]` runs on the main thread — which is the thread the
     // dialog itself needs in order to appear. Asked asynchronously instead.
@@ -202,13 +230,15 @@ pub(crate) async fn adopt_conversation_folder(
     window: Webview,
     app: AppHandle,
     conversation_id: String,
+    pending_id: String,
 ) -> Result<Option<String>, String> {
     require_agent_host_caller(&window, &app)?;
     require_local_install(&app)?;
     let key = conversation_key(&conversation_id)?;
+    let waiting = pending_key(&pending_id)?;
     tauri::async_runtime::spawn_blocking(move || {
         update_bindings(|bindings| {
-            let folder = bindings.remove(PENDING)?;
+            let folder = bindings.remove(&waiting)?;
             bindings.insert(key, folder.clone());
             Some(folder)
         })
@@ -224,13 +254,11 @@ pub(crate) async fn unbind_conversation_folder(
     window: Webview,
     app: AppHandle,
     conversation_id: Option<String>,
+    pending_id: Option<String>,
 ) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
     require_local_install(&app)?;
-    let key = match conversation_id.as_deref() {
-        Some(id) => conversation_key(id)?,
-        None => PENDING.to_owned(),
-    };
+    let key = slot(conversation_id.as_deref(), pending_id.as_deref())?;
     tauri::async_runtime::spawn_blocking(move || {
         update_bindings(|bindings| {
             bindings.remove(&key);
@@ -243,6 +271,39 @@ pub(crate) async fn unbind_conversation_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One composer's waiting choice is not another's.
+    ///
+    /// A single shared slot meant a folder chosen in a composer that was then
+    /// abandoned was still there when the next new conversation started, and
+    /// that conversation adopted it -- a directory chosen for something else.
+    #[test]
+    fn a_waiting_choice_belongs_to_the_composer_that_made_it() {
+        let first = pending_key("composer-a").expect("valid id");
+        let second = pending_key("composer-b").expect("valid id");
+
+        assert_ne!(first, second);
+        // And neither can be steered onto a conversation's own slot.
+        let conversation = Uuid::new_v4().to_string();
+        assert_ne!(pending_key(&conversation).expect("valid id"), conversation);
+    }
+
+    #[test]
+    fn a_pending_id_that_is_not_one_is_refused() {
+        for hostile in ["", "   ", "../../etc", "has space", "a/b", &"x".repeat(129)] {
+            assert!(pending_key(hostile).is_err(), "{hostile}");
+        }
+    }
+
+    /// Neither half can be omitted: without a conversation and without a
+    /// composer there is no slot to name, and defaulting to one would be
+    /// choosing a binding on the caller's behalf.
+    #[test]
+    fn a_slot_needs_a_conversation_or_a_composer() {
+        assert!(slot(None, None).is_err());
+        assert!(slot(None, Some("composer-a")).is_ok());
+        assert!(slot(Some(&Uuid::new_v4().to_string()), None).is_ok());
+    }
 
     /// Two writers must not lose each other's binding.
     ///

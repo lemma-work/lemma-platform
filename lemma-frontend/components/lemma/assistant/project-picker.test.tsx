@@ -71,7 +71,7 @@ describe("choosing where a conversation works", () => {
   });
 
   it("hands the folder choice to the shell rather than naming a path", async () => {
-    const onPickLocalFolder = vi.fn();
+    const onPickLocalFolder = vi.fn().mockResolvedValue("/Users/me/work/api");
     render(
       <ProjectPicker
         {...base}
@@ -85,6 +85,51 @@ describe("choosing where a conversation works", () => {
 
     // No argument: the dialog is the shell's, and so is the path it returns.
     expect(onPickLocalFolder).toHaveBeenCalledWith();
+  });
+
+  it("keeps the repository when the folder dialog is dismissed", async () => {
+    // The repo was cleared before the dialog returned, so closing the dialog
+    // silently moved the conversation to Scratchpad.
+    const onChange = vi.fn();
+    const onPickLocalFolder = vi.fn().mockResolvedValue(null);
+    render(
+      <ProjectPicker
+        {...base}
+        onChange={onChange}
+        value={{ owner: "me", repo: "api" }}
+        isConnected
+        projects={[]}
+        onPickLocalFolder={onPickLocalFolder}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button"));
+    await userEvent.click(screen.getByText("Choose a folder…"));
+
+    expect(onPickLocalFolder).toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the folder when clearing it fails", async () => {
+    // A rejected unbind left the shell bound while the picker showed
+    // Scratchpad, so the two disagreed about where the agent would work.
+    const onChange = vi.fn();
+    const onClearLocalFolder = vi.fn().mockRejectedValue(new Error("busy"));
+    render(
+      <ProjectPicker
+        {...base}
+        onChange={onChange}
+        isConnected={false}
+        canConnectGithub={false}
+        localFolder="/Users/me/work/api"
+        onPickLocalFolder={vi.fn().mockResolvedValue(null)}
+        onClearLocalFolder={onClearLocalFolder}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button"));
+    await userEvent.click(screen.getByText("Scratchpad"));
+
+    expect(onClearLocalFolder).toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("says nothing on a settled conversation that chose neither", () => {

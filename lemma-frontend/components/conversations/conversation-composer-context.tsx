@@ -72,8 +72,8 @@ export function ConversationComposerContext({
         const wasComposing = wasComposingRef.current;
         wasComposingRef.current = isNewConversation;
         if (!wasComposing || isNewConversation || !conversationId) return;
-        void adoptConversationFolder(conversationId);
-    }, [conversationId, isNewConversation]);
+        void adoptConversationFolder(conversationId, localFolder.pendingId);
+    }, [conversationId, isNewConversation, localFolder.pendingId]);
     const agentLabel = agentDisplayLabel
         ?? (selectedAgentName ? formatAgentName(selectedAgentName) : 'Pod default');
     // Neither runtime is required to carry a model — an inherited default names
@@ -157,8 +157,8 @@ export function ConversationComposerContext({
                         accountId={githubProjects.accountId}
                         connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
                         localFolder={localFolder.folder}
-                        onPickLocalFolder={localFolder.available ? () => void localFolder.bind() : undefined}
-                        onClearLocalFolder={localFolder.available ? () => void localFolder.unbind() : undefined}
+                        onPickLocalFolder={localFolder.available ? localFolder.bind : undefined}
+                        onClearLocalFolder={localFolder.available ? localFolder.unbind : undefined}
                         // A GitHub connection needs an app registration, secrets
                         // and a reachable webhook. A local install has none of
                         // those, so offering "Connect GitHub" there is offering

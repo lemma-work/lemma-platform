@@ -9,11 +9,15 @@
  * can show a name. Nothing here can name a directory, which is the point — a
  * page that could would be a page that could point an agent anywhere.
  *
- * A conversation being composed has no id yet, so `bind(null)` parks the choice
- * in the shell and `adopt(id)` gives it one once the conversation exists.
+ * A conversation being composed has no id yet, so the choice is parked in the
+ * shell under an id belonging to *this composer*, and adopted once the
+ * conversation exists. Per composer rather than one shared slot: a folder
+ * chosen in a composer that was then abandoned used to still be sitting there
+ * when the next new conversation started, and that conversation adopted it —
+ * a directory chosen for something else and walked away from.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { isLocalDeployment } from '@/lib/config';
 
@@ -36,6 +40,8 @@ function asPath(value: unknown): string | null {
 }
 
 export interface ConversationFolder {
+    /** This composer's slot for a choice made before the conversation exists. */
+    pendingId: string;
     /** The bound folder, or null for the ordinary Lemma directory. */
     folder: string | null;
     /** Available only on a local install, through the desktop shell. */
@@ -52,12 +58,15 @@ export interface ConversationFolder {
 export function useConversationFolder(conversationId: string | null): ConversationFolder {
     const [folder, setFolder] = useState<string | null>(null);
     const available = canBindConversationFolder();
+    // One per mounted composer. Opaque to the shell, which only uses it to keep
+    // one composer's waiting choice apart from another's.
+    const pendingId = useMemo(() => newPendingId(), []);
 
     useEffect(() => {
         const invoke = shellInvoke();
         if (!invoke) return;
         let cancelled = false;
-        void invoke('conversation_folder', { conversationId })
+        void invoke('conversation_folder', { conversationId, pendingId })
             .then((value) => {
                 if (!cancelled) setFolder(asPath(value));
             })
@@ -69,25 +78,25 @@ export function useConversationFolder(conversationId: string | null): Conversati
         return () => {
             cancelled = true;
         };
-    }, [conversationId]);
+    }, [conversationId, pendingId]);
 
     const bind = useCallback(async () => {
         const invoke = shellInvoke();
         if (!invoke) return null;
-        const chosen = asPath(await invoke('bind_conversation_folder', { conversationId }));
+        const chosen = asPath(await invoke('bind_conversation_folder', { conversationId, pendingId }));
         // Dismissing the dialog changes nothing, so the chip must not clear.
         if (chosen !== null) setFolder(chosen);
         return chosen;
-    }, [conversationId]);
+    }, [conversationId, pendingId]);
 
     const unbind = useCallback(async () => {
         const invoke = shellInvoke();
         if (!invoke) return;
-        await invoke('unbind_conversation_folder', { conversationId });
+        await invoke('unbind_conversation_folder', { conversationId, pendingId });
         setFolder(null);
-    }, [conversationId]);
+    }, [conversationId, pendingId]);
 
-    return { folder, available, bind, unbind };
+    return { folder, available, bind, unbind, pendingId };
 }
 
 /**
@@ -96,15 +105,27 @@ export function useConversationFolder(conversationId: string | null): Conversati
  * Called after the conversation exists. Silent when nothing was parked, which
  * is the ordinary case: most conversations never pick a folder.
  */
-export async function adoptConversationFolder(conversationId: string): Promise<void> {
+export async function adoptConversationFolder(
+    conversationId: string,
+    pendingId: string,
+): Promise<void> {
     const invoke = shellInvoke();
     if (!invoke) return;
     try {
-        await invoke('adopt_conversation_folder', { conversationId });
+        await invoke('adopt_conversation_folder', { conversationId, pendingId });
     } catch {
         // The conversation still runs, in the ordinary directory. Failing the
         // first message over a folder choice would be the worse outcome.
     }
+}
+
+function newPendingId(): string {
+    try {
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+    } catch {
+        // Falls through.
+    }
+    return `p-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /** The last path segment, which is what a chip has room for. */
