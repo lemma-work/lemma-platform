@@ -1,0 +1,99 @@
+name: Announce a release
+
+# The counterpart to "Notify a failure nobody is looking at". That one says when
+# a release *failed*; nothing said when one succeeded, and it turns out those
+# are not the same question -- 0.7.2 succeeded, by every signal this repository
+# produced, and shipped no packages at all.
+#
+# So this does not announce that a release happened. It asks PyPI, npm and the
+# releases API what they are actually serving, and says that. A component that
+# has not landed is named in the first line of the message.
+#
+# Triggered by `workflow_run` rather than `release: published` for the reason
+# that caused the 0.7.2 hole in the first place: a release created by a workflow
+# is authored by github-actions[bot], and GitHub will not start a new workflow
+# run from an event the default GITHUB_TOKEN raised. `workflow_run` fires
+# regardless of who triggered the run underneath it, which is exactly why the
+# failure notifier uses it too.
+#
+# Watched by notify-failure.yml, like every other workflow here, so this one
+# going quiet is itself reported.
+
+on:
+  workflow_run:
+    workflows:
+      # The workflow that creates the GitHub Release. When it finishes, the
+      # release exists and the package publishes -- which the tag started in
+      # parallel -- are usually a few minutes behind; the script waits for
+      # them rather than announcing a healthy release as broken.
+      - Release Local Stack Images
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to announce, for example 0.8.0 or v0.8.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    name: Announce
+    timeout-minutes: 30
+    # Only a real release. A failed run is the failure notifier's business, and
+    # two messages for one event is how a channel stops being read. A
+    # workflow_dispatch upstream is a re-run or a repair rather than a release,
+    # and `head_branch` on a tag push is the tag itself -- anything else is a
+    # branch build that must not announce itself as a version.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    steps:
+      # Resolved in the shell rather than in an expression: the dispatch input
+      # is documented as "0.8.0 or v0.8.0", and the expression language has no
+      # way to strip an optional prefix. Needs no checkout -- it is string work.
+      - name: Resolve the version and its tag
+        id: resolve
+        env:
+          RAW: >-
+            ${{ inputs.version || github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          version="${RAW#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error title=Not a version::'$RAW' is not a release version."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The default branch, deliberately, rather than the tag being announced.
+      #
+      # Checking out the tag looked right -- announce the release from the
+      # release -- and is wrong twice over. A dispatch for any release older
+      # than this workflow checks out a tag that does not contain
+      # `report_release_to_slack.py`, and the next step fails on a missing
+      # file; v0.8.0 is already such a tag. And it would run a script version
+      # chosen by whatever that tag holds, rather than the reviewed one.
+      #
+      # Nothing is lost, because changelog entries accumulate here and are
+      # never removed: `lemma-frontend/content/changelog/` on the default
+      # branch holds every past release, including the one being announced --
+      # the release commit is what adds it. A version with no entry at all is
+      # already reported as having none.
+      - uses: actions/checkout@v7
+        with:
+          # This job reads files and posts to Slack; it pushes nothing, so the
+          # checkout token has no reason to stay on disk for later steps.
+          persist-credentials: false
+
+      - name: Announce, and say what is installable
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          python3 scripts/report_release_to_slack.py "$VERSION" --wait-seconds 900
