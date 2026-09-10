@@ -108,8 +108,17 @@ async def test_native_receiver_coordinator_starts_account_backed_telegram_and_sl
         )
         assert slack.status_code == 200, slack.text
 
-        started = await _collect_started(events, expected=2)
-        started_by_platform = {candidate.platform: candidate for candidate in started}
+        started = await _collect_started(events, expected=3)
+        shared = [
+            candidate for candidate in started if candidate.credential_label == "system"
+        ]
+        assert len(shared) == 1 and shared[0].platform is SurfacePlatform.TELEGRAM
+        assert shared[0].surface_ids == ()
+        started_by_platform = {
+            candidate.platform: candidate
+            for candidate in started
+            if candidate.credential_label != "system"
+        }
 
         telegram_candidate = started_by_platform[SurfacePlatform.TELEGRAM]
         assert telegram_candidate.credentials["bot_token"] == "telegram-user-token"

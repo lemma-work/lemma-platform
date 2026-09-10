@@ -9,10 +9,12 @@ first organization — by making one, by being invited to one, or by finding one
 that already exists. It stops at the point where a pod is worth making, which is
 [Building a pod](building-a-pod.md).
 
-Nothing here is automatic. Signing up creates a person and nothing else: no
-organization, no pod, no content. That is deliberate — a person's first
-organization is a decision about who they work with, and guessing it wrong is
-worse than asking.
+After identity verification, first-chat setup selects an eligible organization
+and ensures a private personal pod with an assistant. Web and shared Lemma bots
+reuse an eligible workspace before creating one. A company Slack or Teams
+installation fixes the organization: signup cannot grant access to another
+organization or bypass the company's membership policy. Importing a pod may
+prepare only the organization, without creating a spare personal pod.
 
 Onboarding keeps its primary Continue, Create, or Join action visible within
 the window, including at the desktop's minimum size and with enlarged text.
@@ -37,6 +39,15 @@ are shown with a retry action rather than an indefinite loading message.
 - If a person signs up with an email that already has a user through a different
   sign-in method, then the system shall say which method that email already
   uses rather than failing generically.
+- A person may continue with an email code on the web. Verifying the code shall
+  reuse their existing account, including accounts created through chat, without
+  changing their identity or duplicating their workspaces.
+- Email codes shall expire within ten minutes, allow three incorrect attempts,
+  and become unusable after completion or replacement. Resending requires a
+  sixty-second wait. Before verification, the response shall not reveal whether
+  an account exists.
+- A successful email-code login shall preserve the requested desktop, CLI, or
+  import destination through the same redirect checks as other login methods.
 
 **Contracts:** `auth.signed_up`
 
@@ -283,3 +294,19 @@ are shown with a retry action rather than an indefinite loading message.
 | What a member may do to a specific resource | [Sharing and permissions](sharing-and-permissions.md) |
 | Email deliverability, verification, abuse protection | [Authentication hardening](../../authentication-hardening.md) |
 | Usage limits that apply to an organization | [Operating a deployment](operating-a-deployment.md) |
+
+
+## Capability: Prepare the first conversation
+
+### PS-ONB-050 — First-chat setup yields one usable personal workspace
+**Status:** covered
+
+- First-chat setup shall reuse an eligible organization and ensure a private pod
+  owned solely by the person, with its assistant ready. Retrying or concurrently
+  requesting setup shall return the same workspace without creating duplicates.
+- Only a verified email domain may select or claim an email-domain organization.
+- Organization-only setup for an importer shall create no spare personal pod;
+  a later first-chat request shall still ensure a pod and assistant.
+- A saved workspace selection shall be scoped to the person and organization.
+
+**Contracts:** `users.ensure_first_workspace`

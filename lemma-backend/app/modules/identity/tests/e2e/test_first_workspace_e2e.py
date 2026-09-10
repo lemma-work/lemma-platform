@@ -130,6 +130,9 @@ async def test_the_second_person_from_a_domain_joins_instead_of_fragmenting(
 
     assert second_workspace.entry == "domain_join"
     assert second_workspace.organization_id == first_workspace.organization_id
+    assert second_workspace.pod_id is not None
+    assert second_workspace.pod_id != first_workspace.pod_id
+    assert second_workspace.assistant_id is not None
 
 
 async def test_the_organization_someone_arrived_through_is_tried_first(
@@ -167,9 +170,9 @@ async def test_the_organization_someone_arrived_through_is_tried_first(
 
     assert workspace.entry == "surface_join"
     assert workspace.organization_id == installing.id
-    # Joined the organization, given no pod: being reachable in a channel is not
-    # access to the pod behind it.
-    assert workspace.pod_id is None
+    assert workspace.pod_id is not None
+    assert workspace.assistant_id is not None
+    assert workspace.pod_created
 
 
 async def test_an_invite_only_organization_still_refuses_a_surface_arrival(
@@ -177,8 +180,7 @@ async def test_an_invite_only_organization_still_refuses_a_surface_arrival(
 ):
     """A reachable surface is not an open organization.
 
-    The refusal is not a failure -- they fall through to the ordinary doors and
-    get a workspace of their own.
+    Verification does not grant membership or select a different organization.
     """
     uow = SqlAlchemyUnitOfWork(db_session)
     service = _organization_service(uow)
@@ -205,13 +207,14 @@ async def test_an_invite_only_organization_still_refuses_a_surface_arrival(
     )
     await uow.commit()
 
-    assert workspace.entry == "new_org"
-    assert workspace.organization_id != closed.id
+    assert workspace.status == "organization_access_required"
+    assert workspace.organization_id == closed.id
+    assert workspace.pod_id is None
+    assert workspace.assistant_id is None
+    assert not workspace.organization_created
 
 
-async def test_somebody_who_already_belongs_somewhere_gets_nothing_new(
-    signup_user, db_session
-):
+async def test_existing_membership_gets_a_personal_pod(signup_user, db_session):
     """Idempotent, so a retried onboarding leaves no second empty workspace."""
     signed_up = await signup_user(email=f"ada-{uuid4().hex[:8]}@gmail.com")
     user_id = UUID(signed_up["id"])
@@ -235,4 +238,27 @@ async def test_somebody_who_already_belongs_somewhere_gets_nothing_new(
 
     assert workspace.entry == "existing"
     assert workspace.organization_id == existing.id
-    assert workspace.pod_id is None
+    assert workspace.pod_id is not None
+    assert workspace.assistant_id is not None
+
+
+async def test_unverified_email_cannot_claim_a_company_domain(signup_user, db_session):
+    from app.modules.identity.infrastructure.models.user_models import User
+
+    signed_up = await signup_user(email=f"unverified@company-{uuid4().hex}.com")
+    user_id = UUID(signed_up["id"])
+    user = await db_session.get(User, user_id)
+    user.is_verified = False
+    await db_session.commit()
+    uow = SqlAlchemyUnitOfWork(db_session)
+    workspace = await ensure_first_workspace(
+        uow,
+        organization_service=_organization_service(uow),
+        user_id=user_id,
+        email="forged@another-company.com",
+    )
+    await uow.commit()
+    organization = await OrganizationRepository(uow).get(workspace.organization_id)
+    assert organization.join_policy == OrganizationJoinPolicy.INVITE_ONLY
+    assert organization.email_domain is None
+    assert workspace.pod_id and workspace.assistant_id

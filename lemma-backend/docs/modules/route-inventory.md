@@ -215,6 +215,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/organizations/invitations/{invitation_id}/accept` | `org.invitation.accept` | Accept Invitation |
 | POST | `/organizations/{organization_id}/invitations` | `org.invitation.invite` | Invite Member |
 | POST | `/organizations/{organization_id}/join` | `org.join_auto_join` | Join Auto-Join Organization |
+| POST | `/users/me/first-workspace` | `users.ensure_first_workspace` | Ensure The Current User Has A Workspace |
 | POST | `/users/me/profile` | `user.profile.upsert` | Create or Update Profile |
 
 ## pod

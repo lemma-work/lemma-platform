@@ -132,38 +132,6 @@ def _needs_mention_verification(
 
 
 class SurfaceInboundMixin(SurfaceInboundMessageMixin):
-    async def _onboarding_reply(
-        self,
-        *,
-        surface: AgentSurfaceEntity,
-        parsed: ParsedInboundSurfaceEvent,
-        agent_display_name: str,
-    ) -> SurfaceReplyContext | None:
-        """Carry an unknown sender one step towards being a known one.
-
-        Imported here rather than at module scope: the wiring reaches identity
-        for account creation and the mail adapter for the code, and neither
-        belongs in the import graph of every routing decision.
-        """
-        if self.uow is None:
-            return None
-        from app.modules.identity.contracts.organizations import (
-            build_identity_email_sender,
-        )
-        from app.modules.identity.contracts.surfaces import onboard_chat_sender
-        from app.modules.agent_surfaces.services.surface_onboarding_wiring import (
-            onboarding_reply,
-        )
-
-        return await onboarding_reply(
-            self.uow,
-            surface=surface,
-            parsed=parsed,
-            agent_display_name=agent_display_name,
-            onboard_sender=onboard_chat_sender,
-            send_code_email=build_identity_email_sender().send_chat_signup_code_email,
-        )
-
     async def _prepare_platform_webhook_ingress(
         self, request: SurfacePlatformWebhookIngress
     ) -> AgentSurfaceContext | None:
@@ -241,6 +209,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             adapter=adapter,
             parsed=parsed,
             credentials=await self._resolve_credentials(identity_surface),
+            installation_id=identity_surface.account_id or identity_surface.id,
         )
         matched_surface = await self._select_surface(
             candidates=candidates,
@@ -325,6 +294,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
+                installation_id=(surface.account_id or surface.id) if surface else None,
             )
         display_name = agent_display_name(
             (await self.agent_name_for_surface(surface)) if surface else None
@@ -346,6 +316,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         parsed: ParsedInboundSurfaceEvent,
         adapter: SurfacePlatformAdapterPort,
         resolved_user: ResolvedSurfaceUser | None = None,
+        claim_delivery: bool = True,
     ) -> AgentSurfaceContext | None:
         if self._is_self_email_event(surface=surface, parsed=parsed):
             return None
@@ -376,7 +347,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         # Claimed only with the message in hand: claiming earlier burns it on an
         # attempt that had no body, so the retry is discarded as a duplicate.
         # Enrichment also changes the ids this keys on.
-        claimed = await self.event_dedup_store.claim_message(
+        claimed = not claim_delivery or await self.event_dedup_store.claim_message(
             surface_installation_id=surface.id,
             platform=surface.surface_type,
             external_channel_id=parsed.external_channel_id,
@@ -403,17 +374,9 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 adapter=adapter,
                 parsed=parsed,
                 credentials=credentials,
+                installation_id=surface.account_id or surface.id,
             )
         if resolved_user.internal_user_id is None:
-            # Ask who they are before telling them they are nobody. The fallback
-            # below is what happens when this surface cannot onboard them.
-            onboarding = await self._onboarding_reply(
-                surface=surface,
-                parsed=parsed,
-                agent_display_name=fallback_agent_display_name,
-            )
-            if onboarding is not None:
-                return onboarding
             return unresolved_sender_context(
                 surface=surface,
                 parsed=parsed,

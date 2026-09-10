@@ -415,6 +415,7 @@ class SurfaceRoutingMixin:
         adapter: SurfacePlatformAdapterPort,
         parsed: ParsedInboundSurfaceEvent,
         credentials: dict[str, Any],
+        installation_id: UUID | None = None,
     ) -> ResolvedSurfaceUser:
         try:
             async with connection_released(self.uow.session):
@@ -427,6 +428,7 @@ class SurfaceRoutingMixin:
         resolved = await self.identity_service.resolve(
             event=parsed,
             sender_profile=sender_profile,
+            installation_id=installation_id,
         )
         return await self._hydrate_resolved_user(resolved)
 

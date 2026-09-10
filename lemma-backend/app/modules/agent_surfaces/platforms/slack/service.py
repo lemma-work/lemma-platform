@@ -4,6 +4,7 @@ import mimetypes
 from typing import Any
 
 import httpx
+from app.modules.agent_surfaces.platforms.slack.reply_blocks import reply_blocks
 from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -26,8 +27,6 @@ from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.slack.blocks import (
     MARKDOWN_BLOCK_CHAR_LIMIT,
     fallback_text,
-    feedback_actions_block,
-    markdown_block,
 )
 from app.modules.agent_surfaces.platforms.slack.channel_reads import (
     SlackChannelReadsMixin,
@@ -184,6 +183,10 @@ class SlackPlatformService(SlackChannelReadsMixin):
         token = slack_access_token(self.credentials)
         channel = event.reply_target.get("channel")
         if not token or not channel:
+            if (metadata or {}).get("private_onboarding"):
+                raise RuntimeError(
+                    "Slack installation cannot deliver private onboarding"
+                )
             logger.debug(
                 "agent_surfaces.service.slack_send_message_skipped_due.diagnostic"
             )
@@ -204,11 +207,13 @@ class SlackPlatformService(SlackChannelReadsMixin):
         ephemeral_user = _ephemeral_target(metadata)
         try:
             for index, chunk in enumerate(chunks):
-                blocks: list[dict[str, Any]] = [markdown_block(chunk)]
-                # Feedback rates the answer, so it belongs on the last message
-                # of a chunked answer — not on every part of one.
-                if feedback_callback_id and index == len(chunks) - 1:
-                    blocks.append(feedback_actions_block(feedback_callback_id))
+                blocks = reply_blocks(
+                    chunk,
+                    metadata,
+                    feedback_callback_id,
+                    is_dm=event.is_dm,
+                    is_last=index == len(chunks) - 1,
+                )
                 payload: dict[str, Any] = {
                     "channel": channel,
                     "text": fallback_text(chunk),

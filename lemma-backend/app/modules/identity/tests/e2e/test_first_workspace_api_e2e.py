@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -16,7 +17,7 @@ async def test_a_new_account_is_given_a_workspace_and_a_pod(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["organization_id"]
-    assert body["entry"] in {"existing", "domain_join", "new_org"}
+    assert body["entry"] in {"saved", "existing", "domain_join", "new_org"}
 
 
 async def test_calling_it_twice_does_not_make_a_second_workspace(
@@ -33,7 +34,10 @@ async def test_calling_it_twice_does_not_make_a_second_workspace(
     assert first.json()["organization_id"] == second.json()["organization_id"], (
         "a repeat call must return the same organization"
     )
-    assert second.json()["entry"] == "existing"
+    assert second.json()["entry"] == "saved"
+    assert first.json()["pod_id"] == second.json()["pod_id"]
+    assert second.json()["assistant_id"]
+    assert not second.json()["pod_created"]
 
 
 async def test_a_caller_making_its_own_pod_is_not_given_a_spare(
@@ -51,6 +55,32 @@ async def test_a_caller_making_its_own_pod_is_not_given_a_spare(
     body = response.json()
     assert body["organization_id"]
     assert body["pod_id"] is None
+    ready = await authenticated_client.post("/users/me/first-workspace")
+    assert ready.status_code == 200, ready.text
+    assert ready.json()["organization_id"] == body["organization_id"]
+    assert ready.json()["pod_id"]
+    assert ready.json()["assistant_id"]
+
+
+async def test_concurrent_provisioning_returns_one_personal_pod(authenticated_client):
+    results = await asyncio.gather(
+        *[authenticated_client.post("/users/me/first-workspace") for _ in range(3)],
+        return_exceptions=True,
+    )
+    assert all(not isinstance(result, BaseException) for result in results), results
+    assert all(result.status_code == 200 for result in results)
+    assert len({result.json()["pod_id"] for result in results}) == 1
+    assert sum(result.json()["pod_created"] for result in results) == 1
+
+
+async def test_public_endpoint_rejects_installation_organization_hints(
+    authenticated_client,
+):
+    response = await authenticated_client.post(
+        "/users/me/first-workspace",
+        json={"arrived_through_organization_id": str(uuid4())},
+    )
+    assert response.status_code == 422
 
 
 async def test_it_needs_a_session(async_client):

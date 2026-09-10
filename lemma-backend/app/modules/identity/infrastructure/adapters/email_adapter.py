@@ -31,6 +31,25 @@ def _humanize_pod_name(value: str) -> str:
 class SmtpIdentityEmailAdapter(IdentityEmailPort):
     """SMTP adapter for identity notification emails."""
 
+    async def send_phone_changed_email(
+        self, *, to_email: str, mobile_number: str
+    ) -> bool:
+        rendered = render_transactional_email(
+            preheader="Your Lemma phone number changed.",
+            eyebrow="Account update",
+            heading="Your phone number changed",
+            body=(
+                f"Your verified phone number is now {mobile_number}.",
+                "If you did not make this change, contact Lemma support.",
+            ),
+        )
+        return await self._send(
+            to_email=to_email,
+            subject="Your Lemma phone number changed",
+            html_content=rendered.html,
+            text_content=rendered.text,
+        )
+
     def _display_name_from_email(self, email: str) -> str:
         local_part = email.split("@", 1)[0].split("+", 1)[0]
         name = " ".join(
@@ -201,20 +220,22 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             eyebrow="Confirm your email",
             heading=f"Your code is {code}",
             body=(
-                f"Somebody entered this address while messaging a Lemma agent on "
-                f"{surface_label}. Send this code back in that conversation and "
-                "the agent will know it is you.",
-                "If that was not you, nothing has happened yet and you can ignore "
-                "this. The code expires shortly.",
+                (
+                    f"Use this code to continue with Lemma on {surface_label}. "
+                    "Enter it only where you requested it."
+                ),
+                (
+                    "If you did not request this code, you can ignore this email. "
+                    "The code expires in ten minutes."
+                ),
             ),
             footer=(
-                "You are receiving this because this address was entered in a chat "
-                "with a Lemma agent.",
+                "You are receiving this because this address was entered in Lemma.",
             ),
         )
         return await self._send(
             to_email=to_email,
-            subject=f"{code} is your Lemma code",
+            subject="Your Lemma verification code",
             html_content=rendered.html,
             text_content=rendered.text,
         )

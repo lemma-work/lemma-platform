@@ -43,6 +43,7 @@ class SurfaceReplyContext(SurfaceContextBase):
 
 class SurfaceChatContext(SurfaceContextBase):
     mode: Literal["chat"] = "chat"
+    personal_dm_route_id: UUID | None = None
     pod_id: UUID | None = None
     agent_name: str | None = None
     conversation_id: UUID

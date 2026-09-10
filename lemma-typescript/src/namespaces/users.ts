@@ -1,5 +1,6 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { UserProfileRequest } from "../openapi_client/models/UserProfileRequest.js";
+import type { FirstWorkspaceRequest } from "../openapi_client/models/FirstWorkspaceRequest.js";
 import { UsersService } from "../openapi_client/services/UsersService.js";
 
 export class UsersNamespace {
@@ -7,6 +8,10 @@ export class UsersNamespace {
 
   current() {
     return this.client.request(() => UsersService.userCurrentGet());
+  }
+
+  ensureFirstWorkspace(payload: FirstWorkspaceRequest = {}) {
+    return this.client.request(() => UsersService.usersEnsureFirstWorkspace(payload));
   }
 
   getProfile() {

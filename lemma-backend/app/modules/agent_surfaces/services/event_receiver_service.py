@@ -222,6 +222,19 @@ class NativeSurfaceReceiverCoordinator:
             surfaces = await repository.list_active_native_receiver_surfaces(platforms)
             account_cache: dict[UUID, dict[str, Any]] = {}
             candidates: dict[str, NativeReceiverCandidate] = {}
+            if (
+                SurfacePlatform.TELEGRAM in platforms
+                and surface_settings.telegram_bot_token
+            ):
+                token = surface_settings.telegram_bot_token.strip()
+                key = _receiver_key("telegram", "system", token)
+                candidates[key] = NativeReceiverCandidate(
+                    key=key,
+                    platform=SurfacePlatform.TELEGRAM,
+                    surface_ids=(),
+                    credential_label="system",
+                    credentials={"bot_token": token},
+                )
 
             for surface in surfaces:
                 credentials = await _receiver_credentials(

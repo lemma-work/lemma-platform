@@ -19,6 +19,8 @@ from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts 
     get_conflicting_thirdparty_id,
     get_thirdparty_conflict_reason,
     has_emailpassword_login_method,
+    has_passwordless_login_method,
+    get_passwordless_conflict_reason,
     list_users_by_email,
 )
 from app.modules.identity.services.email_policy import (
@@ -71,6 +73,9 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             user_context=user_context,
         )
 
+        if has_passwordless_login_method(users, email):
+            return SignInPostNotAllowedResponse(get_passwordless_conflict_reason())
+
         if not has_emailpassword_login_method(users, email):
             conflicting_thirdparty_id = get_conflicting_thirdparty_id(
                 users, email=email
@@ -121,6 +126,9 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             email=email,
             user_context=user_context,
         )
+
+        if has_passwordless_login_method(users, email):
+            return SignUpPostNotAllowedResponse(get_passwordless_conflict_reason())
 
         if not has_emailpassword_login_method(users, email):
             conflicting_thirdparty_id = get_conflicting_thirdparty_id(

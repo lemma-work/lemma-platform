@@ -231,6 +231,9 @@ _NAME_TO_MODULE = {
     'FileSignedUrlResponse': 'file_signed_url_response',
     'FileSummaryResponse': 'file_summary_response',
     'FileUrlResponse': 'file_url_response',
+    'FirstWorkspaceRequest': 'first_workspace_request',
+    'FirstWorkspaceResponse': 'first_workspace_response',
+    'FirstWorkspaceResponseEntry': 'first_workspace_response_entry',
     'ForeignKeySpec': 'foreign_key_spec',
     'FormNode': 'form_node',
     'FormNodeConfig': 'form_node_config',
@@ -766,6 +769,9 @@ if TYPE_CHECKING:
     from .file_signed_url_response import FileSignedUrlResponse
     from .file_summary_response import FileSummaryResponse
     from .file_url_response import FileUrlResponse
+    from .first_workspace_request import FirstWorkspaceRequest
+    from .first_workspace_response import FirstWorkspaceResponse
+    from .first_workspace_response_entry import FirstWorkspaceResponseEntry
     from .foreign_key_spec import ForeignKeySpec
     from .form_node import FormNode
     from .form_node_config import FormNodeConfig
@@ -1314,6 +1320,9 @@ __all__ = [
     'FileSignedUrlResponse',
     'FileSummaryResponse',
     'FileUrlResponse',
+    'FirstWorkspaceRequest',
+    'FirstWorkspaceResponse',
+    'FirstWorkspaceResponseEntry',
     'ForeignKeySpec',
     'FormNode',
     'FormNodeConfig',

@@ -256,7 +256,15 @@ def _is_public_identity_auth_path(path: str, method: str) -> bool:
         }
     ) or (
         normalized_method == "POST"
-        and path in {"/auth/email/bounces", "/auth/email/bounces/resend"}
+        and path
+        in {
+            "/auth/email/bounces",
+            "/auth/email/bounces/resend",
+            "/auth/email-code/browser",
+            "/auth/email-code/start",
+            "/auth/email-code/resend",
+            "/auth/email-code/verify",
+        }
     )
 
 

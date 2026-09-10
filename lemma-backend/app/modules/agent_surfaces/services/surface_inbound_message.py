@@ -8,6 +8,8 @@ transcribed first, recent channel history a group mention needs for context.
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timezone
+from uuid import UUID
 
 
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -22,6 +24,9 @@ from app.modules.agent.contracts.speech import (
     transcribe_voice_notes,
 )
 from app.modules.agent_surfaces.domain.envelope import SurfaceEnvelope
+from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+    PendingChatOnboarding,
+)
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
 )
@@ -149,6 +154,24 @@ class SurfaceInboundMessageMixin:
     ):
         if context.pod_id is None:
             raise ValueError("Surface chat context requires a pod")
+        external_id = context.message_external_message_id or ""
+        if external_id.startswith("onboarding:"):
+            pending = await uow.session.get(
+                PendingChatOnboarding,
+                UUID(external_id.removeprefix("onboarding:")),
+                with_for_update=True,
+            )
+            if (
+                pending is None
+                or pending.user_id != context.user_id
+                or pending.ready_at is None
+            ):
+                raise ValueError("The onboarding handoff is unavailable")
+            if pending.message_committed_at is not None:
+                return None
+            # This marker commits with transcript persistence and the run's outbox
+            # event. A queue retry cannot record or execute the request twice.
+            pending.message_committed_at = datetime.now(timezone.utc)
         # An empty inbound is never something a person sent — it means a body we
         # failed to fetch or parse. Starting a run on it burns a model call and
         # produces an answer to nothing, which reads to the sender as the agent

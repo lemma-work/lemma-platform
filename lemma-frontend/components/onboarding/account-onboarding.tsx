@@ -459,52 +459,10 @@ function SetupAssistant({
     goTo(startStep);
   };
 
-  /**
-   * Create this person's first organization, stepping through name candidates
-   * when the server says one is taken.
-   *
-   * The probe on the identity step cannot be what guarantees uniqueness: two
-   * colleagues signing up in the same minute both pass it and one still loses
-   * the race. So the ladder is walked here too, against the only authority
-   * there is, and setup survives a collision instead of dead-ending on it.
-   */
-  /**
-   * The workspace nobody asked for, created without asking.
-   *
-   * This used to walk a twenty-rung name ladder from the browser -- one
-   * sequential create per rung, on the critical path of a signup, for a name
-   * the user never typed. The server resolves its own collision now, so this is
-   * one call that cannot fail on a name.
-   */
   const createFirstOrganization = async (): Promise<Organization> => {
-    // Respects the consent toggle, where it used to infer domain-join purely
-    // from the address. On a local install that inference was never shown to
-    // anyone: this runs from the identity step, and the flow then jumps
-    // straight to intelligence, skipping the step the toggle lives on. So the
-    // owner got an organization anyone with an address at their work domain
-    // could join, without being asked and without being told.
-    //
-    // That is not theoretical on a shared installation. Email verification is
-    // off for local mode, so the address is never proven — typing one is
-    // enough to be auto-joined as a member, which grants the full member
-    // roster and the ability to create pods inside the owner's organization.
-    //
-    // `allowDomainJoin` defaults to true when a work domain is present, so a
-    // hosted signup that *does* see the toggle behaves exactly as before.
-    const useDomainJoin =
-      allowDomainJoin && Boolean(normalizedWorkDomain) && !isLocal;
-
-    return createOrganization.mutateAsync({
-      name: organizationNameCandidate({
-        email,
-        workDomain: normalizedWorkDomain,
-      }),
-      join_policy: useDomainJoin
-        ? OrganizationJoinPolicy.EMAIL_DOMAIN
-        : OrganizationJoinPolicy.INVITE_ONLY,
-      email_domain: useDomainJoin ? normalizedWorkDomain : null,
-      resolve_name_conflicts: true,
-    });
+    const client = getLemmaClient();
+    const workspace = await client.users.ensureFirstWorkspace({ with_pod: false });
+    return client.organizations.get(workspace.organization_id);
   };
 
   /**
@@ -742,16 +700,20 @@ function SetupAssistant({
           return null;
         }
 
-        const podName =
-          nameOverride || podNameForAudience(audienceForPod, teamName);
-        const pod = await getLemmaClient().pods.create({
-          name: podName,
-          description:
-            audienceForPod === "personal"
-              ? "A private workspace for apps, surface agents, knowledge, and operating loops."
-              : `${teamName || "Team"}'s shared workspace for apps, surface agents, knowledge, and operating loops.`,
-          organization_id: organization.id,
-        });
+        const client = getLemmaClient();
+        const pod = audienceForPod === "personal"
+          ? await (async () => {
+              const workspace = await client.users.ensureFirstWorkspace({ with_pod: true });
+              if (!workspace.pod_id || !workspace.assistant_id) {
+                throw new Error("Your personal workspace is not ready yet");
+              }
+              return client.pods.get(workspace.pod_id);
+            })()
+          : await client.pods.create({
+              name: nameOverride || podNameForAudience(audienceForPod, teamName),
+              description: `${teamName || "Team"}'s shared workspace for apps, surface agents, knowledge, and operating loops.`,
+              organization_id: organization.id,
+            });
         setBasePod(pod);
         // A coding agent picked during setup has to actually answer in this
         // pod. Nothing else was doing that: the pod's default runtime stayed
@@ -760,7 +722,7 @@ function SetupAssistant({
         // got "check the agent runtime configuration" on their first message.
         await adoptLocalAgentAsPodDefault(pod);
         saveOnboardingDraft({
-          organizationId: organization.id,
+          organizationId: pod.organization_id,
           basePodId: pod.id,
         });
         queryClient.invalidateQueries({ queryKey: ["pods"] });

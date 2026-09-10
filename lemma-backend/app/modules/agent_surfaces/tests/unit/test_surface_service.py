@@ -350,7 +350,7 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
     repo.create.assert_not_awaited()
 
 
-async def test_create_system_surface_rejects_org_level_credential_conflict(monkeypatch):
+async def test_create_shared_surface_allows_another_personal_pod(monkeypatch):
     repo = AsyncMock()
     enricher = AsyncMock()
     service = AgentSurfaceService(
@@ -373,23 +373,18 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
         "https://api.example.test",
     )
 
-    with pytest.raises(
-        AgentSurfaceCredentialConflictError, match="System WHATSAPP credentials"
-    ) as raised:
-        await service.create_surface(
-            platform=SurfacePlatform.WHATSAPP,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            config=config,
-        )
-
-    # The setup UI names and links the pod holding the claim, so the conflict
-    # travels as data, not just prose.
-    assert raised.value.details == {
-        "kind": "SYSTEM",
-        "conflicting_surface": {"pod_id": str(holder.pod_id), "name": "whatsapp"},
-    }
-    repo.create.assert_not_awaited()
+    pod_id, agent_id = uuid4(), uuid4()
+    surface = await service.create_surface(
+        platform=SurfacePlatform.WHATSAPP,
+        pod_id=pod_id,
+        agent_id=agent_id,
+        config=config,
+    )
+    assert surface.pod_id == pod_id
+    assert surface.agent_id == agent_id
+    assert surface.account_id is None
+    repo.create.assert_awaited_once()
+    repo.get_system_credential_conflict_in_org.assert_not_awaited()
 
 
 async def test_create_account_surface_rejects_org_level_account_conflict(monkeypatch):

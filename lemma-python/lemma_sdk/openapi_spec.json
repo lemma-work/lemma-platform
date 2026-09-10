@@ -6981,6 +6981,79 @@
         "title": "FileUrlResponse",
         "type": "object"
       },
+      "FirstWorkspaceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "with_pod": {
+            "default": true,
+            "description": "Ensure a personal pod and assistant. Importers may request only an organization.",
+            "title": "With Pod",
+            "type": "boolean"
+          }
+        },
+        "title": "FirstWorkspaceRequest",
+        "type": "object"
+      },
+      "FirstWorkspaceResponse": {
+        "properties": {
+          "assistant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistant Id"
+          },
+          "entry": {
+            "enum": [
+              "saved",
+              "existing",
+              "surface_join",
+              "domain_join",
+              "new_org"
+            ],
+            "title": "Entry",
+            "type": "string"
+          },
+          "organization_created": {
+            "title": "Organization Created",
+            "type": "boolean"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "pod_created": {
+            "title": "Pod Created",
+            "type": "boolean"
+          },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Id"
+          }
+        },
+        "required": [
+          "organization_id",
+          "entry",
+          "organization_created",
+          "pod_created"
+        ],
+        "title": "FirstWorkspaceResponse",
+        "type": "object"
+      },
       "ForeignKeySpec": {
         "description": "Specification for a foreign key constraint.",
         "properties": {
@@ -36042,6 +36115,65 @@
           "resource": "user.current",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/users/me/first-workspace": {
+      "post": {
+        "description": "Select an eligible organization and idempotently ensure the current user has a private pod and assistant.",
+        "operationId": "users.ensure_first_workspace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FirstWorkspaceRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirstWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ensure The Current User Has A Workspace",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "users"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "users",
+          "result": "entity",
+          "verb": "ensure_first_workspace"
         }
       }
     },

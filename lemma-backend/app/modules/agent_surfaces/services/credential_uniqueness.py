@@ -59,6 +59,10 @@ async def ensure_unique_org_credential_binding(
     if surface.credential_mode is not SurfaceCredentialMode.SYSTEM:
         return
 
+    if surface.surface_type in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM):
+        # Shared-bot routing authorizes the sender and personal pod separately.
+        return
+
     # Only when the system credential *is* an identity. One Slack app, one
     # Telegram bot, one WhatsApp number: inbound arrives keyed on that identity
     # and nothing else, so a second pod claiming it would receive the first

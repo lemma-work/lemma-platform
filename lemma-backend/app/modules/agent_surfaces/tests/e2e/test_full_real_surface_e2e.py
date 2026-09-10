@@ -353,7 +353,8 @@ async def test_telegram_native_polling_reaches_outbox_worker_and_provider(
             text="Hello through native polling",
             message_id=99,
             sender_id=sender_id,
-        )
+        ),
+        bot_token="e2e-native-polling-token",
     )
 
     receiver = SurfaceEventReceiverService(
@@ -427,6 +428,13 @@ async def test_slack_signed_webhook_is_deduplicated_and_replies_via_worker(
     payload = _load_slack_dm_fixture(
         text="Reply through the real Slack worker path",
         ts="1700000000.901001",
+    )
+    await _seed_external_user(
+        db_session,
+        platform="SLACK",
+        external_user_id=payload["event"]["user"],
+        tenant_id=payload["team_id"],
+        resolved_user_id=UUID(fixed_test_user["id"]),
     )
     raw_body = json.dumps(payload).encode("utf-8")
     headers = build_slack_signature_headers(
@@ -526,6 +534,13 @@ async def test_slack_channel_attachment_and_history_are_persisted_via_worker(
         }
     )
     event.pop("assistant_thread", None)
+    await _seed_external_user(
+        db_session,
+        platform="SLACK",
+        external_user_id=event["user"],
+        tenant_id=payload["team_id"],
+        resolved_user_id=UUID(fixed_test_user["id"]),
+    )
     raw_body = json.dumps(payload).encode("utf-8")
     response = await authenticated_client.post(
         "/surfaces/webhooks/slack",
@@ -630,6 +645,13 @@ async def test_slack_native_socket_receiver_acknowledges_and_replies_via_worker(
     payload = _load_slack_dm_fixture(
         text="Hello through Slack Socket Mode",
         ts="1700000000.902001",
+    )
+    await _seed_external_user(
+        db_session,
+        platform="SLACK",
+        external_user_id=payload["event"]["user"],
+        tenant_id=payload["team_id"],
+        resolved_user_id=UUID(fixed_test_user["id"]),
     )
     acknowledgements: list[str] = []
 

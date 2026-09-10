@@ -17,6 +17,9 @@ def _routers():
         router as first_workspace,
     )
     from app.modules.identity.api.controllers.auth_controller import router as auth
+    from app.modules.identity.api.controllers.email_login_controller import (
+        router as email_login,
+    )
     from app.modules.identity.api.controllers.cli_auth_controller import (
         router as cli_auth,
     )
@@ -36,6 +39,7 @@ def _routers():
         organization_navigation,
         organization,
         auth,
+        email_login,
         cli_auth,
         email_bounce,
     ]

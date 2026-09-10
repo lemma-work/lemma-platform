@@ -292,6 +292,7 @@ def _reset_supertokens_testing_state() -> None:
     from supertokens_python.recipe.accountlinking.recipe import AccountLinkingRecipe
     from supertokens_python.recipe.dashboard.recipe import DashboardRecipe
     from supertokens_python.recipe.emailpassword.recipe import EmailPasswordRecipe
+    from supertokens_python.recipe.passwordless.recipe import PasswordlessRecipe
     from supertokens_python.recipe.emailverification.recipe import (
         EmailVerificationRecipe,
     )
@@ -309,6 +310,7 @@ def _reset_supertokens_testing_state() -> None:
         SessionRecipe,
         AccountLinkingRecipe,
         EmailPasswordRecipe,
+        PasswordlessRecipe,
         EmailVerificationRecipe,
         DashboardRecipe,
         ThirdPartyRecipe,

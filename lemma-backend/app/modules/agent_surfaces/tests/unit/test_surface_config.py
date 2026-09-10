@@ -27,6 +27,8 @@ EXPECTED = [
     ("slack_home_logo_url", "SLACK_HOME_LOGO_URL", None),
     ("whatsapp_access_token", "WHATSAPP_ACCESS_TOKEN", None),
     ("whatsapp_phone_number_id", "WHATSAPP_PHONE_NUMBER_ID", None),
+    ("whatsapp_onboarding_email_flow_id", "WHATSAPP_ONBOARDING_EMAIL_FLOW_ID", None),
+    ("whatsapp_onboarding_code_flow_id", "WHATSAPP_ONBOARDING_CODE_FLOW_ID", None),
     ("whatsapp_waba_id", "WHATSAPP_WABA_ID", None),
     ("whatsapp_verify_token", "WHATSAPP_VERIFY_TOKEN", None),
     ("whatsapp_app_secret", "WHATSAPP_APP_SECRET", None),

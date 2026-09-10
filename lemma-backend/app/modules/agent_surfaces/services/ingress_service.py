@@ -210,6 +210,7 @@ class AgentSurfaceIngressService(
         await self.start_agent_chat(parsed_context)
 
     async def start_agent_chat(self, context: SurfaceChatContext) -> None:
+        await self._validate_personal_context(context)
         adapter = self.adapter_registry.get(context.platform)
         if adapter is None:
             return
@@ -324,3 +325,27 @@ class AgentSurfaceIngressService(
         # it is no longer true: `PendingUserMessagesCapability` steers these
         # into the run already going, which answers all of them at once.
         await self._commit_inbound_message(context, message_text, metadata)
+
+    async def _validate_personal_context(self, context: SurfaceChatContext) -> None:
+        if context.personal_dm_route_id is not None:
+            from app.modules.agent_surfaces.services.personal_dm_routes import (
+                PersonalRouteUnavailable,
+                validate_personal_dm_route,
+            )
+
+            if self._uow_factory is None:
+                raise PersonalRouteUnavailable(
+                    "Personal DM execution requires a scoped unit of work"
+                )
+            async with self._uow_factory() as uow:
+                route = await validate_personal_dm_route(
+                    uow, route_id=context.personal_dm_route_id, event=context.event
+                )
+                if (route.user_id, route.pod_id, route.installation_surface_id) != (
+                    context.user_id,
+                    context.pod_id,
+                    context.surface_id,
+                ):
+                    raise PersonalRouteUnavailable(
+                        "The queued personal destination no longer matches"
+                    )

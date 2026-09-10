@@ -117,6 +117,8 @@ class SurfaceSettings(BaseSettings):
     whatsapp_access_token: Optional[str] = Field(
         default=None, description="WhatsApp Business API access token (NATIVE mode)"
     )
+    whatsapp_onboarding_email_flow_id: str | None = None
+    whatsapp_onboarding_code_flow_id: str | None = None
     whatsapp_phone_number_id: Optional[str] = Field(
         default=None, description="WhatsApp Business phone number ID (NATIVE mode)"
     )
@@ -205,12 +207,10 @@ class SurfaceSettings(BaseSettings):
     )
     surface_onboarding_ttl_seconds: int = Field(
         default=1800,
+        gt=0,
         description=(
-            "How long a half-finished chat signup waits between messages. Long "
-            "enough to go and find a code in an inbox, short enough that an "
-            "abandoned attempt is gone before anyone returns to it -- and short "
-            "enough that every exchange stays inside WhatsApp's free-form reply "
-            "window without having to reason about the window."
+            "Maximum pending chat signup lifetime, capped at thirty minutes. "
+            "Messages do not extend this deadline or the verification code expiry."
         ),
     )
     surface_stranger_reply_window_seconds: int = Field(

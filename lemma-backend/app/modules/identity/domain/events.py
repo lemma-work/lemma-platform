@@ -109,3 +109,14 @@ class UserMobileChangedEvent(DomainEvent):
 
 class IdentityEvents:
     STREAM = IDENTITY_EVENTS_STREAM
+
+
+class UserPhoneReplacedEvent(DomainEvent):
+    event_type: str = "identity.user.phone.replaced"
+    user_id: UUID
+    email: str
+    mobile_number: str
+
+    @classmethod
+    def stream_name(cls) -> str:
+        return IDENTITY_EVENTS_STREAM

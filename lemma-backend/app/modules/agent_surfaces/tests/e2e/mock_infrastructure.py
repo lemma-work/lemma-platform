@@ -181,10 +181,12 @@ class FakeSlackServer:
         self._site: web.TCPSite | None = None
         self._port: int | None = None
         self.chat_post_blocks_error: str | None = None
+        self.conversations_open_error: str | None = None
 
     async def start(self) -> None:
         app = web.Application()
         app.router.add_route("*", "/api/users.info", self._users_info)
+        app.router.add_route("*", "/api/conversations.open", self._conversations_open)
         app.router.add_route(
             "*", "/api/conversations.history", self._conversations_history
         )
@@ -254,6 +256,16 @@ class FakeSlackServer:
                 payload.update({k: str(v) for k, v in form.items()})
         payload.update(_request_contract(request))
         return payload
+
+    async def _conversations_open(self, request: web.Request) -> web.Response:
+        params = await self._collect_params(request)
+        if self.conversations_open_error:
+            return web.json_response(
+                {"ok": False, "error": self.conversations_open_error}
+            )
+        return web.json_response(
+            {"ok": True, "channel": {"id": f"D{params.get('users', '')}"}}
+        )
 
     async def _users_info(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)
@@ -597,6 +609,9 @@ class FakeTeamsServer:
         )
         app.router.add_get("/botframework/keys", self._jwks)
         app.router.add_post(
+            "/teams/v3/conversations", self._create_personal_conversation
+        )
+        app.router.add_post(
             "/teams/v3/conversations/{conversation_id}/activities",
             self._post_activity,
         )
@@ -713,6 +728,11 @@ class FakeTeamsServer:
     async def _jwks(self, request: web.Request) -> web.Response:
         del request
         return web.json_response({"keys": [self._public_jwk]})
+
+    async def _create_personal_conversation(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        assert body["isGroup"] is False
+        return web.json_response({"id": "personal-onboarding"})
 
     async def _post_activity(self, request: web.Request) -> web.Response:
         body = await request.json()
@@ -1061,6 +1081,7 @@ class FakeTelegramServer:
         self.fail_next: dict[str, int] = {}
         self.unavailable: set[str] = set()
         self._updates: list[dict[str, Any]] = []
+        self._update_tokens: dict[int, str] = {}
 
     async def start(self) -> None:
         app = web.Application()
@@ -1106,9 +1127,13 @@ class FakeTelegramServer:
     def api_base(self) -> str:
         return f"http://127.0.0.1:{self._port}"
 
-    def queue_update(self, payload: dict[str, Any]) -> None:
-        """Make one deterministic update available to the polling receiver."""
+    def queue_update(
+        self, payload: dict[str, Any], *, bot_token: str | None = None
+    ) -> None:
+        """Deliver an update only to the bot that received it."""
         self._updates.append(payload)
+        if bot_token is not None:
+            self._update_tokens[int(payload["update_id"])] = bot_token
 
     async def _get_updates(self, request: web.Request) -> web.Response:
         form = await request.post()
@@ -1117,6 +1142,10 @@ class FakeTelegramServer:
             update
             for update in self._updates
             if int(update.get("update_id") or 0) >= offset
+            and self._update_tokens.get(
+                int(update.get("update_id") or 0), request.match_info["token"]
+            )
+            == request.match_info["token"]
         ]
         if ready:
             delivered_ids = {int(update.get("update_id") or 0) for update in ready}

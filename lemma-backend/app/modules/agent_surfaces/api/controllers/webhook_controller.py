@@ -36,6 +36,9 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.services import teams_consent
+from app.modules.agent_surfaces.services.onboarding_slack_modal import (
+    open_onboarding_modal,
+)
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
@@ -127,6 +130,11 @@ async def handle_platform_webhook(
 
     if platform == "whatsapp" and await _published_whatsapp_verification(payload):
         return {"message": "Verification message received"}
+
+    if platform == "slack" and await open_onboarding_modal(
+        payload, receiver_surface_ids, uow_factory
+    ):
+        return Response(status_code=200)
 
     if platform == "slack" and await _handled_slack_modal(
         payload, headers, receiver_surface_ids, uow_factory

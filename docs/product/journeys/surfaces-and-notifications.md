@@ -82,6 +82,32 @@ it is asked, not skipped.
 
 ---
 
+## Capability: Start privately through chat
+
+Shared Lemma WhatsApp and Telegram bots shall let a new person verify their
+identity and start a personal assistant conversation. WhatsApp uses the signed
+sender phone. Telegram requires a contact shared by that same sender; a username
+or a typed phone number is not proof. An unknown person verifies their mailbox
+with an email code before a workspace is provisioned. Existing customer-connected
+bots retain their pod access boundaries; inbound email does not create accounts.
+
+Slack and Teams signup shall happen in a private conversation belonging to the
+installation. Only that installation's organization may be selected. Its existing
+membership policy decides whether the verified person can join. If access is
+refused, the person is told their account is ready and to ask their team admin
+for access. Returning after approval resumes setup without another email code
+while the verified identity remains valid.
+
+A channel mention may initiate private setup, but no email, code, account status
+or onboarding reply shall appear in the channel. After setup, only the initiating
+message and its attachments are replayed privately; channel history and the
+channel pod's private resources are not copied. Expired requests are discarded
+and the person is asked for a new request. A failed private handoff never falls
+back to public signup. Installation credentials and existing channel routes stay
+in their original organization.
+
+---
+
 ## Capability: Receive a message from outside
 
 ### PS-SURF-010 — Only genuine messages from the platform are acted on
