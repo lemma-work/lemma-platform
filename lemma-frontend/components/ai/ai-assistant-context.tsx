@@ -90,6 +90,9 @@ interface AIAssistantContextType {
     sendMessage: (content: string, options?: SendMessageOptions) => Promise<void>;
     /** Append a follow-up to a conversation that already has a run in flight. */
     steerMessage: (content: string) => Promise<void>;
+    queuedSteers: { id: string; content: string; queuedAt: string }[];
+    sendQueuedSteersNow: () => Promise<void>;
+    discardQueuedSteer: (id: string) => void;
     retryFailedMessage: () => Promise<void>;
     uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
     isUploadingFiles: boolean;
@@ -694,6 +697,9 @@ export function AIAssistantProvider({
         canRetryFailedMessage: controller.canRetryFailedMessage,
         sendMessage,
         steerMessage,
+        queuedSteers: controllerRef.current.queuedSteers,
+        sendQueuedSteersNow: controllerRef.current.sendQueuedSteersNow,
+        discardQueuedSteer: controllerRef.current.discardQueuedSteer,
         retryFailedMessage,
         uploadFiles: controller.uploadFiles,
         isUploadingFiles: controller.isUploadingFiles,

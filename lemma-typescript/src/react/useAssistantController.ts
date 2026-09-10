@@ -10,6 +10,13 @@ import type {
   FileResponse,
   MessageKind,
 } from "../types.js";
+import {
+  appendQueuedSteer,
+  clearQueuedSteers,
+  readQueuedSteers,
+  removeQueuedSteer as removeStoredQueuedSteer,
+  type QueuedSteer,
+} from "./queued-steers.js";
 import { useAssistantRuntime } from "./useAssistantRuntime.js";
 import { useAssistantSession, type AssistantStreamingTool } from "./useAssistantSession.js";
 
@@ -130,6 +137,18 @@ export interface UseAssistantControllerResult {
    * result. Requires an already-open/active conversation.
    */
   steerMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
+  /**
+   * Messages waiting for a turn that cannot be told anything mid-flight.
+   *
+   * Only ever non-empty for an Agent Host conversation: ACP has no way to add
+   * input to a `session/prompt` already running, so a message typed at one is
+   * held rather than pretended into the transcript.
+   */
+  queuedSteers: QueuedSteer[];
+  /** Interrupt the running turn and deliver what is queued now. */
+  sendQueuedSteersNow: () => Promise<void>;
+  /** Drop one queued message without sending it. */
+  discardQueuedSteer: (id: string) => void;
   retryFailedMessage: () => Promise<void>;
   uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
   removePendingFile: (fileKey: string) => void;
@@ -785,7 +804,11 @@ export function useAssistantController({
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<AvailableModelInfo[]>([]);
+  const availableModelsRef = useRef<AvailableModelInfo[]>([]);
+  availableModelsRef.current = availableModels;
   const [conversationModel, setConversationModelState] = useState<ConversationModel | null>(null);
+  const conversationModelRef = useRef<ConversationModel | null>(null);
+  conversationModelRef.current = conversationModel;
   const [conversationRuntime, setConversationRuntimeState] = useState<AgentRuntimeConfig | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
@@ -1923,6 +1946,48 @@ export function useAssistantController({
   // `sendMessage`'s own shared abort ref. The backend endpoint this calls
   // persists the message immediately either way -- joining the active run if
   // there is one -- so no second stream is needed here.
+  const [queuedSteers, setQueuedSteers] = useState<QueuedSteer[]>([]);
+  const queuedSteersRef = useRef<QueuedSteer[]>([]);
+  queuedSteersRef.current = queuedSteers;
+
+  // Whatever a previous page left queued for the conversation being opened.
+  useEffect(() => {
+    setQueuedSteers(activeConversationId ? readQueuedSteers(activeConversationId) : []);
+  }, [activeConversationId]);
+
+  /**
+   * Send what is queued, oldest first, as ordinary messages.
+   *
+   * `appendMessage` starts a run when none is active, so this needs no separate
+   * "begin a turn" call — and by the time it runs there is no active turn, which
+   * is the whole reason these were held.
+   *
+   * Cleared before the first send rather than after the last: a failure part way
+   * through must not leave the earlier ones queued to be sent a second time. The
+   * cost of the other order is a duplicate message; the cost of this one is an
+   * error the person can see and retype.
+   */
+  const flushQueuedSteers = useCallback(async (conversationId: string) => {
+    const queue = readQueuedSteers(conversationId);
+    if (queue.length === 0) return;
+    clearQueuedSteers(conversationId);
+    setQueuedSteers([]);
+    const known = conversationsRef.current.find((conversation) => conversation.id === conversationId);
+    for (const item of queue) {
+      appendOptimisticUserMessage(item.content, { conversationId });
+      await client.conversations.appendMessage(
+        conversationId,
+        { content: item.content },
+        { pod_id: known?.pod_id ?? scope.podId ?? undefined },
+      );
+    }
+    touchConversation(conversationId, { updated_at: new Date().toISOString() });
+    void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch(() => {
+      // The messages are sent; a stream that will not attach is reported by the
+      // ordinary resume path rather than as a failure of the queue.
+    });
+  }, [appendOptimisticUserMessage, client, scope.podId, sessionResumeIfRunning, touchConversation]);
+
   const steerMessage = useCallback(async (
     content: string,
     options: SendAssistantControllerMessageOptions = {},
@@ -1933,14 +1998,43 @@ export function useAssistantController({
     if (!enabled || (!trimmed && uploadsToSend.length === 0) || !conversationId) return;
 
     setLocalError(null);
+
+    const knownConversation = conversationsRef.current.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    // An Agent Host turn is a single `session/prompt` that cannot be told
+    // anything until it returns, so a message aimed at one is queued and said
+    // to be queued. Persisting it here instead -- which is what this used to do
+    // -- put it in the transcript looking delivered while the agent could not
+    // see it, and a person reasonably read that as being ignored.
+    //
+    // Attachments are the exception: they are already uploaded by the time this
+    // runs and holding their references in `localStorage` would outlive them, so
+    // a steer that carries files takes the old path and joins the run's history.
+    // Which harness answers is a property of the model, not of the
+    // conversation: `harness_kind` lives on `AvailableModelInfo`, and `HARNESS`
+    // is the one dispatched through Agent Host.
+    const model = knownConversation?.model ?? conversationModelRef.current;
+    const harnessKind = availableModelsRef.current.find((entry) => entry.id === model)?.harness_kind;
+    // And only while a turn is actually in flight. `steerMessage` is what the
+    // composer calls when the conversation looks busy, but "looks busy" is the
+    // caller's judgement: with nothing running there is nothing to wait for,
+    // and queueing here would delay a message that could go straight out.
+    if (
+      harnessKind === "HARNESS"
+      && isConversationRunning(knownConversation?.status)
+      && uploadsToSend.length === 0
+      && trimmed
+    ) {
+      setQueuedSteers(appendQueuedSteer(conversationId, trimmed));
+      return;
+    }
+
     const hasEagerOptimisticTurn = uploadsToSend.length === 0;
     if (hasEagerOptimisticTurn) {
       appendOptimisticUserMessage(trimmed, { conversationId });
     }
 
-    const knownConversation = conversationsRef.current.find(
-      (conversation) => conversation.id === conversationId,
-    );
     const resolvedPodId = knownConversation?.pod_id ?? scope.podId;
 
     try {
@@ -2142,6 +2236,54 @@ export function useAssistantController({
     return { pendingActions: pending, completedActions: completed };
   }, [messages]);
 
+  /**
+   * Deliver the queue the moment the turn it was waiting for ends.
+   *
+   * Watches the transition rather than the state: firing on "not running" alone
+   * would send the queue again on every unrelated re-render, and firing only on
+   * a stream ending would miss a turn that ended while the page was elsewhere.
+   */
+  const wasRunningRef = useRef(false);
+  useEffect(() => {
+    const conversationId = activeConversationId;
+    const running = isConversationRunning(
+      conversations.find((conversation) => conversation.id === activeConversationId)?.status,
+    );
+    const wasRunning = wasRunningRef.current;
+    wasRunningRef.current = running;
+    if (!conversationId || running || !wasRunning) return;
+    if (queuedSteersRef.current.length === 0) return;
+    void flushQueuedSteers(conversationId).catch((error) => {
+      setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to send the queued message"));
+    });
+  }, [activeConversationId, conversations, flushQueuedSteers]);
+
+  /**
+   * Interrupt the turn and deliver the queue.
+   *
+   * A deliberate stop, so `AgentRunStatus.STOPPED` suppresses the backend's
+   * own follow-up run -- which is correct, and is why the queue is sent from
+   * here instead. The flush is driven by the same transition effect above: the
+   * stop lands, the conversation stops running, and the queue goes out.
+   */
+  const sendQueuedSteersNow = useCallback(async () => {
+    const conversationId = activeConversationIdRef.current;
+    if (!conversationId || queuedSteersRef.current.length === 0) return;
+    if (!isConversationRunning(
+      conversationsRef.current.find((conversation) => conversation.id === conversationId)?.status,
+    )) {
+      await flushQueuedSteers(conversationId);
+      return;
+    }
+    stop();
+  }, [flushQueuedSteers, stop]);
+
+  const discardQueuedSteer = useCallback((id: string) => {
+    const conversationId = activeConversationIdRef.current;
+    if (!conversationId) return;
+    setQueuedSteers(removeStoredQueuedSteer(conversationId, id));
+  }, []);
+
   const isActiveConversationRunning = useMemo(() => {
     if (!activeConversationId) return false;
     const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
@@ -2181,6 +2323,9 @@ export function useAssistantController({
     setConversationModel,
     sendMessage,
     steerMessage,
+    queuedSteers,
+    sendQueuedSteersNow,
+    discardQueuedSteer,
     retryFailedMessage,
     uploadFiles,
     removePendingFile,
@@ -2226,6 +2371,9 @@ export function useAssistantController({
     selectConversation,
     sendMessage,
     steerMessage,
+    queuedSteers,
+    sendQueuedSteersNow,
+    discardQueuedSteer,
     sessionStreamingTool,
     setConversationModel,
     stop,
