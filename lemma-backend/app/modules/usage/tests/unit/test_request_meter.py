@@ -321,3 +321,23 @@ class TestUnpriceableIsAlwaysReported:
                 gateway._report_unpriceable(priceable=True, refused=False)
 
         assert len(self._reports(caplog)) == 1
+
+
+async def test_a_delegate_inside_a_live_run_is_not_judged_as_starting_one() -> None:
+    """A vision delegate meters its own spend but is not a new run.
+
+    Its scope's counter starts at zero, so without the enclosing run's state
+    its first request -- which always carries an image -- would be judged as a
+    run *starting* with an unpriceable shape, the one case `begin` refuses.
+    """
+    gateway = Accounting()
+    delegate = RequestMeter(gateway, inside_admitted_run=True)
+    await delegate.before(priceable=False)
+    assert gateway.in_flight_flags == [True]
+    await delegate.close()
+
+    starting = Accounting()
+    fresh = RequestMeter(starting)
+    await fresh.before(priceable=False)
+    assert starting.in_flight_flags == [False]
+    await fresh.close()
