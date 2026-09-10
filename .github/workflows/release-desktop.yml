@@ -81,6 +81,17 @@ jobs:
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
+      # Before the rewrite below, not only after it.
+      #
+      # The rewrite sets the desktop files to the tag, and the check that
+      # follows it then compares every component against that tag -- so a tree
+      # whose desktop version had drifted from the rest was silently corrected
+      # and the *other* components were blamed. Asking first separates "this
+      # commit is internally inconsistent" from "the tag does not match it",
+      # which are different problems with different fixes.
+      - name: Check the tree already agrees with itself
+        run: python3 scripts/check_version_consistency.py
+
       - name: Set version in tauri.conf.json and Cargo.toml
         shell: bash
         env:
@@ -185,7 +196,18 @@ jobs:
               break
             fi
             if [[ "${attempt}" == 60 ]]; then
-              echo "Native host pack was not published within 30 minutes" >&2
+              # Which workflow, and what it is doing. These artifacts are
+              # published by release-local-images.yml against the same tag, and
+              # "not published within 30 minutes" on its own does not say
+              # whether that workflow failed, never started, or is simply slow
+              # -- three different things to do next.
+              echo "::error::The native host pack for v${VERSION} was not \
+              published within 30 minutes. release-local-images.yml is what \
+              publishes it; its runs for this tag:" >&2
+              gh run list --workflow=release-local-images.yml --limit 5 \
+                --json displayTitle,status,conclusion,url \
+                --jq '.[] | "  \(.status) \(.conclusion // "") \(.displayTitle) \(.url)"' >&2 \
+                || echo "  (could not list runs)" >&2
               exit 1
             fi
             sleep 30

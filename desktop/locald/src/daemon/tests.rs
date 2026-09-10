@@ -483,3 +483,39 @@ fn a_supervisor_is_spawned_under_the_lock_that_records_it() {
          the spawn, which is the race itself:\n{body}"
     );
 }
+
+/// The compatibility supervisor is stopped as a tree, and can be.
+///
+/// It is `uv run --project lemma-stack lemma-stack supervise` in a checkout --
+/// uv, then Python, then whatever the stack started. `child.kill()` reached the
+/// leader and left the rest running with nothing to reap them, which is the
+/// same defect the Agent Host had and fixed.
+///
+/// The two halves have to move together, which is why one test asserts both. A
+/// tree teardown without its own process group is worse than the bug: on unix
+/// it signals the negative PID, and without `process_group(0)` that is whatever
+/// group locald itself is in.
+///
+/// Asserted on the source because the alternative is spawning a real
+/// supervisor, which needs a checkout, uv, and a container runtime.
+#[test]
+fn the_supervisor_is_spawned_into_its_own_group_and_stopped_as_a_tree() {
+    let supervisor_source = include_str!("supervisor.rs").replace("\r\n", "\n");
+    let spawn = function_body(&supervisor_source, "fn ensure_supervisor(");
+    assert!(
+        spawn.contains("command.process_group(0)"),
+        "the supervisor needs its own process group, or there is nothing to \
+         signal but the leader:\n{spawn}"
+    );
+
+    let stack_source = include_str!("stack_ops.rs").replace("\r\n", "\n");
+    let stop = function_body(&stack_source, "fn start_daemon_shutdown(");
+    assert!(
+        stop.contains("terminate_process_tree(&mut supervisor.child)"),
+        "stopping the supervisor has to take the tree with it:\n{stop}"
+    );
+    assert!(
+        !stop.contains("supervisor.child.kill()"),
+        "killing the leader is what orphaned uv's children:\n{stop}"
+    );
+}
