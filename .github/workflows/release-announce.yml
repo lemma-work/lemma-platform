@@ -70,12 +70,26 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
+      # The default branch, deliberately, rather than the tag being announced.
+      #
+      # Checking out the tag looked right -- announce the release from the
+      # release -- and is wrong twice over. A dispatch for any release older
+      # than this workflow checks out a tag that does not contain
+      # `report_release_to_slack.py`, and the next step fails on a missing
+      # file; v0.8.0 is already such a tag. And it would run a script version
+      # chosen by whatever that tag holds, rather than the reviewed one.
+      #
+      # Nothing is lost, because changelog entries accumulate here and are
+      # never removed: `lemma-frontend/content/changelog/` on the default
+      # branch holds every past release, including the one being announced --
+      # the release commit is what adds it. A version with no entry at all is
+      # already reported as having none.
       - uses: actions/checkout@v7
         with:
-          # The changelog entry for the version being announced, not main's.
-          ref: ${{ steps.resolve.outputs.tag }}
+          # This job reads files and posts to Slack; it pushes nothing, so the
+          # checkout token has no reason to stay on disk for later steps.
+          persist-credentials: false
 
       - name: Announce, and say what is installable
         env:

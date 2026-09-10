@@ -87,13 +87,21 @@ def _read(url: str):
 
 
 def pypi_has(package: str, version: str) -> Optional[bool]:
-    """Whether PyPI serves ``version`` of ``package``. None when unknown."""
+    """Whether PyPI can install ``version`` of ``package``. None when unknown.
+
+    The version has to be present *and* carry at least one distribution file.
+    A key in ``releases`` with an empty list is a version PyPI knows the name of
+    and cannot serve -- every file yanked or deleted, or a registration that
+    never completed its upload -- and ``pip install package==version`` fails on
+    it. Reporting that as published is the exact shape of lie this script exists
+    to catch, one level further in.
+    """
     data = _read("https://pypi.org/pypi/{}/json".format(package))
     if data is ABSENT:
         return False
     if data is None:
         return None
-    return version in (data.get("releases") or {})
+    return bool((data.get("releases") or {}).get(version))
 
 
 def npm_has(package: str, version: str) -> Optional[bool]:

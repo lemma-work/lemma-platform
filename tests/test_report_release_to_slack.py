@@ -109,6 +109,23 @@ def test_a_404_is_an_answer_rather_than_a_failure_to_get_one(monkeypatch, entry)
     assert report.github_release_exists("9.9.9") is False
 
 
+def test_a_pypi_version_with_no_files_is_not_installable(monkeypatch, entry):
+    """Present in `releases` but carrying nothing: `pip install` fails on it.
+
+    Every file yanked or deleted, or an upload that never completed. PyPI knows
+    the version's name and cannot serve it.
+    """
+    monkeypatch.setattr(report, "_read", lambda url: {"releases": {"9.9.9": []}})
+    assert report.pypi_has("lemma-sdk", "9.9.9") is False
+
+    monkeypatch.setattr(
+        report,
+        "_read",
+        lambda url: {"releases": {"9.9.9": [{"filename": "lemma_sdk-9.9.9.whl"}]}},
+    )
+    assert report.pypi_has("lemma-sdk", "9.9.9") is True
+
+
 def test_a_transport_error_stays_unknown(monkeypatch, entry):
     monkeypatch.setattr(report, "_read", lambda url: None)
     assert report.pypi_has("lemma-sdk", "9.9.9") is None
