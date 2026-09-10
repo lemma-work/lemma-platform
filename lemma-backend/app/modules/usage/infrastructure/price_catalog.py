@@ -17,6 +17,21 @@ from app.modules.usage.domain.accounting import (
 )
 
 
+# Rates that bill image input in a category of its own. `RequestUsage` reports
+# one `input_tokens` total, so a card holding any of these needs a split the
+# adapter never sees.
+IMAGE_RATE_KEYS = frozenset(
+    {
+        "input_image_mtok",
+        "input_gpixels",
+        "cache_image_read_mtok",
+        "cache_image_write_mtok",
+        "cache_image_write_5m_mtok",
+        "cache_image_write_1h_mtok",
+    }
+)
+
+
 class Rate(BaseModel):
     model_config = ConfigDict(frozen=True)
     base: Decimal = Field(ge=0)
@@ -69,6 +84,27 @@ class RateCard(BaseModel):
                 )
             )["total_price"]
         )
+
+    @property
+    def prices_images_as_text(self) -> bool:
+        """Whether image input is billed at this card's ordinary input rate.
+
+        Every chat model that accepts an image counts it into the provider's
+        own `input_tokens`, which `price` charges at `input_mtok` -- an image
+        costs input tokens, the same category as the words around it. Of the
+        1600-odd models the bundled catalog carries, the only ones stating a
+        separate image rate are image-generation, realtime and embedding
+        models, and for those the split the rate needs is one pydantic-ai's
+        normalized receipt does not report.
+
+        Treating every image as unpriceable instead cost the product its
+        eyes. Under a monetary limit a run that looked at an image was
+        recorded unpriced and stopped at the next request boundary, and a
+        text-only model's vision delegate -- whose every request carries an
+        image by definition -- was refused outright as an unpriceable first
+        request. Both were reported as a usage limit nobody had reached.
+        """
+        return not (IMAGE_RATE_KEYS & self.rates.keys())
 
     @property
     def priceable(self) -> bool:
