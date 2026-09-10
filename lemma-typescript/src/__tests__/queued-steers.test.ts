@@ -10,9 +10,20 @@ import {
   readQueuedSteers,
   removeQueuedSteer,
   writeQueuedSteers,
+  type QueuedSteer,
 } from "../react/queued-steers.js";
 
 const CONVERSATION = "conv-1";
+
+/** Seed this page's in-memory view without touching storage. */
+function inMemoryAsIfStale(conversationId: string, items: QueuedSteer[]): void {
+  const saved = window.localStorage.getItem(`lemma.queued-steers.${conversationId}`);
+  window.localStorage.removeItem(`lemma.queued-steers.${conversationId}`);
+  forgetQueuedSteersInMemory(conversationId);
+  writeQueuedSteers(conversationId, items);
+  if (saved === null) window.localStorage.removeItem(`lemma.queued-steers.${conversationId}`);
+  else window.localStorage.setItem(`lemma.queued-steers.${conversationId}`, saved);
+}
 
 afterEach(() => {
   // Mocks first: one test replaces the `localStorage` getter with one that
@@ -122,6 +133,44 @@ describe("queued steers", () => {
 
     // An empty queue is an answer: falling back to storage here would
     // resurrect what was just sent.
+    expect(readQueuedSteers(CONVERSATION)).toEqual([]);
+  });
+
+  it("does not overwrite a message another page queued", () => {
+    // Two pages of the same workspace share one `localStorage` and each has its
+    // own in-memory copy. Writing the cached array straight back meant the
+    // second page's message was replaced by the first page's older copy of the
+    // same key -- silently: nothing failed, the message was simply gone.
+    appendQueuedSteer(CONVERSATION, "from page A");
+
+    // Page B: its own context, so its own memory, but the same storage.
+    const fromPageB = [
+      ...readQueuedSteers(CONVERSATION),
+      { id: "page-b", content: "from page B", queuedAt: "2026-09-10T00:00:05Z" },
+    ];
+    writeQueuedSteers(CONVERSATION, fromPageB);
+    forgetQueuedSteersInMemory();
+    readQueuedSteers(CONVERSATION);
+
+    // Page A again, still holding its stale one-item view.
+    forgetQueuedSteersInMemory();
+    inMemoryAsIfStale(CONVERSATION, [
+      { id: "page-a", content: "from page A", queuedAt: "2026-09-10T00:00:00Z" },
+    ]);
+    appendQueuedSteer(CONVERSATION, "and another from page A");
+
+    const contents = readQueuedSteers(CONVERSATION).map((item) => item.content);
+    expect(contents).toContain("from page B");
+    expect(contents).toContain("and another from page A");
+  });
+
+  it("a removal is not undone by another page's copy", () => {
+    const queued = appendQueuedSteer(CONVERSATION, "drop me");
+    // Another page persisted the same item; removing it here must still remove
+    // it rather than merging it back in.
+    writeQueuedSteers(CONVERSATION, queued);
+
+    expect(removeQueuedSteer(CONVERSATION, queued[0].id)).toEqual([]);
     expect(readQueuedSteers(CONVERSATION)).toEqual([]);
   });
 

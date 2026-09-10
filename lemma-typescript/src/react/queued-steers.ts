@@ -113,15 +113,44 @@ export function appendQueuedSteer(conversationId: string, content: string): Queu
         content,
         queuedAt: new Date().toISOString(),
     };
-    const next = [...readQueuedSteers(conversationId), item];
+    const next = [...reconciled(conversationId), item];
     writeQueuedSteers(conversationId, next);
     return next;
 }
 
 export function removeQueuedSteer(conversationId: string, id: string): QueuedSteer[] {
-    const next = readQueuedSteers(conversationId).filter((item) => item.id !== id);
+    // Reconciled first, then the removal applied on top, so dropping one item
+    // here cannot resurrect it from a copy another page persisted.
+    const next = reconciled(conversationId).filter((item) => item.id !== id);
     writeQueuedSteers(conversationId, next);
     return next;
+}
+
+/**
+ * This page's queue, merged with whatever is on disk.
+ *
+ * Two pages of the same workspace share one `localStorage` and each has its own
+ * `inMemory`. Writing a cached array straight back meant the second page's
+ * queued message was overwritten by the first page's older copy of the same
+ * key, and silently: nothing failed, the message was simply gone.
+ *
+ * Merged by id, persisted order first, so the result contains both pages' items
+ * exactly once. This is not a lock -- two writes landing in the same
+ * millisecond can still interleave -- but it removes the case that happens in
+ * practice, which is two pages minutes apart.
+ */
+function reconciled(conversationId: string): QueuedSteer[] {
+    const remembered = inMemory.get(conversationId) ?? [];
+    const stored = readStored(conversationId);
+    const merged: QueuedSteer[] = [...stored];
+    const seen = new Set(stored.map((item) => item.id));
+    for (const item of remembered) {
+        if (!seen.has(item.id)) {
+            merged.push(item);
+            seen.add(item.id);
+        }
+    }
+    return merged;
 }
 
 export function clearQueuedSteers(conversationId: string): void {

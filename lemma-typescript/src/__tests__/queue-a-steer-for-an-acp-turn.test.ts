@@ -181,6 +181,53 @@ describe("a steer aimed at an Agent Host turn", () => {
     expect(controller.current?.queuedSteers).toEqual([]);
   });
 
+  it("sends a queue restored onto an idle conversation, without being asked", async () => {
+    // Close the app with something queued and reopen it: the conversation is
+    // already idle, so there is no running-to-stopped edge to observe. Watching
+    // the transition left the message sitting there while the UI kept promising
+    // it would be sent when the turn finished. The turn had finished.
+    window.localStorage.setItem(
+      "lemma.queued-steers.c1",
+      JSON.stringify([{ id: "restored", content: "from last time", queuedAt: "2026-09-10T00:00:00Z" }]),
+    );
+    forgetQueuedSteersInMemory();
+
+    const { client, appendMessage } = fakeClient({ status: "WAITING" });
+    const controller = await mount(client);
+    await settle();
+
+    expect(appendMessage).toHaveBeenCalledTimes(1);
+    expect(controller.current?.queuedSteers).toEqual([]);
+  });
+
+  it("does not retry a failed send on every render", async () => {
+    // A send that fails once usually fails again, and the drain runs off state
+    // rather than a transition -- so without parking the failure this was a
+    // request per render.
+    window.localStorage.setItem(
+      "lemma.queued-steers.c1",
+      JSON.stringify([{ id: "doomed", content: "will not send", queuedAt: "2026-09-10T00:00:00Z" }]),
+    );
+    forgetQueuedSteersInMemory();
+
+    const { client, appendMessage } = fakeClient({ status: "WAITING" });
+    (appendMessage as unknown as { mockRejectedValue: (value: unknown) => void })
+      .mockRejectedValue(new Error("nope"));
+    const controller = await mount(client);
+    await settle();
+    await settle();
+
+    expect(appendMessage).toHaveBeenCalledTimes(1);
+    expect(controller.current?.queuedSteers).toHaveLength(1);
+
+    // And asking explicitly is the retry.
+    await act(async () => {
+      await controller.current?.sendQueuedSteersNow().catch(() => {});
+    });
+    await settle();
+    expect(appendMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps what did not go out when a send fails part way through", async () => {
     // Clearing the whole queue before the first request was simpler and lost
     // more: one failure took every message behind it out of both state and
@@ -203,11 +250,8 @@ describe("a steer aimed at an Agent Host turn", () => {
         if (calls === 2) throw new Error("the second one failed");
         return { conversation_id: "c1", agent_run_id: "run-1", started_new_run: false };
       });
+    // The drain runs on its own now, so mounting is the whole trigger.
     const controller = await mount(client);
-
-    await act(async () => {
-      await controller.current?.sendQueuedSteersNow().catch(() => {});
-    });
     await settle();
 
     // The one that went out is gone; the one that failed and the one behind it
@@ -216,6 +260,7 @@ describe("a steer aimed at an Agent Host turn", () => {
       "second",
       "third",
     ]);
+    expect(calls).toBe(2);
   });
 
   it("drops one on request without sending it", async () => {

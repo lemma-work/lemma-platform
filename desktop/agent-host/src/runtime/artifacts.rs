@@ -77,6 +77,20 @@ pub(crate) fn prepare_run_directory(
     target: Uuid,
     spec: &RunSpec,
 ) -> anyhow::Result<PathBuf> {
+    // A folder the person picked on this computer wins, and is used as it is:
+    // it already exists, it is theirs, and creating anything inside it here
+    // would be this process deciding the shape of someone's project.
+    //
+    // Checked before the legacy scratch directory, so binding a folder takes
+    // effect on a conversation that has already run somewhere else. The
+    // provider session's cwd changes with it, which is the point.
+    let bound = crate::conversation_folders::bound_folder(
+        &crate::conversation_folders::read_bindings(&paths.folders),
+        spec.conversation_id,
+    );
+    if let Some(folder) = bound {
+        return Ok(folder);
+    }
     let legacy = scratch_directory(paths, target, spec.conversation_id);
     // Provider session indexes may include the lexical cwd. Never move an
     // existing session's files behind its back during an app upgrade.

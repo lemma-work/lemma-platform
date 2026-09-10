@@ -2260,26 +2260,44 @@ export function useAssistantController({
   }, [messages]);
 
   /**
-   * Deliver the queue the moment the turn it was waiting for ends.
+   * Deliver the queue whenever there is no turn left to wait for.
    *
-   * Watches the transition rather than the state: firing on "not running" alone
-   * would send the queue again on every unrelated re-render, and firing only on
-   * a stream ending would miss a turn that ended while the page was elsewhere.
+   * On the state rather than the transition. Watching the transition missed the
+   * case that matters most: close the app with something queued, reopen it, and
+   * the conversation is already idle -- there is no running-to-stopped edge to
+   * observe, so the message sat there while the UI kept promising it would be
+   * sent when the turn finished. The turn had finished.
+   *
+   * `queuedSteers` is a dependency for the same reason: restoring a queue from
+   * storage has to be able to trigger this, and it happens after mount.
+   *
+   * Two guards keep it from becoming a loop. `flushing` is held for the whole
+   * drain, because the drain itself changes `queuedSteers` on every item. And a
+   * failure parks the queue rather than retrying it: an append that fails once
+   * usually fails again, and a silent retry every render would be a request
+   * storm nobody asked for. `Send now` clears the park, which is what makes it
+   * a retry the person can see.
    */
-  const wasRunningRef = useRef(false);
+  const flushingRef = useRef(false);
+  const parkedAfterFailureRef = useRef<string | null>(null);
   useEffect(() => {
     const conversationId = activeConversationId;
+    if (!conversationId || flushingRef.current || queuedSteers.length === 0) return;
+    if (parkedAfterFailureRef.current === queuedSteers[0]?.id) return;
     const running = isConversationRunning(
-      conversations.find((conversation) => conversation.id === activeConversationId)?.status,
+      conversations.find((conversation) => conversation.id === conversationId)?.status,
     );
-    const wasRunning = wasRunningRef.current;
-    wasRunningRef.current = running;
-    if (!conversationId || running || !wasRunning) return;
-    if (queuedSteersRef.current.length === 0) return;
-    void flushQueuedSteers(conversationId).catch((error) => {
-      setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to send the queued message"));
-    });
-  }, [activeConversationId, conversations, flushQueuedSteers]);
+    if (running) return;
+    flushingRef.current = true;
+    void flushQueuedSteers(conversationId)
+      .catch((error) => {
+        parkedAfterFailureRef.current = readQueuedSteers(conversationId)[0]?.id ?? null;
+        setLocalError((prev) => prev || (error instanceof Error ? error.message : "Failed to send the queued message"));
+      })
+      .finally(() => {
+        flushingRef.current = false;
+      });
+  }, [activeConversationId, conversations, flushQueuedSteers, queuedSteers]);
 
   /**
    * Interrupt the turn and deliver the queue.
@@ -2292,6 +2310,9 @@ export function useAssistantController({
   const sendQueuedSteersNow = useCallback(async () => {
     const conversationId = activeConversationIdRef.current;
     if (!conversationId || queuedSteersRef.current.length === 0) return;
+    // Asking again is the point of the button, so a parked failure is cleared
+    // before anything else happens.
+    parkedAfterFailureRef.current = null;
     if (!isConversationRunning(
       conversationsRef.current.find((conversation) => conversation.id === conversationId)?.status,
     )) {

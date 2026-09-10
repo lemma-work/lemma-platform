@@ -15,6 +15,10 @@ pub struct HostPaths {
     pub adapters: PathBuf,
     pub lock: PathBuf,
     pub config_lock: PathBuf,
+    /// Folders the person bound conversations to, written by the desktop shell.
+    /// See `conversation_folders` for why the path is recorded here rather than
+    /// carried on the run.
+    pub folders: PathBuf,
 }
 
 /// Proof that this process is the only Agent Host for its data directory.
@@ -66,6 +70,7 @@ impl HostPaths {
             adapters: root.join("adapters"),
             lock: root.join("agent-host.lock"),
             config_lock: root.join("config.lock"),
+            folders: root.join("conversation-folders.json"),
             root,
         }
     }
