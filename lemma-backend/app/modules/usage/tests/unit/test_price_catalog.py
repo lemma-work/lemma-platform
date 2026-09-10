@@ -217,3 +217,38 @@ def test_a_price_that_is_not_the_gateway_s_own_cannot_enforce_a_budget() -> None
 
     assert card.rates, "a price was found"
     assert not card.priceable, "but not one this deployment may enforce against"
+
+
+def test_a_chat_model_bills_an_image_at_its_ordinary_input_rate() -> None:
+    """Which is what makes an agent able to look at one under a budget.
+
+    The provider counts image input into `input_tokens`; only a card that
+    states an image rate of its own needs a split the receipt does not carry.
+    """
+    chat = resolve_rate_card(
+        {"provider_model_name": "gpt-5.1", "config": {"base_url": None}},
+        {},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert chat.prices_images_as_text
+
+    separate = RateCard(
+        model="gpt-image-1",
+        enforceable=True,
+        rates={
+            "input_mtok": Rate(base=Decimal("1")),
+            "output_mtok": Rate(base=Decimal("1")),
+            "input_image_mtok": Rate(base=Decimal("10")),
+        },
+    )
+    assert not separate.prices_images_as_text
+
+
+def test_an_operator_stating_input_and_output_prices_has_priced_images() -> None:
+    card = resolve_rate_card(
+        {"model_name": "house-vision"},
+        {"house-vision": ModelPricing(3.0, 15.0)},
+        datetime(2026, 9, 1, tzinfo=timezone.utc),
+    )
+    assert card.priceable
+    assert card.prices_images_as_text
