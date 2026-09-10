@@ -9,7 +9,11 @@ twice across the two languages and nothing used to check that the copies agree:
   and this process re-accumulates it with the other, reconciling the two
   buffers at every segment boundary. A disagreement raises nothing. It
   silently truncates a persisted message, which is precisely how the
-  seal-and-clear bug in ``Segment`` stayed invisible.
+  seal-and-clear bug in ``Segment`` stayed invisible;
+* the ``RunSpec`` field list — a field added on one side and not the other is
+  either a spec the host silently ignores or one this process cannot see, and
+  the fixture is also where ``mcp``'s deliberate absence from this side is
+  written down so nobody closes the gap by declaring it here.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostCapacity,
     AgentHostEvent,
     AgentHostEventType,
+    AgentHostRunSpec,
 )
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.harnesses.agent_host.events import (
@@ -161,3 +166,28 @@ def test_the_protocol_version_is_the_one_the_host_sends() -> None:
     nothing failing on either side to say so.
     """
     assert AGENT_HOST_PROTOCOL_VERSION == _contract()["protocol_version"]
+
+
+def test_the_run_spec_declares_the_fields_the_contract_names() -> None:
+    """The run spec is one payload in two languages, and this side omits a field.
+
+    ``mcp`` is on the wire -- ``_wire_command`` decrypts ``encrypted_mcp`` into
+    it as the command is handed to the host -- but it is deliberately not a
+    field of this model. A model field is a place the plaintext could be
+    persisted back into the command row, which is the one thing encrypting it
+    at rest exists to prevent. Every other field is declared on both sides, and
+    nothing tied the two lists together: adding a field here and not in
+    ``protocol.rs`` gives the host a spec it silently ignores, and adding one
+    there and not here makes it a field this side cannot see.
+    """
+    run_spec = _contract()["run_spec"]
+    shared = set(run_spec["fields"])
+    on_delivery = set(run_spec["added_on_delivery"])
+
+    assert set(AgentHostRunSpec.model_fields) == shared
+    assert shared.isdisjoint(on_delivery)
+    for field in on_delivery:
+        assert field not in AgentHostRunSpec.model_fields, (
+            f"{field} is added when the command is delivered; declaring it here "
+            f"would let the plaintext be persisted with the command"
+        )
