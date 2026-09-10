@@ -263,6 +263,33 @@ describe("a steer aimed at an Agent Host turn", () => {
     expect(calls).toBe(2);
   });
 
+  it("notices a steer another window queued", async () => {
+    // `queuedSteers` was read when the conversation opened and never again, so
+    // a second window queueing one left this controller holding an empty list
+    // -- and the drain, which checks that list, never delivered it.
+    const { client, appendMessage } = fakeClient();
+    const controller = await mount(client);
+    expect(controller.current?.queuedSteers).toEqual([]);
+
+    // What the other window's write looks like from here.
+    window.localStorage.setItem(
+      "lemma.queued-steers.c1",
+      JSON.stringify([{ id: "elsewhere", content: "from the other window", queuedAt: "2026-09-10T00:00:00Z" }]),
+    );
+    await act(async () => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "lemma.queued-steers.c1" }),
+      );
+    });
+    await settle();
+
+    expect(controller.current?.queuedSteers.map((item) => item.content)).toEqual([
+      "from the other window",
+    ]);
+    // The turn is still running, so it waits rather than delivering.
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
   it("drops one on request without sending it", async () => {
     const { client, appendMessage } = fakeClient();
     const controller = await mount(client);

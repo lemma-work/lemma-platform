@@ -101,6 +101,11 @@ function readStored(conversationId: string): QueuedSteer[] {
     }
 }
 
+/** The storage key a conversation's queue lives under, for change listeners. */
+export function queuedSteersKey(conversationId: string): string {
+    return keyFor(conversationId);
+}
+
 /** Forget this page's copy, so the next read comes from storage again. */
 export function forgetQueuedSteersInMemory(conversationId?: string): void {
     if (conversationId === undefined) inMemory.clear();

@@ -95,8 +95,9 @@ pub(crate) fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> 
     // Before showing, so the icon and the window arrive together rather than
     // the window appearing under a Dock that has not noticed yet.
     restore_dock_presence(app);
-    let _ = bring_window_to_front(&window);
-    Ok(())
+    // Reported rather than discarded: a window that would not show or take
+    // focus has not opened, and returning `Ok` there told the caller it had.
+    bring_window_to_front(&window)
 }
 
 /// Should a `ready` event navigate the main window to `workspace`?

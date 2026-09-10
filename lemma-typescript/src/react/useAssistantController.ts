@@ -12,6 +12,8 @@ import type {
 } from "../types.js";
 import {
   appendQueuedSteer,
+  forgetQueuedSteersInMemory,
+  queuedSteersKey,
   readQueuedSteers,
   removeQueuedSteer as removeStoredQueuedSteer,
   type QueuedSteer,
@@ -1949,9 +1951,31 @@ export function useAssistantController({
   const queuedSteersRef = useRef<QueuedSteer[]>([]);
   queuedSteersRef.current = queuedSteers;
 
-  // Whatever a previous page left queued for the conversation being opened.
+  // Whatever a previous page left queued for the conversation being opened,
+  // and whatever another page queues while this one is open.
+  //
+  // The `storage` event fires in every *other* same-origin page, so a second
+  // window queueing a steer -- or draining one -- reaches this controller
+  // instead of leaving it holding the view it had when the conversation opened.
   useEffect(() => {
-    setQueuedSteers(activeConversationId ? readQueuedSteers(activeConversationId) : []);
+    if (!activeConversationId) {
+      setQueuedSteers([]);
+      return;
+    }
+    const reload = () => {
+      forgetQueuedSteersInMemory(activeConversationId);
+      setQueuedSteers(readQueuedSteers(activeConversationId));
+    };
+    reload();
+    if (typeof window === "undefined") return;
+    const key = queuedSteersKey(activeConversationId);
+    const onStorage = (event: StorageEvent) => {
+      // `key` is null when a page calls `localStorage.clear()`, which is a
+      // change to everything, including this.
+      if (event.key === null || event.key === key) reload();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [activeConversationId]);
 
   /**
@@ -2277,6 +2301,16 @@ export function useAssistantController({
    * usually fails again, and a silent retry every render would be a request
    * storm nobody asked for. `Send now` clears the park, which is what makes it
    * a retry the person can see.
+   *
+   * Not guarded against two *pages* both delivering, which two windows on one
+   * conversation could do. The storage listener above shortens the window --
+   * each learns of the other's removals -- but does not close it. Closing it
+   * needs the append to be idempotent on the queued id, which is a change to
+   * the API rather than to this file, and the alternatives that live here are
+   * worse: draining only in the focused page was tried and rejected, because a
+   * single window that happens to sit behind another app would then not deliver
+   * at all. That breaks the promise the queue makes in the common case to tidy
+   * up a rare one.
    */
   const flushingRef = useRef(false);
   const parkedAfterFailureRef = useRef<string | null>(null);

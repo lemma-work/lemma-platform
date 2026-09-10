@@ -480,7 +480,11 @@ def _sandbox_root(cwd: str) -> str:
     """
     trimmed = (cwd or "").strip()
     if not trimmed.startswith("/"):
-        return trimmed or "the working directory"
+        # A relative cwd has no root to name, and returning it unchanged was a
+        # hole in this very guard: the absolute branch was validated and this
+        # one handed the string straight back, backticks and all, into the same
+        # code spans.
+        return "the working directory"
     first = trimmed.strip("/").split("/", 1)[0]
     if not first:
         return "/"
