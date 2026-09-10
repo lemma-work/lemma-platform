@@ -20,6 +20,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+from PIL import ImageFont
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -61,20 +62,32 @@ pytestmark = [
 SECRET = "PLUM 47"
 
 
+def _legible_font(size: int) -> "ImageFont.FreeTypeFont | ImageFont.ImageFont":
+    """A face big enough to read, on whatever machine is running this.
+
+    `load_default` is the one that cannot fail, and since Pillow 10.1 it takes
+    a size and returns a scalable face -- so the fallback is still legible
+    rather than the 11px bitmap that made this test depend on a font macOS
+    happens to ship.
+    """
+    for name in (
+        "Helvetica",
+        "DejaVuSans.ttf",
+        "Arial.ttf",
+        "LiberationSans-Regular.ttf",
+    ):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    return ImageFont.load_default(size=size)
+
+
 def _image_saying(text: str) -> bytes:
     from PIL import Image, ImageDraw
 
     image = Image.new("RGB", (640, 200), "white")
-    draw = ImageDraw.Draw(image)
-    for size in (14, 11, 8):
-        try:
-            from PIL import ImageFont
-
-            font = ImageFont.truetype("Helvetica", size * 4)
-            break
-        except OSError:
-            font = None
-    draw.text((40, 70), text, fill="black", font=font)
+    ImageDraw.Draw(image).text((40, 60), text, fill="black", font=_legible_font(56))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
