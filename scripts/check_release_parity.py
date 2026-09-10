@@ -60,8 +60,14 @@ def scripts_called(workflow: Path, job: str) -> set[str]:
         ) from error
     found: set[str] = set()
     for step in steps:
-        run = step.get("run") or ""
-        found.update(match.group("name") for match in SCRIPT_CALL.finditer(run))
+        for line in (step.get("run") or "").splitlines():
+            # A comment naming a script is not a job running it. Without this a
+            # note explaining why a pipeline *stopped* calling something counts
+            # as still calling it, which is precisely the asymmetry this exists
+            # to report.
+            if line.lstrip().startswith("#"):
+                continue
+            found.update(match.group("name") for match in SCRIPT_CALL.finditer(line))
     return found
 
 
@@ -83,13 +89,21 @@ def failures() -> list[str]:
                     f"Either call it there too, or record why not in "
                     f"ALLOWED_ASYMMETRY with the reason."
                 )
-    # And the record stays honest: an allowance for a script nobody calls any
-    # more is a stale exemption, which is how the next drift hides.
+    # And the record stays honest, in both directions. An allowance for a
+    # script nobody calls any more is a stale exemption -- and so is one for a
+    # script every pipeline now calls, because then there is no asymmetry left
+    # to excuse and the entry is only hiding the next one.
     for (label, script), reason in ALLOWED_ASYMMETRY.items():
         if script not in called.get(label, set()):
             problems.append(
                 f"ALLOWED_ASYMMETRY says {label} runs {script} ({reason}), and it "
                 f"does not. Remove the entry."
+            )
+        elif all(script in scripts for scripts in called.values()):
+            problems.append(
+                f"ALLOWED_ASYMMETRY excuses {script} as {label}-only ({reason}), "
+                f"and every pipeline runs it now. Remove the entry, so the next "
+                f"real asymmetry is not excused by a stale one."
             )
     return problems
 

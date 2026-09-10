@@ -32,6 +32,48 @@ class ReleaseParityTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("the nightly runs", problems[0])
 
+    def test_a_script_named_only_in_a_comment_is_not_a_call(self) -> None:
+        """A note explaining why a pipeline stopped calling something would
+        otherwise count as still calling it -- hiding the very asymmetry this
+        file exists to report."""
+        import tempfile
+        from pathlib import Path
+
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "w.yml"
+            workflow.write_text(
+                yaml.safe_dump(
+                    {
+                        "jobs": {
+                            "build": {
+                                "steps": [
+                                    {
+                                        "run": "# desktop/scripts/check_online_payload.py\n"
+                                        "  #   desktop/scripts/check_updater_key.py\n"
+                                        "python3 desktop/scripts/check_macos_signing.py app\n"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                )
+            )
+
+            self.assertEqual(
+                parity.scripts_called(workflow, "build"), {"check_macos_signing.py"}
+            )
+
+    def test_an_allowance_every_pipeline_outgrew_is_reported(self) -> None:
+        """An exemption with no asymmetry left is not describing anything, and
+        it would excuse the next real one."""
+        allowed = {("the nightly", "shared.py"): "was nightly-only"}
+        problems = self.called({"shared.py"}, {"shared.py"}, allowed)
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("every pipeline runs it now", problems[0])
+
     def test_an_agreed_set_passes_however_large(self) -> None:
         shared = {"check_macos_signing.py", "check_online_payload.py", "a.py"}
         self.assertEqual(self.called(shared, set(shared)), [])
