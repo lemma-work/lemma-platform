@@ -12,6 +12,7 @@ from check_macos_signing import (
     Signature,
     check,
     parse_signature,
+    validate_bundle_metadata,
     validate_signature,
 )
 
@@ -110,6 +111,11 @@ class NativeSigningTests(unittest.TestCase):
                     "CFBundleIdentifier": "work.lemma.desktop",
                     "CFBundleExecutable": "lemma-desktop",
                     "CFBundlePackageType": "APPL",
+                    # `check` validates this too, and the QA-identity test below
+                    # runs the whole of it -- only in an environment that has an
+                    # identity, which is the worst place to discover a fixture
+                    # is missing a key.
+                    "NSLocalNetworkUsageDescription": "Lemma runs its services here.",
                 }
             )
         )
@@ -223,3 +229,51 @@ class NativeSigningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BundleMetadataTests(unittest.TestCase):
+    """The keys a shipped bundle cannot work without.
+
+    Only one of the two DMG pipelines asked for the local-network description,
+    and it was the nightly -- not the release that reaches users. Moving the
+    assertion here is what makes both pipelines carry it, since both call this
+    file.
+    """
+
+    def bundle(self, info: dict | None) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        app = Path(directory.name) / "Lemma.app"
+        (app / "Contents").mkdir(parents=True)
+        if info is not None:
+            (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+        return app
+
+    def test_a_present_description_passes(self) -> None:
+        app = self.bundle({
+            "CFBundleIdentifier": "work.lemma.desktop",
+            "NSLocalNetworkUsageDescription": "Lemma runs its services on this Mac.",
+        })
+
+        validate_bundle_metadata(app)
+
+    def test_a_missing_description_is_refused(self) -> None:
+        """The failure it prevents: macOS never asks, so the app cannot reach
+        its own backend, and it looks like a startup that never finishes."""
+        app = self.bundle({"CFBundleIdentifier": "work.lemma.desktop"})
+
+        with self.assertRaisesRegex(ValueError, "NSLocalNetworkUsageDescription"):
+            validate_bundle_metadata(app)
+
+    def test_an_empty_or_non_string_description_does_not_count(self) -> None:
+        for value in ["", "   ", True, 1, ["a reason"]]:
+            app = self.bundle({"NSLocalNetworkUsageDescription": value})
+
+            with self.assertRaises(ValueError, msg=repr(value)):
+                validate_bundle_metadata(app)
+
+    def test_an_unreadable_plist_is_refused_rather_than_skipped(self) -> None:
+        app = self.bundle(None)
+
+        with self.assertRaisesRegex(ValueError, "could not be read"):
+            validate_bundle_metadata(app)

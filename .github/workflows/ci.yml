@@ -179,6 +179,7 @@ jobs:
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
               - 'scripts/check_ci_aggregators.py'
+              - 'scripts/check_release_parity.py'
               - 'scripts/check_ci_job_results.py'
               - 'scripts/check_pytest_census.py'
               - 'scripts/check_test_run.py'
@@ -679,6 +680,13 @@ jobs:
       # declares a timeout.
       - name: CI aggregators watch every job
         run: uv run --no-project --with pyyaml python scripts/check_ci_aggregators.py
+
+      # The two DMG pipelines drifted in both directions before this
+      # existed: one did not verify the guest helper's entitlement, the
+      # other did not verify that macOS would ask for local network
+      # access. Each was green on its own terms.
+      - name: Both DMG pipelines verify the same things
+        run: uv run --no-project --with pyyaml python scripts/check_release_parity.py
 
   windows-cli:
     name: Windows CLI smoke test
