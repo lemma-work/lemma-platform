@@ -515,6 +515,11 @@ _NAME_TO_MODULE = {
     'WaitUntilNodePositionType0': 'wait_until_node_position_type_0',
     'WaitUntilNodeResponse': 'wait_until_node_response',
     'WaitUntilNodeResponsePositionType0': 'wait_until_node_response_position_type_0',
+    'WebLoginAuditEntry': 'web_login_audit_entry',
+    'WebLoginAuditResponse': 'web_login_audit_response',
+    'WebLoginKind': 'web_login_kind',
+    'WebLoginListResponse': 'web_login_list_response',
+    'WebLoginResponse': 'web_login_response',
     'WebSearchRequest': 'web_search_request',
     'WebSearchResponse': 'web_search_response',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
@@ -541,6 +546,9 @@ _NAME_TO_MODULE = {
     'WorkflowUpdateRequest': 'workflow_update_request',
     'WorkspaceAppAccessRequest': 'workspace_app_access_request',
     'WorkspaceAppAccessResponse': 'workspace_app_access_response',
+    'WorkspaceFileEntry': 'workspace_file_entry',
+    'WorkspaceFileEntryKind': 'workspace_file_entry_kind',
+    'WorkspaceFileListResponse': 'workspace_file_list_response',
 }
 
 if TYPE_CHECKING:
@@ -1050,6 +1058,11 @@ if TYPE_CHECKING:
     from .wait_until_node_position_type_0 import WaitUntilNodePositionType0
     from .wait_until_node_response import WaitUntilNodeResponse
     from .wait_until_node_response_position_type_0 import WaitUntilNodeResponsePositionType0
+    from .web_login_audit_entry import WebLoginAuditEntry
+    from .web_login_audit_response import WebLoginAuditResponse
+    from .web_login_kind import WebLoginKind
+    from .web_login_list_response import WebLoginListResponse
+    from .web_login_response import WebLoginResponse
     from .web_search_request import WebSearchRequest
     from .web_search_response import WebSearchResponse
     from .widget_embed_url_response import WidgetEmbedUrlResponse
@@ -1076,6 +1089,9 @@ if TYPE_CHECKING:
     from .workflow_update_request import WorkflowUpdateRequest
     from .workspace_app_access_request import WorkspaceAppAccessRequest
     from .workspace_app_access_response import WorkspaceAppAccessResponse
+    from .workspace_file_entry import WorkspaceFileEntry
+    from .workspace_file_entry_kind import WorkspaceFileEntryKind
+    from .workspace_file_list_response import WorkspaceFileListResponse
 
 
 def __getattr__(name: str):
@@ -1598,6 +1614,11 @@ __all__ = [
     'WaitUntilNodePositionType0',
     'WaitUntilNodeResponse',
     'WaitUntilNodeResponsePositionType0',
+    'WebLoginAuditEntry',
+    'WebLoginAuditResponse',
+    'WebLoginKind',
+    'WebLoginListResponse',
+    'WebLoginResponse',
     'WebSearchRequest',
     'WebSearchResponse',
     'WidgetEmbedUrlResponse',
@@ -1624,4 +1645,7 @@ __all__ = [
     'WorkflowUpdateRequest',
     'WorkspaceAppAccessRequest',
     'WorkspaceAppAccessResponse',
+    'WorkspaceFileEntry',
+    'WorkspaceFileEntryKind',
+    'WorkspaceFileListResponse',
 ]

@@ -356,124 +356,6 @@
     }
   },
   {
-    "tool_name": "browser_login",
-    "toolset": "BROWSER",
-    "description": "Get signed in to a site, without ever handling the person's password.\n\nCall it when a page turns out to need a login \u2014 before filling a login form\nyourself, and instead of asking anybody for a password. You never see the\ncredential either way.\n\nThree things can come back:\n\n- `signed_in: true` \u2014 a saved session was loaded. Open the page and check it\n  took before going on.\n- `use_connector_instead` \u2014 this site is already connected properly. Use that\n  connector; do not drive its login form.\n- `needs_person: true` with a `takeover_url` \u2014 nobody is signed in yet. Send\n  the person that link, say what you were doing, and wait. It opens the very\n  browser you are using so they can sign in themselves, and it only opens for\n  them. Once they are done, call this again.\n\nNever ask anyone to type a password to you, and never put one in a command.",
-    "input_schema": {
-      "properties": {
-        "origin": {
-          "description": "The site to be signed in to, e.g. `https://app.example.com`. The page you happen to be on does not matter \u2014 a login belongs to the site.",
-          "maxLength": 255,
-          "type": "string"
-        },
-        "reason": {
-          "default": "",
-          "description": "What you were trying to do. Shown to the person if they are asked to sign in, so say the task, not the mechanics.",
-          "maxLength": 500,
-          "type": "string"
-        },
-        "comment": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "One-line statement of intent, shown to the user."
-        }
-      },
-      "required": [
-        "origin"
-      ],
-      "title": "BrowserLoginRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "properties": {
-        "success": {
-          "default": false,
-          "description": "Whether the tool completed successfully.",
-          "type": "boolean"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable error details when the tool fails."
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable status or follow-up information for the tool call."
-        },
-        "origin": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The site this is about, normalised."
-        },
-        "signed_in": {
-          "default": false,
-          "description": "Whether the browser now holds a session for this site.",
-          "type": "boolean"
-        },
-        "needs_person": {
-          "default": false,
-          "description": "True when somebody has to sign in themselves. Ask them, using the link \u2014 do not ask for their password.",
-          "type": "boolean"
-        },
-        "takeover_url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Where the person signs in. Send it to them as it is; it only opens for them."
-        },
-        "use_connector_instead": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "A connector already covers this site. Use it rather than a browser login."
-        }
-      },
-      "title": "BrowserLoginResult",
-      "type": "object"
-    }
-  },
-  {
     "tool_name": "browser_open",
     "toolset": "BROWSER",
     "description": "Open a page in the workspace's real Chromium and return what is on it.\n\nUse it for anything a page renders: JS-heavy sites, logins, forms, scraping,\nand apps running inside this sandbox (`http://127.0.0.1:<port>` \u2014 never a\npublic preview URL). The browser starts itself on the first call.\n\nThe result carries the page's `@eN` element refs. Act on them with\n`browser_act`, read from them with `browser_read`, and look at the page with\n`browser_screenshot`.\n\nWhen opening triggers a redirect, name where you expect to land with\n`wait_for_url` rather than opening and hoping \u2014 a snapshot taken mid-redirect\ndescribes a page that is already gone.",
@@ -1524,11 +1406,6 @@
         "interactive_only": {
           "default": true,
           "description": "Only elements you can act on. Turn it off only when you need page text you cannot get with `browser_read`, and expect a large result.",
-          "type": "boolean"
-        },
-        "include_urls": {
-          "default": false,
-          "description": "Include each link's href in the snapshot.",
           "type": "boolean"
         },
         "max_snapshot_tokens": {

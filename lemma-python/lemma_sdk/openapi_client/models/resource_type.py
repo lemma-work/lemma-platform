@@ -18,6 +18,7 @@ class ResourceType(str, Enum):
     POD_MEMBER = "pod_member"
     ROLE = "role"
     SCHEDULE = "schedule"
+    WEB_LOGIN = "web_login"
     WORKFLOW = "workflow"
 
     def __str__(self) -> str:

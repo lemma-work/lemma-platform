@@ -11,15 +11,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
 | `workspace.browser.access` | POST | `/workspace/apps/browser/access` | Create workspace browser access URL |
-| `workspace.browser.heartbeat` | POST | `/workspace/apps/browser/heartbeat` | Keep the workspace browser awake while somebody is watching |
-| `workspace.browser.targets` | GET | `/workspace/apps/browser/targets` | List pages the workspace browser has open |
 | `workspace.files.content` | GET | `/workspace/files:content` | Read workspace file content |
 | `workspace.files.list` | GET | `/workspace/files` | List workspace files |
 | `workspace.files.stat` | GET | `/workspace/files:stat` | Stat one workspace file |
-| `workspace.takeover.create` | POST | `/workspace/takeover` | Ask a person to drive the workspace browser |
-| `workspace.takeover.heartbeat` | POST | `/workspace/takeover/{request_id}:heartbeat` | Keep the browser alive while somebody is typing |
-| `workspace.takeover.open` | GET | `/workspace/takeover/{request_id}` | Open a takeover and get the live browser URL |
-| `workspace.takeover.resolve` | POST | `/workspace/takeover/{request_id}:resolve` | Say the takeover is finished |
 
 <!-- /generated:operations -->
 

@@ -50,6 +50,7 @@ from app.core.observability.telemetry import (
 from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
+from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
 from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
@@ -413,9 +414,10 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # unless apps call the API on their own origin; see the module docstring.
     app.add_middleware(RefreshCookieScopeMiddleware)
 
-    # Host-based serving — apps and sandbox browsers, each claimed by its own
-    # module. Before the correlation id so that stays outermost.
-    assembly.add_module_middleware(app, modules)
+    # Host-based app serving: rewrite `<slug>.<app_base_domain>` requests onto
+    # the public app asset endpoint. Outermost so the slug is resolved before
+    # routing/auth (the rewritten /public/* path is unauthenticated).
+    app.add_middleware(AppHostRoutingMiddleware)
 
     # Correlation id — added last so it is the outermost middleware and stamps
     # every response (including app-host-routed ones).

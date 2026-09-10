@@ -4,11 +4,7 @@ from pydantic_ai import ToolReturn
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.browser import browser, login
-from app.modules.agent.tools.browser.login import (
-    BrowserLoginRequest,
-    BrowserLoginResult,
-)
+from app.modules.agent.tools.browser import browser
 from app.modules.agent.tools.browser.models import (
     BrowserActRequest,
     BrowserOpenRequest,
@@ -111,40 +107,12 @@ async def browser_screenshot(
     return await browser.screenshot_internal(ctx.deps, request)
 
 
-async def browser_login(
-    ctx: RunContext[BaseAgentContext],
-    request: BrowserLoginRequest,
-) -> BrowserLoginResult:
-    """
-    Get signed in to a site, without ever handling the person's password.
-
-    Call it when a page turns out to need a login — before filling a login form
-    yourself, and instead of asking anybody for a password. You never see the
-    credential either way.
-
-    Three things can come back:
-
-    - `signed_in: true` — a saved session was loaded. Open the page and check it
-      took before going on.
-    - `use_connector_instead` — this site is already connected properly. Use that
-      connector; do not drive its login form.
-    - `needs_person: true` with a `takeover_url` — nobody is signed in yet. Send
-      the person that link, say what you were doing, and wait. It opens the very
-      browser you are using so they can sign in themselves, and it only opens for
-      them. Once they are done, call this again.
-
-    Never ask anyone to type a password to you, and never put one in a command.
-    """
-    return await login.login_internal(ctx.deps, request)
-
-
 BROWSER_TOOLS = [
     browser_open,
     browser_snapshot,
     browser_act,
     browser_read,
     browser_screenshot,
-    browser_login,
 ]
 
 # Its own toolset rather than more entries in WORKSPACE_CLI, because the

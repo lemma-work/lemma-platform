@@ -1,7 +1,6 @@
 """App module registration."""
 
 from app.core.registry import LemmaModule
-from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
 
 
 def _routers():
@@ -44,5 +43,4 @@ module = LemmaModule(
     resource_names=_resource_names,
     routers=_routers,
     register_streaq=_register_streaq,
-    middlewares=(AppHostRoutingMiddleware,),
 )

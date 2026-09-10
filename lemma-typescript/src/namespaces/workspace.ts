@@ -84,23 +84,6 @@ export class WebLoginsNamespace {
   }
 }
 
-export type TakeoverStatus = 'pending' | 'done' | 'cancelled';
-
-export interface TakeoverRequest {
-  request_id: string;
-  origin: string;
-  reason: string;
-  status: TakeoverStatus;
-  conversation_id: string | null;
-  created_at: string;
-}
-
-export interface TakeoverSession extends TakeoverRequest {
-  /** Signed URL of the live browser view. */
-  url: string;
-  expires_at: string;
-}
-
 export class WorkspaceNamespace {
   constructor(private readonly http: HttpClient) {}
 
@@ -135,56 +118,6 @@ export class WorkspaceNamespace {
     return this.http.request("POST", "/workspace/apps/browser/access", {
       body: { ttl_seconds: ttlSeconds },
     });
-  }
-
-  /**
-   * Keep the browser awake while somebody is watching.
-   *
-   * Watching is not a command, and `agent-browser` closes Chrome after two
-   * minutes without one — so a live view with nobody typing goes dark on its
-   * own unless something touches it.
-   */
-  heartbeatBrowser(): Promise<void> {
-    return this.http.request<void>("POST", "/workspace/apps/browser/heartbeat");
-  }
-
-  /** Ask the person to drive the browser, and get the id that addresses it. */
-  createTakeover(body: {
-    origin: string;
-    conversation_id?: string;
-    reason?: string;
-  }): Promise<TakeoverRequest> {
-    return this.http.request<TakeoverRequest>("POST", "/workspace/takeover", { body });
-  }
-
-  /**
-   * Open a takeover.
-   *
-   * The id is a lookup, never a credential: the server checks it against the
-   * caller's own session, which is what makes the link safe to send through a
-   * chat platform whose unfurl bot fetches every URL it is shown.
-   */
-  openTakeover(requestId: string): Promise<TakeoverSession> {
-    return this.http.request<TakeoverSession>(
-      "GET",
-      `/workspace/takeover/${encodeURIComponent(requestId)}`,
-    );
-  }
-
-  /** Keep the browser alive while somebody is still typing into it. */
-  heartbeatTakeover(requestId: string): Promise<void> {
-    return this.http.request<void>(
-      "POST",
-      `/workspace/takeover/${encodeURIComponent(requestId)}:heartbeat`,
-    );
-  }
-
-  resolveTakeover(requestId: string, done: boolean): Promise<TakeoverRequest> {
-    return this.http.request<TakeoverRequest>(
-      "POST",
-      `/workspace/takeover/${encodeURIComponent(requestId)}:resolve`,
-      { params: { done } },
-    );
   }
 
   /**
