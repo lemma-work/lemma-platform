@@ -38,21 +38,24 @@ describe("messages queued for a turn that cannot hear them", () => {
     expect(onSendNow).toHaveBeenCalledTimes(1);
   });
 
-  it("removes the one that was asked about, by id", () => {
+  it("names each remove button by the message it drops", () => {
+    // Two queued messages used to give a screen reader two buttons both called
+    // "Remove", neither of which said what it would discard.
     const onDiscard = vi.fn();
     render(
       <AssistantQueuedSteers items={[item("a", "first"), item("b", "second")]} onDiscard={onDiscard} />,
     );
 
-    screen.getAllByRole("button", { name: "Remove" })[1].click();
+    screen.getByRole("button", { name: "Remove queued message: second" }).click();
 
     expect(onDiscard).toHaveBeenCalledWith("b");
+    expect(screen.getByRole("button", { name: "Remove queued message: first" })).toBeTruthy();
   });
 
   it("offers no controls that were not wired up", () => {
     render(<AssistantQueuedSteers items={[item("a", "orphan")]} />);
     expect(screen.queryByRole("button", { name: "Send now" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Remove queued message/ })).toBeNull();
   });
 
   it("announces itself, since the person is waiting on an answer", () => {

@@ -775,10 +775,18 @@ async function runDesktopAction(button) {
     if (action === "prepare-sandbox-image") {
       button.disabled = true;
       button.textContent = "Starting…";
-      await invoke("prepare_sandbox_image", { id: nextId("sandbox-prepare") });
-      // The button is not re-enabled here: the `sandbox-images` broadcast
-      // arrives with `downloading` and renders the panel, and re-enabling it
-      // would offer a second download of what is already being fetched.
+      try {
+        await invoke("prepare_sandbox_image", { id: nextId("sandbox-prepare") });
+      } catch (error) {
+        // Put the offer back. Without this the button stayed disabled reading
+        // "Starting…" for a download that never started, and the only way to
+        // try again was to reopen Settings.
+        renderSandboxImage(snapshot?.sandbox_images);
+        throw error;
+      }
+      // Not re-enabled on success: the `sandbox-images` broadcast arrives with
+      // `downloading` and renders the panel, and re-enabling it would offer a
+      // second download of what is already being fetched.
       renderSandboxImage({ state: "downloading", detail: "" });
     }
     if (action === "logs") await invoke("open_logs");

@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LemmaClient } from "../client.js";
 import type { Conversation } from "../types.js";
 import { useAssistantController, type UseAssistantControllerResult } from "../react/index.js";
+import { forgetQueuedSteersInMemory } from "../react/queued-steers.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -108,6 +109,8 @@ afterEach(async () => {
   document.body.innerHTML = "";
   vi.restoreAllMocks();
   window.localStorage.clear();
+  // Module-level, so it outlives a test unless it is cleared here.
+  forgetQueuedSteersInMemory();
 });
 
 describe("a steer aimed at an Agent Host turn", () => {
@@ -176,6 +179,43 @@ describe("a steer aimed at an Agent Host turn", () => {
     expect(appendMessage).toHaveBeenCalledTimes(1);
     expect(stopRun).not.toHaveBeenCalled();
     expect(controller.current?.queuedSteers).toEqual([]);
+  });
+
+  it("keeps what did not go out when a send fails part way through", async () => {
+    // Clearing the whole queue before the first request was simpler and lost
+    // more: one failure took every message behind it out of both state and
+    // storage, with nothing left to retype from.
+    window.localStorage.setItem(
+      "lemma.queued-steers.c1",
+      JSON.stringify([
+        { id: "one", content: "first", queuedAt: "2026-09-10T00:00:00Z" },
+        { id: "two", content: "second", queuedAt: "2026-09-10T00:00:01Z" },
+        { id: "three", content: "third", queuedAt: "2026-09-10T00:00:02Z" },
+      ]),
+    );
+    forgetQueuedSteersInMemory();
+
+    const { client, appendMessage } = fakeClient({ status: "WAITING" });
+    let calls = 0;
+    (appendMessage as unknown as { mockImplementation: (fn: () => Promise<unknown>) => void })
+      .mockImplementation(async () => {
+        calls += 1;
+        if (calls === 2) throw new Error("the second one failed");
+        return { conversation_id: "c1", agent_run_id: "run-1", started_new_run: false };
+      });
+    const controller = await mount(client);
+
+    await act(async () => {
+      await controller.current?.sendQueuedSteersNow().catch(() => {});
+    });
+    await settle();
+
+    // The one that went out is gone; the one that failed and the one behind it
+    // are still queued, and still on screen.
+    expect(controller.current?.queuedSteers.map((item) => item.content)).toEqual([
+      "second",
+      "third",
+    ]);
   });
 
   it("drops one on request without sending it", async () => {

@@ -12,7 +12,6 @@ import type {
 } from "../types.js";
 import {
   appendQueuedSteer,
-  clearQueuedSteers,
   readQueuedSteers,
   removeQueuedSteer as removeStoredQueuedSteer,
   type QueuedSteer,
@@ -1962,24 +1961,26 @@ export function useAssistantController({
    * "begin a turn" call — and by the time it runs there is no active turn, which
    * is the whole reason these were held.
    *
-   * Cleared before the first send rather than after the last: a failure part way
-   * through must not leave the earlier ones queued to be sent a second time. The
-   * cost of the other order is a duplicate message; the cost of this one is an
-   * error the person can see and retype.
+   * Each message leaves the queue only once its own request has succeeded.
+   * Clearing the whole queue first was simpler and lost more: one failed
+   * request took every message behind it with it, out of both state and
+   * storage, with nothing left to retype from. Now a failure stops the drain
+   * and whatever did not go out is still queued and still visible.
    */
   const flushQueuedSteers = useCallback(async (conversationId: string) => {
     const queue = readQueuedSteers(conversationId);
     if (queue.length === 0) return;
-    clearQueuedSteers(conversationId);
-    setQueuedSteers([]);
     const known = conversationsRef.current.find((conversation) => conversation.id === conversationId);
     for (const item of queue) {
-      appendOptimisticUserMessage(item.content, { conversationId });
       await client.conversations.appendMessage(
         conversationId,
         { content: item.content },
         { pod_id: known?.pod_id ?? scope.podId ?? undefined },
       );
+      // Sent, so it stops being queued -- and only now, because the throw
+      // above is the case this ordering exists for.
+      setQueuedSteers(removeStoredQueuedSteer(conversationId, item.id));
+      appendOptimisticUserMessage(item.content, { conversationId });
     }
     touchConversation(conversationId, { updated_at: new Date().toISOString() });
     void sessionResumeIfRunning(conversationId, { expectRun: true, force: true }).catch(() => {
@@ -2014,8 +2015,29 @@ export function useAssistantController({
     // Which harness answers is a property of the model, not of the
     // conversation: `harness_kind` lives on `AvailableModelInfo`, and `HARNESS`
     // is the one dispatched through Agent Host.
+    //
+    // Loaded rather than assumed when the catalogue is not here yet. An empty
+    // catalogue -- a first steer before the models land, or a list request that
+    // failed -- left the kind undefined, and undefined fell through to the
+    // immediate path: the exact transcript behaviour this change exists to stop,
+    // reappearing precisely when the page was slowest.
     const model = knownConversation?.model ?? conversationModelRef.current;
-    const harnessKind = availableModelsRef.current.find((entry) => entry.id === model)?.harness_kind;
+    let catalogue = availableModelsRef.current;
+    if (catalogue.length === 0) {
+      try {
+        catalogue = await loadAvailableModels();
+        availableModelsRef.current = catalogue;
+      } catch {
+        catalogue = [];
+      }
+    }
+    // A model the catalogue still cannot name falls through to the immediate
+    // path, which is deliberate rather than overlooked. Queueing on an unknown
+    // kind would delay every in-process steer whenever the catalogue is
+    // unavailable, and an in-process run answers a mid-run message on its next
+    // step -- so the guess costs the common case an immediate answer to spare
+    // the rare one a behaviour it had before this change anyway.
+    const harnessKind = catalogue.find((entry) => entry.id === model)?.harness_kind;
     // And only while a turn is actually in flight. `steerMessage` is what the
     // composer calls when the conversation looks busy, but "looks busy" is the
     // caller's judgement: with nothing running there is nothing to wait for,
@@ -2081,6 +2103,7 @@ export function useAssistantController({
     attachPendingFiles,
     client,
     enabled,
+    loadAvailableModels,
     pendingFileUploads,
     scope.podId,
     sessionResumeIfRunning,

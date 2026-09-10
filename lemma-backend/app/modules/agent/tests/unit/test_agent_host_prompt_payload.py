@@ -252,6 +252,30 @@ class TestNativeAndSandboxDirectories:
         assert _sandbox_root("relative/dir") == "relative/dir"
         assert _sandbox_root("") == "the working directory"
 
+    def test_a_root_that_would_break_out_of_its_code_span_is_not_written(
+        self,
+    ) -> None:
+        """Every use of the root sits inside a Markdown code span.
+
+        A backtick or a newline in it closes the span early and turns the rest
+        of the sentence into something else. The cwd is assembled from a date
+        and a slug, so nothing is known to put one there -- but it is derived
+        from conversation metadata, and an instruction that reads as something
+        else is not a failure worth leaving to chance.
+        """
+        from app.modules.agent.domain.prompts import _sandbox_root
+
+        for hostile in [
+            "/work`space/c/x",
+            "/work\nspace/c/x",
+            "/work space/c/x",
+            "/" + "w" * 200 + "/c/x",
+        ]:
+            assert _sandbox_root(hostile) == "the sandbox root", hostile
+        # And the ordinary ones still describe themselves.
+        assert _sandbox_root("/workspace/c/x") == "/workspace"
+        assert _sandbox_root("/srv-1.2_a@b+c/c/x") == "/srv-1.2_a@b+c"
+
     async def test_without_sandbox_tools_native_work_is_still_available(self) -> None:
         prompt = _system_prompt(toolsets=[])
         assert "no Lemma sandbox execution tools" in prompt

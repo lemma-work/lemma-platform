@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendQueuedSteer,
   clearQueuedSteers,
+  forgetQueuedSteersInMemory,
   readQueuedSteers,
   removeQueuedSteer,
   writeQueuedSteers,
@@ -18,6 +19,8 @@ afterEach(() => {
   // throws, and clearing before restoring makes teardown itself throw.
   vi.restoreAllMocks();
   window.localStorage.clear();
+  // Module-level, so it outlives a test unless it is cleared here.
+  forgetQueuedSteersInMemory();
 });
 
 describe("queued steers", () => {
@@ -26,6 +29,7 @@ describe("queued steers", () => {
     appendQueuedSteer(CONVERSATION, "one more thing");
 
     // A reload is exactly this: nothing in memory, everything from storage.
+    forgetQueuedSteersInMemory();
     expect(readQueuedSteers(CONVERSATION).map((item) => item.content)).toEqual([
       "also check the invoices",
       "one more thing",
@@ -64,12 +68,14 @@ describe("queued steers", () => {
       "lemma.queued-steers.conv-1",
       JSON.stringify([{ id: "a", content: "kept", queuedAt: "t" }, { id: "b" }, "nonsense"]),
     );
+    forgetQueuedSteersInMemory();
 
     expect(readQueuedSteers(CONVERSATION).map((i) => i.content)).toEqual(["kept"]);
   });
 
   it("survives storage that is not JSON at all", () => {
     window.localStorage.setItem("lemma.queued-steers.conv-1", "{oh dear");
+    forgetQueuedSteersInMemory();
     expect(readQueuedSteers(CONVERSATION)).toEqual([]);
   });
 
@@ -84,6 +90,39 @@ describe("queued steers", () => {
     expect(() => writeQueuedSteers(CONVERSATION, [])).not.toThrow();
     expect(() => appendQueuedSteer(CONVERSATION, "x")).not.toThrow();
     expect(spy).toHaveBeenCalled();
+  });
+
+  it("keeps every message when storage is unavailable", () => {
+    // Storage was the source of truth, so with it throwing every read returned
+    // nothing: appending twice wrote a one-item array twice and the first
+    // message was quietly replaced. The flush reads through here too, so those
+    // messages could never be delivered either.
+    vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+
+    appendQueuedSteer(CONVERSATION, "first");
+    appendQueuedSteer(CONVERSATION, "second");
+    appendQueuedSteer(CONVERSATION, "third");
+
+    expect(readQueuedSteers(CONVERSATION).map((item) => item.content)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+  });
+
+  it("still drains to empty when storage is unavailable", () => {
+    vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    appendQueuedSteer(CONVERSATION, "only");
+
+    clearQueuedSteers(CONVERSATION);
+
+    // An empty queue is an answer: falling back to storage here would
+    // resurrect what was just sent.
+    expect(readQueuedSteers(CONVERSATION)).toEqual([]);
   });
 
   it("gives every queued message its own id", () => {

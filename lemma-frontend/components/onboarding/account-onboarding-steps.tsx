@@ -1023,10 +1023,15 @@ export function StartStep({
             <Button variant="quiet"
               type="button"
               onClick={() => {
-                void copyText(starterPrompt).then(() => {
-                  setPromptCopied(true);
-                  toast.success("Prompt copied");
-                });
+                void copyText(starterPrompt).then(
+                  () => {
+                    setPromptCopied(true);
+                    toast.success("Prompt copied");
+                  },
+                  // Without this the rejection was unhandled and the button
+                  // looked inert: no copy, no message.
+                  () => toast.error("Could not copy to clipboard"),
+                );
               }}
               className="setup-primary-action !flex mt-5 h-11 w-full gap-2 text-sm font-medium"
             >

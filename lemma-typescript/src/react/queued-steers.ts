@@ -31,6 +31,22 @@ export type QueuedSteer = {
 
 const PREFIX = "lemma.queued-steers.";
 
+/**
+ * The queue this page is actually working from.
+ *
+ * Storage is the durability layer, not the source of truth. When it is
+ * unavailable -- a private window, blocked site data, quota -- every read
+ * returned nothing, so appending twice wrote a one-item array twice and the
+ * first message was silently replaced. Worse, the flush reads through here too,
+ * so messages that existed only in React state could never be delivered.
+ *
+ * Held per conversation, and consulted before storage whenever this page has an
+ * answer of its own. `has` rather than a truthiness check, because an empty
+ * queue is an answer: after a drain, falling back to storage would resurrect
+ * what was just sent.
+ */
+const inMemory = new Map<string, QueuedSteer[]>();
+
 function keyFor(conversationId: string): string {
     return `${PREFIX}${conversationId}`;
 }
@@ -47,6 +63,28 @@ function storage(): Storage | null {
 
 /** What is queued for this conversation, oldest first. */
 export function readQueuedSteers(conversationId: string): QueuedSteer[] {
+    const remembered = inMemory.get(conversationId);
+    if (remembered) return [...remembered];
+    const stored = readStored(conversationId);
+    // Seeded, so a reload's first read is also the last one that has to trust
+    // storage for this conversation.
+    inMemory.set(conversationId, stored);
+    return [...stored];
+}
+
+export function writeQueuedSteers(conversationId: string, items: QueuedSteer[]): void {
+    inMemory.set(conversationId, [...items]);
+    const store = storage();
+    if (!store) return;
+    try {
+        if (items.length === 0) store.removeItem(keyFor(conversationId));
+        else store.setItem(keyFor(conversationId), JSON.stringify(items));
+    } catch {
+        // Out of quota, or blocked. The queue still works for this page.
+    }
+}
+
+function readStored(conversationId: string): QueuedSteer[] {
     const store = storage();
     if (!store) return [];
     try {
@@ -63,15 +101,10 @@ export function readQueuedSteers(conversationId: string): QueuedSteer[] {
     }
 }
 
-export function writeQueuedSteers(conversationId: string, items: QueuedSteer[]): void {
-    const store = storage();
-    if (!store) return;
-    try {
-        if (items.length === 0) store.removeItem(keyFor(conversationId));
-        else store.setItem(keyFor(conversationId), JSON.stringify(items));
-    } catch {
-        // Out of quota, or blocked. The queue still works for this page.
-    }
+/** Forget this page's copy, so the next read comes from storage again. */
+export function forgetQueuedSteersInMemory(conversationId?: string): void {
+    if (conversationId === undefined) inMemory.clear();
+    else inMemory.delete(conversationId);
 }
 
 export function appendQueuedSteer(conversationId: string, content: string): QueuedSteer[] {

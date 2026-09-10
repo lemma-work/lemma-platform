@@ -10,6 +10,7 @@ rich because it has every toolset, not because its base prompt restates each too
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -438,6 +439,10 @@ def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> 
     )
 
 
+# Path segments this file is willing to write into a Markdown code span.
+_PLAIN_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._@+-]{1,64}")
+
+
 def _sandbox_root(cwd: str) -> str:
     """The sandbox's top-level directory, taken from the cwd this run was given.
 
@@ -454,7 +459,21 @@ def _sandbox_root(cwd: str) -> str:
     if not trimmed.startswith("/"):
         return trimmed or "the working directory"
     first = trimmed.strip("/").split("/", 1)[0]
-    return f"/{first}" if first else "/"
+    if not first:
+        return "/"
+    # Every use of this sits inside a Markdown code span, and a backtick or a
+    # newline in it would close the span early and turn the rest of the sentence
+    # into whatever came after. Nothing is known to put one there -- the cwd is
+    # assembled from a date and a slug -- but this is a value derived from
+    # conversation metadata being written into instructions, and the cost of
+    # being wrong about that is an instruction that reads as something else.
+    #
+    # A root that is not a plain path segment is not described rather than
+    # described unsafely: the sentences around it still name the cwd, which is
+    # what the agent needs.
+    if not _PLAIN_PATH_SEGMENT.fullmatch(first):
+        return "the sandbox root"
+    return f"/{first}"
 
 
 def _workspace_directory_section(
