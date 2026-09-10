@@ -1,0 +1,121 @@
+---
+title: 0.8.0
+description: Lemma runs on Windows, GitHub and Slack become connectors Lemma speaks natively, a run says what it costs while it runs, and three names on the wire settle on one spelling each.
+published: 2026-09-10
+tags:
+  - release
+---
+
+## Three names on the wire settle on one spelling
+
+This is the change that makes 0.8 a minor rather than a patch. Three
+inconsistencies were spread across the API, each of them harmless on its own and
+each of them something a client had to learn twice.
+
+`{org_id}` becomes `{organization_id}` in the fourteen identity and agent
+operations that still spelled it the short way; usage and connectors already
+said `organization_id`, and there was no reason for the split beyond the order
+the modules were written in. `GET /pods/organization/{organization_id}` was the
+only org-scoped collection not nested under its organization, and is now
+`GET /organizations/{organization_id}/pods`. And three routes named an action
+with a colon while twenty named it with a slash, so the slash wins on count.
+
+None of the operation ids move, so anything written against the SDKs by name is
+untouched — both SDK layers call the generated clients positionally, and a path
+rename stops at the generated signature. Two of the colon routes,
+`/agent-host/pairings:complete` and `/agent-host/events:append`, keep an alias:
+the Rust agent host hard-codes them and an installed host keeps calling what it
+shipped with, so removing them outright would strand every paired computer
+already in the field.
+
+If you call the HTTP API directly, those are the three edits. If you use
+`lemma-sdk` for Python or TypeScript, or the `lemma` CLI, upgrade the package
+and there is nothing else to do.
+
+## Lemma runs on Windows
+
+Lemma had never been run on Windows. It nearly booted after four blockers, and
+then kept not-quite-working in ways that only running it could find: a path is
+not an identity there, so a wrapper-launched agent outlived every run it
+belonged to; an installer cannot replace a file that is open; every sandbox
+start began the download the previous start was still doing; and an upgrade was
+a choice between the old release and nothing.
+
+Those are fixed, along with the shell paths that could each stop the app, and
+the nightly can now build a Windows host pack — it could not, because of an API
+nobody calls.
+
+## GitHub, Slack and Gmail are connectors Lemma speaks natively
+
+GitHub is a real GitHub App now. Lemma acts as the App against an installation,
+so a schedule keeps working after its author leaves and a triggered run has an
+identity with nobody present; and as the person for the sandbox's `git` and `gh`
+and for pod publishing, because work in someone's checkout should carry their
+name. GitHub events wake a pod. "GitHub is connected" used to be true and
+useless — authorizing is not installing — and now says which of the two it
+means. A published pod no longer carries its author's installation with it.
+
+Slack and Gmail stop going through a vendored package and become native OpenAPI
+connectors, which meant teaching the shared machinery the three things they
+need: form-encoded bodies, failure reported inside a `200`, and cursor
+pagination. Slack answering `{"ok": false}` with HTTP 200 had been reaching
+agents as a successful result, so an agent read a failure as data.
+
+An MCP server connected with an API key came up with no tools; it comes up with
+its tools, described in the server's own words, on a session that survives.
+
+## A run says what it costs, while it runs
+
+Model work that had been running for free is metered per request, budgets are
+enforced as the run proceeds rather than after it, and the usage screens say
+what a cost is made of and how much of a plan is left. A refusal now names the
+budget it hit, which is how an agent that could not look at an image explained
+itself instead of failing the whole run over one picture.
+
+## Apps and functions can be rolled back
+
+Both keep a bounded version history, and a rollback is a safe operation rather
+than a redeploy of something you hope you still have. An app's version history
+shipped in an earlier version with no way to open it; there is a way now.
+
+## Lem is a real agent
+
+The pod's assistant had no `agents` row — a conversation with a null agent id
+*was* the assistant — so it could not be scheduled, could not be a trigger's
+target, and every surface that wanted to name it faked it differently. It has
+one row, one identity and one name everywhere, and a schedule can wake it with
+an instruction for the occasion rather than an agent whose entire purpose is one
+sentence.
+
+## Self-hosting on a server
+
+There were four ways to run Lemma and none of them was "on a server".
+`deploy/compose/` is that missing path: api and worker as separate containers, a
+one-shot migrate that stops a deploy rather than crash-looping against a schema
+it cannot use, and images pinned by digest from the release manifest — so a
+compose deployment of a version runs the same bytes as a desktop install of it.
+
+## Desktop stops freezing, and stops being unreadable
+
+Five locks were held across work that waits, and the tray froze for eleven
+seconds. The splash parsed 356 KB before it could draw anything. A killed
+install left 2.2 GB behind. A guest asked a system with no init to power itself
+off. Those are gone, along with a sandbox that could quietly fill the guest's
+disk, and a settings pane that asked a dead daemon for ever.
+
+The agent host was 16,678 lines in ten files. Nothing under `desktop/` is over
+600 lines now, `daemon.rs` is not 3,261 of them, and the twenty guards that had
+been reading the wrong file read the right one.
+
+## Under the floor
+
+The composition root is empty and then gone: modules talk through contracts and
+events, and imports through the root fell from 195 to 61 on the way. The
+standard the code is held to is written down, with an id per rule and the check
+that enforces it, and the gates were changed to match what it says. A unit test
+can no longer reach production. A default a test cannot replace is a build
+failure. Both DMG pipelines verify the same things, after each had been checking
+something the other thought mattered.
+
+A forged `From:` could make a mailbox write to a stranger, and a channel could
+make an agent answer nobody. Neither can now.

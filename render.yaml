@@ -77,7 +77,7 @@ services:
     runtime: image
     plan: standard
     image:
-      url: ghcr.io/lemma-work/lemma-backend:v0.7.2
+      url: ghcr.io/lemma-work/lemma-backend:v0.8.0
     healthCheckPath: /health/ready
     # Migrations before the new instance serves. On compose this is a separate
     # one-shot container so a failure stops the deploy; Render's equivalent is
@@ -142,7 +142,7 @@ services:
     runtime: image
     plan: standard
     image:
-      url: ghcr.io/lemma-work/lemma-backend:v0.7.2
+      url: ghcr.io/lemma-work/lemma-backend:v0.8.0
     dockerCommand: python -m app.worker
     envVars: *backend_env
 
@@ -151,7 +151,7 @@ services:
     runtime: image
     plan: starter
     image:
-      url: ghcr.io/lemma-work/lemma-frontend:v0.7.2
+      url: ghcr.io/lemma-work/lemma-frontend:v0.8.0
     envVars:
       - key: NEXT_PUBLIC_API_URL
         sync: false

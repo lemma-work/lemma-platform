@@ -152,6 +152,22 @@ SOURCES: tuple[Source, ...] = (
         REPO_ROOT / "lemma-stack/pyproject.toml",
         re.compile(r'(?m)^version = "([^"]+)"'),
     ),
+    # The three below are not installed from an index, which is why they were
+    # left out — and why they drifted. The 0.7.1 release moved all three; 0.7.2
+    # moved neither, and nothing said, so 0.8.0 found them a release behind.
+    # A version that is only ever read by a person reporting a bug still has to
+    # be right, and the cost of listing them here is one line each at release.
+    Source(
+        "lemma-backend package",
+        REPO_ROOT / "lemma-backend/pyproject.toml",
+        re.compile(r'(?m)^version = "([^"]+)"'),
+    ),
+    Source(
+        "lemma-pod-bundle package",
+        REPO_ROOT / "lemma-pod-bundle/pyproject.toml",
+        re.compile(r'(?m)^version = "([^"]+)"'),
+    ),
+    Source("lemma-frontend package", REPO_ROOT / "lemma-frontend/package.json"),
 )
 
 def workspace_members() -> tuple[str, ...]:
