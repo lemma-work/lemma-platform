@@ -1041,7 +1041,7 @@ jobs:
           args=(
             --force
             --options runtime
-            --entitlements desktop/entitlements.plist
+            --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist
             --sign "${APPLE_SIGNING_IDENTITY}"
           )
           if [[ "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
@@ -1121,6 +1121,25 @@ jobs:
           codesign --verify --strict --verbose=2 "${vz}"
           codesign -d --entitlements :- "${vz}" 2>/dev/null \
             | grep -F "com.apple.security.virtualization"
+          # And nothing else carries it. Tauri applies one entitlements file to
+          # the app and to every externalBin it signs, so the app's file used to
+          # hand this to four processes -- one of which hosts a WebView -- for a
+          # capability only lemma-vz can use. lemma-vz keeps it because it ships
+          # as a resource, which Tauri does not re-sign.
+          #
+          # Dumped into a variable first: under `pipefail` a codesign that fails
+          # would make the grep pipeline non-zero, and "no match" would read as a
+          # pass on a binary nobody managed to inspect.
+          for signed_with_the_app in "${app}" "${locald}" "${runtime_bridge}" \
+              "${app}/Contents/MacOS/lemma-agent-host"; do
+            dumped="$(codesign -d --entitlements :- "${signed_with_the_app}" 2>&1)"
+            if grep -qF "com.apple.security.virtualization" <<<"${dumped}"; then
+              echo "::error::$(basename "${signed_with_the_app}") carries" \
+                   "com.apple.security.virtualization and cannot use it." \
+                   "Only Contents/Resources/lemma-vz links Virtualization.framework."
+              exit 1
+            fi
+          done
           # The daemon's keychain access is keyed to this identifier, and Tauri
           # re-signs sidecars without one of its own -- so this asserts the
           # embedded Info.plist survived bundling. Ad-hoc builds re-prompt either

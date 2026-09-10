@@ -9,10 +9,12 @@ import unittest
 
 from check_macos_signing import (
     HELPERS,
+    VZ_HELPER,
     Signature,
     check,
     parse_signature,
     validate_bundle_metadata,
+    validate_entitlements,
     validate_signature,
 )
 
@@ -82,7 +84,32 @@ class NativeSigningTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
 
-    def build(self, name: str, revision: int, identity: str) -> Path:
+    def build(
+        self,
+        name: str,
+        revision: int,
+        identity: str,
+        entitled: dict[str, bool] | None = None,
+    ) -> Path:
+        """Build a bundle; `entitled` names paths to sign with virtualization.
+
+        Keys are the same relative paths as `HELPERS`, plus `"."` for the
+        bundle itself, which is how a real build gets there: Tauri signs the app
+        and each externalBin with one entitlements file.
+
+        The default is the shape every real build has -- the entitlement on
+        lemma-vz and nowhere else -- because `check` validates that, and a test
+        that only wanted a signature should not have to know. Pass `{}` to build
+        a bundle without it; the guard for a helper that lost its entitlement is
+        the one case that wants that.
+        """
+        if entitled is None:
+            entitled = {VZ_HELPER: True}
+        plist = self.root / f"{name}-virtualization.plist"
+        plist.write_bytes(plistlib.dumps({"com.apple.security.virtualization": True}))
+        def entitlement_args(relative: str) -> list[str]:
+            return ["--entitlements", str(plist)] if entitled.get(relative) else []
+
         app = self.root / f"{name}.app"
         binary = app / "Contents/MacOS/lemma-desktop"
         binary.parent.mkdir(parents=True)
@@ -131,6 +158,7 @@ class NativeSigningTests(unittest.TestCase):
                     identity,
                     "--identifier",
                     identifier,
+                    *entitlement_args(relative),
                     str(helper),
                 ],
                 check=True,
@@ -144,6 +172,7 @@ class NativeSigningTests(unittest.TestCase):
                 "--timestamp=none",
                 "--sign",
                 identity,
+                *entitlement_args("."),
                 str(app),
             ],
             check=True,
@@ -151,6 +180,38 @@ class NativeSigningTests(unittest.TestCase):
             timeout=30,
         )
         return app
+
+    def test_the_virtualization_entitlement_belongs_to_lemma_vz_alone(self) -> None:
+        """Read off a real bundle, because what could go wrong is a signing step.
+
+        Tauri applies one entitlements file to the app and to every sidecar it
+        signs, so a grant meant for one binary reaches four; and it does not
+        sign the resource that actually needs one, so the grant can equally go
+        missing. Neither shape is visible in a plist.
+        """
+        validate_entitlements(self.build("split", 1, "-"))
+
+    def test_an_app_that_carries_virtualization_is_refused(self) -> None:
+        app = self.build("over", 1, "-", {VZ_HELPER: True, ".": True})
+        with self.assertRaisesRegex(ValueError, "cannot use it"):
+            validate_entitlements(app)
+
+    def test_a_sidecar_that_carries_virtualization_is_refused(self) -> None:
+        app = self.build(
+            "sidecar", 1, "-", {VZ_HELPER: True, "Contents/MacOS/lemma-locald": True}
+        )
+        with self.assertRaisesRegex(ValueError, "lemma-locald"):
+            validate_entitlements(app)
+
+    def test_a_helper_signed_without_virtualization_is_refused(self) -> None:
+        """The other direction, and the one that ships a broken guest: nothing
+        else in the release would notice a helper that cannot start a VM.
+
+        The empty map is deliberate -- it is what asks for a bundle that does
+        not have the entitlement anywhere.
+        """
+        with self.assertRaisesRegex(ValueError, "never come up"):
+            validate_entitlements(self.build("under", 1, "-", {}))
 
     def test_a_valid_adhoc_bundle_is_not_a_release_identity(self) -> None:
         app = self.build("adhoc", 1, "-")
