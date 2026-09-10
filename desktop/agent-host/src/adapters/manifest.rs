@@ -108,11 +108,6 @@ impl AdapterManifest {
                 .ok_or_else(|| anyhow::anyhow!("adapter cache is not configured"))?;
             let command = cached_adapter_executable(cache_root, &spec);
             verify_cached_adapter(&command)?;
-            // After the cache is known good and before anything launches it.
-            // A cache installed under a Node that has since been replaced is
-            // the same problem as one installed under a Node that never
-            // qualified, and this is the one place both pass through.
-            ensure_adapter_node_runs(&spec, cache_root)?;
             command
         } else {
             resolve_executable(&spec.command).ok_or_else(|| {
@@ -121,6 +116,17 @@ impl AdapterManifest {
         };
         let upstream_command = resolve_executable(&spec.upstream_command)
             .ok_or_else(|| anyhow::anyhow!("{} executable was not found", spec.upstream_command))?;
+        // After the cache is known good and after both executables are known,
+        // because the Node this checks has to be the Node the adapter's shim
+        // will find -- and that is decided by a `PATH` with these two
+        // directories in front of it. A cache installed under a Node that has
+        // since been replaced is the same problem as one installed under a
+        // Node that never qualified, and this is where both pass through.
+        if let Some(cache_root) = self.cache_root.as_ref()
+            && spec.distribution.starts_with("npm:")
+        {
+            ensure_adapter_node_runs(&spec, cache_root, &command, &upstream_command)?;
+        }
         let probed = probe_version(&upstream_command, &spec.upstream_version_args);
         let upstream_version = probed.clone().ok();
         if let Some(minimum) = spec.minimum_upstream_version.as_deref() {

@@ -14,7 +14,10 @@
 
 use std::path::Path;
 
-use super::{AdapterSpec, cached_adapter_directory, probe_version, resolve_executable};
+use super::{
+    AdapterSpec, adapter_search_paths, cached_adapter_directory, probe_version,
+    resolve_executable_in,
+};
 
 /// The Node range an adapter declares, if it declares one.
 pub(crate) fn declared_node_range(package_json: &str) -> Option<String> {
@@ -91,16 +94,24 @@ pub(crate) fn pinned_package_name(distribution: &str) -> Option<&str> {
 pub(crate) fn ensure_adapter_node_runs(
     spec: &AdapterSpec,
     cache_root: &Path,
+    command: &Path,
+    upstream_command: &Path,
 ) -> anyhow::Result<()> {
-    ensure_adapter_node_runs_with(spec, cache_root, node_version_on_this_computer)
+    ensure_adapter_node_runs_with(spec, cache_root, || {
+        node_version_on_this_computer(command, upstream_command)
+    })
 }
 
 /// The Node the adapter's own shim will pick, and what it calls itself.
 ///
-/// The same search order the shim's `#!/usr/bin/env node` resolves through, so
-/// the version checked is the version that runs.
-fn node_version_on_this_computer() -> Option<String> {
-    let node = resolve_executable("node")?;
+/// Resolved through `adapter_search_paths`, which is what
+/// `ResolvedAdapter::environment` puts in the child's `PATH` -- so this is the
+/// Node the shim's `#!/usr/bin/env node` will find. Searching only
+/// `executable_search_paths()` would have missed the two directories that
+/// environment prepends, which are precisely where a second Node would shadow
+/// the one on the ordinary path.
+fn node_version_on_this_computer(command: &Path, upstream_command: &Path) -> Option<String> {
+    let node = resolve_executable_in("node", adapter_search_paths(command, upstream_command))?;
     probe_version(&node, &["--version".to_owned()]).ok()
 }
 
@@ -176,6 +187,41 @@ mod tests {
             assert!(!node_is_excluded(range, "v16.0.0"), "{range}");
         }
         assert!(!node_is_excluded(">=20", "not-a-version"));
+    }
+
+    /// The Node this checks is the Node the shim will run.
+    ///
+    /// `ResolvedAdapter::environment` puts the adapter's own directory and the
+    /// agent's in front of everything else, so a `node` sitting in either of
+    /// them is the one `#!/usr/bin/env node` finds. The probe used to search
+    /// only the ordinary path and would have reported a different version than
+    /// the one that runs -- which is worse than not checking, because the
+    /// answer looks authoritative.
+    #[cfg(unix)]
+    #[test]
+    fn the_probe_searches_the_path_the_adapter_will_run_under() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let beside_the_adapter = root.path().join("cache/node_modules/.bin");
+        std::fs::create_dir_all(&beside_the_adapter).unwrap();
+        let shadowing_node = beside_the_adapter.join("node");
+        std::fs::write(&shadowing_node, "#!/bin/sh\necho v22.0.0\n").unwrap();
+        std::fs::set_permissions(&shadowing_node, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let command = beside_the_adapter.join("codex-acp");
+        let upstream = root.path().join("agent/codex");
+
+        let found = super::adapter_search_paths(&command, &upstream)
+            .into_iter()
+            .find(|directory| directory.join("node").is_file());
+
+        assert_eq!(
+            found.as_deref(),
+            Some(beside_the_adapter.as_path()),
+            "the adapter's own directory has to come before the ordinary path, \
+             or the version reported is not the version that runs",
+        );
     }
 
     #[test]
