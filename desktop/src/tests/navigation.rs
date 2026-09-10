@@ -15,10 +15,20 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
     // that one section. `allow-apply-operator-config`, which would let the
     // same page rewrite sharing and surfaces, stays out.
     //
-    // `allow-sandbox-image-status` is the mildest of the four: it reads two
-    // strings the shell already holds and changes nothing at all. It is
-    // here because the download runs behind a workspace the user is already
-    // in, so the workspace is the only surface that can say it is happening.
+    // `allow-sandbox-image-status` is the mildest: it reads two strings the
+    // shell already holds and changes nothing at all. It is here because the
+    // download runs behind a workspace the user is already in, so the
+    // workspace is the only surface that can say it is happening.
+    //
+    // The three `conversation-folder` ones are the least mild, and they are
+    // the reason this list is asserted rather than trusted. One of them raises
+    // a native folder dialog, and `https://lemma.work` is in this capability's
+    // remote URLs -- so granted alone they would let a hosted page open a
+    // picker on somebody's machine and read paths back out of it. Each refuses
+    // unless `current_mode` is `local`, which is the same guard
+    // `prepare_sandbox_image` carries and the only thing that makes the grant
+    // safe. They are granted at all because the folder is chosen from the
+    // composer, which only exists in the workspace.
     let workspace = granted("workspace");
     assert!(workspace.contains(&"allow-open-control-center".to_string()));
     assert!(workspace.iter().all(|permission| {
@@ -28,6 +38,10 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
                 | "allow-discover-provider-models"
                 | "allow-configure-ai-provider"
                 | "allow-sandbox-image-status"
+                | "allow-conversation-folder"
+                | "allow-bind-conversation-folder"
+                | "allow-unbind-conversation-folder"
+                | "allow-adopt-conversation-folder"
         ) || permission.starts_with("allow-agent-host-")
     }));
     for forbidden in [

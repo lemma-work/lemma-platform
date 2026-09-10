@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 
 import { splitEmail } from '@/lib/surfaces/agent-email';
 import { cn } from '@/lib/utils';
+import { copyText } from '@/lib/clipboard';
 
 /**
  * An agent's own email address, rendered as the address it is.
@@ -49,7 +50,7 @@ export function AgentEmail({
 
     const copy = async () => {
         try {
-            await navigator.clipboard.writeText(`${parts.local}${parts.domain}`);
+            await copyText(`${parts.local}${parts.domain}`);
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         } catch {

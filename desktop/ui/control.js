@@ -772,6 +772,23 @@ async function runDesktopAction(button) {
       if (!stopEverything) return;
       await invoke("stop", { includeInfra: true });
     }
+    if (action === "prepare-sandbox-image") {
+      button.disabled = true;
+      button.textContent = "Starting…";
+      try {
+        await invoke("prepare_sandbox_image", { id: nextId("sandbox-prepare") });
+      } catch (error) {
+        // Put the offer back. Without this the button stayed disabled reading
+        // "Starting…" for a download that never started, and the only way to
+        // try again was to reopen Settings.
+        renderSandboxImage(snapshot?.sandbox_images);
+        throw error;
+      }
+      // Not re-enabled on success: the `sandbox-images` broadcast arrives with
+      // `downloading` and renders the panel, and re-enabling it would offer a
+      // second download of what is already being fetched.
+      renderSandboxImage({ state: "downloading", detail: "" });
+    }
     if (action === "logs") await invoke("open_logs");
     if (action === "devtools") await invoke("open_developer_tools");
     // Connecting, choosing agents and turning it off live in the workspace, so
@@ -1456,6 +1473,48 @@ function unusableEventReason(event) {
   return missing.length ? `${event.event} arrived without ${missing.join(", ")}` : null;
 }
 
+/**
+ * What the sandbox panel says, and whether the download is worth offering.
+ *
+ * `not-prepared` is the only state where the button does something useful:
+ * `ready` has nothing left to fetch, `downloading` is already doing it, and
+ * `unsupported` means there is no guest that could hold an image at all.
+ */
+function sandboxImageWording(state) {
+  if (state === "ready") {
+    return { text: "Downloaded. Pods can run code, shells and browsers on this computer.", offer: false };
+  }
+  if (state === "downloading") {
+    return { text: "Downloading…", offer: false };
+  }
+  if (state === "failed") {
+    return { text: "The last download did not finish. The first task in a pod will fetch it, or try again here.", offer: true };
+  }
+  if (state === "unsupported") {
+    return { text: "This installation runs no private runtime, so there is no sandbox image to download.", offer: false };
+  }
+  if (state === "not-prepared") {
+    return { text: "Not downloaded. Coding agents run natively and do not need it; download it to run pod code, shells and browsers here.", offer: true };
+  }
+  return { text: "Checking…", offer: false };
+}
+
+function renderSandboxImage(status) {
+  const label = $("sandbox-image-state");
+  const detail = $("sandbox-image-detail");
+  const button = document.querySelector('[data-action="prepare-sandbox-image"]');
+  if (!label || !button) return;
+  const state = status?.state || "";
+  const wording = sandboxImageWording(state);
+  label.textContent = wording.text;
+  if (detail) {
+    detail.textContent = status?.detail || "";
+    detail.hidden = !status?.detail;
+  }
+  button.disabled = !wording.offer;
+  button.textContent = state === "failed" ? "Try the download again" : "Download sandbox image";
+}
+
 function handleLocaldEvent(event) {
   const unusable = unusableEventReason(event);
   if (unusable) {
@@ -1477,6 +1536,7 @@ function handleLocaldEvent(event) {
     if (!sharingChoice) sharingChoice = snapshot.sharing?.mode || "this_computer";
     fillConfiguration();
     render();
+    renderSandboxImage(event.sandbox_images);
     for (const [id, pending] of pendingSaves) {
       const operation = event.config_operations?.[id];
       if (operation?.status === "succeeded") {
@@ -1488,6 +1548,10 @@ function handleLocaldEvent(event) {
       }
     }
     if (pendingSaves.size) scheduleSnapshotRetry();
+  }
+  if (event.event === "sandbox-images") {
+    if (snapshot) snapshot.sandbox_images = { state: event.state, detail: event.detail };
+    renderSandboxImage({ state: event.state, detail: event.detail });
   }
   if (event.event === "config.applied") {
     const pending = pendingSaves.get(event.id);

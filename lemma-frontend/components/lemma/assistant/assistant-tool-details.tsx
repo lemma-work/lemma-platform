@@ -50,6 +50,7 @@ import type {
   AssistantToolInvocation,
 } from "lemma-sdk/react";
 import type { AssistantToolRenderArgs } from "./assistant-types";
+import { copyText } from "@/lib/clipboard";
 import type {
   ToolCardArgs,
   ToolCardResult,
@@ -687,7 +688,7 @@ export function TextBlockWithCopy({
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }

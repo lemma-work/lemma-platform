@@ -95,6 +95,7 @@ import {
   AssistantExperienceConversation,
 } from "./assistant-experience-conversation";
 import { AssistantExperienceComposer } from "./assistant-experience-composer";
+import { AssistantQueuedSteers } from "./assistant-queued-steers";
 import { agentHostBridge, useIsDesktopShell } from "@/lib/desktop/agent-host-bridge";
 import { isLocalAgentSignInFailure } from "@/components/agents/agent-runtime-helpers";
 // getActiveToolBanner moved to assistant-format; re-export to preserve the API.
@@ -242,6 +243,9 @@ export function AssistantExperienceView({
   const centerEmptyConversation = emptyStateFillsViewport && isConversationEmpty;
   const sendMessage = controller.sendMessage;
   const steerMessage = controller.steerMessage;
+  const queuedSteers = controller.queuedSteers ?? [];
+  const sendQueuedSteersNow = controller.sendQueuedSteersNow;
+  const discardQueuedSteer = controller.discardQueuedSteer;
   const uploadFiles = controller.uploadFiles;
   const loadOlderMessages = controller.loadOlderMessages;
   const setConversationModel = controller.setConversationModel;
@@ -731,6 +735,13 @@ export function AssistantExperienceView({
             isConversationBusy={isConversationBusy}
           />
         </div>
+
+        <AssistantQueuedSteers
+          items={queuedSteers}
+          onSendNow={sendQueuedSteersNow ? () => void sendQueuedSteersNow() : undefined}
+          onDiscard={discardQueuedSteer}
+          className={composerWidthClassName}
+        />
 
         <AssistantExperienceComposer
           composerTone={composerTone}
