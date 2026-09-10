@@ -201,6 +201,7 @@ function PodConversationSurface({
             canWrite={canWriteConversations}
             podId={podId}
             boundProject={projectFromMetadata(activeConversation?.metadata)}
+            conversationId={activeConversation?.id ?? null}
             onAgentChange={handleAgentChange}
             onRuntimeChange={handleCommandRuntimeChange}
             manageModelsHref={podModelsHref(podId)}

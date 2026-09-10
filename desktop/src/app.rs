@@ -76,6 +76,7 @@ pub(crate) fn run() {
             conversation_folders::conversation_folder,
             conversation_folders::bind_conversation_folder,
             conversation_folders::unbind_conversation_folder,
+            conversation_folders::adopt_conversation_folder,
             agent_host_ui::agent_host_start,
             agent_host_ui::agent_host_pair,
             agent_host_ui::agent_host_refresh,

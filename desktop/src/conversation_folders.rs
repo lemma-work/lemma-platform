@@ -38,6 +38,15 @@ pub(crate) fn bindings_path() -> PathBuf {
 
 type Bindings = BTreeMap<String, String>;
 
+/// Where a choice waits while its conversation is still being created.
+///
+/// The folder is picked in the composer, before the first message, so there is
+/// no conversation to key it to yet. The alternative was handing the path back
+/// to the page and letting it name the folder when it created the conversation
+/// -- which is the one thing this design exists to avoid. It waits here
+/// instead, under a key no conversation id can collide with.
+const PENDING: &str = "pending";
+
 fn read_bindings() -> Bindings {
     std::fs::read_to_string(bindings_path())
         .ok()
@@ -89,30 +98,40 @@ fn conversation_key(conversation_id: &str) -> Result<String, String> {
 pub(crate) async fn conversation_folder(
     window: Webview,
     app: AppHandle,
-    conversation_id: String,
+    conversation_id: Option<String>,
 ) -> Result<Option<String>, String> {
     require_agent_host_caller(&window, &app)?;
     require_local_install(&app)?;
-    let key = conversation_key(&conversation_id)?;
+    let key = match conversation_id.as_deref() {
+        Some(id) => conversation_key(id)?,
+        None => PENDING.to_owned(),
+    };
     tauri::async_runtime::spawn_blocking(move || read_bindings().get(&key).cloned())
         .await
         .map_err(|error| error.to_string())
 }
 
-/// Ask for a folder, and bind this conversation to it.
+/// Ask for a folder, and hold the answer.
+///
+/// `conversation_id` is optional because the composer offers this before the
+/// conversation exists. Absent, the choice waits under `PENDING` until
+/// `adopt_conversation_folder` gives it an id.
 ///
 /// `None` means the dialog was dismissed, which is not a failure and must not
-/// change the binding: someone opening the picker to look at it and closing it
-/// again has said nothing.
+/// change anything: someone opening the picker to look and closing it again has
+/// said nothing.
 #[tauri::command]
 pub(crate) async fn bind_conversation_folder(
     window: Webview,
     app: AppHandle,
-    conversation_id: String,
+    conversation_id: Option<String>,
 ) -> Result<Option<String>, String> {
     require_agent_host_caller(&window, &app)?;
     require_local_install(&app)?;
-    let key = conversation_key(&conversation_id)?;
+    let key = match conversation_id.as_deref() {
+        Some(id) => conversation_key(id)?,
+        None => PENDING.to_owned(),
+    };
     // `blocking_pick_folder` would block the thread it is called on, and a
     // `#[tauri::command]` runs on the main thread — which is the thread the
     // dialog itself needs in order to appear. Asked asynchronously instead.
@@ -148,17 +167,47 @@ pub(crate) async fn bind_conversation_folder(
     Ok(Some(recorded))
 }
 
+/// Give the waiting choice the conversation it was made for.
+///
+/// Returns the folder that was adopted, or `None` when nothing was waiting --
+/// which is the ordinary case, because most conversations never pick one.
+#[tauri::command]
+/// Off the UI thread, for the same reason as `conversation_folder`.
+pub(crate) async fn adopt_conversation_folder(
+    window: Webview,
+    app: AppHandle,
+    conversation_id: String,
+) -> Result<Option<String>, String> {
+    require_agent_host_caller(&window, &app)?;
+    require_local_install(&app)?;
+    let key = conversation_key(&conversation_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut bindings = read_bindings();
+        let Some(folder) = bindings.remove(PENDING) else {
+            return Ok(None);
+        };
+        bindings.insert(key, folder.clone());
+        write_bindings(&bindings)?;
+        Ok(Some(folder))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Work in the ordinary place again.
 #[tauri::command]
 /// Off the UI thread, for the same reason as `conversation_folder`.
 pub(crate) async fn unbind_conversation_folder(
     window: Webview,
     app: AppHandle,
-    conversation_id: String,
+    conversation_id: Option<String>,
 ) -> Result<(), String> {
     require_agent_host_caller(&window, &app)?;
     require_local_install(&app)?;
-    let key = conversation_key(&conversation_id)?;
+    let key = match conversation_id.as_deref() {
+        Some(id) => conversation_key(id)?,
+        None => PENDING.to_owned(),
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let mut bindings = read_bindings();
         if bindings.remove(&key).is_none() {

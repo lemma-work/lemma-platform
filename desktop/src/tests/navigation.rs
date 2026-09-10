@@ -41,6 +41,7 @@ fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
                 | "allow-conversation-folder"
                 | "allow-bind-conversation-folder"
                 | "allow-unbind-conversation-folder"
+                | "allow-adopt-conversation-folder"
         ) || permission.starts_with("allow-agent-host-")
     }));
     for forbidden in [

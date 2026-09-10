@@ -140,6 +140,21 @@ mod tests {
         assert_eq!(bound_folder(&store, conversation), None);
     }
 
+    /// The shell parks a choice under a reserved key while its conversation is
+    /// still being created. It is looked up by UUID here, so the reserved key
+    /// cannot be reached -- and a folder waiting for a conversation must not
+    /// become the folder of some other one.
+    #[test]
+    fn the_shells_waiting_choice_is_not_a_conversations_folder() {
+        let temporary = tempfile::tempdir().expect("temp dir");
+        let store = bindings(&[("pending", temporary.path().to_str().expect("utf-8 path"))]);
+
+        for _ in 0..8 {
+            assert_eq!(bound_folder(&store, Uuid::now_v7()), None);
+        }
+        assert!(Uuid::parse_str("pending").is_err(), "and it is not an id");
+    }
+
     #[test]
     fn a_store_that_is_missing_or_malformed_binds_nothing() {
         let temporary = tempfile::tempdir().expect("temp dir");

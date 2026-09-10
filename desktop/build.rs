@@ -29,6 +29,7 @@ const COMMANDS: &[&str] = &[
     "conversation_folder",
     "bind_conversation_folder",
     "unbind_conversation_folder",
+    "adopt_conversation_folder",
     "agent_host_start",
     "agent_host_pair",
     "agent_host_refresh",

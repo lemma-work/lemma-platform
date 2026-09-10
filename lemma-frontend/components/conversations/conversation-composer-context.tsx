@@ -5,11 +5,14 @@ import type {
     AgentRuntimeProfileListResponse,
 } from 'lemma-sdk';
 
+import { useEffect, useRef } from 'react';
+
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { resolveRuntimeModelName, shortModelName } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { ProjectBranchChip } from '@/components/lemma/assistant/project-branch';
 import { ProjectPicker } from '@/components/lemma/assistant/project-picker';
+import { adoptConversationFolder, useConversationFolder } from '@/lib/hooks/use-conversation-folder';
 import type { ProjectSelection } from '@/lib/assistant/project-selection';
 import { useGithubProjects } from '@/lib/hooks/use-github-projects';
 import { formatAgentName } from '@/lib/utils/agents';
@@ -31,6 +34,7 @@ export function ConversationComposerContext({
     manageModelsHref,
     podId,
     boundProject = null,
+    conversationId = null,
 }: {
     agents: Agent[];
     selectedAgentName: string | null;
@@ -47,11 +51,29 @@ export function ConversationComposerContext({
     podId: string;
     /** The project an existing conversation is already working in. */
     boundProject?: ProjectSelection | null;
+    /** The open conversation, or null while one is being composed. */
+    conversationId?: string | null;
 }) {
     const { pendingProject, setPendingProject } = useAIAssistant();
     // Only the picker needs the repo list, and only before a conversation
     // exists — an open conversation's directory is already decided.
     const githubProjects = useGithubProjects({ enabled: isNewConversation });
+    // A folder on this computer, which only a local install can offer. Asked
+    // for the open conversation, or for the one being composed — the shell
+    // holds that choice until there is an id to give it.
+    const localFolder = useConversationFolder(isNewConversation ? null : conversationId);
+
+    // A folder chosen in the composer is parked in the shell until the
+    // conversation exists. Adopted only on the transition out of composing:
+    // adopting whenever an id appears would hand the parked choice to whatever
+    // conversation the person happened to open next.
+    const wasComposingRef = useRef(isNewConversation);
+    useEffect(() => {
+        const wasComposing = wasComposingRef.current;
+        wasComposingRef.current = isNewConversation;
+        if (!wasComposing || isNewConversation || !conversationId) return;
+        void adoptConversationFolder(conversationId);
+    }, [conversationId, isNewConversation]);
     const agentLabel = agentDisplayLabel
         ?? (selectedAgentName ? formatAgentName(selectedAgentName) : 'Pod default');
     // Neither runtime is required to carry a model — an inherited default names
@@ -73,7 +95,7 @@ export function ConversationComposerContext({
                 <span className="max-w-28 truncate sm:max-w-52" title={`Model: ${modelLabel}`}>
                     {modelLabel}
                 </span>
-                {boundProject ? (
+                {boundProject || localFolder.folder ? (
                     <>
                         <ProjectPicker
                             value={boundProject}
@@ -83,12 +105,13 @@ export function ConversationComposerContext({
                             isLoadingProjects={false}
                             readOnly
                             connectHref="#"
+                            localFolder={localFolder.folder}
                             className="h-auto px-0"
                         />
                         {/* The branch is settled, but what happened to it is not:
                             a pull request can open, fill up and merge while this
                             conversation is still going. */}
-                        <ProjectBranchChip project={boundProject} readOnly />
+                        {boundProject ? <ProjectBranchChip project={boundProject} readOnly /> : null}
                     </>
                 ) : null}
             </div>
@@ -133,6 +156,15 @@ export function ConversationComposerContext({
                         error={githubProjects.error}
                         accountId={githubProjects.accountId}
                         connectHref={`/pod/${encodeURIComponent(podId)}/connectors`}
+                        localFolder={localFolder.folder}
+                        onPickLocalFolder={localFolder.available ? () => void localFolder.bind() : undefined}
+                        onClearLocalFolder={localFolder.available ? () => void localFolder.unbind() : undefined}
+                        // A GitHub connection needs an app registration, secrets
+                        // and a reachable webhook. A local install has none of
+                        // those, so offering "Connect GitHub" there is offering
+                        // something that cannot be finished — a folder on this
+                        // computer is the answer instead.
+                        canConnectGithub={!localFolder.available}
                     />
                     {pendingProject ? (
                         <ProjectBranchChip
