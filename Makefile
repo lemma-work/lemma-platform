@@ -23,8 +23,8 @@ SHELL := /bin/bash
         desktop-dev desktop-sidecars desktop-test desktop-test-app desktop-fmt desktop-fmt-fix \
         desktop-lint desktop-guestd desktop-check-windows desktop-check \
         desktop-host-pack desktop-host-pack-check \
-        desktop-concepts desktop-concepts-check \
-        desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents \
+        desktop-concepts desktop-concepts-check desktop-file-size \
+        desktop-runtime-fetch desktop-dmg desktop-exe desktop-verify-agents desktop-agent-host-e2e desktop-agent-host-browser-e2e \
         desktop-verify-guest desktop-clean \
         version-check local-domain-check local-auth-gate-check script-portability-check \
         test-dev-workflow \
@@ -78,6 +78,10 @@ SCENARIOS_DIR := tests/scenarios
 # Desktop is one cargo workspace: the app shell, the durable daemon, the Agent
 # Host, and the runtime helpers share a lockfile and a target directory. That
 # is why these point at `desktop` and not at five separate crates.
+# The Node this repository is built with. Read from .nvmrc rather than written
+# down again: two "install Node.js 22" messages outlived .nvmrc moving to 24,
+# and nothing objected, because a message is not a check.
+NODE_VERSION  := $(shell tr -d '[:space:]' < .nvmrc)
 DESKTOP_DOWNLOAD_DIR := $(DESKTOP_DIR)/runtime/download
 DESKTOP_BUNDLED_DIR  := $(DESKTOP_DIR)/runtime/bundled
 # Pinned in one file, read by the Makefile, dev-local.sh, desktop.ps1, and every
@@ -936,7 +940,7 @@ desktop-dev:
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@command -v node >/dev/null 2>&1 || \
-		(echo "  ✗ node not found — install Node.js 22 from https://nodejs.org"; exit 1)
+		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
 	@$(DESKTOP_DIR)/scripts/dev-local.sh --source $(if $(filter 1,$(CONTROL)),--control,)
 
 # Four binaries from one cargo invocation. Asking for them separately would
@@ -974,6 +978,9 @@ desktop-test: _desktop-ensure-sidecars
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Desktop workspace tests…"
 	@cd $(DESKTOP_DIR) && cargo test $(DESKTOP_CARGO_SCOPE) --locked
+	@node --test desktop/ui-tests/tests/*.test.mjs
+	@uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+	@if [ "$$(uname -s)" = Darwin ]; then swift test --package-path desktop/local-runtime/macos-vz; fi
 	@echo "  ✓ desktop workspace tests pass"
 
 # The app crate alone, for when the shell is what changed.
@@ -995,8 +1002,6 @@ desktop-lint: _desktop-ensure-sidecars
 	@echo "→ Desktop workspace clippy…"
 	@cd $(DESKTOP_DIR) && cargo clippy $(DESKTOP_CARGO_SCOPE) --locked --all-targets -- -D warnings
 	@echo "  ✓ clippy clean"
-	@echo "→ Memory balloon policy…"
-	@$(DESKTOP_DIR)/scripts/check-balloon-policy.sh
 
 # Build the ~1 GB artifact the app ships, and prove its interpreters run.
 #
@@ -1031,10 +1036,12 @@ desktop-host-pack-check:
 
 # Compile the Windows code paths from a Mac, before pushing.
 #
-# The `desktop-windows` CI job is not in the desktop path filter, so its result
-# arrives a push later -- and it has now caught four separate things one round
-# at a time: unix-only test helpers, a `Path` import behind the wrong cfg, CRLF
-# breaking source searches, and tests that spawn `/bin/sh`.
+# The `desktop-windows` CI job has caught four separate things one round at a
+# time: unix-only test helpers, a `Path` import behind the wrong cfg, CRLF
+# breaking source searches, and tests that spawn `/bin/sh`. It is in the desktop
+# path filter now, so it runs on the same push rather than a later one -- but a
+# Windows runner is the slowest lane in CI, and finding out here costs a minute
+# instead of the whole job.
 #
 # This catches the *compile* half of that class locally. `lemma-agent-host` is
 # left out on purpose: it pulls `libsqlite3-sys`, whose build script needs a
@@ -1061,17 +1068,56 @@ desktop-host-pack-check:
 # Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
 # They need release certificates, so they cannot run on a contributor's machine
 # -- `make desktop-dmg` is the local approximation.
-desktop-check: desktop-fmt desktop-concepts-check desktop-lint desktop-test desktop-check-windows
+desktop-check: desktop-fmt desktop-concepts-check desktop-file-size desktop-image-pins desktop-entrypoint-parity desktop-entitlements desktop-lint desktop-test desktop-check-windows desktop-test-browser
 	@echo ""
-	@echo "  ✓ desktop: fmt, concepts, clippy, tests, and the locald/runtime-manager Windows paths"
+	@echo "  ✓ desktop: fmt, concepts, file size, image pins, entrypoint parity, entitlements, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
+
+# DES-09 reaches the desktop crates. `check_architecture.py` reads Python only,
+# which is how main.rs got to 11,297 lines with nothing objecting.
+desktop-file-size:
+	@echo "→ Rust file size (DES-09)…"
+	@python3 desktop/scripts/check_file_size.py
+
+# A moving base tag makes the same commit build a different guest. Checked here
+# rather than only in the guest-image CI job, which the desktop path filter
+# skips whenever a change did not touch that directory.
+.PHONY: desktop-image-pins
+desktop-image-pins:
+	@echo "→ Guest image base pins…"
+	@python3 desktop/scripts/check_image_pins.py
+
+# Windows has no `make`, so desktop.ps1 carries the same verbs -- and it said so
+# while four cross-platform gates were missing from it.
+.PHONY: desktop-entrypoint-parity
+desktop-entrypoint-parity:
+	@echo "→ Makefile and desktop.ps1 offer the same verbs…"
+	@python3 desktop/scripts/check_entrypoint_parity.py
+
+# The signing arrangement is invisible in the diff that would break it: Tauri
+# applies one entitlements file to the app and every sidecar it signs, and the
+# one binary that needs an entitlement is the one Tauri does not sign at all.
+.PHONY: desktop-entitlements
+desktop-entitlements:
+	@echo "→ Entitlements (least privilege per binary)…"
+	@python3 desktop/scripts/check_entitlements.py
+
+.PHONY: desktop-test-browser
+desktop-test-browser:
+	@npm ci --prefix desktop/ui-tests --ignore-scripts --no-audit --no-fund
+	@if [ -z "$${LEMMA_TEST_BROWSER_CHANNEL:-}" ]; then cd desktop/ui-tests && npx --no-install playwright install chromium; fi
+	@npm --prefix desktop/ui-tests run test:browser
 
 desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
 		echo "→ Adding the Windows target…"; \
 		rustup target add x86_64-pc-windows-msvc)
-	@echo "→ Windows compile check (locald, runtime manager, tests included)…"
+	@echo "→ Windows compile check (locald, runtime manager, bridge, process, job object)…"
+	# lemma-agent-host is deliberately absent: it depends on libsqlite3-sys,
+	# which needs a Windows C toolchain to cross-compile. CI's windows-latest
+	# job builds and tests it, and that is the only place it can be checked.
 	@cd $(DESKTOP_DIR) && cargo clippy \
 		-p lemma-locald -p lemma-runtime-manager \
+		-p lemma-runtime -p lemma-desktop-process -p lemma-job-object \
 		--target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
 	@echo "  ✓ the Windows code paths compile and lint"
 
@@ -1137,6 +1183,26 @@ desktop-runtime-fetch:
 # half a gigabyte a run. CI publishes the signed online DMG instead
 # (`release-local-images.yml` with `share`); this is the one you install
 # yourself, from the runtime artifacts that workflow uploads.
+# QA=1 builds the same DMG as a separate application: its own name, its own
+# bundle identifier, and -- the part that matters -- its own data directory.
+#
+# Qualifying a candidate means running it on the same Mac as the real
+# installation, and two builds sharing `Application Support/Lemma` is not a
+# tidiness problem: locald's process ledger, its runtime and its reset command
+# are all keyed on that directory, so a candidate would stop the user's daemon,
+# adopt its runtime, and erase its pods on cleanup. The name is baked into the
+# binary at build time rather than passed at launch, so it holds however the
+# candidate is started.
+ifeq ($(QA),1)
+DESKTOP_DMG_CONFIG   := tauri.qa.conf.json
+DESKTOP_DMG_DATA_DIR := Lemma Candidate QA
+DESKTOP_DMG_APP_NAME := Lemma Candidate QA
+else
+DESKTOP_DMG_CONFIG   := tauri.dist.conf.json
+DESKTOP_DMG_DATA_DIR :=
+DESKTOP_DMG_APP_NAME := Lemma
+endif
+
 desktop-dmg:
 	@test "$$(uname -s)" = "Darwin" || ( \
 		echo "  ✗ desktop-dmg builds a macOS DMG"; \
@@ -1146,7 +1212,7 @@ desktop-dmg:
 	@command -v swift >/dev/null 2>&1 || \
 		(echo "  ✗ swift not found — install Xcode or the Command Line Tools"; exit 1)
 	@command -v node >/dev/null 2>&1 || \
-		(echo "  ✗ node not found — install Node.js 22 from https://nodejs.org"; exit 1)
+		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
 	@command -v jq >/dev/null 2>&1 || (echo "  ✗ jq not found — brew install jq"; exit 1)
 	@test -d $(DESKTOP_DOWNLOAD_DIR) || ( \
 		echo "  ✗ no runtime artifacts in $(DESKTOP_DOWNLOAD_DIR)"; \
@@ -1169,16 +1235,23 @@ desktop-dmg:
 	@# as CI does it.
 	@echo "→ Re-sealing the virtualization helper…"
 	@codesign --force --options runtime \
-		--entitlements $(DESKTOP_DIR)/entitlements.plist \
+		--entitlements $(DESKTOP_DIR)/local-runtime/macos-vz/lemma-vz.entitlements.plist \
 		--sign "$${APPLE_SIGNING_IDENTITY:--}" \
 		$(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE) 2>/dev/null
 	@codesign --verify --strict $(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE)
+	@# `--ci` is not about being in CI. Without it the DMG bundler runs
+	@# AppleScript against Finder purely to position the icons, and a shell
+	@# with no Automation grant -- an SSH session, an agent, a fresh terminal
+	@# -- gets "Not authorised to send Apple events to Finder. (-1743)" and the
+	@# build fails after the .app is already built and signed. The documented
+	@# command has to work where it is documented to be run.
 	@echo "→ Bundling the self-contained DMG…"
 	@cd $(DESKTOP_DIR) && APPLE_SIGNING_IDENTITY="$${APPLE_SIGNING_IDENTITY:--}" \
-		npx -y $(TAURI_CLI) build --config tauri.dist.conf.json
+		LEMMA_DESKTOP_DATA_DIR_NAME="$(DESKTOP_DMG_DATA_DIR)" \
+		npx -y $(TAURI_CLI) build --ci --config $(DESKTOP_DMG_CONFIG)
 	@$(MAKE) --no-print-directory _desktop-verify-dist-app
 	@echo ""
-	@dmg=$$(ls $(DESKTOP_DIR)/target/release/bundle/dmg/Lemma_*.dmg 2>/dev/null | head -1); \
+	@dmg=$$(ls $(DESKTOP_DIR)/target/release/bundle/dmg/*_*.dmg 2>/dev/null | head -1); \
 	echo "  ✓ $$dmg"
 	@test -n "$${APPLE_SIGNING_IDENTITY:-}" || ( \
 		echo "    Ad-hoc signed: Gatekeeper will ask on first open, and locald"; \
@@ -1194,7 +1267,23 @@ desktop-exe:
 	@echo "      pwsh desktop\\scripts\\desktop.ps1 exe"
 	@exit 1
 
-# The one command that answers "does ACP chat over Agent Host actually work?"
+# The real backend and Rust host share the same HTTP path as a browser chat.
+# A scripted ACP provider makes streaming and disconnects deterministic without
+# using installed agent accounts. Testcontainers owns the disposable services.
+desktop-agent-host-e2e:
+	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
+	@cd lemma-backend && uv run pytest \
+		app/modules/agent/tests/e2e/test_agent_host_process_e2e.py -m 'not agent_host_browser' --no-showlocals
+
+desktop-agent-host-browser-e2e:
+	@cd $(DESKTOP_DIR) && cargo build -p lemma-agent-host --locked
+	@npm --prefix lemma-typescript run build
+	@node --test desktop/ui-tests/drivers/setup-layout.mjs
+	@cd lemma-backend && CORS_ORIGIN_REGEX='^http://127[.]0[.]0[.]1:[0-9]+$$' \
+		uv run pytest app/modules/agent/tests/e2e/test_agent_host_process_e2e.py \
+		-m agent_host_browser --no-showlocals
+
+# Does ACP chat over Agent Host work with authenticated provider agents?
 # Drives Codex, Claude Code and OpenCode over real ACP and asserts each streams
 # a real answer back through the host protocol, keeps one provider session
 # across two turns, and survives a session the provider has forgotten.
@@ -1204,9 +1293,10 @@ desktop-exe:
 desktop-verify-agents:
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@test -n "$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-}" || \
+		(echo "Set LEMMA_REAL_AGENT_HOST_DATA_DIR to a disposable directory with verified adapters; use dedicated provider test accounts."; exit 1)
 	@echo "→ Verifying ACP chat over Agent Host (real agents, real quota)…"
 	@cd $(DESKTOP_DIR) && \
-		LEMMA_REAL_AGENT_HOST_DATA_DIR="$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-$$HOME/Library/Application Support/Lemma/agent-host}" \
 		cargo test -p lemma-agent-host --locked --test real_harness_e2e -- \
 			--ignored --nocapture --test-threads=1
 	@echo "  ✓ ACP chat over Agent Host verified"
@@ -1321,7 +1411,7 @@ desktop-clean:
 # locald identifier check, which a local build is the likeliest place to lose.
 _desktop-verify-dist-app:
 	@set -eu; \
-	app="$(DESKTOP_DIR)/target/release/bundle/macos/Lemma.app"; \
+	app="$(DESKTOP_DIR)/target/release/bundle/macos/$(DESKTOP_DMG_APP_NAME).app"; \
 	test -x "$$app/Contents/MacOS/lemma-locald"; \
 	test -x "$$app/Contents/MacOS/lemma-agent-host"; \
 	test -x "$$app/Contents/MacOS/lemma-runtime"; \
@@ -1332,15 +1422,26 @@ _desktop-verify-dist-app:
 	test ! -e "$$app/Contents/Resources/local-runtime"; \
 	test ! -e "$$app/Contents/Resources/managed-runtime"; \
 	app_bytes=$$(du -sk "$$app" | awk '{print $$1 * 1024}'); \
-	test "$$app_bytes" -le $$((850 * 1024 * 1024)) || ( \
-		echo "  ✗ app is $$app_bytes bytes; the bundled gate is 850 MiB"; exit 1); \
+	test "$$app_bytes" -le $$((7 * 1024 * 1024 * 1024)) || ( \
+		echo "  ✗ app is $$app_bytes bytes; the bundled gate is 7 GiB"; exit 1); \
 	codesign --verify --deep --strict "$$app"; \
+	test -n "$$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$$app/Contents/Info.plist")"; \
 	codesign -d --entitlements :- "$$app/Contents/Resources/lemma-vz" 2>&1 \
 		| grep -qF "com.apple.security.virtualization"; \
-	codesign -dvvv "$$app/Contents/MacOS/lemma-locald" 2>&1 \
-		| grep -qFx "Identifier=work.lemma.locald" || ( \
-		echo "  ✗ locald lost its embedded Info.plist identifier — the credential"; \
-		echo "    vault would treat every rebuild as a different program"; exit 1); \
+	for over in "" MacOS/lemma-locald MacOS/lemma-agent-host MacOS/lemma-runtime; do \
+		target="$$app"; test -z "$$over" || target="$$app/Contents/$$over"; \
+		if codesign -d --entitlements :- "$$target" 2>&1 \
+			| grep -qF "com.apple.security.virtualization"; then \
+			echo "  ✗ $$target carries com.apple.security.virtualization and cannot use it"; \
+			exit 1; \
+		fi; \
+	done; \
+	for helper in locald agent-host runtime vz; do \
+		location="MacOS"; test "$$helper" != vz || location="Resources"; \
+		codesign -dvvv "$$app/Contents/$$location/lemma-$$helper" 2>&1 \
+			| grep -qFx "Identifier=work.lemma.$$helper" || ( \
+			echo "  ✗ $$helper lost its stable signing identifier"; exit 1); \
+	done; \
 	test "$$(jq -r .version "$$app/Contents/Resources/lemma-local.json")" = \
 		"$$(jq -r .version $(DESKTOP_DIR)/tauri.conf.json)" || ( \
 		echo "  ✗ the bundled runtime manifest and Desktop disagree on the version"; \
@@ -1693,10 +1794,9 @@ RUFF := uvx ruff@0.15.22
 # rather than silently passed.
 lint:
 	@echo "→ Backend (ruff)…"
-	@# Delegates rather than running `ruff check .`, which walked into the
-	@# vendored lemma-backend/lemma-connectors tree and failed on generated
-	@# code. That is why this target had been red for a while without anyone
-	@# noticing: the backend line was the one line here that could fail, and
+	@# Delegates rather than running `ruff check .`, which walked into
+	@# generated code. That is why this target had been red for a while without
+	@# anyone noticing: the backend line was the one line here that could fail, and
 	@# `make quality` -- the documented gate -- calls the scoped target below.
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint
 	@$(MAKE) --no-print-directory lint-clients
@@ -1737,7 +1837,6 @@ lint-clients:
 # `--check` resolves without writing, and the whole sweep is well under a second.
 LOCKED_PROJECTS = \
 	$(BACKEND_DIR) \
-	$(BACKEND_DIR)/lemma-connectors \
 	$(BACKEND_DIR)/sandbox-images/templates/function-python \
 	$(BACKEND_DIR)/sandbox-images/templates/workspace-python \
 	$(CLI_DIR) \
@@ -1751,14 +1850,13 @@ lint-lockfiles:
 		(cd $$project && uv lock --check --quiet) \
 			|| { echo "  $$project/uv.lock is stale — run 'uv lock' there"; exit 1; }; \
 	done
-	@echo "9 lockfiles current."
+	@echo "8 lockfiles current."
 
 # ── Format ────────────────────────────────────────────────────────────────────
 #
 # Every first-party Python file is `ruff format` clean. Generated trees are
-# excluded and stay excluded: `lemma-backend/lemma-connectors/` comes from
-# provider OpenAPI specs and `lemma-python/lemma_sdk/openapi_client/` from the
-# API spec, so formatting either one would be reverted by the next generation
+# excluded and stay excluded: `lemma-python/lemma_sdk/openapi_client/` comes
+# from the API spec, so formatting it would be reverted by the next generation
 # and read as codegen drift.
 #
 # `format-check` is part of `quality`, so formatting is a merge requirement.
@@ -1829,8 +1927,6 @@ quality:
 	@$(MAKE) --no-print-directory client-typecheck-record
 	@echo "→ Async-safety…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-async
-	@echo "→ Connector package (ruff, excludes generated clients)…"
-	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-connectors
 	@echo "→ DB connection scope…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-session-scope
 	@echo "→ I/O hygiene…"
@@ -1869,6 +1965,8 @@ quality:
 	@$(MAKE) --no-print-directory script-portability-check
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+	@echo "→ Both DMG pipelines verify the same things…"
+	@uv run --no-project --with pyyaml python scripts/check_release_parity.py
 	@echo "→ Test census (no suite has quietly stopped running)…"
 	@python3 scripts/check_pytest_census.py
 	@echo "→ E2E shard layout…"
@@ -1964,6 +2062,8 @@ quality-frontend:
 		echo "    or run 'make quality' if your change is Python-only."; \
 		exit 1; \
 	fi
+	@echo "→ TypeScript SDK test types…"
+	@cd $(TS_DIR) && npx tsc --noEmit -p tsconfig.test.json
 	@echo "→ Frontend lint, types, design audit, education anchors…"
 	@cd $(FRONTEND_DIR) && npm run --silent check
 

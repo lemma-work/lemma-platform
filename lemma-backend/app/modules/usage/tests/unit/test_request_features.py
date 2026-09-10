@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 
 import pytest
+from pydantic import BaseModel
 from pydantic_ai.messages import (
     AudioUrl,
     BinaryContent,
@@ -134,3 +135,26 @@ def test_image_output_is_not_a_text_request() -> None:
     assert not priceable_text_request(
         [], ModelRequestParameters(allow_image_output=True), {}
     )
+
+
+def test_a_tool_returning_a_model_is_text_because_that_is_what_is_sent() -> None:
+    """Most tools return a model or a dataclass, not a JSON primitive.
+
+    pydantic-ai serializes it with `model_response_str`, so the provider is
+    billed for text. Treating it as unpriceable refused the continuation after
+    the first tool call of any run under a monetary limit.
+    """
+
+    class ExecCommandResult(BaseModel):
+        stdout: str
+        exit_code: int
+
+    messages: list[ModelMessage] = [
+        ModelResponse(parts=[ToolCallPart("exec", {"command": "ls"})]),
+        ModelRequest(
+            parts=[
+                ToolReturnPart("exec", ExecCommandResult(stdout="a.txt", exit_code=0))
+            ]
+        ),
+    ]
+    assert priceable_text_request(messages, ModelRequestParameters(), {})

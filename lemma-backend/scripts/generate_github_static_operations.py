@@ -39,15 +39,18 @@ from app.modules.connectors.infrastructure.openapi.spec_import import (  # noqa:
     build_operation_descriptors,
     build_raw_passthrough,
 )
+from scripts._openapi_static_operations import (  # noqa: E402
+    LEMMA_APPS_CONFIG_PATH,
+    SPECS_DIR,
+    operation_to_static_entry,
+    write_into_lemma_apps_config,
+)
 
 SPEC_URL = (
     "https://raw.githubusercontent.com/github/rest-api-description/main/"
     "descriptions/api.github.com/api.github.com.json"
 )
-SPEC_PATH = (
-    Path(__file__).parent.parent / "lemma-connectors" / "openapi_specs" / "github.json"
-)
-LEMMA_APPS_CONFIG_PATH = Path(__file__).parent / "lemma_apps_config.json"
+SPEC_PATH = SPECS_DIR / "github.json"
 
 
 def _ensure_spec() -> None:
@@ -80,10 +83,33 @@ ALLOWLIST = [
         "users/get-authenticated",
         "users/get-by-username",
         # Repositories
+        #
+        # `repos/list-for-authenticated-user` (GET /user/repos) is deliberately
+        # absent. It is not available to GitHub App user tokens, and it does not
+        # fail loudly: it returns only repositories inside an installation, so
+        # an agent asking "what repositories do I have?" with no installation is
+        # told *none*. `apps/list-repos-accessible-to-installation` is the
+        # enumeration a GitHub App actually has.
+        #
+        # `repos/create-for-authenticated-user` (POST /user/repos) is absent for
+        # a harder reason: neither identity this App has can call it. It needs
+        # the OAuth `repo` scope, App user tokens carry no scopes at all, and
+        # GitHub marks the route as unavailable to installations. It was shipped
+        # and could only ever fail.
         "repos/get",
-        "repos/list-for-authenticated-user",
         "repos/list-for-org",
-        "repos/create-for-authenticated-user",
+        # Both, because a GitHub App has two identities and each has its own
+        # listing. `list-repos-accessible-to-installation` is the installation
+        # asking what it covers (`installation_ok`); it answers 403 "Resource
+        # not accessible by integration" to a user token, so it is not a
+        # replacement for the user-facing question.
+        # `list-installation-repos-for-authenticated-user` is that one: what
+        # *this person* can reach through an installation. Which of the two an
+        # operation gets is decided per call by `github_presenter`, from the
+        # `github_token_kind` generated here.
+        "apps/list-repos-accessible-to-installation",
+        "apps/list-installation-repos-for-authenticated-user",
+        "apps/list-installations-for-authenticated-user",
         "repos/list-branches",
         "repos/get-branch",
         "repos/list-commits",
@@ -296,39 +322,6 @@ OVERRIDES = {
 RAW_PASSTHROUGH_NAME = "github_http_request"
 GRAPHQL_PASSTHROUGH_NAME = "github_graphql_request"
 
-# Top-level property names and types, and nothing below that. Output schemas
-# were 93% of this catalog entry -- `repos_get` alone was 72 KB, so one
-# `describe_connector_operation` on it cost an agent roughly 18k tokens. What a
-# model actually needs from an output schema is which fields come back; the
-# shape of `owner.plan.collaborators` three levels down it can read off the
-# response it already has.
-_PROSE_KEYS = frozenset(
-    {"description", "example", "examples", "title", "format", "default"}
-)
-
-
-def _prune_output_schema(node: object, depth: int = 0) -> object:
-    if not isinstance(node, dict):
-        return node
-    pruned: dict = {}
-    for key, value in node.items():
-        if key in _PROSE_KEYS:
-            continue
-        if key == "properties" and isinstance(value, dict):
-            pruned[key] = {
-                name: {"type": sub.get("type")} if isinstance(sub, dict) else {}
-                for name, sub in value.items()
-            }
-        elif key == "items":
-            pruned[key] = _prune_output_schema(value, depth + 1)
-        elif key in ("anyOf", "oneOf", "allOf") and isinstance(value, list):
-            pruned[key] = [_prune_output_schema(value[0], depth + 1)] if value else []
-        elif isinstance(value, dict):
-            pruned[key] = _prune_output_schema(value, depth + 1)
-        else:
-            pruned[key] = value
-    return pruned
-
 
 def _token_kinds_by_route(spec: dict) -> dict[tuple[str, str], str]:
     """Whether an installation token can run each route, per GitHub's own spec.
@@ -361,19 +354,9 @@ def _operation_to_static_entry(
         str(descriptor.get("method", "")).upper(),
         str(descriptor.get("path", "")),
     )
-    execution = {
-        **descriptor,
-        "github_token_kind": token_kinds.get(route, "installation_ok"),
-    }
-    entry: dict = {
-        "name": op.public_name,
-        "description": op.description,
-        "execution": execution,
-        "input_schema": op.input_schema,
-    }
-    if op.output_schema is not None:
-        entry["output_schema"] = _prune_output_schema(op.output_schema)
-    return entry
+    return operation_to_static_entry(
+        op, {"github_token_kind": token_kinds.get(route, "installation_ok")}
+    )
 
 
 def build_static_operations() -> list[dict]:
@@ -441,23 +424,6 @@ def _graphql_passthrough_entry() -> dict:
     }
 
 
-def _write_into_lemma_apps_config(static_operations: list[dict]) -> None:
-    apps = json.loads(LEMMA_APPS_CONFIG_PATH.read_text(encoding="utf-8"))
-    for app in apps:
-        if app.get("name") == "github":
-            app["static_operations"] = static_operations
-            break
-    else:
-        raise SystemExit(
-            "No 'github' entry found in lemma_apps_config.json — add the "
-            "connector's non-operation fields (title, oauth2_config, "
-            "system_oauth, ...) first, then re-run with --write."
-        )
-    LEMMA_APPS_CONFIG_PATH.write_text(
-        json.dumps(apps, indent=2) + "\n", encoding="utf-8"
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -471,7 +437,7 @@ def main() -> None:
     static_operations = build_static_operations()
 
     if args.write:
-        _write_into_lemma_apps_config(static_operations)
+        write_into_lemma_apps_config("github", static_operations)
         print(
             f"Wrote {len(static_operations)} operations into "
             f"{LEMMA_APPS_CONFIG_PATH}'s 'github' entry."

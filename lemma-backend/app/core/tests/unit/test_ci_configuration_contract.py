@@ -10,6 +10,58 @@ def _read(path: str) -> str:
     return (_REPO_ROOT / path).read_text()
 
 
+def test_native_desktop_dependency_caches_are_shared_across_build_workflows() -> None:
+    import yaml
+
+    native_caches = set()
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-desktop.yml",
+        ".github/workflows/release-local-images.yml",
+    ):
+        workflow = yaml.safe_load(_read(path))
+        for name, job in workflow["jobs"].items():
+            for index, step in enumerate(job.get("steps", [])):
+                settings = step.get("with", {})
+                if settings.get("prefix-key") != "desktop-native":
+                    continue
+                assert step["uses"] == "Swatinem/rust-cache@v2"
+                assert settings["workspaces"] == "desktop"
+                assert settings["shared-key"] == "${{ runner.os }}-${{ runner.arch }}"
+                assert "save-if" not in settings, "PRs need merge-ref cache reuse"
+                assert not settings.get("cache-all-crates", False)
+                assert not settings.get("cache-workspace-crates", False)
+                assert any(
+                    previous.get("uses", "").startswith("dtolnay/rust-toolchain@")
+                    for previous in job["steps"][:index]
+                ), "the cache must key the selected compiler, not the runner default"
+                native_caches.add((path, name))
+    assert native_caches == {
+        (".github/workflows/ci.yml", "desktop"),
+        (".github/workflows/ci.yml", "desktop-windows"),
+        (".github/workflows/release-desktop.yml", "build-dmg"),
+        (".github/workflows/release-desktop.yml", "build-windows"),
+        (".github/workflows/release-local-images.yml", "share-desktop-dmg"),
+        (".github/workflows/release-local-images.yml", "share-desktop-exe"),
+    }
+
+
+def test_desktop_npm_cache_tracks_settings_and_cli_dependencies() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    for name in ("desktop", "desktop-windows"):
+        node = next(
+            step
+            for step in workflow["jobs"][name]["steps"]
+            if step.get("uses", "").startswith("actions/setup-node@")
+        )
+        assert node["with"]["cache"] == "npm"
+        inputs = node["with"]["cache-dependency-path"].splitlines()
+        assert "desktop/ui-tests/package-lock.json" in inputs
+        assert "desktop/scripts/tauri-cli-version.txt" in inputs
+
+
 def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
     """Every ecosystem is monthly, grouped, and has somewhere to put a fix.
 
@@ -39,7 +91,6 @@ def test_dependabot_is_monthly_grouped_and_uv_native() -> None:
         assert entry["open-pull-requests-limit"] >= len(entry["groups"]), name
 
     for directory in (
-        "/lemma-backend/lemma-connectors",
         "/lemma-cli",
         "/lemma-pod-bundle",
         "/lemma-python",
@@ -120,156 +171,82 @@ def test_expensive_security_jobs_are_change_scoped() -> None:
     assert "if: needs.changes.outputs.backend_image == 'true'" in workflow
 
 
-def _nightly_prune_step() -> dict:
-    """The shipped prune step, read out of the workflow rather than retyped.
+def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
+    """Chromium is downloaded once per Playwright version, not once per run.
 
-    A test that restates the script proves only that two copies agree. These
-    run the text that will actually execute in CI.
+    It is ~150 MB and byte-identical between runs, so three desktop jobs were
+    each fetching it on every push. The cache has to sit *before* the install
+    in the same job -- a restore afterwards is a restore of nothing -- and it
+    has to be keyed on the lockfile, because that is the file a Playwright
+    version bump changes.
     """
     import yaml
 
-    workflow = yaml.safe_load(_read(".github/workflows/release-local-images.yml"))
-    steps = workflow["jobs"]["share-desktop-dmg"]["steps"]
-    # `.get`, not `[]`: a step is allowed to be a bare `uses:` with no name,
-    # and indexing made this helper raise KeyError on the first such step
-    # rather than skipping it.
-    return next(
-        s for s in steps if s.get("name") == "Prune superseded nightly prereleases"
-    )
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    installing = set()
+    for name, job in workflow["jobs"].items():
+        for index, step in enumerate(job.get("steps", [])):
+            if "playwright install" not in str(step.get("run", "")):
+                continue
+            installing.add(name)
+            cache = [
+                earlier
+                for earlier in job["steps"][:index]
+                if earlier.get("uses", "").startswith("actions/cache@")
+                and "ms-playwright" in str(earlier.get("with", {}).get("path", ""))
+            ]
+            assert cache, f"{name} downloads a browser it never restores"
+            key = cache[-1]["with"]["key"]
+            assert "desktop/ui-tests/package-lock.json" in key, (
+                f"{name} keys its browser cache on something other than the "
+                "lockfile a version bump changes"
+            )
+            paths = cache[-1]["with"]["path"]
+            # One step for three runners: the browser lives somewhere different
+            # on each, and a path that does not exist is skipped rather than
+            # failing.
+            for expected in (
+                "~/.cache/ms-playwright",
+                "~/Library/Caches/ms-playwright",
+                "~/AppData/Local/ms-playwright",
+            ):
+                assert expected in paths, f"{name} misses {expected}"
+    assert installing, "no job installs a browser; this contract found nothing"
 
 
-def _run_prune(tmp_path, releases: list[str], *, keep: str = "3") -> tuple[int, str]:
-    """Run the step with a stubbed `gh`, so no delete can escape the test."""
-    import os
-    import subprocess
+def test_every_dmg_build_survives_a_busy_hdiutil() -> None:
+    """`bundle_dmg.sh` fails on a busy `hdiutil`, and it fails late.
 
-    listing = "".join(f'printf "%s\\n" "{line}"\n' for line in releases)
-    stub = tmp_path / "gh"
-    stub.write_text(
-        "#!/bin/bash\n"
-        'if [[ "$1" == "api" ]]; then\n'
-        f"{listing}"
-        "  exit 0\n"
-        "fi\n"
-        'if [[ "$1" == "release" && "$2" == "delete" ]]; then\n'
-        '  echo "DELETED $3"\n'
-        "  exit 0\n"
-        "fi\n"
-        "exit 1\n"
-    )
-    stub.chmod(0o755)
-    script = tmp_path / "prune.sh"
-    script.write_text(_nightly_prune_step()["run"])
-    completed = subprocess.run(
-        ["bash", str(script)],
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "PATH": f"{tmp_path}:{os.environ['PATH']}",
-            "GITHUB_REPOSITORY": "lemma-work/lemma-platform",
-            "GH_TOKEN": "stub",
-            "KEEP": keep,
-        },
-    )
-    return completed.returncode, completed.stdout + completed.stderr
+    By then the workspace has compiled, every test in the job has passed, and
+    the only thing left is wrapping a signed `.app` in a disk image. That took
+    main red once, and the re-run went green untouched.
 
-
-def test_nightly_prune_keeps_a_rolling_window_of_the_newest_builds(tmp_path) -> None:
-    """Twelve nightly prereleases had buried v0.7.0 fifth from the top.
-
-    Ordering is by creation time and the newest are kept, so the release this
-    run just published is always inside the window and stays installable.
+    The retry is not enough on its own, which is the part worth pinning: a
+    failed run leaves its image attached and a half-built bundle behind, so an
+    attempt that does not clear both meets the last one's leftovers and fails
+    the same way. Retrying an unchanged failure is how the first version of the
+    apt retry managed three identical failures.
     """
-    returncode, output = _run_prune(
-        tmp_path,
-        [
-            "2026-08-14T15:07:47Z\tdesktop-nightly-oldest00",
-            "2026-08-18T05:36:33Z\tdesktop-nightly-newest00",
-            "2026-08-17T09:39:47Z\tdesktop-nightly-fourth00",
-            "2026-08-18T05:34:01Z\tdesktop-nightly-second00",
-            "2026-08-17T19:13:00Z\tdesktop-nightly-third000",
-        ],
-    )
+    import yaml
 
-    assert returncode == 0, output
-    deleted = {
-        line.split()[1] for line in output.splitlines() if line.startswith("DELETED ")
-    }
-    assert deleted == {"desktop-nightly-fourth00", "desktop-nightly-oldest00"}
-
-
-def test_nightly_prune_refuses_to_delete_anything_that_is_not_a_nightly(
-    tmp_path,
-) -> None:
-    """The guard, not the filter, is what stands between a bug and a lost release.
-
-    `gh release delete --cleanup-tag` destroys the release *and* its tag, so a
-    version tag reaching that loop is unrecoverable. This feeds one straight
-    past the API filter and asserts the loop stops rather than trusting it.
-    """
-    returncode, output = _run_prune(
-        tmp_path,
-        [
-            "2026-08-18T05:36:33Z\tdesktop-nightly-newest00",
-            "2026-08-18T05:34:01Z\tdesktop-nightly-second00",
-            "2026-08-17T19:13:00Z\tdesktop-nightly-third000",
-            "2026-08-15T13:18:34Z\tv0.7.0",
-            "2026-08-14T15:07:47Z\tdesktop-nightly-oldest00",
-        ],
-    )
-
-    assert returncode != 0
-    assert "Refusing to delete a non-nightly release::v0.7.0" in output
-    # It must stop *before* deleting, not merely complain on the way past.
-    assert "DELETED" not in output
-
-
-def test_nightly_prune_survives_a_listing_failure_without_claiming_success(
-    tmp_path,
-) -> None:
-    """Housekeeping runs after the DMG is published, so it must not fail the build.
-
-    But an unreadable listing must not read as a tidy release page either --
-    that is how a prune quietly stops running and the page fills up again.
-    """
-    import os
-    import subprocess
-
-    stub = tmp_path / "gh"
-    stub.write_text(
-        '#!/bin/bash\nif [[ "$1" == "api" ]]; then exit 1; fi\necho "DELETED $3"\n'
-    )
-    stub.chmod(0o755)
-    script = tmp_path / "prune.sh"
-    script.write_text(_nightly_prune_step()["run"])
-
-    completed = subprocess.run(
-        ["bash", str(script)],
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "PATH": f"{tmp_path}:{os.environ['PATH']}",
-            "GITHUB_REPOSITORY": "lemma-work/lemma-platform",
-            "GH_TOKEN": "stub",
-            "KEEP": "3",
-        },
-    )
-
-    assert completed.returncode == 0
-    assert "Could not list nightly prereleases" in completed.stdout
-    assert "DELETED" not in completed.stdout
-
-
-def test_nightly_prune_asks_the_api_only_for_nightly_prereleases() -> None:
-    """Both halves of the filter matter, and neither is implied by the other.
-
-    Dropping `.prerelease` would sweep in any future `desktop-nightly-` release
-    that was promoted; dropping the prefix would sweep in every prerelease.
-    """
-    run = _nightly_prune_step()["run"]
-
-    assert 'select(.prerelease and (.tag_name | startswith("desktop-nightly-")))' in run
-    # Deleting the tag is the point -- an orphaned tag is still clutter.
-    assert "--cleanup-tag" in run
+    building = []
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-local-images.yml",
+    ):
+        workflow = yaml.safe_load(_read(path))
+        for name, job in workflow["jobs"].items():
+            for step in job.get("steps", []):
+                run = step.get("run") or ""
+                # The steps that *invoke* the CLI to build, not the one that
+                # puts its version in the environment — and not the
+                # Windows-only `--bundles nsis` one, which makes no disk image.
+                if '"$TAURI_CLI" build' not in run or "nsis" in run:
+                    continue
+                building.append((path, name))
+                assert "for attempt in" in run, f"{name} bundles a DMG without retrying"
+                assert "hdiutil detach" in run, (
+                    f"{name} retries without detaching what the failure left "
+                    "attached, so the retry asks the same broken question"
+                )
+    assert len(building) == 2, f"expected both DMG lanes, found {building}"

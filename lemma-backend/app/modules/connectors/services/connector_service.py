@@ -62,10 +62,6 @@ from app.modules.connectors.services.account_credentials import (
 from app.modules.connectors.services.account_identity import (
     resolve_account_identity,
 )
-from app.modules.connectors.services.account_profile import (
-    load_native_account_profile,
-    profile_to_dict,
-)
 from app.modules.connectors.services.account_revocation import revoke_one
 from app.modules.connectors.services.auth.mcp_install_authorization import (
     negotiate_mcp_authorization,
@@ -83,10 +79,12 @@ from app.modules.connectors.services.auth_install_resolver import (
 )
 from app.modules.connectors.services.connect_request_lifecycle import (
     pkce_verifier_for,
+    with_return_path,
 )
 from app.modules.connectors.services.install_provisioning import (
     DiscoveryOutcome,
     discover_install_operations,
+    discover_operations_for_new_account,
     org_has_install,
     refresh_install_operations,
     resolve_install_kind,
@@ -96,6 +94,7 @@ from app.modules.connectors.services.install_update import update_install
 from app.modules.connectors.services.oauth_callback import handle_oauth_callback
 from app.modules.connectors.services.profile_operation_execution import (
     execute_profile_operation,
+    normalize_profile_result,
 )
 
 logger = get_logger(__name__)
@@ -148,14 +147,6 @@ class ConnectorService:
             details["upstream_code"] = code
         return details
 
-    async def _load_native_account_profile(
-        self, connector: ConnectorEntity, credentials: OAuthCredentials
-    ) -> dict | None:
-        return await load_native_account_profile(connector, credentials)
-
-    def _profile_to_dict(self, profile: object) -> dict | None:
-        return profile_to_dict(profile)
-
     async def _fetch_account_profile(
         self,
         connector: ConnectorEntity,
@@ -194,6 +185,13 @@ class ConnectorService:
             return None
         await self.uow.commit()
 
+        # Merged, not first-wins. One operation rarely answers the whole
+        # question: Slack's `auth_test` states who and which workspace, and only
+        # `users_profile_get` carries the address -- so stopping at the first
+        # non-empty result labelled every Slack account with no email. Earlier
+        # operations win a contested key, because the catalog lists them in the
+        # order the connector considers authoritative.
+        merged: dict = {}
         for operation_name, operation in runnable:
             try:
                 result = await execute_profile_operation(
@@ -218,21 +216,14 @@ class ConnectorService:
                     exc_info=True,
                 )
                 continue
-            profile = self._profile_to_dict(result)
-            # Composio wraps every tool execution result in
-            # {"data": ..., "successful": ..., "error": ...} (composio.tools.execute's
-            # ToolExecutionResponse); the toolkit's actual fields (email, name, ...)
-            # live one level down in `data`, not at the top level.
-            if (
-                isinstance(profile, dict)
-                and provider.upper() == AuthProvider.COMPOSIO.value
-            ):
-                unwrapped = profile.get("data")
-                if isinstance(unwrapped, dict):
-                    profile = unwrapped
-            if profile:
+            profile = normalize_profile_result(result, provider)
+            if isinstance(profile, dict):
+                merged = {**profile, **merged}
+            elif profile and not merged:
+                # A provider that answers with something other than an object.
+                # Nothing to merge into, so it stands alone.
                 return profile
-        return None
+        return merged or None
 
     def _profile_dispatcher(self):
         if self._kind_dispatcher is None:
@@ -371,8 +362,6 @@ class ConnectorService:
                 continue
             capabilities.append(capability)
 
-        # `kinds`, not `provider_capabilities`: the latter is a read-only view,
-        # so updating it here silently discarded the enrichment.
         return connector.model_copy(update={"kinds": capabilities})
 
     def _validate_auth_config_request(
@@ -668,6 +657,7 @@ class ConnectorService:
         organization_id: UUID,
         connector_id: str | None = None,
         auth_config_id: UUID | None = None,
+        return_to: str | None = None,
     ) -> ConnectRequestEntity:
         await self._require_org_member(user_id=user_id, organization_id=organization_id)
         auth_config = await self._resolve_auth_config(
@@ -735,11 +725,14 @@ class ConnectorService:
             connector_id=connector.id,
             authorization_url=authorization_url,
             status=ConnectRequestStatus.PENDING,
-            attributes={
-                "state": state,
-                "provider_state": provider_state,
-                **({"code_verifier": code_verifier} if code_verifier else {}),
-            },
+            attributes=with_return_path(
+                {
+                    "state": state,
+                    "provider_state": provider_state,
+                    **({"code_verifier": code_verifier} if code_verifier else {}),
+                },
+                return_to,
+            ),
         )
         connect_request = await self.connect_request_repository.create(connect_request)
         await self.uow.commit()
@@ -859,6 +852,12 @@ class ConnectorService:
             )
         )
         await self.uow.commit()
+
+        # The step the OAuth callback also takes, and for the reason that
+        # function documents. After the commit, and it does not raise: a
+        # discovery failure must not report a failed connection for an account
+        # that exists.
+        await discover_operations_for_new_account(self, auth_config)
         return account
 
     async def _reject_if_identity_already_connected(

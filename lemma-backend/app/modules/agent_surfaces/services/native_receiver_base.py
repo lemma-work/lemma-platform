@@ -23,6 +23,21 @@ from uuid import UUID
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 
 
+class NativeReceiverConflict(RuntimeError):
+    """Another consumer already owns this upstream credential.
+
+    The lease this service takes is a Redis key, so it only orders the workers
+    of *one* deployment. Nothing stops a Desktop installation and Lemma Cloud
+    from being configured with the same Telegram bot or Resend inbox, and each
+    then takes its own lease from its own Redis and starts consuming.
+
+    Upstream is the only place that can see both. Telegram says so outright --
+    a second ``getUpdates`` gets 409 -- so a runner that has been refused for
+    longer than a handover could explain raises this rather than returning as
+    though it had finished its work.
+    """
+
+
 class ReceiverRunner(Protocol):
     async def run(self) -> None:
         """Run the receiver until it is cancelled."""

@@ -216,7 +216,6 @@ class FunctionRuntimeEndpointCache:
         if failure is not None:
             return None, failure
         return task.result(), None
-        raise AssertionError("unreachable runtime endpoint cache retry state")
 
     async def invalidate(
         self,

@@ -19,9 +19,46 @@ paths-ignore:
   # editing, so findings would be noise no one can act on.
   - "lemma-python/lemma_sdk/openapi_client"
   - "lemma-typescript/src/openapi_client"
-  # Generated connector clients, for the same reason and at four times the
-  # scale: 3,222 files and 459k of the repository's 1.11M tracked Python lines
-  # sit under `lemma-connectors/src/lemma_connectors/*/generated/`, emitted by
-  # scripts/generate_*.py from each provider's OpenAPI document. Extracting them
-  # was roughly 40% of a six-minute Python analysis that no PR can act on.
+  # Any other `generated/` tree, for the same reason. This was written for the
+  # 3,222 files under `lemma-connectors/src/lemma_connectors/*/generated/`,
+  # which were roughly 40% of a six-minute Python analysis; that package was
+  # deleted in #648 and the pattern now covers only
+  # `lemma-typescript/src/react/generated`. Kept as a rule rather than a list,
+  # so the next generator to land is excluded without anyone remembering to.
   - "**/generated"
+  # Committed esbuild output. `lemma-typescript/public/lemma-client.js` (652k)
+  # and `lemma-ui.js` (69k) are copies of the bundle, and ci.yml verifies with
+  # `git diff --exit-code` that they are byte-identical to a fresh
+  # `npm run build:bundle`. A finding here cannot be acted on: editing the file
+  # fails the very gate that keeps it honest. `**/dist` and `**/build` above
+  # already cover the originals; this covers the committed copy.
+  - "lemma-typescript/public"
+  # Alembic reads `revision`, `down_revision`, `branch_labels` and `depends_on`
+  # off the module by introspection, so every migration reports globals that
+  # nothing appears to read -- 18 of them. The one other finding here is the
+  # `from sqlalchemy import Text` the autogenerate template emits into the
+  # baseline, which is genuinely unused and already says so with a `noqa: F401`.
+  # A migration is a record of what was run, so neither is editable.
+  - "lemma-backend/migrations/versions"
+
+# `...` as the body of a `Protocol` method is what PEP 544 and typeshed
+# prescribe, and `py/ineffectual-statement` reads it as a statement someone
+# forgot to finish: 459 of them across the eight `domain/ports.py` files alone.
+# It has been open against github/codeql as a labelled false positive since 2022
+# (issue 11351). Ruff's B015/B018 catch the real defect class instead and do know
+# what a stub body is.
+#
+# Read this before trusting it: today the entry changes nothing, and it is here
+# so that stays true by choice rather than by luck.
+#   - The two jobs in security.yml run the default *security* suite, which does
+#     not contain this query at all.
+#   - `make codeql` does run `security-and-quality`, but run_codeql.sh names that
+#     suite explicitly on `database analyze`, and the CLI applies query-filters
+#     only when no suite is named. `.codeql-allow.txt` is what suppresses this
+#     query locally, and it still carries the seven entries that do it.
+#   - GitHub Code Quality runs its own workflow and never reads this file.
+# So this only bites if someone adds quality queries to a job here -- which is
+# exactly when they would not want 459 Protocol stubs arriving as alerts.
+query-filters:
+  - exclude:
+      id: py/ineffectual-statement

@@ -87,8 +87,10 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             eyebrow = "Pod invitation"
             heading = f"Use {display_pod_name}."
             body = (
-                f"{inviter_name} invited you to access {display_pod_name} "
-                f"in {display_organization_name}.",
+                (
+                    f"{inviter_name} invited you to access {display_pod_name} "
+                    f"in {display_organization_name}."
+                ),
             )
             action_label = f"Open {display_pod_name}"
             details = (
@@ -110,8 +112,10 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             heading = f"Join {display_organization_name} on Lemma."
             body = (
                 f"{inviter_name} invited you to the {display_organization_name} workspace.",
-                "Accept the invitation to work with the team's agents, data, "
-                "automations, and apps in one place.",
+                (
+                    "Accept the invitation to work with the team's agents, data, "
+                    "automations, and apps in one place."
+                ),
             )
             action_label = "Accept invitation"
             details = (EmailDetail("Workspace", display_organization_name),)
@@ -152,8 +156,10 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             eyebrow="Welcome to Lemma",
             heading=f"Welcome to Lemma{first_name_suffix}.",
             body=(
-                "Your account is ready. Describe the work, connect the tools your team "
-                "already uses, and start turning the process into a system.",
+                (
+                    "Your account is ready. Describe the work, connect the tools your team "
+                    "already uses, and start turning the process into a system."
+                ),
             ),
             action=EmailAction("Open Lemma", settings.frontend_url.rstrip("/")),
             highlights=(
@@ -227,9 +233,11 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             eyebrow="Workspace joined",
             heading=f"You're in {display_organization_name}.",
             body=(
-                "The workspace is now available in your Lemma account. You can open "
-                "shared pods, collaborate with the team, and connect the tools needed "
-                "for your workflows.",
+                (
+                    "The workspace is now available in your Lemma account. You can open "
+                    "shared pods, collaborate with the team, and connect the tools needed "
+                    "for your workflows."
+                ),
             ),
             action=EmailAction("Open Lemma", settings.frontend_url.rstrip("/")),
             details=(EmailDetail("Active workspace", display_organization_name),),
@@ -261,8 +269,10 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
             eyebrow="Pod join request",
             heading=f"New request to join {display_pod_name}.",
             body=(
-                f"{requester_label} requested access to {display_pod_name} in "
-                f"{display_organization_name}.",
+                (
+                    f"{requester_label} requested access to {display_pod_name} in "
+                    f"{display_organization_name}."
+                ),
                 "Review the pending request in Lemma to approve or decline it.",
             ),
             action=EmailAction("Review requests", settings.frontend_url.rstrip("/")),

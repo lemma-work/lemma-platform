@@ -17,9 +17,17 @@ mkdir -p "$OUT_DIR"
 # target directories; now they share one, and asking cargo for them separately
 # would resolve features over three different package sets — rebuilding reqwest,
 # tokio and hyper from scratch each time, every time.
-cargo build --manifest-path desktop/Cargo.toml --release --target "$TRIPLE" \
-  -p lemma-locald -p lemma-agent-host -p lemma-runtime
-BUILT="desktop/target/$TRIPLE/release"
+# Native Tauri builds use target/release. Reuse that dependency tree instead
+# of compiling a second release tree solely because --target was explicit.
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+BUILD_ARGS=(--manifest-path desktop/Cargo.toml --locked --release
+  -p lemma-locald -p lemma-agent-host -p lemma-runtime)
+BUILT="desktop/target/release"
+if [[ "$TRIPLE" != "$HOST_TRIPLE" || -n "${CARGO_BUILD_TARGET:-}" ]]; then
+  BUILD_ARGS+=(--target "$TRIPLE")
+  BUILT="desktop/target/$TRIPLE/release"
+fi
+cargo build "${BUILD_ARGS[@]}"
 cp "$BUILT/lemma-locald" "$OUT_DIR/lemma-locald-$TRIPLE"
 cp "$BUILT/lemma-agent-host" "$OUT_DIR/lemma-agent-host-$TRIPLE"
 cp "$BUILT/lemma-runtime" "$OUT_DIR/lemma-runtime-$TRIPLE"
@@ -75,7 +83,7 @@ sign "$OUT_DIR/lemma-runtime-$TRIPLE"
 # the app entitlement only to its main executable and re-signs externalBin
 # sidecars without helper-specific entitlements. Release CI re-signs this helper
 # with Developer ID and its entitlement before bundling.
-sign "$OUT_DIR/lemma-vz-$TRIPLE" --entitlements desktop/entitlements.plist
+sign "$OUT_DIR/lemma-vz-$TRIPLE" --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist
 echo "locald: $OUT_DIR/lemma-locald-$TRIPLE"
 echo "agent host: $OUT_DIR/lemma-agent-host-$TRIPLE"
 echo "runtime bridge: $OUT_DIR/lemma-runtime-$TRIPLE"
@@ -85,13 +93,15 @@ echo "VZ helper: $OUT_DIR/lemma-vz-$TRIPLE"
 # identifier from the binary's contents, the credential vault treats the next
 # build as a different program, and the app re-prompts for access on launch --
 # all of which looks like working software until someone opens it.
-locald_identifier="$(codesign -dv "$OUT_DIR/lemma-locald-$TRIPLE" 2>&1 \
-  | sed -n 's/^Identifier=//p')"
-if [[ "${locald_identifier}" != "work.lemma.locald" ]]; then
-  echo "locald signed as '${locald_identifier}', expected work.lemma.locald" >&2
-  exit 1
-fi
-echo "locald: identifier ${locald_identifier}"
+for helper in locald agent-host runtime vz; do
+  identifier="$(codesign -dv "$OUT_DIR/lemma-$helper-$TRIPLE" 2>&1 \
+    | sed -n 's/^Identifier=//p')"
+  if [[ "${identifier}" != "work.lemma.$helper" ]]; then
+    echo "$helper signed as '${identifier}', expected work.lemma.$helper" >&2
+    exit 1
+  fi
+  echo "$helper: identifier ${identifier}"
+done
 "$OUT_DIR/lemma-agent-host-$TRIPLE" --version >/dev/null \
   && echo "agent host: smoke ok"
 "$OUT_DIR/lemma-runtime-$TRIPLE" --version >/dev/null && echo "runtime bridge: smoke ok"

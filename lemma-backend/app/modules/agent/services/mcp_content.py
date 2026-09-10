@@ -79,7 +79,7 @@ def image_contents(result: object) -> list[ImageContent]:
             ImageContent(
                 type="image",
                 data=base64.b64encode(data).decode("ascii"),
-                mimeType=media_type,
+                mime_type=media_type,
             )
         )
     return contents
@@ -121,7 +121,7 @@ def tool_call_result(result: object) -> CallToolResult:
     if isinstance(payload, dict):
         return CallToolResult(
             content=[text_content(payload), *images],
-            structuredContent=payload,
+            structured_content=payload,
         )
     return CallToolResult(content=[text_content(payload), *images])
 
@@ -130,7 +130,7 @@ def tool_call_error(name: str, exc: Exception) -> CallToolResult:
     """A failed tool call as MCP content, in the shape the model reads."""
     payload = format_tool_error(name, exc)
     return CallToolResult(
-        isError=True,
+        is_error=True,
         content=[TextContent(type="text", text=json.dumps(payload, default=str))],
-        structuredContent=payload,
+        structured_content=payload,
     )

@@ -241,6 +241,7 @@ export const useManagedAgentRuntimes = (
         enabled: Boolean(organizationId),
         staleTime: 30000,
         refetchOnWindowFocus: true,
+        refetchInterval: SETTLED_REFETCH_MS,
     });
 };
 

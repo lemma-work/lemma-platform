@@ -1,0 +1,14 @@
+[Unit]
+Description=Lemma private service %i proxy
+Requires=lemma-service@%i.socket
+After=lemma-service@%i.socket
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --connections-max=128 127.0.0.1:%i
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_VSOCK

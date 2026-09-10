@@ -13,7 +13,6 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
     ConnectorKind,
     kind_to_provider,
-    provider_to_kind,
 )
 
 
@@ -54,7 +53,7 @@ class AuthConfigEntity(Entity):
 
     organization_id: UUID
     connector_id: str
-    kind: ConnectorKind = ConnectorKind.PACKAGE
+    kind: ConnectorKind = ConnectorKind.HTTP
     config_source: AuthConfigSource = AuthConfigSource.SYSTEM_DEFAULT
     status: AuthConfigStatus = AuthConfigStatus.ACTIVE
     name: str
@@ -80,8 +79,6 @@ class AuthConfigEntity(Entity):
         """
         if not isinstance(data, dict):
             return data
-        if data.get("kind") is None and data.get("provider") is not None:
-            data = {**data, "kind": provider_to_kind(data["provider"])}
         if data.get("config") is None and data.get("provider_config") is not None:
             data = {**data, "config": data["provider_config"]}
         return data

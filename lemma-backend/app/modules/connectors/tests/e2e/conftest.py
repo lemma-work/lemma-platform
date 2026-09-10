@@ -35,7 +35,7 @@ async def connector_test_connector(db_session):
         id=app_id,
         title="Connector Test App",
         description="Connector test connector",
-        kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
+        kinds=[{"kind": "http", "auth_scheme": "OAUTH2"}],
         is_active=True,
     )
     db_session.add(app)

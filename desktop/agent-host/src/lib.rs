@@ -8,6 +8,7 @@ pub mod acp;
 pub mod adapters;
 pub mod api;
 pub mod config;
+pub mod conversation_directory;
 pub mod journal;
 pub mod mcp_bridge;
 pub mod permissions;
@@ -21,22 +22,20 @@ pub mod service;
 /// -- npm, and the agent CLIs themselves -- are console programs. Each would
 /// otherwise open a console window in the user's face.
 ///
-/// A no-op everywhere else, so call sites stay platform-neutral.
+/// Used where this crate runs a Windows tool directly: removing a service an
+/// older release installed, and ending an agent's process tree. Setup commands
+/// preserve this flag through their process ownership wrapper instead.
+#[cfg(windows)]
 pub(crate) trait NoConsoleWindow {
     fn no_console_window(&mut self) -> &mut Self;
 }
 
+#[cfg(windows)]
 impl NoConsoleWindow for std::process::Command {
-    #[cfg(windows)]
     fn no_console_window(&mut self) -> &mut Self {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         self.creation_flags(CREATE_NO_WINDOW)
-    }
-
-    #[cfg(not(windows))]
-    fn no_console_window(&mut self) -> &mut Self {
-        self
     }
 }
 

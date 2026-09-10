@@ -1,6 +1,6 @@
 import { LemmaClient } from 'lemma-sdk';
 import { config } from '@/lib/config';
-import { desktopBridgeAvailable } from '@/lib/desktop/local-capabilities';
+import { runningInDesktopApp } from '@/lib/desktop/local-capabilities';
 
 function toOrigin(value: string): string | null {
     try {
@@ -32,7 +32,13 @@ function createBaseClient(): LemmaClient {
         // Unnamed, this SDK identifies as `lemma-sdk-ts` and every human's
         // traffic lands under SDK -- indistinguishable from somebody's script,
         // which makes "how much of this pod's work is a person?" unanswerable.
-        client: desktopBridgeAvailable() ? 'lemma-desktop' : 'lemma-web',
+        //
+        // `runningInDesktopApp`, not `desktopBridgeAvailable`. The latter also
+        // requires the deployment to be local, because it gates the privileged
+        // local commands -- so a cloud workspace opened in the desktop app
+        // reported itself as a web visitor, and DESKTOP counted only the
+        // subset of desktop users who had chosen Local Lemma.
+        client: runningInDesktopApp() ? 'lemma-desktop' : 'lemma-web',
     });
 }
 

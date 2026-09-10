@@ -13,10 +13,10 @@ only a promise marked `covered` with no test is.
 | --- | ---: |
 | `covered` | 160 |
 | `gap` | 0 |
-| `manual` | 4 |
+| `manual` | 6 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **164** |
+| **total** | **166** |
 
 Scenario tests declaring a promise: 387.
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 242 | 246 |
+| OpenAPI operations | 242 | 249 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -174,6 +174,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-OPS-030` The platform reports its own health honestly | `covered` | `test_web_search_says_when_it_is_unavailable` |
 | `PS-OPS-031` Work that cannot be completed is not lost silently | `manual` | `test_feedback_can_be_reported` |
 | `PS-OPS-032` A deployment can be configured for its own region and rules | `manual` | — |
+| `PS-OPS-040` Desktop settings keep drafts until a deliberate decision | `manual` | — |
+| `PS-OPS-041` Desktop reopens the last workspace page after Quit | `manual` | — |
 
 ## [Packaging and reuse](journeys/packaging-and-reuse.md)
 
@@ -198,7 +200,7 @@ working one. It is listed because `covered` otherwise reads as
 | --- | --- | --- |
 | `PS-SCHED-001` A person schedules work for a time or a repeat | `covered` | `test_a_repeating_schedule_is_created`, `test_unusable_timing_is_refused`, `test_an_outsider_cannot_touch_schedules` |
 | `PS-SCHED-002` A person can pause a schedule without losing it | `covered` | `test_a_stopped_schedule_can_be_restarted`, `test_a_schedule_can_be_paused_and_resumed`, `test_a_paused_schedule_does_not_fire` |
-| `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire`, `test_deleting_the_target_takes_the_schedule` |
+| `PS-SCHED-003` Deleting a schedule stops it everywhere | `covered` | `test_deleting_a_schedule_removes_it`, `test_a_deleted_schedule_does_not_fire`, `test_the_schedule_outlives_its_deleted_target` |
 | `PS-SCHED-010` A pod reacts to a webhook from outside | `covered` | `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_delivery_to_an_unknown_surface_is_refused` |
 | `PS-SCHED-011` A pod reacts to its own data changing | `covered` | `test_a_change_meeting_the_condition_fires`, `test_a_record_change_fires_a_schedule`, `test_an_unwatched_operation_does_not_fire`, `test_another_table_does_not_fire` |
 | `PS-SCHED-012` A person can narrow what actually triggers | `covered` | `test_a_change_below_the_condition_is_skipped`, `test_a_change_meeting_the_condition_fires`, `test_skipped_and_fired_are_distinguishable`, `test_an_unsatisfiable_condition_is_refused` |
@@ -206,7 +208,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SCHED-021` A person can see every firing and how it went | `covered` | `test_a_schedules_history_is_readable`, `test_a_record_change_fires_a_schedule`, `test_an_outsider_cannot_read_history` |
 | `PS-SCHED-022` A firing that fails is retried, and then given up on visibly | `covered` | `test_retrying_an_unknown_firing_is_refused` |
 | `PS-SCHED-023` A schedule that keeps failing is turned off and reported | `covered` | `test_repeated_failure_stops_a_schedule`, `test_a_stopped_schedule_explains_itself`, `test_a_stopped_schedule_can_be_restarted` |
-| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow`, `test_deleting_the_target_takes_the_schedule`, `test_a_firing_starts_a_conversation_with_the_assistant` |
+| `PS-SCHED-030` A schedule can drive an agent, a workflow, or a message | `covered` | `test_a_schedule_can_target_a_workflow`, `test_the_schedule_outlives_its_deleted_target`, `test_a_firing_starts_a_conversation_with_the_assistant` |
 | `PS-SCHED-031` A schedule says what the work is, not just when it happens | `covered` | `test_a_schedule_keeps_its_instruction`, `test_the_instruction_and_the_condition_are_both_kept`, `test_the_instruction_can_be_edited` |
 | `PS-SCHED-032` The pod's own assistant can be put on a schedule | `covered` | `test_the_default_assistant_is_a_schedulable_target`, `test_the_assistant_needs_an_instruction`, `test_retargeting_to_the_assistant_replaces_the_agent`, `test_a_firing_starts_a_conversation_with_the_assistant` |
 

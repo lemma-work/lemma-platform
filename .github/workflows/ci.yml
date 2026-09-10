@@ -29,6 +29,7 @@ jobs:
       desktop_packaging: ${{ steps.filter.outputs.desktop_packaging }}
       desktop_contract: ${{ steps.filter.outputs.desktop_contract }}
       repo_tooling: ${{ steps.filter.outputs.repo_tooling }}
+      app_template: ${{ steps.filter.outputs.app_template }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -55,6 +56,22 @@ jobs:
             typescript:
               - 'lemma-typescript/**'
               - '.github/actions/verify-typescript-sdk/**'
+              - '.github/workflows/ci.yml'
+            # The app starter and everything its compile depends on. The SDK is
+            # in here because the template is typed against it: `lemma apps
+            # init` shipped a starter reading a field `UserResponse` does not
+            # have, so every newly scaffolded app failed its first `deploy`.
+            # Nothing compiled the template, so nothing could have caught it.
+            app_template:
+              - 'lemma-cli/lemma_cli/cli_core/assets/app_vite_template/**'
+              - 'lemma-cli/lemma_cli/cli_core/app_scaffold.py'
+              - 'lemma-typescript/**'
+              # The job compiles the starter with this Node, and a version this
+              # repo has already been bitten by -- see the desktop pack job's
+              # note on three days of red main. `.nvmrc` reaches no other
+              # filter, so no other Node job reruns on a bump; that gap is
+              # older than this job and is not addressed here.
+              - '.nvmrc'
               - '.github/workflows/ci.yml'
             frontend:
               - 'lemma-frontend/**'
@@ -129,6 +146,8 @@ jobs:
             desktop_contract:
               - 'lemma-backend/**'
               - 'lemma-frontend/**'
+              - 'lemma-typescript/**'
+              - 'Makefile'
               - 'scripts/build_local_host_pack.py'
               - 'scripts/build_local_guest_runtime.sh'
               - 'desktop/locald/src/native_host_pack.rs'
@@ -160,6 +179,7 @@ jobs:
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
               - 'scripts/check_ci_aggregators.py'
+              - 'scripts/check_release_parity.py'
               - 'scripts/check_ci_job_results.py'
               - 'scripts/check_pytest_census.py'
               - 'scripts/check_test_run.py'
@@ -312,8 +332,6 @@ jobs:
         working-directory: .
         run: make quality
       # Not part of `quality`: these two run code rather than reading it.
-      - name: Connector package tests
-        run: make test-connectors
       # The static gates check the shapes they can see. This one runs the flows
       # and measures: a connection checked out with no statement running is a
       # hold, whatever the code looks like. Deliberately a small marked subset
@@ -453,6 +471,75 @@ jobs:
       # Shared with release-lemma-typescript.yml, so what a release verifies
       # cannot drift from what a pull request does.
       - uses: ./.github/actions/verify-typescript-sdk
+
+  app-template:
+    name: App starter compiles
+    timeout-minutes: 20
+    needs: changes
+    if: needs.changes.outputs.app_template == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: lemma-typescript/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # Against this commit's SDK, not the published one. A starter that only
+      # compiles against whatever npm currently calls `latest` is a starter
+      # whose breakage arrives after the release that caused it.
+      - name: Build the SDK the starter is typed against
+        working-directory: lemma-typescript
+        run: npm ci && npm run build
+      - name: Scaffold an app the way `lemma apps init` does
+        run: |
+          uv run --project lemma-cli python - "$RUNNER_TEMP/app-template-check" <<'EOF'
+          import sys
+          from pathlib import Path
+
+          from lemma_cli.cli_core.app_scaffold import (
+              AppScaffoldOptions,
+              resolve_local_sdk_path,
+              scaffold_app,
+          )
+
+          sdk = resolve_local_sdk_path()
+          assert sdk is not None, "the sibling lemma-typescript checkout was not found"
+          scaffold_app(
+              AppScaffoldOptions(
+                  target_dir=Path(sys.argv[1]),
+                  name="app-template-check",
+                  pod_id="00000000-0000-0000-0000-000000000000",
+                  api_url="http://localhost:8000",
+                  auth_url="http://localhost:8000",
+                  title="App Template Check",
+                  navigation="none",
+                  agent_name=None,
+                  chat_mode="none",
+                  members=False,
+                  search_config=None,
+                  theme_toggle=False,
+                  install=False,
+                  registry=False,
+                  style_preset="default",
+                  template_source="bundled",
+                  sdk_path=str(sdk),
+              )
+          )
+          EOF
+      # `tsc -b && vite build` -- exactly what `lemma apps deploy` runs, and the
+      # step that was failing on a clean scaffold.
+      - name: Build the scaffolded app
+        working-directory: ${{ runner.temp }}/app-template-check
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
 
   codegen-drift:
     name: Codegen drift gate
@@ -594,6 +681,13 @@ jobs:
       - name: CI aggregators watch every job
         run: uv run --no-project --with pyyaml python scripts/check_ci_aggregators.py
 
+      # The two DMG pipelines drifted in both directions before this
+      # existed: one did not verify the guest helper's entitlement, the
+      # other did not verify that macOS would ask for local network
+      # access. Each was green on its own terms.
+      - name: Both DMG pipelines verify the same things
+        run: uv run --no-project --with pyyaml python scripts/check_release_parity.py
+
   windows-cli:
     name: Windows CLI smoke test
     timeout-minutes: 45
@@ -671,9 +765,9 @@ jobs:
   # host pack the app ships. Nothing connected the two, so a backend change
   # that broke the desktop stack merged with CI fully green.
   #
-  # Compiles locald alone: no sidecars, no app crate, no Tauri, no bundler.
+  # Includes the real backend/Agent Host seam without the app crate or bundler.
   desktop-contract:
-    timeout-minutes: 20
+    timeout-minutes: 30
     name: Desktop contracts
     needs: changes
     if: needs.changes.outputs.desktop_contract == 'true' || needs.changes.outputs.desktop == 'true'
@@ -698,10 +792,90 @@ jobs:
         working-directory: desktop
         run: cargo test -p lemma-locald -p lemma-guestd --locked
 
-      # `make desktop-lint` has always run this; CI never did, and it guards a
-      # guest-kernel Oops during first setup.
-      - name: Memory balloon policy
-        run: desktop/scripts/check-balloon-policy.sh
+      # The Rust half of the Agent Host's wire contract. This job runs on
+      # backend-only pull requests -- `lemma-backend/**` is in its filter --
+      # and it did not run the half that would notice. Both sides of
+      # `tests/fixtures/wire_contract.json` are assertions over a committed
+      # file; only the named suites, because the rest of this crate's tests
+      # spawn agents.
+      - name: Agent Host wire contract
+        working-directory: desktop
+        run: >-
+          cargo test -p lemma-agent-host --locked
+          --test wire_contract --test control_plane_contract
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install backend dependencies
+        working-directory: lemma-backend
+        run: uv sync --locked --extra local
+
+      - name: Real backend and Agent Host streaming
+        run: make desktop-agent-host-e2e
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            lemma-typescript/package-lock.json
+            lemma-frontend/package-lock.json
+            desktop/ui-tests/package-lock.json
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
+
+      - name: Install chat UI test dependencies
+        run: |
+          npm ci --prefix lemma-typescript
+          npm ci --prefix lemma-frontend
+          npm ci --prefix desktop/ui-tests
+          # The browser first, from the cache above, with no apt involved.
+          npm exec --prefix desktop/ui-tests -- playwright install chromium
+          # Then the system libraries it wants. This is the apt half, and it is
+          # the half that fails: `--with-deps` fetches Google's Chrome
+          # repository index, and a "Hash Sum mismatch" there exits 100 and
+          # takes the lane down after every Rust test in it has already passed.
+          # Four times in one afternoon, on an index this repository neither
+          # controls nor needs -- the browser is already downloaded.
+          #
+          # Retrying it was the wrong fix and is gone: a mismatch is apt saying
+          # its cached index disagrees with the server, so the same fetch fails
+          # the same way, which is exactly what three attempts did.
+          #
+          # Not fatal now. `ubuntu-latest` ships the libraries Chromium needs,
+          # so this is belt and braces; if that ever stops being true the
+          # browser fails to launch in the next step and names the library it
+          # is missing, which is a better failure than a lane that dies on a
+          # mirror being mid-update.
+          if ! npm exec --prefix desktop/ui-tests -- playwright install-deps chromium; then
+            echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
+          fi
+
+      - name: Chat UI with JSON ACP agents
+        run: make desktop-agent-host-browser-e2e
+
+      - name: Upload chat UI evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-host-chat-ui
+          path: output/playwright/agent-host-*/
+          if-no-files-found: ignore
 
   # One job for the whole desktop workspace. locald had its own because of the
   # runner OS - "macOS, not Linux, because that is a platform locald ships on;
@@ -725,7 +899,9 @@ jobs:
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
           # is re-downloaded on every run of both 90-minute desktop jobs.
           cache: npm
-          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            desktop/ui-tests/package-lock.json
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -769,10 +945,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-ci
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
+          # GitHub scopes PR caches to their merge ref: subsequent pushes can
+          # reuse dependencies without making them available to main/releases.
 
       - name: Import Developer ID certificate
         id: apple-signing
@@ -809,11 +986,6 @@ jobs:
       - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
-      # One second, and it guards a guest-kernel Oops during first setup.
-      # `make desktop-lint` has always run it; CI never did.
-      - name: Memory balloon policy
-        run: desktop/scripts/check-balloon-policy.sh
-
       - name: Lint
         working-directory: desktop
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
@@ -821,6 +993,37 @@ jobs:
       - name: Test
         working-directory: desktop
         run: cargo test --workspace --locked
+
+      - name: Test native VM service transport
+        run: swift test --package-path desktop/local-runtime/macos-vz
+
+      - name: Guest boot tooling tests
+        run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
 
       # desktop/runtime/lemma-local.json is committed as an online-shaped
       # placeholder: unresolvable URLs, zero digests, and `artifact_source:
@@ -838,7 +1041,7 @@ jobs:
           args=(
             --force
             --options runtime
-            --entitlements desktop/entitlements.plist
+            --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist
             --sign "${APPLE_SIGNING_IDENTITY}"
           )
           if [[ "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
@@ -871,7 +1074,30 @@ jobs:
             ${{ (github.event_name == 'push'
             || needs.changes.outputs.desktop_packaging == 'true')
             && 'app,dmg' || 'app' }}
-        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json --bundles "$BUNDLES"
+        run: |
+          set -euo pipefail
+          # Retried, and the detach between attempts is the part that matters.
+          # `bundle_dmg.sh` failing partway leaves its image attached, so a
+          # second attempt meets the first one's leftovers and fails the same
+          # way -- the same shape as retrying an apt fetch whose cached index
+          # is the thing that is wrong. Cargo has already compiled by then, so
+          # a retry costs the bundling and the signing, not the build.
+          #
+          # Measured: this took main red once today, after every test in the
+          # job had passed, and the re-run went green untouched.
+          for attempt in 1 2 3; do
+            npx -y "$TAURI_CLI" build \
+              --config tauri.online.conf.json --bundles "$BUNDLES" && break
+            if [ "$attempt" = 3 ]; then
+              echo "::error::tauri build failed three times; this is not hdiutil"
+              exit 1
+            fi
+            echo "tauri build failed (attempt $attempt); detaching leftovers and retrying"
+            for volume in /Volumes/Lemma*; do
+              [ -d "$volume" ] && hdiutil detach "$volume" -force || true
+            done
+            sleep 20
+          done
 
       - name: Verify application signature
         shell: bash
@@ -895,6 +1121,25 @@ jobs:
           codesign --verify --strict --verbose=2 "${vz}"
           codesign -d --entitlements :- "${vz}" 2>/dev/null \
             | grep -F "com.apple.security.virtualization"
+          # And nothing else carries it. Tauri applies one entitlements file to
+          # the app and to every externalBin it signs, so the app's file used to
+          # hand this to four processes -- one of which hosts a WebView -- for a
+          # capability only lemma-vz can use. lemma-vz keeps it because it ships
+          # as a resource, which Tauri does not re-sign.
+          #
+          # Dumped into a variable first: under `pipefail` a codesign that fails
+          # would make the grep pipeline non-zero, and "no match" would read as a
+          # pass on a binary nobody managed to inspect.
+          for signed_with_the_app in "${app}" "${locald}" "${runtime_bridge}" \
+              "${app}/Contents/MacOS/lemma-agent-host"; do
+            dumped="$(codesign -d --entitlements :- "${signed_with_the_app}" 2>&1)"
+            if grep -qF "com.apple.security.virtualization" <<<"${dumped}"; then
+              echo "::error::$(basename "${signed_with_the_app}") carries" \
+                   "com.apple.security.virtualization and cannot use it." \
+                   "Only Contents/Resources/lemma-vz links Virtualization.framework."
+              exit 1
+            fi
+          done
           # The daemon's keychain access is keyed to this identifier, and Tauri
           # re-signs sidecars without one of its own -- so this asserts the
           # embedded Info.plist survived bundling. Ad-hoc builds re-prompt either
@@ -1073,9 +1318,7 @@ jobs:
         with:
           workspaces: desktop
           prefix-key: desktop-guestd
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # PR merge-ref caches cannot be restored by main or release refs.
 
       - name: Lint
         working-directory: desktop
@@ -1101,13 +1344,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           # Only here to run `npx @tauri-apps/cli@<pin>`, which without a cache
           # is re-downloaded on every run of both 90-minute desktop jobs.
           cache: npm
-          cache-dependency-path: desktop/scripts/tauri-cli-version.txt
+          cache-dependency-path: |
+            desktop/scripts/tauri-cli-version.txt
+            desktop/ui-tests/package-lock.json
 
       - uses: dtolnay/rust-toolchain@1.98.0
         with:
@@ -1125,10 +1374,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop
-          prefix-key: desktop-win
-          # PRs restore from main's cache but do not write their own, so one
-          # branch's build output cannot evict another's.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          prefix-key: desktop-native
+          shared-key: ${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
+          # GitHub scopes PR caches to their merge ref: subsequent pushes can
+          # reuse dependencies without making them available to main/releases.
 
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
@@ -1153,6 +1403,34 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace --exclude lemma-guestd --locked
 
+      - name: Guest packaging tests
+        run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
+
+      - name: Settings behavior tests
+        working-directory: desktop/ui-tests
+        shell: bash
+        run: |
+          npm ci --ignore-scripts
+          npx --no-install playwright install chromium
+          npm test
+          npm run test:browser
+
       - name: Read the pinned Tauri CLI
         run: |
           $v = (Get-Content desktop/scripts/tauri-cli-version.txt).Trim()
@@ -1162,8 +1440,8 @@ jobs:
       # bundler runs and the payload stays within budget, not that the artifact
       # is installable.
       # Skipped on a pull request that cannot have changed the result. The
-      # bundle is the single most expensive step in CI's Windows job and its
-      # output is discarded, so it runs where a regression would actually be
+      # bundle is the single most expensive step in CI's Windows job, so it
+      # runs where a regression would actually be
       # caught by it: every push to main, and any branch that touches packaging.
       # A compile or test regression -- the thing this job exists to catch, and
       # the thing that has actually caught real bugs -- is still gated on every
@@ -1183,23 +1461,39 @@ jobs:
           github.event_name == 'push'
           || needs.changes.outputs.desktop_packaging == 'true'
         run: |
-          $ErrorActionPreference = "Stop"
-          $payload = @(
-            "desktop/target/release/lemma-desktop.exe",
-            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
-            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
-            "desktop/runtime/lemma-local.json"
-          )
-          $bytes = ($payload | ForEach-Object {
-            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
-            (Get-Item $_).Length
-          } | Measure-Object -Sum).Sum
-          # The online application downloads its runtime on first launch, so the
-          # installed payload is the shell plus the daemon and nothing else.
-          if ($bytes -gt 25MB) {
-            throw "Online application payload is $bytes bytes; the limit is 25 MiB"
+          python desktop/scripts/check_online_payload.py --windows-root desktop
+
+      - name: Record Windows candidate provenance
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
+        run: |
+          $installers = @(Get-ChildItem desktop/target/release/bundle/nsis/*.exe)
+          if ($installers.Count -ne 1) { throw "Expected exactly one candidate installer" }
+          $payload = @{
+            commit = (git rev-parse HEAD).Trim()
+            run_id = $env:GITHUB_RUN_ID
+            run_attempt = $env:GITHUB_RUN_ATTEMPT
+            architecture = 'x86_64'
+            authenticode_signed = $false
+            runtime_manifest = 'placeholder-not-installable'
+            installer = $installers[0].Name
+            sha256 = (Get-FileHash $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           }
-          Write-Host "online payload ok: $bytes bytes"
+          $payload | ConvertTo-Json | Set-Content desktop/target/release/bundle/nsis/candidate.json
+
+      - name: Retain Windows candidate for installed-app QA
+        if: >-
+          github.event_name == 'push'
+          || needs.changes.outputs.desktop_packaging == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-windows-x64-buildcheck
+          path: |
+            desktop/target/release/bundle/nsis/*.exe
+            desktop/target/release/bundle/nsis/candidate.json
+          if-no-files-found: error
+          retention-days: 14
 
   ci:
     name: CI passed
@@ -1215,6 +1509,7 @@ jobs:
       # failed this job and "CI passed" stayed green.
       - cli-packaging
       - typescript-sdk
+      - app-template
       - codegen-drift
       - frontend
       - dev-workflow

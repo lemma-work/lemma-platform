@@ -26,7 +26,7 @@ from app.modules.connectors.contracts.surfaces import (
 )
 from app.modules.connectors.domain.connector import (
     AuthScheme,
-    LemmaProviderCapability,
+    HttpKindSpec,
 )
 
 _CUSTOM = SurfaceCredentialMode.CUSTOM
@@ -34,10 +34,8 @@ _SYSTEM = SurfaceCredentialMode.SYSTEM
 _NATIVE = {SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM, SurfacePlatform.RESEND}
 
 
-def _default_cap() -> LemmaProviderCapability:
-    return LemmaProviderCapability(
-        auth_scheme=AuthScheme.OAUTH2, system_default_available=True
-    )
+def _default_cap() -> HttpKindSpec:
+    return HttpKindSpec(auth_scheme=AuthScheme.OAUTH2, system_default_available=True)
 
 
 def _catalog(*, missing=(), inactive=(), no_lemma=(), capability=None):
@@ -94,7 +92,7 @@ async def test_modes_drop_system_when_no_native_credentials(monkeypatch):
 
 async def test_connect_descriptor_maps_capability(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
-    cap = LemmaProviderCapability(
+    cap = HttpKindSpec(
         auth_scheme=AuthScheme.API_KEY,
         credential_schema={"type": "object"},
         auth_config_schema={"x": 1},

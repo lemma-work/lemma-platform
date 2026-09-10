@@ -12,7 +12,6 @@ const COMMANDS: &[&str] = &[
     "restart",
     "open_app",
     "open_logs",
-    "installer_log",
     "diagnostic_logs",
     "choose_connection_mode",
     "set_connection_mode",
@@ -36,12 +35,17 @@ const COMMANDS: &[&str] = &[
     "sharing_action",
     "close_local_settings",
     "confirm_destructive_action",
+    "confirm_settings_changes",
+    "resolve_confirmation",
     "open_developer_tools",
     "local_recovery_options",
     "reset_local_data",
     "reset_full_reinstall",
+    "restart_into_recovery",
     "check_for_app_update",
     "install_app_update",
+    "telemetry_status",
+    "set_telemetry_enabled",
 ];
 
 fn main() {
@@ -53,9 +57,55 @@ fn main() {
     // refuses to self-update.
     println!("cargo:rerun-if-env-changed=LEMMA_RELEASE_CHANNEL");
     println!("cargo:rerun-if-env-changed=LEMMA_BUILD_SHA");
+    // Which directory this build keeps its data in, when it must not be the
+    // one the user's installed Lemma is using.
+    //
+    // Qualifying a candidate means running it on the same Mac as the real
+    // installation, and the two sharing `Application Support/Lemma` would let
+    // a test build stop the user's daemon, adopt its runtime, and reset its
+    // data. Baked at build time rather than passed at launch so the isolation
+    // is a property of the artifact: a candidate that is handed to somebody,
+    // or double-clicked from the Finder, stays isolated with no environment to
+    // remember.
+    println!("cargo:rerun-if-env-changed=LEMMA_DESKTOP_DATA_DIR_NAME");
+    // Windows stops at 260 characters unless a binary says otherwise, and the
+    // paths this app builds are long by construction: an installation prefix,
+    // then a release directory named by version and artifact identity, then a
+    // Python site-packages tree inside it. `build_local_host_pack.py` already
+    // budgets for MAX_PATH and reports how little headroom is left; this is the
+    // other half, and the two are independent -- the budget keeps the pack
+    // installable on a machine that has not opted in, and this lets a machine
+    // that has opted in stop being the constraint.
+    //
+    // Tauri's own default manifest is the Common-Controls dependency and
+    // nothing else, so this is that manifest plus one setting rather than a
+    // replacement that drops something.
+    let windows = tauri_build::WindowsAttributes::new().app_manifest(
+        r#"<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>
+"#,
+    );
     tauri_build::try_build(
         tauri_build::Attributes::new()
-            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS)),
+            .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS))
+            .windows_attributes(windows),
     )
     .expect("failed to run tauri-build");
 }

@@ -11,6 +11,7 @@ import pytest
 os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
 
 from app.modules.connectors.domain.connector import (
+    kind_to_provider,
     ConnectorEntity,
     ConnectorKind,
     AuthMethod,
@@ -18,7 +19,6 @@ from app.modules.connectors.domain.connector import (
     ComposioProviderCapability,
     DiscoveryMode,
     HttpKindSpec,
-    LemmaProviderCapability,
     McpKindSpec,
     OAuth2Defaults,
     SqlKindSpec,
@@ -81,7 +81,9 @@ def _operation_details(name: str) -> SimpleNamespace:
 
 
 def _providers(entity: ConnectorEntity) -> list[AuthProvider]:
-    return [capability.provider for capability in entity.provider_capabilities]
+    # Kind specs no longer carry a `provider` view of themselves; the mapping
+    # is the module-level function, and it is the only thing that ever read it.
+    return [kind_to_provider(capability.kind) for capability in entity.kinds]
 
 
 def _capability(entity: ConnectorEntity, provider: AuthProvider):
@@ -127,6 +129,7 @@ async def test_sync_native_catalog_imports_credential_only_surface_apps():
                     "title": "Telegram",
                     "description": "Telegram bot surface connector",
                     "auth_method": "API_KEY",
+                    "kind": "http",
                     "credential_schema": credential_schema,
                     "is_active": True,
                     "triggers": [],
@@ -147,7 +150,7 @@ async def test_sync_native_catalog_imports_credential_only_surface_apps():
     entity = upsert_connector.await_args.args[1]
     assert entity.id == "telegram"
     capability = _capability(entity, AuthProvider.LEMMA)
-    assert isinstance(capability, LemmaProviderCapability)
+    assert isinstance(capability, HttpKindSpec)
     assert capability.auth_scheme == AuthMethod.API_KEY
     assert capability.credential_schema == credential_schema
     assert capability.auth_config_schema == {
@@ -173,6 +176,7 @@ async def test_sync_native_catalog_adds_default_oauth_auth_config_schema():
                     "title": "Custom OAuth",
                     "description": "Custom OAuth connector",
                     "auth_method": "OAUTH2",
+                    "kind": "http",
                     "oauth2_config": {
                         "authorization_url": "https://example.test/auth",
                         "token_url": "https://example.test/token",
@@ -217,7 +221,7 @@ async def test_sync_static_operations_stores_the_declared_kind():
     `AuthProvider.LEMMA`, which `provider_to_kind` maps to `PACKAGE` as an
     ambiguous best-effort default -- so every static-operations connector's
     rows (not just github's: `sql`'s query/list_tables/describe_table too)
-    were stored with `kind='package'` regardless of the connector's real
+    were stored with `kind='http'` regardless of the connector's real
     declared kind. `get_by_connector_kind_and_name` -- what the execute-
     operation route uses -- looks up by the *real* kind, so every such
     operation was unreachable at runtime despite importing without error.
@@ -260,7 +264,7 @@ async def test_sync_native_catalog_honors_declared_kind():
     Regression test: `_sync_native_catalog` previously never forwarded
     `app_config.get("kind")` into `_native_kind_spec`, so every connector
     sourced from lemma_apps_config.json -- including `sql`, `mcp`, `openapi`,
-    and `github` -- was built as a `PackageKindSpec` regardless of its
+    and `github` -- was built as a `HttpKindSpec` regardless of its
     declared kind. That only surfaced once a real install tried to select
     the connector's own declared kind and got a "cannot be installed as"
     error, because no test exercised `_sync_native_catalog` end-to-end for a
@@ -323,7 +327,7 @@ async def test_sync_native_catalog_replaces_stale_slack_oauth_defaults():
         id="slack",
         title="Slack",
         description="Slack connector",
-        provider_capabilities=[LemmaProviderCapability()],
+        kinds=[HttpKindSpec()],
     )
     connector_repository = SimpleNamespace(get=AsyncMock(return_value=existing))
     operation_repository = SimpleNamespace()
@@ -339,6 +343,7 @@ async def test_sync_native_catalog_replaces_stale_slack_oauth_defaults():
                     "title": "Slack",
                     "description": "Slack connector",
                     "auth_method": "OAUTH2",
+                    "kind": "http",
                     "system_oauth": {
                         "client_id_env": "SLACK_CLIENT_ID",
                         "client_secret_env": "SLACK_CLIENT_SECRET",
@@ -353,7 +358,6 @@ async def test_sync_native_catalog_replaces_stale_slack_oauth_defaults():
                 }
             ],
         ),
-        patch.object(importer, "_list_native_apps", return_value=[]),
         patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
     ):
         totals = await importer._sync_native_catalog(
@@ -379,61 +383,6 @@ async def test_sync_native_catalog_replaces_stale_slack_oauth_defaults():
 
 
 @pytest.mark.asyncio
-async def test_sync_native_catalog_package_pass_preserves_slack_oauth_defaults():
-    connector_repository = _ConnectorRepository()
-    operation_repository = AsyncMock()
-    trigger_repository = AsyncMock()
-    info_client = SimpleNamespace(list_operations=AsyncMock(return_value=[]))
-
-    with (
-        patch.object(
-            importer,
-            "_load_lemma_apps_config",
-            return_value=[
-                {
-                    "name": "slack",
-                    "title": "Slack",
-                    "description": "Slack connector",
-                    "auth_method": "OAUTH2",
-                    "system_oauth": {
-                        "client_id_env": "SLACK_CLIENT_ID",
-                        "client_secret_env": "SLACK_CLIENT_SECRET",
-                    },
-                    "oauth2_config": {
-                        "authorization_url": "https://slack.com/oauth/v2/authorize",
-                        "token_url": "https://slack.com/api/oauth.v2.access",
-                        "default_scopes": ["chat:write"],
-                        "extra_params": {"user_scope": "users:read"},
-                    },
-                    "triggers": [],
-                }
-            ],
-        ),
-        patch.object(importer, "_list_native_apps", return_value=["slack"]),
-        patch.object(importer, "get_native_info_client", return_value=info_client),
-    ):
-        totals = await importer._sync_native_catalog(
-            connector_repository,
-            operation_repository,
-            trigger_repository,
-            app_filters={"slack"},
-            schema_compiler=importer.PydanticCodeSchemaCompiler(),
-        )
-
-    assert totals == (2, 0, 0)
-    assert connector_repository.entity is not None
-    capability = _capability(connector_repository.entity, AuthProvider.LEMMA)
-    assert capability.oauth2_defaults is not None
-    assert capability.oauth2_defaults.authorization_url == (
-        "https://slack.com/oauth/v2/authorize"
-    )
-    assert capability.oauth2_defaults.token_url == (
-        "https://slack.com/api/oauth.v2.access"
-    )
-    assert capability.system_oauth is not None
-
-
-@pytest.mark.asyncio
 async def test_sync_composio_catalog_uses_googlecalendar_toolkit_with_google_calendar_app_id():
     connector_repository = SimpleNamespace(
         get=AsyncMock(
@@ -442,7 +391,7 @@ async def test_sync_composio_catalog_uses_googlecalendar_toolkit_with_google_cal
                 title="Google Calendar",
                 description="Google Calendar connector",
                 icon="googlecalendar.png",
-                provider_capabilities=[LemmaProviderCapability()],
+                kinds=[HttpKindSpec()],
                 is_active=True,
             )
         )
@@ -503,7 +452,7 @@ async def test_sync_composio_catalog_backfills_toolkit_logo_for_iconless_native_
                 title="Slack",
                 description="Slack connector",
                 icon=None,
-                provider_capabilities=[LemmaProviderCapability()],
+                kinds=[HttpKindSpec()],
                 is_active=True,
             )
         )
@@ -796,9 +745,7 @@ async def test_sync_composio_catalog_uses_lemma_auth_provider_for_native_auth_ap
                 id=app_slug,
                 title=app_slug.title(),
                 description=f"{app_slug.title()} connector",
-                provider_capabilities=[
-                    ComposioProviderCapability(toolkit_slug=app_slug)
-                ],
+                kinds=[ComposioProviderCapability(toolkit_slug=app_slug)],
                 is_active=True,
             )
         )
@@ -927,7 +874,7 @@ async def test_sync_composio_catalog_leaves_profile_operation_names_none_without
 @pytest.mark.asyncio
 async def test_sync_native_catalog_applies_curated_profile_operation_names():
     """JSON-config Lemma apps (Slack, Jira, Confluence, ...) also get curated
-    profile operations threaded onto their LemmaProviderCapability."""
+    profile operations threaded onto their HttpKindSpec."""
     connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
     operation_repository = SimpleNamespace()
     trigger_repository = SimpleNamespace()
@@ -945,6 +892,7 @@ async def test_sync_native_catalog_applies_curated_profile_operation_names():
                     "title": "TestApp",
                     "description": "TestApp connector",
                     "auth_method": "OAUTH2",
+                    "kind": "http",
                     "triggers": [],
                 }
             ],
@@ -990,7 +938,7 @@ async def test_sync_composio_catalog_supports_both_providers_for_google_apps(
                 id=expected_app_id,
                 title=expected_app_id.title(),
                 description=f"{expected_app_id.title()} connector",
-                provider_capabilities=[LemmaProviderCapability()],
+                kinds=[HttpKindSpec()],
                 is_active=True,
             )
         )
@@ -1033,30 +981,18 @@ async def test_sync_composio_catalog_supports_both_providers_for_google_apps(
 
 
 @pytest.mark.asyncio
-async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages():
-    connector_repository = SimpleNamespace(
-        get=AsyncMock(side_effect=[None, None]),
-    )
+async def test_sync_native_catalog_imports_slack_operations_from_static_operations():
+    """Slack's operations come from the catalog entry, not a vendored client.
+
+    Replaces a test that asserted the opposite. Slack installs as `http` now,
+    so its operations are the curated `static_operations` in
+    lemma_apps_config.json and they must be tagged with the declared kind --
+    tagged `package` instead, a strict (connector, kind, name) lookup on the
+    execute route would never find them.
+    """
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
     operation_repository = SimpleNamespace()
     trigger_repository = SimpleNamespace()
-    info_client = SimpleNamespace(
-        get_connector_info=AsyncMock(
-            return_value=SimpleNamespace(
-                platform_name="Slack",
-                description="Slack connector",
-                agent_guide="Use Slack",
-            )
-        ),
-        list_available_operations=AsyncMock(
-            return_value=["send_message", "get_channel_info"]
-        ),
-        get_operation_details=AsyncMock(
-            side_effect=lambda name: _operation_details(name)
-        ),
-    )
-    schema_compiler = SimpleNamespace(
-        to_json_schema=MagicMock(return_value={"type": "object"})
-    )
 
     with (
         patch.object(
@@ -1068,19 +1004,24 @@ async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages(
                     "title": "Slack",
                     "description": "Slack connector",
                     "auth_method": "OAUTH2",
-                    "auth_provider": "LEMMA",
-                    "operation_executor": "LEMMA",
-                    "config": {
-                        "access_token_path": "authed_user.access_token",
-                        "refresh_token_path": "refresh_token",
-                    },
+                    "kind": "http",
+                    "is_active": True,
                     "triggers": [],
+                    "static_operations": [
+                        {
+                            "name": "chat_post_message",
+                            "description": "Send a message",
+                            "execution": {"kind": "http", "mode": "openapi"},
+                        },
+                        {
+                            "name": "conversations_list",
+                            "description": "List conversations",
+                            "execution": {"kind": "http", "mode": "openapi"},
+                        },
+                    ],
                 }
             ],
         ),
-        patch.object(
-            importer, "get_native_info_client", AsyncMock(return_value=info_client)
-        ) as get_native_info_client,
         patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
         patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
     ):
@@ -1089,53 +1030,22 @@ async def test_sync_native_catalog_imports_slack_operations_from_lemma_packages(
             operation_repository,
             trigger_repository,
             app_filters={"slack"},
-            schema_compiler=schema_compiler,
-        )
-
-    assert totals == (2, 2, 0)
-    assert connector_repository.get.await_args_list[0].args == ("slack",)
-    assert connector_repository.get.await_args_list[1].args == ("slack",)
-    assert upsert_connector.await_args_list[1].args[1].id == "slack"
-    assert _providers(upsert_connector.await_args_list[1].args[1]) == [
-        AuthProvider.LEMMA
-    ]
-    get_info_client_call = get_native_info_client.await_args
-    assert get_info_client_call.args == ("slack",)
-    assert upsert_operation.await_count == 2
-    assert upsert_operation.await_args_list[0].args[1] == "slack"
-    assert upsert_operation.await_args_list[0].kwargs["public_name"] == "send_message"
-    assert (
-        upsert_operation.await_args_list[1].kwargs["public_name"] == "get_channel_info"
-    )
-
-
-@pytest.mark.asyncio
-async def test_sync_native_catalog_imports_google_apps_for_lemma_provider():
-    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
-    operation_repository = SimpleNamespace()
-    trigger_repository = SimpleNamespace()
-
-    with (
-        patch.object(importer, "_load_lemma_apps_config", return_value=[]),
-        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
-        patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
-    ):
-        totals = await importer._sync_native_catalog(
-            connector_repository,
-            operation_repository,
-            trigger_repository,
-            app_filters={"gmail"},
             schema_compiler=SimpleNamespace(
                 to_json_schema=MagicMock(return_value={"type": "object"})
             ),
         )
 
-    assert totals[0] == 1
-    assert totals[1] > 0
+    assert totals == (1, 2, 0)
     entity = upsert_connector.await_args.args[1]
-    assert entity.id == "gmail"
-    assert _providers(entity) == [AuthProvider.LEMMA]
-    assert upsert_operation.await_count == totals[1]
+    assert entity.id == "slack"
+    assert [capability.kind for capability in entity.kinds] == [ConnectorKind.HTTP]
+    assert upsert_operation.await_count == 2
+    assert [
+        call.kwargs["public_name"] for call in upsert_operation.await_args_list
+    ] == ["chat_post_message", "conversations_list"]
+    assert all(
+        call.kwargs["kind"] == "http" for call in upsert_operation.await_args_list
+    )
 
 
 def test_list_composio_toolkits_uses_curated_allowlist_and_env_append():
@@ -1219,9 +1129,7 @@ async def test_deactivate_excluded_composio_connectors_deactivates_microsoft_tea
     existing = ConnectorEntity(
         id="microsoft_teams",
         title="Microsoft Teams",
-        provider_capabilities=[
-            ComposioProviderCapability(toolkit_slug="microsoft_teams")
-        ],
+        kinds=[ComposioProviderCapability(toolkit_slug="microsoft_teams")],
         is_active=True,
     )
     connector_repository = SimpleNamespace(
@@ -1263,7 +1171,7 @@ def test_a_retired_connector_is_never_deactivated_wholesale():
     github = ConnectorEntity(
         id="github",
         title="GitHub",
-        provider_capabilities=[
+        kinds=[
             HttpKindSpec(auth_scheme=AuthMethod.OAUTH2),
             ComposioProviderCapability(toolkit_slug="github"),
         ],
@@ -1277,7 +1185,7 @@ async def test_retiring_composio_drops_only_its_half_of_the_connector():
     github = ConnectorEntity(
         id="github",
         title="GitHub",
-        provider_capabilities=[
+        kinds=[
             HttpKindSpec(auth_scheme=AuthMethod.OAUTH2),
             ComposioProviderCapability(toolkit_slug="github"),
         ],
@@ -1299,8 +1207,8 @@ async def test_retiring_composio_drops_only_its_half_of_the_connector():
     updated = connector_repository.update.await_args.args[0]
     assert updated.is_active is True
     assert [
-        AuthProvider(capability.provider.value)
-        for capability in updated.provider_capabilities
+        AuthProvider(kind_to_provider(capability.kind).value)
+        for capability in updated.kinds
     ] == [AuthProvider.LEMMA]
     # Catalog rows are regenerated every import, so the Composio ones are
     # deleted; installs are only disabled, because deleting them would silently
@@ -1321,7 +1229,7 @@ async def test_retiring_composio_is_a_no_op_once_applied():
     github = ConnectorEntity(
         id="github",
         title="GitHub",
-        provider_capabilities=[HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)],
+        kinds=[HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)],
         is_active=True,
     )
     connector_repository = SimpleNamespace(
@@ -1380,8 +1288,8 @@ def test_trigger_id_is_keyed_on_kind_like_the_uniqueness_index():
         == "gmail:composio:new_message"
     )
     assert (
-        importer._trigger_id("slack", ConnectorKind.PACKAGE.value, "msg")
-        == "slack:package:msg"
+        importer._trigger_id("slack", ConnectorKind.HTTP.value, "msg")
+        == "slack:http:msg"
     )
     # A native http connector no longer shares an id space with a package one.
     assert (
@@ -1429,7 +1337,7 @@ async def test_upsert_trigger_tags_kind():
 
     repo = _FakeTriggerRepo()
     await importer._upsert_trigger(
-        repo, "gmail", _trigger("new_message"), provider=AuthProvider.COMPOSIO
+        repo, "gmail", _trigger("new_message"), kind=ConnectorKind.COMPOSIO.value
     )
 
     assert len(repo.created) == 1
@@ -1588,26 +1496,30 @@ async def test_sync_native_catalog_marks_mcp_entry_for_tool_discovery():
 
 
 @pytest.mark.asyncio
-async def test_upsert_operation_retags_a_legacy_package_row_in_place():
-    """Re-running the import must migrate, not duplicate.
+async def test_upsert_operation_updates_the_row_it_finds_rather_than_adding_one():
+    """Re-running the import must update, not duplicate.
 
-    The unique index is (connector, kind, name), so a fresh insert under the
-    new kind would leave the package-tagged row behind and the catalog would
-    list the operation twice.
+    The unique index is (connector, kind, name), so a fresh insert alongside an
+    existing row would leave both behind and the catalog would list the
+    operation twice.
+
+    This used to also retag a row stored under the old vendored-package kind.
+    That kind no longer exists, and the one-time migration of rows that still
+    carry it is `scripts/retag_package_installs.py`, run once at release.
     """
-    legacy = ConnectorOperationEntity(
-        id="sql:package:execute_query",
+    existing = ConnectorOperationEntity(
+        id="sql:sql:execute_query",
         connector_id="sql",
-        kind=ConnectorKind.PACKAGE,
+        kind=ConnectorKind.SQL,
         name="execute_query",
         provider_operation_name="execute_query",
     )
-    repo = _FakeOperationRepo([legacy])
+    repo = _FakeOperationRepo([existing])
 
     await importer._upsert_operation(
         repo,
         "sql",
-        provider=AuthProvider.LEMMA,
+        kind="sql",
         public_name="execute_query",
         provider_operation_name="execute_query",
         display_name="Execute query",
@@ -1616,12 +1528,11 @@ async def test_upsert_operation_retags_a_legacy_package_row_in_place():
         output_schema=None,
         search_document=None,
         execution={"kind": "sql", "op": "query"},
-        kind="sql",
     )
 
     assert repo.created == []
     assert len(repo.updated) == 1
-    assert repo.updated[0].id == "sql:package:execute_query"
+    assert repo.updated[0].id == "sql:sql:execute_query"
     assert repo.updated[0].kind is ConnectorKind.SQL
 
 
@@ -1695,18 +1606,17 @@ async def test_apply_connector_renames_skips_when_target_not_synced():
     assert session.executed == []
 
 
-def test_a_second_native_kind_survives_the_merge():
-    """Keying the merge on the two-valued auth provider collapsed every native
-    kind onto one slot, so a connector gaining an `http` spec silently lost its
-    `package` one -- which is exactly what a package-to-http migration does."""
+def test_merging_replaces_the_spec_of_the_same_kind_and_keeps_the_others():
+    """The merge is keyed on kind, not on the two-valued auth provider.
+
+    Keyed on the provider it collapsed every native kind onto one slot, so a
+    connector gaining an `http` spec silently lost whatever native spec it had.
+    """
     slack = ConnectorEntity(
         id="slack",
         title="Slack",
-        provider_capabilities=[
-            # A `package` spec as the real Slack has one: with the endpoints
-            # that make it installable. A bare OAuth2 spec carrying none is a
-            # different thing entirely and is dropped -- see the test below.
-            LemmaProviderCapability(
+        kinds=[
+            HttpKindSpec(
                 auth_scheme=AuthMethod.OAUTH2,
                 oauth2_defaults=OAuth2Defaults(
                     authorization_url="https://slack.com/oauth/v2/authorize",
@@ -1718,79 +1628,15 @@ def test_a_second_native_kind_survives_the_merge():
     )
 
     merged = importer._merge_provider_capabilities(
-        slack, HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)
+        slack, HttpKindSpec(auth_scheme=AuthMethod.API_KEY)
     )
 
     assert [capability.kind for capability in merged] == [
         ConnectorKind.HTTP,
-        ConnectorKind.PACKAGE,
         ConnectorKind.COMPOSIO,
     ]
-
-
-class TestADeadPackageKindIsNotCarriedForever:
-    """A connector that leaves the native-operations set keeps a `package` spec
-    naming no package, with no OAuth endpoints and no system client.
-
-    It is not inert. `supports_org_custom_oauth` was set on every OAuth2 native
-    spec unconditionally, so the UI offered "use my own OAuth app" for it, took
-    a client id and secret, created the install, and only then failed at
-    sign-in with "OAuth2 defaults are not configured" -- with the install left
-    behind and its name taken. Sixty of eighty-four connectors in one
-    deployment were in that state, Instagram among them.
-    """
-
-    def test_a_composio_only_connector_loses_its_stranded_native_kind(self):
-        instagram = ConnectorEntity(
-            id="instagram",
-            title="Instagram",
-            provider_capabilities=[
-                LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2),
-                ComposioProviderCapability(toolkit_slug="instagram"),
-            ],
-        )
-
-        merged = importer._merge_provider_capabilities(
-            instagram,
-            importer._composio_provider_capability(
-                auth_method=AuthMethod.OAUTH2, toolkit_slug="instagram"
-            ),
-        )
-
-        assert [capability.kind for capability in merged] == [ConnectorKind.COMPOSIO]
-
-    def test_a_google_app_that_resolves_its_endpoints_at_runtime_is_kept(self):
-        """Gmail stores no endpoints either -- it resolves them from the native
-        registry. By shape alone it is indistinguishable from a dead spec, and
-        pruning it would be far worse than the bug this fixes."""
-        gmail = ConnectorEntity(
-            id="gmail",
-            title="Gmail",
-            provider_capabilities=[
-                LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2),
-                ComposioProviderCapability(toolkit_slug="gmail"),
-            ],
-        )
-
-        merged = importer._merge_provider_capabilities(
-            gmail,
-            importer._composio_provider_capability(
-                auth_method=AuthMethod.OAUTH2, toolkit_slug="gmail"
-            ),
-        )
-
-        assert ConnectorKind.PACKAGE in [capability.kind for capability in merged]
-
-    def test_a_kind_this_import_produced_is_never_pruned(self):
-        """The prune is about what is *carried*. A spec the current import just
-        built is the current answer, whatever shape it has."""
-        somewhere = ConnectorEntity(id="somewhere", title="Somewhere")
-
-        merged = importer._merge_provider_capabilities(
-            somewhere, LemmaProviderCapability(auth_scheme=AuthMethod.OAUTH2)
-        )
-
-        assert [capability.kind for capability in merged] == [ConnectorKind.PACKAGE]
+    # The incoming spec wins for its own kind; Composio's is untouched.
+    assert merged[0].auth_scheme is AuthMethod.API_KEY
 
 
 class TestOrgCustomOAuthIsOnlyOfferedWhereItWorks:
@@ -1817,7 +1663,7 @@ class TestOrgCustomOAuthIsOnlyOfferedWhereItWorks:
 
     def test_a_google_app_resolving_its_endpoints_at_runtime_does_too(self):
         spec = importer._native_kind_spec(
-            connector_id="gmail", auth_method=AuthMethod.OAUTH2
+            connector_id="google_calendar", auth_method=AuthMethod.OAUTH2
         )
 
         assert spec.supports_org_custom_oauth is True
@@ -1834,7 +1680,7 @@ def test_merging_the_same_kind_twice_replaces_rather_than_duplicates():
     github = ConnectorEntity(
         id="github",
         title="GitHub",
-        provider_capabilities=[HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)],
+        kinds=[HttpKindSpec(auth_scheme=AuthMethod.OAUTH2)],
     )
 
     merged = importer._merge_provider_capabilities(
@@ -1877,7 +1723,6 @@ async def test_a_native_http_connector_seeds_triggers_under_its_own_kind():
                 }
             ],
         ),
-        patch.object(importer, "_list_native_apps", return_value=[]),
     ):
         totals = await importer._sync_native_catalog(
             connector_repository,
@@ -1915,6 +1760,7 @@ async def test_slacks_seeded_install_schema_asks_for_the_signing_secret():
                     "title": "Slack",
                     "description": "Slack connector",
                     "auth_method": "OAUTH2",
+                    "kind": "http",
                     "oauth2_config": {
                         "authorization_url": "https://slack.com/oauth/v2/authorize",
                         "token_url": "https://slack.com/api/oauth.v2.access",
@@ -1923,7 +1769,6 @@ async def test_slacks_seeded_install_schema_asks_for_the_signing_secret():
                 }
             ],
         ),
-        patch.object(importer, "_list_native_apps", return_value=[]),
     ):
         await importer._sync_native_catalog(
             connector_repository,
@@ -1963,7 +1808,6 @@ async def test_a_connector_without_its_own_quirks_gets_the_plain_oauth_schema():
                 }
             ],
         ),
-        patch.object(importer, "_list_native_apps", return_value=[]),
     ):
         await importer._sync_native_catalog(
             connector_repository,

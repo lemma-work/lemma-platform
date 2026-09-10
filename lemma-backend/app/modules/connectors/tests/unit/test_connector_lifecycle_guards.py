@@ -45,7 +45,7 @@ from app.modules.connectors.domain.connector import (
     AuthScheme,
     ConnectorEntity,
     ConnectorKind,
-    LemmaProviderCapability,
+    HttpKindSpec,
     McpKindSpec,
 )
 from app.modules.connectors.domain.errors import (
@@ -87,12 +87,12 @@ def _uow(journal: _Journal) -> AsyncMock:
 def _connector(connector_id: str = "slack", **kwargs) -> ConnectorEntity:
     return ConnectorEntity(
         id=connector_id,
-        provider_capabilities=[LemmaProviderCapability(**kwargs)],
+        kinds=[HttpKindSpec(**kwargs)],
     )
 
 
 def _mcp_connector() -> ConnectorEntity:
-    return ConnectorEntity(id="mcp", provider_capabilities=[McpKindSpec()])
+    return ConnectorEntity(id="mcp", kinds=[McpKindSpec()])
 
 
 def _auth_config(connector_id: str = "slack") -> AuthConfigEntity:
@@ -100,7 +100,7 @@ def _auth_config(connector_id: str = "slack") -> AuthConfigEntity:
         id=uuid4(),
         organization_id=ORG_ID,
         connector_id=connector_id,
-        provider="LEMMA",
+        kind=ConnectorKind.HTTP,
         config_source=AuthConfigSource.SYSTEM_DEFAULT,
         name=connector_id,
     )
@@ -173,12 +173,9 @@ async def test_the_oauth_callback_releases_before_the_token_exchange():
         auth_provider_registry=Mock(get=Mock(return_value=provider)),
     )
 
-    with patch.object(
-        service, "_load_native_account_profile", AsyncMock(return_value=None)
-    ):
-        await service.handle_oauth_callback(
-            redirect_uri="https://cb?state=s&code=abc", state="s"
-        )
+    await service.handle_oauth_callback(
+        redirect_uri="https://cb?state=s&code=abc", state="s"
+    )
 
     # The claim is spent by the same commit, which is what makes single-use
     # survive a domain error raised out of the exchange.

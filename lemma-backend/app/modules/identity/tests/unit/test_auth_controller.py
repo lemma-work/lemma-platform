@@ -18,6 +18,9 @@ from app.modules.identity.api.controllers.auth_controller import (
 from app.modules.identity.domain.user_entities import AuthUserEntity, UserEntity
 from app.modules.identity.services.desktop_auth_handoff import (
     DesktopAuthRateLimitExceeded,
+    DesktopAuthRequestNotFound,
+    DesktopAuthRequestPending,
+    DesktopAuthVerifierRejected,
 )
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
@@ -216,6 +219,7 @@ async def test_desktop_auth_handoff_creates_completes_and_exchanges(monkeypatch)
             code_verifier="b" * 43,
         ),
         webview_request,
+        store,
     )
 
     assert store.created_challenges == [(challenge, "127.0.0.1")]
@@ -224,3 +228,74 @@ async def test_desktop_auth_handoff_creates_completes_and_exchanges(monkeypatch)
     assert completed.status == "complete"
     assert exchanged.user_id == user_id
     assert exchanged.session_handle == "session-handle"
+
+
+@pytest.mark.parametrize(
+    ("failure", "status"),
+    [
+        # Still waiting for the person to finish signing in. The app polls on
+        # this, so it must not read as an error it should give up on.
+        (DesktopAuthRequestPending("id"), 409),
+        # The caller does not hold the verifier that goes with this request.
+        (DesktopAuthVerifierRejected("id"), 403),
+        # Expired, consumed already, or never existed -- deliberately one
+        # answer, so an id cannot be probed for whether it is real.
+        (DesktopAuthRequestNotFound("id"), 404),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_handoff_that_cannot_be_exchanged_mints_no_session(failure, status):
+    """Three refusals, three codes, and never a session.
+
+    The desktop app branches on these: 409 means keep waiting, 403 means this
+    is not its handoff, 404 means start again. They had no test, and the one
+    thing they share -- that `create_desktop_browser_session` is not reached --
+    had none either. A session minted on a rejected verifier is the whole
+    exchange defeated.
+    """
+
+    async def refuse(*_args, **_kwargs):
+        raise failure
+
+    # If the exchange ever minted a session before consuming, the real
+    # `create_desktop_browser_session` would run here against a request with no
+    # state and fail loudly. Nothing is patched to notice that; being
+    # unreachable is the property, and reaching it is what breaks.
+    with pytest.raises(HTTPException) as exc:
+        await create_desktop_auth_session(
+            DesktopAuthSessionRequest(
+                request_id="desktop-request-123456789", code_verifier="b" * 43
+            ),
+            SimpleNamespace(headers={"st-auth-mode": "cookie"}),
+            SimpleNamespace(consume=refuse),
+        )
+
+    assert exc.value.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_the_exchange_refuses_a_request_that_is_not_in_cookie_mode():
+    """The header decides where the session lands.
+
+    Without cookie mode SuperTokens answers with tokens in the body instead of
+    setting cookies, and the webview ends up with a handle it cannot use while
+    the handoff has already been consumed -- one-shot, so there is no second
+    attempt. Refused before `consume` is called, which is what keeps the
+    request usable.
+    """
+    consumed = []
+    store = SimpleNamespace(
+        consume=lambda *args, **kwargs: consumed.append(args) or _async_value(None)
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await create_desktop_auth_session(
+            DesktopAuthSessionRequest(
+                request_id="desktop-request-123456789", code_verifier="b" * 43
+            ),
+            SimpleNamespace(headers={}),
+            store,
+        )
+
+    assert exc.value.status_code == 400
+    assert consumed == [], "a one-shot handoff must not be spent on a bad request"

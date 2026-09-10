@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Check, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { Input } from "@/components/lemma/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/lemma/ui/select"
 import { Checkbox } from "@/components/lemma/ui/checkbox"

@@ -33,7 +33,6 @@ import {
     Plus,
     RefreshCw,
     Share2,
-    Sparkles,
     TerminalSquare,
 } from "@/components/ui/icons";
 import { HarnessProfileDialog, type HarnessDialogTarget } from "@/components/agents/harness-profile-dialog";
@@ -41,12 +40,9 @@ import { selectWorkspaceTarget } from "@/components/agents/this-computer-status"
 import { useAutoConnectThisComputer } from "@/lib/desktop/auto-connect";
 import { getLemmaApiBaseUrl } from "@/lib/sdk/lemma-client";
 import {
-    configureAiProvider,
     useDesktopBridge,
-    discoverProviderModels,
     openLocalSettings,
     useLocalAiStatus,
-    type AiProfileDraft,
 } from "@/lib/desktop/local-capabilities";
 import {
     useAgentHostHarnesses,
@@ -63,15 +59,15 @@ import { StepLoader } from "@/components/brand/loader";
 import { Skeleton } from "@/components/shared/loading";
 import {
     RECHECK_SETTLE_MS,
-    discoveryHeadline,
-    discoveryLines,
     discoveryPhase,
     discoveryStatusLine,
     harnessRowStates,
 } from "@/components/agents/harness-discovery-rows";
 import { agentHostBridge } from "@/lib/desktop/agent-host-bridge";
+import { useLocalProviderSetup, type ProviderPreset as Preset } from "@/lib/desktop/provider-setup";
+import { isReadyLocalAgent } from "@/lib/desktop/local-agent-default";
 import { RuntimeProfileKind } from "lemma-sdk";
-import { SetupPrimaryButton, SetupSplitPanel } from "./account-onboarding-chrome";
+import { SetupChoicesPage, SetupPrimaryButton, SetupSplitPanel } from "./account-onboarding-chrome";
 import type { SetupStep } from "./account-onboarding-helpers";
 
 type StepChrome = {
@@ -168,14 +164,7 @@ function BridgeUnavailableNote() {
 // What answers in chats
 // ---------------------------------------------------------------------------
 
-type Preset = {
-    id: string;
-    title: string;
-    hint: string;
-    protocol: AiProfileDraft["protocol"];
-    baseUrl: string;
-    needsKey: boolean;
-};
+
 
 // Local runners first: someone running Lemma on their own Mac most likely has
 // one of these serving already, and neither needs a key or an account.
@@ -223,7 +212,6 @@ export function LocalIntelligenceStep({
     organizationId,
     onContinue,
     onBack,
-    steps,
 }: StepChrome & {
     organizationId: string | null;
     onContinue: (outcome: "ready" | "deferred") => void;
@@ -235,7 +223,8 @@ export function LocalIntelligenceStep({
     const computerNoun = useThisComputer();
     // Connects itself. Nobody is asked to press anything for a machine that is
     // already this workspace's own computer.
-    const { status } = useAutoConnectThisComputer();
+    const { status, error: statusError, connectError, retryConnect, refetch } = useAutoConnectThisComputer();
+    const connectionError = connectError ?? statusError ?? status?.last_error ?? null;
     // This workspace's pairing, not the first one on the machine. `targets[0]`
     // is whichever pairing happens to sort first, so a Mac already paired to
     // another workspace showed that host's agents on this one's setup screen.
@@ -255,12 +244,8 @@ export function LocalIntelligenceStep({
     const restore = useRestoreAgentRuntime();
     const { status: aiStatus } = useLocalAiStatus(true);
 
-    const [preset, setPreset] = useState<Preset | null>(null);
-    const [apiKey, setApiKey] = useState("");
-    const [models, setModels] = useState<string[]>([]);
-    const [model, setModel] = useState("");
-    const [listing, setListing] = useState(false);
-    const [applying, setApplying] = useState(false);
+    const { preset, selectPreset, apiKey, setApiKey, models, model, setModel,
+        listing, applying, error: providerError, listModels, apply } = useLocalProviderSetup();
     const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
 
     const detected = useMemo(() => harnesses.data?.items ?? [], [harnesses.data?.items]);
@@ -281,7 +266,7 @@ export function LocalIntelligenceStep({
     });
     const rows = useMemo(() => harnessRowStates(detected, phase), [detected, phase]);
     const foundCount = rows.filter((row) => row.state === "found").length;
-    const working = phase !== "settled" && phase !== "unavailable";
+    const working = !connectionError && phase !== "settled" && phase !== "unavailable";
     // A clock, only while there is something to time. Probing spawns every agent
     // on the machine, and how long that takes is the one thing the screen knows
     // and the user does not -- but a wait is only worth explaining once it has
@@ -333,76 +318,39 @@ export function LocalIntelligenceStep({
         return saved;
     }, [managed.data?.items]);
 
-    const hasAgent = [...savedByHarnessId.values()].some((saved) => !saved.archived);
+    const hostOnline = host?.status === "ONLINE";
+    const hasAgent = hostOnline && (managed.data?.items ?? []).some((profile) =>
+        isReadyLocalAgent(profile)
+        && detected.some((harness) => harness.id === profile.harness_id && harness.health === "READY"),
+    );
     const configured = hasAgent || aiStatus === "ready";
 
-    const draft = (): AiProfileDraft | null =>
-        preset
-            ? {
-                  protocol: preset.protocol,
-                  base_url: preset.baseUrl,
-                  default_model: model,
-                  models,
-                  vision_models: [],
-                  allow_private_network: false,
-              }
-            : null;
-
-    const listModels = async () => {
-        const candidate = draft();
-        if (!candidate) return;
-        setListing(true);
-        try {
-            const found = await discoverProviderModels({ ...candidate, default_model: "", models: [] }, apiKey);
-            if (!found.length) {
-                toast.error("That provider answered, but reported no models.");
-                return;
-            }
-            setModels(found);
-            setModel((current) => (found.includes(current) ? current : found[0]));
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : String(error));
-        } finally {
-            setListing(false);
-        }
-    };
-
-    const apply = async () => {
-        const candidate = draft();
-        if (!candidate || !model) return;
-        setApplying(true);
-        try {
-            await configureAiProvider(candidate, apiKey);
-            toast.success(`${preset?.title} is ready.`);
-        } catch (error) {
-            toast.error(error instanceof Error ? error.message : String(error));
-        } finally {
-            setApplying(false);
-        }
-    };
-
     return (
-        <SetupSplitPanel
+        <SetupChoicesPage
             title="What should answer in your chats?"
-            subtitle={`A coding agent already on ${computerNoun}, an API provider, or both. Nothing here has AI until one of them is set.`}
-            preview={
-                <LocalPreview
-                    icon={<Sparkles className="size-5" />}
-                    headline={discoveryHeadline(phase, foundCount, computerNoun)}
-                    lines={discoveryLines(phase, foundCount, computerNoun)}
-                    working={working}
-                />
-            }
+            subtitle={`Use an agent on ${computerNoun}, connect a model provider, or set up both.`}
             onBack={onBack}
-            currentStep="intelligence"
-            steps={steps}
+            footer={(
+                <div className="flex flex-wrap items-center gap-3">
+                    <SetupPrimaryButton
+                        type="button"
+                        onClick={() => onContinue(configured ? "ready" : "deferred")}
+                        className="!mx-0 !mt-0"
+                    >
+                        Continue
+                        <ArrowRight className="h-4 w-4" />
+                    </SetupPrimaryButton>
+                    {configured ? (
+                        <span className="flex items-center gap-1.5 text-xs text-[var(--state-success)]">
+                            <Check className="size-3.5" />
+                            Ready
+                        </span>
+                    ) : null}
+                </div>
+            )}
         >
-            {/* max-w-xl, matching the title's measure above it — the panel sets
-                that on the heading but leaves children full width, so a wider
-                block here sits visibly proud of the text it belongs to. */}
-            <div className="w-full max-w-xl space-y-5 text-left">
+            <div className="min-w-0">
                 {!hasBridge ? <BridgeUnavailableNote /> : null}
-
                 <section className="space-y-2">
                     <div className="flex items-center justify-between">
                         <p className="text-xs font-medium text-[var(--text-tertiary)]">
@@ -421,13 +369,17 @@ export function LocalIntelligenceStep({
                         </Button>
                     </div>
 
-                    {/*
-                     * Here rather than only in the preview, which is `hidden
-                     * lg:flex` -- so on a narrow window the screen said nothing
-                     * at all for the whole minute a first probe takes, next to
-                     * four grey rows and a disabled button.
-                     */}
-                    {statusLine ? (
+                    {connectionError ? (
+                        <div role="alert" className="space-y-2 rounded-md border border-[var(--border-subtle)] p-3">
+                            <p className="text-sm">{connectionError}</p>
+                            <Button type="button" variant="quiet" size="sm" onClick={() => {
+                                retryConnect();
+                                void refetch();
+                            }}>
+                                Retry connection
+                            </Button>
+                        </div>
+                    ) : statusLine ? (
                         <p
                             role="status"
                             aria-live="polite"
@@ -438,13 +390,6 @@ export function LocalIntelligenceStep({
                         </p>
                     ) : null}
 
-                    {/*
-                     * Every agent Lemma can drive, from the first frame, each
-                     * resolving on its own. The previous version showed an empty
-                     * panel with one sentence in it for the whole minute a first
-                     * probe takes — which reads as broken rather than busy — and
-                     * then had the list appear out of nothing.
-                     */}
                     {rows.map((row) => {
                         if (row.state !== "found") {
                             return (
@@ -460,6 +405,8 @@ export function LocalIntelligenceStep({
                             <HarnessRow
                                 key={row.harness.id}
                                 harness={row.harness}
+                                compact
+                                hostOnline={hostOnline}
                                 savedProfile={saved ? { name: saved.name, archived: saved.archived } : null}
                                 onRecheck={recheck}
                                 className="border border-[var(--border-subtle)]"
@@ -527,34 +474,32 @@ export function LocalIntelligenceStep({
                     ) : null}
                 </section>
 
+                <p className="mt-3 text-xs text-[var(--text-tertiary)]">Agents use their own sign-in. No API key needed.</p>
+            </div>
+            <div className="min-w-0 md:border-l md:border-[var(--border-subtle)] md:pl-8">
                 <section className="space-y-3">
                     <p className="text-xs font-medium text-[var(--text-tertiary)]">
-                        Or connect a model provider
+                        Model providers
                     </p>
-                    <div className="flex flex-wrap gap-2">
+                    {!preset ? <div className="grid grid-cols-2 gap-2">
                         {presets(computerNoun).map((candidate) => (
                             <button
                                 key={candidate.id}
                                 type="button"
-                                data-active={preset?.id === candidate.id}
-                                onClick={() => {
-                                    setPreset(candidate);
-                                    // The models belonged to the last endpoint.
-                                    setModels([]);
-                                    setModel("");
-                                    setApiKey("");
-                                }}
-                                className={[
-                                    "setup-path-choice flex min-w-[7.5rem] flex-col gap-0.5 px-3 py-2 text-left",
-                                    preset?.id === candidate.id ? "is-active" : "",
-                                ].join(" ")}
+                                disabled={applying}
+                                onClick={() => selectPreset(candidate)}
+                                className="setup-path-choice flex min-w-[7.5rem] flex-col gap-0.5 px-3 py-2 text-left"
                             >
                                 <span className="text-sm font-medium text-[var(--text-primary)]">{candidate.title}</span>
                                 <span className="text-xs text-[var(--text-tertiary)]">{candidate.hint}</span>
                             </button>
                         ))}
-                    </div>
+                    </div> : <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium">{preset.title}</span>
+                        <Button type="button" variant="quiet" size="sm" disabled={applying} onClick={() => selectPreset(null)}>Choose another provider</Button>
+                    </div>}
 
+                    {providerError ? <p role="alert" className="text-sm text-[var(--state-error)]">{providerError}</p> : null}
                     {preset ? (
                         <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-4 py-4">
                             <p className="text-xs text-[var(--text-tertiary)]">{preset.baseUrl}</p>
@@ -563,6 +508,7 @@ export function LocalIntelligenceStep({
                                     type="password"
                                     autoComplete="new-password"
                                     value={apiKey}
+                                    disabled={applying}
                                     onChange={(event) => setApiKey(event.target.value)}
                                     placeholder="API key"
                                     aria-label={`${preset.title} API key`}
@@ -574,7 +520,7 @@ export function LocalIntelligenceStep({
                                     <span className="block text-xs font-medium text-[var(--text-tertiary)]">
                                         Default model
                                     </span>
-                                    <Select value={model} onValueChange={setModel}>
+                                    <Select value={model} onValueChange={setModel} disabled={applying}>
                                         <SelectTrigger aria-label="Default model">
                                             <SelectValue placeholder="Pick a model" />
                                         </SelectTrigger>
@@ -596,7 +542,7 @@ export function LocalIntelligenceStep({
                                     size="sm"
                                     loading={listing}
                                     loadingLabel="Connecting"
-                                    disabled={!hasBridge || (preset.needsKey && !apiKey.trim())}
+                                    disabled={!hasBridge || applying || (preset.needsKey && !apiKey.trim())}
                                     onClick={() => void listModels()}
                                 >
                                     {models.length ? "List models again" : "Connect and list models"}
@@ -608,7 +554,7 @@ export function LocalIntelligenceStep({
                                         loading={applying}
                                         loadingLabel="Applying — Lemma restarts"
                                         disabled={!model}
-                                        onClick={() => void apply()}
+                                        onClick={() => void apply().then((applied) => { if (applied) toast.success(`${preset.title} is ready.`); })}
                                     >
                                         Use {model}
                                     </Button>
@@ -618,37 +564,10 @@ export function LocalIntelligenceStep({
                     ) : null}
                 </section>
 
-                <p className="text-xs text-[var(--text-tertiary)]">
-                    A provider is this installation&apos;s single default — one profile, not one per
-                    person. If you later open Lemma to your network or the web, that key answers for
-                    everyone. A coding agent stays on {computerNoun} and uses its own credentials.
+                <p className="mt-3 text-xs text-[var(--text-tertiary)]">
+                    The provider is shared by this local installation. Prompts and tool results can be sent to the service you choose.
                 </p>
 
-                {/*
-                  * `pt-9` and `!mt-0` together, because `SetupPrimaryButton`
-                  * carries `mx-auto mt-8` of its own. This row already cancelled
-                  * the centring; leaving the top margin meant `items-center`
-                  * centred the button's *margin* box while the "Ready" pip
-                  * centred on the line, so the pip sat visibly above the middle
-                  * of the button. The 2rem moves to the container, where it
-                  * applies to the whole row.
-                  */}
-                <div className="flex flex-wrap items-center gap-3 pt-9">
-                    <SetupPrimaryButton
-                        type="button"
-                        onClick={() => onContinue(configured ? "ready" : "deferred")}
-                        className="!mx-0 !mt-0"
-                    >
-                        Continue
-                        <ArrowRight className="h-4 w-4" />
-                    </SetupPrimaryButton>
-                    {configured ? (
-                        <span className="flex items-center gap-1.5 text-xs text-[var(--state-success)]">
-                            <Check className="size-3.5" />
-                            Ready
-                        </span>
-                    ) : null}
-                </div>
             </div>
 
             {organizationId ? (
@@ -665,7 +584,7 @@ export function LocalIntelligenceStep({
                     }}
                 />
             ) : null}
-        </SetupSplitPanel>
+        </SetupChoicesPage>
     );
 }
 
@@ -751,6 +670,21 @@ export function LocalSharingStep({
                 />
             }
             onBack={onBack}
+            footer={(
+                <div className="pt-1">
+                    <SetupPrimaryButton
+                        type="button"
+                        onClick={() => void handleContinue()}
+                        disabled={
+                            isCreating || (selected !== "this_computer" && !hasBridge)
+                        }
+                        className="!mx-0"
+                    >
+                        {isCreating ? "Creating your pod" : "Continue"}
+                        <ArrowRight className="h-4 w-4" />
+                    </SetupPrimaryButton>
+                </div>
+            )}
             currentStep="sharing"
             steps={steps}
         >
@@ -800,19 +734,7 @@ export function LocalSharingStep({
 
                 {hasBridge || selected === "this_computer" ? null : <BridgeUnavailableNote />}
 
-                <div className="pt-1">
-                    <SetupPrimaryButton
-                        type="button"
-                        onClick={() => void handleContinue()}
-                        disabled={
-                            isCreating || (selected !== "this_computer" && !hasBridge)
-                        }
-                        className="!mx-0"
-                    >
-                        {isCreating ? "Creating your pod" : "Continue"}
-                        <ArrowRight className="h-4 w-4" />
-                    </SetupPrimaryButton>
-                </div>
+
             </div>
         </SetupSplitPanel>
     );

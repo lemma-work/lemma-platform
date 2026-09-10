@@ -6,15 +6,28 @@ from fastapi import APIRouter, Query
 
 from app.core.api.dependencies import CurrentUser
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AccountCreateSchema,
+    AccountInstallationsSchema,
+    InstallationBindSchema,
+    InstallationChoiceSchema,
     AccountCredentialsUpdateSchema,
     AccountListResponseSchema,
     AccountResponseSchema,
     MessageResponseSchema,
 )
+from app.modules.connectors.contracts.github import install_state_for
+from app.modules.connectors.domain.errors import ConnectorValidationError
+from app.modules.connectors.services.auth.github_installation import (
+    verify_installation,
+)
+from app.modules.connectors.services.auth.github_reconciler import (
+    GithubInstallationReconciler,
+)
+from app.modules.connectors.services.credential_freshness import fresh_credentials
 from app.modules.connectors.services.account_credential_rotation import (
     rotate_account_credentials,
 )
@@ -28,6 +41,12 @@ router = APIRouter(
 async def _account_response(connector_service, account) -> AccountResponseSchema:
     response = AccountResponseSchema.model_validate(account)
     response.kind = await connector_service.get_account_kind(account)
+    # Derived, not asked: listing accounts must not spend a GitHub call each,
+    # and must not block a page on a provider being slow. `installations` below
+    # is where the network lives.
+    response.install_state = install_state_for(
+        account.connector_id, account.external_ref
+    ).value
     return response
 
 
@@ -162,3 +181,102 @@ async def delete_account(
 ) -> MessageResponseSchema:
     await connector_service.delete_account(account_id, user.id, organization_id)
     return MessageResponseSchema(message="Account deleted successfully", success=True)
+
+
+def _installations_response(outcome) -> AccountInstallationsSchema:
+    return AccountInstallationsSchema(
+        install_state=outcome.state.value,
+        installation_id=outcome.installation_id,
+        choices=[
+            InstallationChoiceSchema(
+                installation_id=choice.installation_id,
+                account_login=choice.account_login,
+                account_type=choice.account_type,
+                repository_selection=choice.repository_selection,
+                manage_url=choice.manage_url,
+            )
+            for choice in outcome.choices
+        ],
+    )
+
+
+@router.get(
+    "/{account_id}/github/installations",
+    response_model=AccountInstallationsSchema,
+    operation_id="connector.account.installations",
+    summary="Account Installations",
+    description=(
+        "Which GitHub App installations this account can reach, resolving and "
+        "recording one when it is unambiguous."
+    ),
+)
+async def account_installations(
+    user: CurrentUser,
+    organization_id: UUID,
+    account_id: UUID,
+    connector_service: ConnectorServiceDep,
+    refresh: bool = Query(
+        default=False,
+        description=(
+            "Ask the provider again rather than trusting what is recorded. "
+            "Editing an installation's repositories sends no callback and no "
+            "reliable event, so this is how a change made on GitHub is seen."
+        ),
+    ),
+) -> AccountInstallationsSchema:
+    """Ask GitHub what this account reaches, and record an unambiguous answer.
+
+    Separate from listing accounts on purpose. This is the call that can be slow
+    or fail, and a connectors page must not block on a provider to render rows
+    it already has.
+    """
+    account = await connector_service.get_account(account_id, user.id, organization_id)
+    reconciler = GithubInstallationReconciler(connector_service)
+    return _installations_response(await reconciler.outcome(account, force=refresh))
+
+
+@router.post(
+    "/{account_id}/github/installations",
+    response_model=AccountResponseSchema,
+    operation_id="connector.account.bind_installation",
+    summary="Bind Account Installation",
+    description="Bind an account to one of the installations it can reach.",
+)
+async def bind_account_installation(
+    user: CurrentUser,
+    organization_id: UUID,
+    account_id: UUID,
+    data: InstallationBindSchema,
+    connector_service: ConnectorServiceDep,
+) -> AccountResponseSchema:
+    """Settle which installation an account speaks for.
+
+    Somebody in two organizations that both installed the App has two, and
+    binding to whichever came back first would route the other organization's
+    events at them. So the choice is theirs -- but it is still proved before it
+    is stored: `external_ref` is the inbound routing key, and a request body is
+    exactly as untrustworthy as the callback parameter GitHub warns about.
+    """
+    account = await connector_service.get_account(account_id, user.id, organization_id)
+    credentials = await fresh_credentials(
+        account, user.id, connector_service=connector_service
+    )
+    token = (credentials or {}).get("access_token")
+    reveal = getattr(token, "get_secret_value", None)
+    if callable(reveal):
+        token = reveal()
+    proved = False
+    if token:
+        # The write below wants the session back, so only the round trip to
+        # GitHub happens without a pooled connection held.
+        async with connection_released(getattr(connector_service.uow, "session", None)):
+            proved = await verify_installation(str(token), data.installation_id)
+    if not proved:
+        raise ConnectorValidationError(
+            "That installation is not one this account can reach."
+        )
+    account.external_ref = data.installation_id
+    await connector_service.account_repository.update(account)
+    await connector_service.uow.commit()
+    await GithubInstallationReconciler(connector_service).invalidate(account.id)
+    return await _account_response(connector_service, account)

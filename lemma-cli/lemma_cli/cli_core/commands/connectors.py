@@ -1500,13 +1500,13 @@ def describe_connector(
     kind: Optional[str] = typer.Option(
         None,
         "--kind",
-        help="Override kind, e.g. package or composio. Auto-detected from the installed auth config when omitted.",
+        help="Override kind, e.g. http or composio. Auto-detected from the installed auth config when omitted.",
     ),
 ) -> None:
     """Show the skill guide for a connector app.
 
     Automatically selects the kind-specific skill when the app ships as both a
-    vendored package and a Composio toolkit and an auth config is installed.
+    native connector and a Composio toolkit and an auth config is installed.
     """
 
     state = state_from_ctx(ctx)

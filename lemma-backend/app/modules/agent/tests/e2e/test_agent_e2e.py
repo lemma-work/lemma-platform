@@ -244,7 +244,7 @@ async def _seed_gmail_connector(db_session) -> None:
         description="Gmail connector",
         # Post-#265 the install axis is `kinds` (one KindSpec per way the
         # connector can be installed), not the retired `provider_capabilities`.
-        kinds=[{"kind": "package", "auth_scheme": "NOAUTH"}],
+        kinds=[{"kind": "http", "auth_scheme": "NOAUTH"}],
         is_active=True,
     )
     operation = ConnectorOperation(

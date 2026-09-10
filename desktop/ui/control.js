@@ -15,8 +15,11 @@ const forThisDevice = (text) =>
 // Named per platform because the sentence is about the operating system
 // refusing access, not about the box it runs on.
 const OS_NAME = IS_WINDOWS ? "Windows" : "macOS";
+const LOCAL_MODE = window.__LEMMA_DESKTOP__?.mode === "local";
+const LOCAL_PAGES = new Set(["overview", "ai", "sharing", "integrations", "channels", "runtime"]);
 
 const titles = {
+  computer: ["This computer", "Installed agents and the connection to your workspace."],
   overview: ["Overview", "Health, attention, and exposure at a glance."],
   ai: ["AI provider", "Choose and validate the system model profile used by local agents."],
   sharing: ["Sharing", "Keep Lemma private, use it on trusted Wi-Fi, or create an intentional public link."],
@@ -24,6 +27,7 @@ const titles = {
   channels: ["Channels", "Make agents reachable through only the receivers you explicitly enable."],
   runtime: ["Runtime", "Application health, lifecycle controls, and private dependency status."],
   updates: ["Updates", "Exact release matching, verified packs, and safe repair boundaries."],
+  recovery: ["Recovery", "Repair a broken installation or explicitly erase local Lemma and set up again."],
   diagnostics: ["Diagnostics", "Local paths, canonical origins, logs, and non-destructive repair."],
 };
 
@@ -37,6 +41,9 @@ let sharingProvider = "ngrok";
 let cloudflareSetupChoice = null;
 let sharingBusy = false;
 let snapshotTimer = null;
+const sectionRevisions = new Map();
+const draftVersions = new Map();
+const pendingSaves = new Map();
 
 const nextId = (prefix) => `control-${prefix}-${Date.now()}-${++requestCounter}`;
 
@@ -65,8 +72,14 @@ function escapeHtml(value) {
 
 function setPage(page) {
   if (!titles[page]) return;
+  if (!LOCAL_MODE && LOCAL_PAGES.has(page)) page = "computer";
   document.querySelectorAll(".nav-item").forEach((button) => {
-    button.classList.toggle("active", button.dataset.page === page);
+    const current = button.dataset.page === page;
+    button.classList.toggle("active", current);
+    // Which page you are on was carried by a background colour and nothing
+    // else, so a screen reader read eleven identical navigation buttons.
+    if (current) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   document.querySelectorAll(".page").forEach((section) => {
     section.classList.toggle("active", section.dataset.page === page);
@@ -75,8 +88,12 @@ function setPage(page) {
   $("page-subtitle").textContent = titles[page][1];
   document.querySelector(".content").scrollTo({ top: 0, behavior: "instant" });
   // Only poll while the logs are actually on screen.
-  if (page === "diagnostics") startLogPolling();
-  else stopLogPolling();
+  if (page === "diagnostics") {
+    startLogPolling();
+    loadTelemetry();
+  } else {
+    stopLogPolling();
+  }
 }
 
 /* ---------------------------------------------------------------- logs ---
@@ -229,7 +246,10 @@ function renderAppUpdate() {
   $("app-update-cost").textContent = runtime
     ? `The update itself is small. After Lemma restarts it downloads about ${runtime} of runtime before the workspace opens.`
     : "After Lemma restarts it downloads its runtime once before the workspace opens.";
-  $("app-update-reset-warning").hidden = appUpdate.dataCompatibility !== "requires-reset";
+  if (!LOCAL_MODE) $("app-update-cost").textContent = "Updates the desktop app and its local agent support. Cloud mode does not download the complete Local Lemma stack.";
+  const blocked = ["requires-reset", "migration-unavailable", "unknown"].includes(appUpdate.dataCompatibility);
+  $("app-update-reset-warning").hidden = !blocked;
+  document.querySelector('[data-action="install-app-update"]').disabled = blocked;
 }
 
 async function loadAppUpdate() {
@@ -242,18 +262,80 @@ async function loadAppUpdate() {
   }
 }
 
+let closeDecisionPending = false;
+
 async function closeLocalSettings() {
+  if (closeDecisionPending) return false;
+  const status = $("settings-close-status");
+  status.hidden = true;
+  if (pendingSaves.size) {
+    status.textContent = "A save is still running. Wait for its result before closing.";
+    status.hidden = false;
+    return false;
+  }
+  closeDecisionPending = true;
+  try {
+    if (document.querySelector(".config-page.dirty")) {
+      const decision = await invoke("confirm_settings_changes");
+      if (decision === "confirm") {
+        for (const page of document.querySelectorAll(".config-page.dirty")) {
+          if (!await saveConfiguration(page.querySelector("[data-save]"))) {
+            status.textContent = "A section could not be saved. Review its error; your draft is preserved.";
+            status.hidden = false;
+            return false;
+          }
+        }
+        if (document.querySelector(".config-page.dirty")) {
+          status.textContent = "New edits are still unsaved. Review them before closing.";
+          status.hidden = false;
+          return false;
+        }
+      } else if (decision !== "discard") {
+        return false;
+      }
+      if (pendingSaves.size) {
+        status.textContent = "A save is still running. Wait for its result before closing.";
+        status.hidden = false;
+        return false;
+      }
+    }
+    return await leaveSettings();
+  } catch (error) {
+    status.textContent = `Couldn't close settings. ${friendlyError(error)}`;
+    status.hidden = false;
+    return false;
+  } finally {
+    closeDecisionPending = false;
+    $("back-to-lemma").focus();
+  }
+}
+
+async function leaveSettings() {
   try {
     await invoke("close_local_settings");
+    return true;
   } catch (error) {
     toast(friendlyError(error), true);
+    return false;
   }
 }
 
 function markDirty(target) {
   if (filling) return;
+  if (target.dataset.secret && target.value) {
+    target.dataset.clear = "false";
+    const button = target.parentElement.querySelector(".secret-clear");
+    if (button) {
+      button.classList.remove("armed");
+      button.textContent = "Remove";
+      labelSecretButton(button, target);
+    }
+  }
   const page = target.closest(".config-page");
-  if (page) page.classList.add("dirty");
+  if (page) {
+    page.classList.add("dirty");
+    draftVersions.set(page.dataset.page, (draftVersions.get(page.dataset.page) || 0) + 1);
+  }
 }
 
 function secretInputs() {
@@ -267,12 +349,33 @@ function labelSecretButton(button, input) {
 }
 
 function configureInteractionHandlers() {
+  document.querySelectorAll('[data-action="reset-local-data"]').forEach((button) => { button.disabled = !LOCAL_MODE; });
+  document.querySelectorAll(".nav-item").forEach((button) => {
+    if (!LOCAL_MODE && LOCAL_PAGES.has(button.dataset.page)) {
+      button.disabled = true;
+      button.title = "Available when using Local Lemma";
+    }
+  });
+  $("deployment-description").textContent = LOCAL_MODE
+    ? "Local Lemma runs its services and stores application data on this computer. Configured LLMs, connectors, and online features can send requested prompts, tool results, and payloads externally."
+    : window.__LEMMA_DESKTOP__?.mode === "undecided"
+      ? "Choose Lemma Cloud or Local Lemma when you return to setup. Cloud stores workspace data online; Local Lemma stores application data and runs services on this computer. Configured providers and connectors can communicate externally in either mode."
+      : "Your workspace data and orchestration live in Lemma Cloud. Installed coding agents run on this computer. Their requested results are sent to your cloud workspace.";
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => setPage(button.dataset.page));
   });
   $("back-to-lemma").addEventListener("click", closeLocalSettings);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !event.defaultPrevented) closeLocalSettings();
+    if (event.key !== "Escape" || event.defaultPrevented) return;
+    // Escape inside a field belongs to the field. Typing a password, pressing
+    // Escape to dismiss the browser's own suggestion list, and having the
+    // whole settings window close instead is not a shortcut anybody asked
+    // for. The first Escape leaves the control; a second one closes.
+    if (isEditingControl(event.target)) {
+      event.target.blur();
+      return;
+    }
+    closeLocalSettings();
   });
   document.querySelectorAll(".config-page input, .config-page select").forEach((input) => {
     input.addEventListener("input", () => markDirty(input));
@@ -293,6 +396,17 @@ function configureInteractionHandlers() {
   });
   document.querySelectorAll("[data-save]").forEach((button) => {
     button.addEventListener("click", () => saveConfiguration(button));
+    const discard = document.createElement("button");
+    discard.className = "btn";
+    discard.textContent = "Discard changes";
+    discard.addEventListener("click", () => {
+      const page = button.closest(".config-page");
+      if ([...pendingSaves.values()].some((pending) => pending.page === page)) return;
+      page.classList.remove("dirty");
+      setSectionError(page, "");
+      fillConfiguration();
+    });
+    button.parentElement.append(discard);
   });
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => runDesktopAction(button));
@@ -314,6 +428,9 @@ function configureInteractionHandlers() {
     // is how a default that the provider has never heard of gets saved.
     clearDiscoveredModels();
   });
+  for (const id of ["ai-protocol", "ai-key", "ai-private-network"]) {
+    $(id).addEventListener("change", clearDiscoveredModels);
+  }
   document.querySelectorAll("[data-sharing-mode]").forEach((button) => {
     button.addEventListener("click", () => selectSharingChoice(button.dataset.sharingMode));
   });
@@ -338,8 +455,6 @@ function configureInteractionHandlers() {
   $("sharing-enable-lan").addEventListener("click", enableLanSharing);
   $("sharing-enable-public").addEventListener("click", enablePublicSharing);
   $("sharing-disable").addEventListener("click", disableSharing);
-  $("public-confirm-cancel").addEventListener("click", () => $("public-confirm-dialog").close());
-  $("public-confirm-activate").addEventListener("click", activatePublicSharing);
 }
 
 // Loopback endpoints for the two local runners, and base URLs for the API
@@ -367,6 +482,13 @@ function applyProviderPreset(name) {
   $("ai-protocol").value = preset.protocol;
   $("ai-base").value = preset.base;
   $("ai-key").value = "";
+  $("ai-key").dataset.clear = "false";
+  const clearButton = $("ai-key").parentElement.querySelector(".secret-clear");
+  if (clearButton) {
+    clearButton.classList.remove("armed");
+    clearButton.textContent = "Remove";
+    labelSecretButton(clearButton, $("ai-key"));
+  }
   $("ai-private-network").checked = false;
   clearDiscoveredModels();
   markDirty($("ai-base"));
@@ -395,12 +517,19 @@ function renderDiscoveredModels(models, selected) {
   $("ai-model-panel").hidden = models.length === 0;
 }
 
+function providerDraftIdentity() {
+  return JSON.stringify([$("ai-protocol").value, $("ai-base").value.trim(),
+    $("ai-private-network").checked, $("ai-key").value, $("ai-key").dataset.clear,
+    snapshot?.operator.config.revision, draftVersions.get("ai")]);
+}
+
 async function discoverModels() {
   const button = $("ai-discover");
   if (button.disabled) return;
   const original = button.textContent;
   button.disabled = true;
   button.textContent = "Connecting…";
+  const draft = providerDraftIdentity();
   try {
     const models = await invoke("discover_provider_models", {
       payload: {
@@ -412,17 +541,17 @@ async function discoverModels() {
           vision_models: [],
           allow_private_network: $("ai-private-network").checked,
         },
-        // Absent means "use the stored key", which is what an already
-        // configured provider wants. An empty field is a deliberate no-key.
-        api_key: $("ai-key").dataset.clear === "true" ? "" : $("ai-key").value,
+        ...($("ai-key").dataset.clear === "true"
+          ? { api_key: "" }
+          : $("ai-key").value ? { api_key: $("ai-key").value } : {}),
       },
     });
     // The command returns the list rather than announcing it on the event
     // stream, so the answer belongs to this press and not to whichever page
     // happened to be listening.
-    applyDiscoveredModels(Array.isArray(models) ? models : []);
+    if (draft === providerDraftIdentity()) applyDiscoveredModels(Array.isArray(models) ? models : []);
   } catch (error) {
-    toast(friendlyError(error), true);
+    if (draft === providerDraftIdentity()) toast(friendlyError(error), true);
   } finally {
     button.disabled = false;
     button.textContent = original;
@@ -486,6 +615,8 @@ function fillConfiguration() {
   filling = true;
   const config = snapshot.operator.config;
   const presence = snapshot.operator.secrets || {};
+  const canFill = (name) => !document.querySelector(`.config-page[data-page="${name}"]`)?.classList.contains("dirty");
+  if (canFill("ai")) {
   $("ai-protocol").value = config.ai.protocol;
   $("ai-base").value = config.ai.base_url;
   // A saved profile already carries the list the probe returned when it was
@@ -500,11 +631,15 @@ function fillConfiguration() {
   $("ai-validation").textContent = config.ai.last_validated_at_unix_ms
     ? `Validated ${new Date(config.ai.last_validated_at_unix_ms).toLocaleString()}`
     : "Not validated";
+  }
+  if (canFill("integrations")) {
   $("composio-enabled").checked = config.integrations.composio_enabled;
   $("google-id").value = config.integrations.google_client_id;
   $("microsoft-id").value = config.integrations.microsoft_client_id;
   $("github-id").value = config.integrations.github_client_id || "";
   $("slack-connector-id").value = config.integrations.slack_client_id || "";
+  }
+  if (canFill("channels")) {
   $("slack-enabled").checked = config.surfaces.slack_socket_mode;
   $("telegram-enabled").checked = config.surfaces.telegram_polling;
   $("teams-id").value = config.surfaces.teams_app_id;
@@ -512,7 +647,9 @@ function fillConfiguration() {
   $("wa-phone").value = config.surfaces.whatsapp_phone_number_id;
   $("wa-waba").value = config.surfaces.whatsapp_waba_id;
   $("resend-domain").value = config.surfaces.resend_inbound_domain;
+  }
   secretInputs().forEach((input) => {
+    if (!canFill(input.closest(".config-page").dataset.page)) return;
     input.value = "";
     input.dataset.clear = "false";
     input.placeholder = presence[input.dataset.secret] ? "Configured — enter to replace" : "Not configured";
@@ -526,11 +663,13 @@ function fillConfiguration() {
   });
   // After the fields, because the badge is read off them.
   paintConfigStates(presence);
-  document.querySelectorAll(".config-page").forEach((page) => page.classList.remove("dirty"));
+  document.querySelectorAll(".config-page").forEach((page) => {
+    if (canFill(page.dataset.page)) sectionRevisions.set(page.dataset.page, config.revision);
+  });
   filling = false;
 }
 
-function collectConfiguration() {
+function collectConfiguration(pageName) {
   const config = structuredClone(snapshot.operator.config);
   config.ai = {
     ...config.ai,
@@ -563,27 +702,53 @@ function collectConfiguration() {
   };
   const secrets = {};
   secretInputs().forEach((input) => {
-    if (input.dataset.clear === "true") secrets[input.dataset.secret] = null;
-    else if (input.value) secrets[input.dataset.secret] = input.value;
+    if (input.closest(".config-page").dataset.page !== pageName) return;
+    secrets[input.dataset.secret] = input.dataset.clear === "true" ? { action: "remove" }
+      : input.value ? { action: "replace", value: input.value } : { action: "keep" };
   });
-  return { config, secrets };
+  const name = pageName === "channels" ? "surfaces" : pageName;
+  return { expected_revision: sectionRevisions.get(pageName), section: { name, value: config[name] }, secrets };
 }
 
 async function saveConfiguration(button) {
-  if (!snapshot || button.disabled) return;
+  if (!snapshot || button.disabled) return false;
   const original = button.textContent;
+  const page = button.closest(".config-page");
+  const id = nextId("apply");
+  let complete;
+  const completion = new Promise((resolve) => { complete = resolve; });
+  pendingSaves.set(id, { page, button, original, complete, started: Date.now(),
+    expectedRevision: sectionRevisions.get(page.dataset.page), version: draftVersions.get(page.dataset.page) || 0 });
+  setSectionError(page, "");
   button.disabled = true;
   button.textContent = "Saving…";
   try {
     await invoke("apply_operator_config", {
-      id: nextId("apply"),
-      payload: collectConfiguration(),
+      id,
+      payload: collectConfiguration(page.dataset.page),
     });
+    requestSnapshot();
+    return await completion;
   } catch (error) {
+    pendingSaves.delete(id);
     button.disabled = false;
     button.textContent = original;
+    setSectionError(page, friendlyError(error));
     toast(friendlyError(error), true);
+    return false;
   }
+}
+
+function setSectionError(page, message) {
+  let error = page.querySelector(".section-error");
+  if (!error) {
+    error = document.createElement("p");
+    error.className = "section-error danger-warning";
+    error.setAttribute("role", "alert");
+    page.append(error);
+  }
+  error.textContent = message;
+  error.hidden = !message;
 }
 
 // A plain confirm() returns false without drawing anything in this webview, so
@@ -594,6 +759,7 @@ const confirmAction = (title, message, confirmLabel) =>
 async function runDesktopAction(button) {
   try {
     const action = button.dataset.action;
+    if (action === "restart-recovery") await invoke("restart_into_recovery");
     if (action === "start") await invoke("start");
     if (action === "restart") await invoke("restart");
     if (action === "stop") await invoke("stop", { includeInfra: false });
@@ -612,7 +778,7 @@ async function runDesktopAction(button) {
     // a cloud user reaches the same controls. This page keeps only what is
     // useful when the workspace itself will not load.
     if (action === "agent-host-open") {
-      await invoke("close_local_settings");
+      if (!await closeLocalSettings()) return;
       await invoke("open_app");
     }
     if (action === "agent-host-restart") await invoke("agent_host_action", { action: "restart" });
@@ -643,25 +809,15 @@ async function runDesktopAction(button) {
     if (action === "install-app-update") {
       button.disabled = true;
       button.textContent = "Downloading…";
-      let resetData = false;
-      // The reset warning is not decoration: taking an incompatible update
-      // without discarding data first produces an app that cannot start.
-      if (appUpdate?.dataCompatibility === "requires-reset") {
-        const proceed = await confirmAction(
-          "Update and reset local data?",
-          forThisDevice(`Lemma ${appUpdate.availableVersion} upgrades the local database. Your pods, files and accounts on this Mac cannot be carried across and will be deleted.`),
-          "Update and Reset",
-        );
-        if (!proceed) return;
-        resetData = true;
+      if (appUpdate?.dataCompatibility !== "compatible") {
+        throw new Error("This update has no supported data-preserving migration. Your current version and data have been kept.");
       }
-      // The reset is the *command's* job, not this handler's. Doing it here
-      // meant the data was destroyed before the download had even been
-      // attempted, so a network drop or an unverifiable signature took every
-      // pod, file and account with it -- and `reset_local_data` returns as soon
-      // as the request is written, so the install then raced the wipe and
-      // force-terminated the daemon in the middle of it.
-      await invoke("install_app_update", { resetData });
+      // The version the user is looking at, so the command can refuse if the
+      // feed has moved on since they were shown it.
+      await invoke("install_app_update", {
+        resetData: false,
+        expectedVersion: appUpdate?.availableVersion ?? "",
+      });
       await loadAppUpdate();
     }
     if (action === "retry-snapshot") {
@@ -672,31 +828,38 @@ async function runDesktopAction(button) {
     if (action === "reset-local-data") {
       button.disabled = true;
       button.textContent = "Resetting…";
-      await invoke("reset_local_data");
-      toast("Local data was erased. Lemma is starting with a clean workspace.");
+      const outcome = await invoke("reset_local_data");
+      $("recovery-status").textContent = outcome === "started"
+        ? "Local data reset has started. Wait for the installation to report completion."
+        : "Reset cancelled. No cleanup was started.";
     }
     if (action === "full-reinstall") {
       button.disabled = true;
       button.textContent = "Starting over…";
-      await invoke("reset_full_reinstall");
-      toast("Everything local was removed. Choose how to run Lemma to set up again.");
+      const outcome = await invoke("reset_full_reinstall");
+      $("recovery-status").textContent = outcome === "completed"
+        ? "Cleanup completed. Choose how to run Lemma to set up again."
+        : "Cleanup cancelled. No cleanup was started.";
     }
   } catch (error) {
+    if (["reset-local-data", "full-reinstall"].includes(button.dataset.action)) {
+      $("recovery-status").textContent = friendlyError(error);
+    }
     toast(friendlyError(error), true);
   } finally {
     for (const [action, label] of [
       ["reset-local-data", "Reset local data"],
-      ["full-reinstall", "Start over"],
+      ["full-reinstall", "Force cleanup and reinstall"],
       ["check-app-update", "Check for updates"],
       ["install-app-update", "Download and install"],
     ]) {
       document.querySelectorAll(`[data-action="${action}"]`).forEach((item) => {
-        item.disabled = false;
+        item.disabled = (action === "install-app-update" && appUpdate?.dataCompatibility !== "compatible") || (action === "reset-local-data" && !LOCAL_MODE);
         item.textContent = label;
       });
     }
     document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
-      item.disabled = !runtimeInfo?.repairAvailable;
+      item.disabled = !LOCAL_MODE || !runtimeInfo?.repairAvailable;
       item.textContent = "Verify & repair runtime";
     });
   }
@@ -706,7 +869,7 @@ function render() {
   if (!snapshot?.operator) return;
   const readiness = snapshot.operator.readiness;
   const services = snapshot.services || [];
-  const appReady = services.length > 0 && services.every((service) => service.running);
+  const appReady = Boolean(snapshot.state?.ready) && services.length > 0 && services.every((service) => service.running);
   const aiReady = readiness.ai === "ready";
   const runtimeReady = Boolean(snapshot.managed_runtime);
   const sharing = snapshot.sharing || {};
@@ -718,10 +881,10 @@ function render() {
   const channel = appUpdate && appUpdate.channel !== "stable" ? ` · ${appUpdate.channel}` : "";
   $("release").textContent = `Release ${snapshot.release || "development"}${channel}`;
   $("metric-app").textContent = appReady ? "Healthy" : state?.running ? "Starting" : "Stopped";
-  $("metric-ai").textContent = aiReady ? "Ready" : "Needs setup";
+  $("metric-ai").textContent = aiReady ? "Ready" : "Not configured";
   $("metric-ai-detail").textContent = aiReady
     ? `${snapshot.operator.config.ai.default_model || "Provider configured"}`
-    : "Choose a provider, or point Lemma at Ollama or LM Studio.";
+    : "Use an installed coding agent, or configure an API provider or local model server.";
   $("metric-exposure").textContent = modeLabel(sharingMode);
   $("metric-exposure-detail").textContent = exposureCopy(sharingMode);
 
@@ -729,6 +892,10 @@ function render() {
   pill.textContent = appReady && runtimeReady ? "Healthy" : state?.status || "Checking";
   pill.className = `state-pill ${appReady && runtimeReady ? "ok" : state?.last_error ? "bad" : "warn"}`;
   setDot("overview", appReady ? "ok" : "warn");
+  if (!LOCAL_MODE) {
+    pill.textContent = snapshot.agent_host?.running ? "Agent Host running" : "Agent Host stopped";
+    pill.className = `state-pill ${snapshot.agent_host?.running ? "ok" : "warn"}`;
+  }
   setDot("ai", aiReady ? "ok" : "warn");
   setDot("sharing", sharing.phase === "error" ? "bad" : sharingMode === "this_computer" ? "ok" : "warn");
   setDot("integrations", readiness.integrations === "configured" ? "ok" : "");
@@ -736,7 +903,6 @@ function render() {
   setDot("runtime", appReady ? "ok" : "warn");
 
   const attention = [];
-  if (!aiReady) attention.push({ title: "Choose an AI provider", copy: "Agents cannot answer until a provider is configured.", page: "ai" });
   if (!appReady) attention.push({ title: "Application services need attention", copy: "Review the runtime state and reconcile services.", page: "runtime" });
   if (sharing.last_error) attention.push({ title: "Sharing needs attention", copy: sharing.last_error, page: "sharing" });
   const banner = $("attention-banner");
@@ -748,7 +914,7 @@ function render() {
   }
   $("overview-attention").innerHTML = attention.length
     ? attention.map((item) => summaryHtml(item.title, item.copy, "Review", item.page)).join("")
-    : summaryHtml("Nothing urgent", "Lemma is healthy and ready for local work.", "Good", "");
+    : summaryHtml("Nothing urgent", "Application health checks passed. Agent setup is available in your workspace.", "Good", "");
   $("overview-exposure").innerHTML = summaryHtml(
     modeLabel(sharingMode),
     sharing.canonical_url || snapshot.state?.url || "Local address unavailable",
@@ -759,7 +925,7 @@ function render() {
   const processHtml = services.map((service) => serviceHtml(
     service.id,
     service.pid ? `PID ${service.pid}` : service.last_exit || "Not running",
-    service.running ? "healthy" : service.circuit_open ? "failed" : "stopped",
+    service.running ? "running" : service.circuit_open ? "failed" : "stopped",
     service.running ? "ok" : service.circuit_open ? "bad" : "",
   )).join("");
   const embeddings = snapshot.capabilities?.capabilities?.embeddings;
@@ -781,6 +947,42 @@ function render() {
   }
   renderAgentHost(snapshot.agent_host || {});
   renderSharing(sharing);
+}
+
+// The anonymous install-health switch.
+//
+// Read once, when Local settings opens. It is not part of the operator config
+// -- it is a choice about this installation, stored beside the install id --
+// so it neither joins the dirty-section machinery nor waits for a save.
+let telemetryLoaded = false;
+async function loadTelemetry() {
+  if (telemetryLoaded) return;
+  telemetryLoaded = true;
+  let status;
+  try {
+    status = await invoke("telemetry_status");
+  } catch {
+    // A build that cannot answer offers nothing rather than a dead switch.
+    return;
+  }
+  if (!status?.available) return;
+  const panel = $("telemetry-panel");
+  const box = $("telemetry-enabled");
+  panel.hidden = false;
+  box.checked = Boolean(status.enabled);
+  $("telemetry-detail").textContent =
+    `Sent to ${status.host}, identified only by a random id for this installation`
+    + (status.install_id ? ` (${status.install_id.slice(0, 8)}…).` : ".")
+    + " Turning this off is remembered, and nothing is sent again.";
+  box.addEventListener("change", async () => {
+    const wanted = box.checked;
+    try {
+      await invoke("set_telemetry_enabled", { enabled: wanted });
+    } catch (error) {
+      box.checked = !wanted;
+      toast(String(error), "bad");
+    }
+  });
 }
 
 // Matches `formatUptime` in the workspace's own This computer card, which is
@@ -835,9 +1037,27 @@ function serviceHtml(title, copy, status, tone) {
   return `<div class="service-row"><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(copy)}</small></span><span class="status ${tone}">${escapeHtml(status)}</span></div>`;
 }
 
+// What each dot's colour means, in words.
+//
+// The dots were colour and nothing else: green, gold, red and grey, with no
+// text anywhere. Someone who cannot tell those apart -- or who is listening
+// rather than looking -- got eleven navigation items that all read the same,
+// and no way to find the one that needs them.
+const DOT_MEANING = {
+  ok: "healthy",
+  warn: "needs attention",
+  bad: "not working",
+  "": "not configured",
+};
+
 function setDot(id, tone) {
   const dot = $(`dot-${id}`);
-  if (dot) dot.className = `health-dot ${tone}`;
+  if (!dot) return;
+  dot.className = `health-dot ${tone}`;
+  // Inside the nav button, so it joins that button's name: "AI provider,
+  // needs attention".
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", DOT_MEANING[tone] ?? DOT_MEANING[""]);
 }
 
 function modeLabel(mode) {
@@ -899,7 +1119,19 @@ function renderSharing(sharing = {}) {
   }
   const qrVisible = actualMode === "local_network" && sharing.phase === "ready" && Boolean(sharing.qr_svg);
   $("sharing-qr").hidden = !qrVisible;
-  $("sharing-qr-image").innerHTML = qrVisible ? sharing.qr_svg : "";
+  // Not innerHTML. This window can reinstall Lemma and write credentials, and
+  // its CSP allows inline script, so markup arriving over the daemon's event
+  // stream must not become live DOM here. An SVG loaded through <img> cannot
+  // run script, and img-src already permits data: URIs.
+  const qrImage = $("sharing-qr-image");
+  qrImage.replaceChildren();
+  if (qrVisible) {
+    const img = document.createElement("img");
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sharing.qr_svg)}`;
+    img.alt = "QR code for this computer's Lemma address";
+    img.decoding = "async";
+    qrImage.appendChild(img);
+  }
 
   $("cloudflare-fields").hidden = sharingProvider !== "cloudflare";
   const readiness = sharing.provider_readiness?.[sharingProvider] || {};
@@ -976,13 +1208,19 @@ async function enableLanSharing() {
   }
 }
 
-function enablePublicSharing() {
-  const dialog = $("public-confirm-dialog");
-  if (!dialog.open) dialog.showModal();
+async function enablePublicSharing() {
+  try {
+    if (await confirmAction(
+      "Create a public link?",
+      "Anyone with this link can create an account and use this Lemma installation. The workspace, auth, API, files, chat, tools, streaming, and webhook callbacks will be reachable from the internet.",
+      "I understand · create link",
+    )) await activatePublicSharing();
+  } catch (error) {
+    toast(friendlyError(error), true);
+  }
 }
 
 async function activatePublicSharing() {
-  $("public-confirm-dialog").close();
   const payload = {
     mode: "public",
     provider: sharingProvider,
@@ -1061,9 +1299,9 @@ function renderRuntime() {
     ? "Verified inside this signed app."
     : "Verified immutable download.";
   document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
-    item.disabled = !runtimeInfo.repairAvailable;
+    item.disabled = !LOCAL_MODE || !runtimeInfo.repairAvailable;
   });
-  setDot("updates", runtimeInfo.activeRelease === runtimeInfo.desktopRelease ? "ok" : "warn");
+  setDot("updates", !LOCAL_MODE ? "" : runtimeInfo.activeRelease === runtimeInfo.desktopRelease ? "ok" : "warn");
 }
 
 async function loadRuntimeInfo() {
@@ -1087,7 +1325,15 @@ async function loadRuntimeInfo() {
  * Now it retries on a heartbeat until a snapshot arrives, and says so on screen
  * while it is trying.
  */
-const SNAPSHOT_RETRY_MS = 5000;
+// Backed off rather than flat. A daemon that is coming back does so within a
+// second or two, and one that is not is usually not coming back at all -- a
+// stopped stack, a crash loop, a machine going to sleep with this window open.
+// A fixed five seconds asked that question for ever at the same rate, which is
+// a wake-up every five seconds on a laptop lid nobody has opened. Starting
+// sooner also makes the ordinary case feel faster than the flat interval did.
+const SNAPSHOT_RETRY_FLOOR_MS = 1000;
+const SNAPSHOT_RETRY_CEILING_MS = 30000;
+let snapshotRetryDelay = SNAPSHOT_RETRY_FLOOR_MS;
 let snapshotRetryTimer = null;
 
 function requestSnapshot() {
@@ -1101,11 +1347,23 @@ function requestSnapshot() {
 }
 
 function scheduleSnapshotRetry() {
-  if (snapshot || snapshotRetryTimer) return;
+  if (snapshotRetryTimer) return;
+  const delay = snapshotRetryDelay;
+  snapshotRetryDelay = Math.min(snapshotRetryDelay * 2, SNAPSHOT_RETRY_CEILING_MS);
   snapshotRetryTimer = setTimeout(() => {
     snapshotRetryTimer = null;
-    if (!snapshot) requestSnapshot();
-  }, SNAPSHOT_RETRY_MS);
+    requestSnapshot();
+  }, delay);
+}
+
+// A snapshot arrived, so the next outage starts asking quickly again. Without
+// this the backoff is one-way: a window left open through a restart would keep
+// the half-minute interval it had reached, and the next real outage would take
+// thirty seconds to notice.
+function resetSnapshotRetry() {
+  snapshotRetryDelay = SNAPSHOT_RETRY_FLOOR_MS;
+  clearTimeout(snapshotRetryTimer);
+  snapshotRetryTimer = null;
 }
 
 /* Daemon errors, said in a way a person can act on.
@@ -1122,7 +1380,7 @@ const FRIENDLY_ERRORS = [
   [/control token/i,
    "Lemma couldn't authenticate with its own background service. Restarting Lemma replaces the credential."],
   [/local data must be reset/i,
-   "The workspace data on this Mac can't be read by this version of Lemma. Reset local data below to start clean."],
+   "This version cannot read the existing workspace data. Keep the data and return to a compatible version, or use Recovery only if you intend to erase it."],
   [/another local operation is running|busy/i,
    "Lemma is already doing something. Wait for it to finish and try again."],
   [/broken pipe|connection reset/i,
@@ -1141,13 +1399,15 @@ function friendlyError(reason) {
 }
 
 function showSnapshotUnavailable(reason) {
-  if (snapshot) return;
   const banner = $("snapshot-unavailable");
   if (!banner) return;
   banner.hidden = false;
   const detail = $("snapshot-unavailable-detail");
   // textContent: `reason` is a daemon error string, not something to parse.
   if (detail) detail.textContent = friendlyError(reason);
+  $("state-pill").textContent = "Disconnected";
+  $("state-pill").className = "state-pill bad";
+  $("metric-app").textContent = "Unavailable";
 }
 
 function clearSnapshotUnavailable() {
@@ -1157,33 +1417,108 @@ function clearSnapshotUnavailable() {
   if (banner) banner.hidden = true;
 }
 
+// Whether an element is a control the user is editing.
+function isEditingControl(target) {
+  if (!target || typeof target.tagName !== "string") return false;
+  if (target.isContentEditable) return true;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+// What each event has to carry before this page will act on it.
+//
+// Only the fields its branch dereferences without guarding, which is where a
+// missing one throws. Everything else is already read with `?.` or `||`.
+const REQUIRED_EVENT_FIELDS = {
+  "control.snapshot": ["state", "operator.config.revision"],
+  "config.applied": ["operator.config.revision"],
+};
+
+function hasPath(value, path) {
+  return path
+    .split(".")
+    .reduce((current, key) => (current == null ? undefined : current[key]), value) !== undefined;
+}
+
+// Events cross the bridge from the daemon and were read here unparsed.
+///
+/// A shape this page did not expect threw partway through a branch, after
+/// some of that branch had already run: a `config.applied` without an
+/// `operator` released the save button and dropped the pending save, then
+/// threw before `fillConfiguration`, leaving stale settings on screen with no
+/// error, no toast, and a save the page believed had succeeded.
+function unusableEventReason(event) {
+  if (!event || typeof event !== "object" || typeof event.event !== "string") {
+    return "the daemon sent something this page cannot read";
+  }
+  const missing = (REQUIRED_EVENT_FIELDS[event.event] || []).filter(
+    (path) => !hasPath(event, path),
+  );
+  return missing.length ? `${event.event} arrived without ${missing.join(", ")}` : null;
+}
+
 function handleLocaldEvent(event) {
+  const unusable = unusableEventReason(event);
+  if (unusable) {
+    // Said, not swallowed. Showing the previous snapshot as though it were
+    // current is the one outcome worse than showing nothing.
+    if (event?.event === "control.snapshot" || !event?.event) {
+      showSnapshotUnavailable(unusable);
+    } else {
+      toast(unusable, true);
+      requestSnapshot();
+    }
+    return;
+  }
   if (event.event === "control.snapshot") {
     snapshot = event;
     state = event.state;
     clearSnapshotUnavailable();
+    resetSnapshotRetry();
     if (!sharingChoice) sharingChoice = snapshot.sharing?.mode || "this_computer";
     fillConfiguration();
     render();
+    for (const [id, pending] of pendingSaves) {
+      const operation = event.config_operations?.[id];
+      if (operation?.status === "succeeded") {
+        handleLocaldEvent({ event: "config.applied", id, operator: operation.operator });
+      } else if (operation?.status === "failed" || operation?.status === "interrupted") {
+        handleLocaldEvent({ event: "error", id, message: operation.message || "The daemon restarted during this save. Review the current settings before retrying; your draft is preserved." });
+      } else if (!operation && Date.now() - pending.started > 10000) {
+        handleLocaldEvent({ event: "error", id, message: "The save could not be confirmed. Review the current settings before retrying." });
+      }
+    }
+    if (pendingSaves.size) scheduleSnapshotRetry();
   }
   if (event.event === "config.applied") {
-    if (snapshot) snapshot.operator = event.operator;
+    const pending = pendingSaves.get(event.id);
+    if (pending) {
+      if ((draftVersions.get(pending.page.dataset.page) || 0) === pending.version) pending.page.classList.remove("dirty");
+      pending.button.disabled = false;
+      pending.button.textContent = pending.original;
+      pendingSaves.delete(event.id);
+      pending.complete(true);
+      // This acknowledged section write was conditional on our saved revision.
+      // Other drafts can advance past our own change without losing their edits.
+      for (const [name, revision] of sectionRevisions) {
+        if (revision === pending.expectedRevision) sectionRevisions.set(name, event.operator.config.revision);
+      }
+    }
+    if (snapshot && snapshot.operator.config.revision <= event.operator.config.revision) snapshot.operator = event.operator;
     fillConfiguration();
     render();
-    document.querySelectorAll("[data-save]").forEach((button) => {
-      button.disabled = false;
-      button.textContent = button.closest('[data-page="ai"]')
-        ? "Validate & apply"
-        : button.closest('[data-page="integrations"]') ? "Save integrations" : "Save channels";
-    });
-    toast("Configuration saved and backend health checks passed.");
+    if (pending) toast("Configuration saved and backend health checks passed.");
     requestSnapshot();
   }
   if (event.event === "error") {
     sharingBusy = false;
-    document.querySelectorAll("[data-save]").forEach((button) => {
-      button.disabled = false;
-    });
+    const pending = pendingSaves.get(event.id);
+    if (pending) {
+      pending.button.disabled = false;
+      pending.button.textContent = pending.original;
+      pendingSaves.delete(event.id);
+      setSectionError(pending.page, event.message || "Local operation failed");
+      pending.complete(false);
+    }
     toast(event.message || "Local operation failed", true);
     requestSnapshot();
   }
@@ -1241,6 +1576,10 @@ listen("lemma:control-page", (page) => {
   if (typeof page === "string") setPage(page);
 });
 listen("lemma:locald-event", handleLocaldEvent);
+listen("lemma:locald-disconnected", () => {
+  showSnapshotUnavailable("The local service manager disconnected. Reconnecting; your drafts are preserved.");
+  scheduleSnapshotRetry();
+});
 // Static copy in control.html, rewritten wholesale rather than kept as a list
 // of ids someone has to remember to extend. Text nodes only -- attributes and
 // element structure are untouched.

@@ -30,6 +30,7 @@ from app.modules.agent_surfaces.platforms.telegram.update_batching import (
 from app.modules.agent_surfaces.services.native_receiver_base import (
     _publish_native_receiver_event,
     NativeReceiverCandidate,
+    NativeReceiverConflict,
 )
 
 logger = get_logger(__name__)
@@ -170,10 +171,16 @@ class TelegramPollingReceiverRunner:
             if now < conflict_deadline:
                 await asyncio.sleep(5)
                 return conflict_deadline, True
-            logger.debug(
-                "agent_surfaces.event_receiver_service.telegram_polling_still_gets_409.diagnostic"
+            # Past the grace period this is not a handover, it is someone
+            # else's bot -- most often the same token configured on both a
+            # Desktop installation and Lemma Cloud. Returning quietly let the
+            # coordinator start the loser again on its next scan, forever,
+            # and each attempt steals updates from the consumer that is
+            # working. Raising says which of the two this is so the
+            # coordinator can stand down.
+            raise NativeReceiverConflict(
+                "another consumer holds this Telegram bot's updates"
             )
-            return conflict_deadline, False
 
         if isinstance(exc, httpx.ReadTimeout):
             # Expected during long polling: the 30s long-poll can occasionally

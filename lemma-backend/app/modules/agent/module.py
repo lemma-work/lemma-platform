@@ -19,12 +19,30 @@ async def _report_system_model_pricing(
     from app.modules.usage.contracts.execution import (
         UsageService,
         assert_system_pricing_covers_catalog,
+        unpriced_limit_policy,
+        usage_limits_are_possible,
     )
 
     UsageService._load_environment_metadata()
     catalog = system_lemma_openai_catalog_model_names()
     unpriced = assert_system_pricing_covers_catalog(catalog)
-    if unpriced:
+    if unpriced and usage_limits_are_possible():
+        # This check has always run and has always known the answer. It
+        # reported it at `debug` with no fields, which `LOG_LEVEL=INFO` drops
+        # before formatting -- so a deployment whose every request was about to
+        # be refused for want of a price was told at boot, invisibly, and found
+        # out from a 429 in the middle of a conversation instead.
+        #
+        # Only when a limit can actually apply. Unpriced models are unremarkable
+        # otherwise: metering still records the tokens, and there is no budget
+        # for the missing price to break.
+        logger.warning(
+            "agent.module.system_models_cannot_back_a_spend_limit.degraded",
+            unpriced_models=",".join(sorted(unpriced)),
+            unpriced_count=len(unpriced),
+            policy=unpriced_limit_policy(),
+        )
+    elif unpriced:
         logger.debug("agent.module.system_lemma_models_will_be.observed")
     yield
 
@@ -93,6 +111,9 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_report_system_model_pricing,),
+    # The worker is where agent runs actually dispatch, so a deployment
+    # whose models cannot back its spend limit has to hear it there too.
+    worker_lifespans=(_report_system_model_pricing,),
     stream_groups=(
         ("agent_events", "agent-events"),
         # A second group on the datastore's stream, so a memory file written

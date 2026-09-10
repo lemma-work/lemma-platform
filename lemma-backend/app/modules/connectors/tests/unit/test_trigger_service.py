@@ -74,11 +74,9 @@ async def test_list_triggers_for_auth_config_passes_kind_to_repo():
 async def test_get_trigger_for_auth_config_uses_kind_lookup():
     trigger_repository = AsyncMock()
     trigger_repository.get_by_connector_kind_and_name.return_value = _trigger(
-        ConnectorKind.PACKAGE
+        ConnectorKind.HTTP
     )
-    service = _service(
-        trigger_repository=trigger_repository, kind=ConnectorKind.PACKAGE
-    )
+    service = _service(trigger_repository=trigger_repository, kind=ConnectorKind.HTTP)
 
     trigger = await service.get_trigger_for_auth_config(
         user_id=uuid4(),
@@ -87,11 +85,11 @@ async def test_get_trigger_for_auth_config_uses_kind_lookup():
         trigger_name="new_message",
     )
 
-    assert trigger.kind == ConnectorKind.PACKAGE
+    assert trigger.kind == ConnectorKind.HTTP
     assert trigger.provider == AuthProvider.LEMMA
     trigger_repository.get_by_connector_kind_and_name.assert_awaited_once_with(
         "slack",
-        "package",
+        "http",
         "new_message",
     )
 

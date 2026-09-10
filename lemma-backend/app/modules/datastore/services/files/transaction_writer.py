@@ -359,6 +359,8 @@ class FileTransactionWriter:
         self,
         pod_id: UUID,
         directory_path: str,
-        requester_user_id: UUID,
+        *,
+        requester_user_id: UUID | None = None,
+        ctx: Context | None = None,
     ) -> DatastoreFileEntity | None:
         raise NotImplementedError

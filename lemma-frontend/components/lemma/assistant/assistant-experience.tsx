@@ -86,7 +86,7 @@ import {
   isInlineAssistantErrorNoise,
 } from "./assistant-experience-helpers";
 // Self-contained hooks extracted from this file.
-import { useControllableDraft } from "./use-assistant-experience";
+import { useControllableDraft, useDraftPersistence } from "./use-assistant-experience";
 import { useTranscriptScroll } from "./use-transcript-scroll";
 // Presentational subtree views extracted from AssistantExperienceView's render.
 import { AssistantExperienceSidebar } from "./assistant-experience-sidebar";
@@ -122,9 +122,6 @@ export interface ActiveToolBanner {
   activeCount: number;
 }
 
-/** How long typing has to pause before the draft is written to localStorage. */
-const DRAFT_PERSIST_DEBOUNCE_MS = 400;
-
 /**
  * Does the browser grow the composer on its own?
  *
@@ -147,14 +144,6 @@ function cssSizesTheComposer(): boolean {
       && CSS.supports("field-sizing", "content");
   }
   return fieldSizingSupport;
-}
-
-function writeDraft(key: string, draft: string) {
-  if (draft) {
-    localStorage.setItem(key, draft);
-  } else {
-    localStorage.removeItem(key);
-  }
 }
 
 const SPARSE_HISTORY_ROW_TARGET = 8;
@@ -221,8 +210,6 @@ export function AssistantExperienceView({
   const [draftSelectionStart, setDraftSelectionStart] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const draftRestoredRef = useRef(false);
-  const pendingDraftWriteRef = useRef<{ key: string; draft: string } | null>(null);
   const autoLoadedOlderConversationRef = useRef<string | null>(null);
   const autoLoadedOlderPageCountRef = useRef(0);
   const transcriptScroll = useTranscriptScroll({
@@ -246,42 +233,7 @@ export function AssistantExperienceView({
   const controllerMessages = controller.messages;
   const activeConversationId = controller.activeConversationId;
 
-  // Restore draft from localStorage when conversation changes
-  useEffect(() => {
-    draftRestoredRef.current = true;
-    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
-    const stored = localStorage.getItem(key);
-    setDraft(stored ?? '');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeConversationId]);
-
-  // Persist draft to localStorage on change (skip the write immediately after a
-  // restore). Deferred rather than written inline: `localStorage` is
-  // synchronous, and this used to run once per keystroke — a main-thread write
-  // between the keypress and the frame that draws it. The draft only has to
-  // survive a reload, so a pause in typing is soon enough, and the cleanup
-  // flushes it if the composer goes away first.
-  useEffect(() => {
-    const key = `lemma:draft:${activeConversationId ?? 'new'}`;
-    // Recorded on every commit, debounced or not, so the unmount flush below
-    // always has the latest draft and the key it belongs to.
-    pendingDraftWriteRef.current = { key, draft };
-    if (draftRestoredRef.current) {
-      draftRestoredRef.current = false;
-      return;
-    }
-    const timer = window.setTimeout(() => writeDraft(key, draft), DRAFT_PERSIST_DEBOUNCE_MS);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [draft, activeConversationId]);
-
-  // A draft still sitting in the debounce when the composer unmounts would
-  // otherwise be lost, so the last one is written out on the way down.
-  useEffect(() => () => {
-    const pending = pendingDraftWriteRef.current;
-    if (pending) writeDraft(pending.key, pending.draft);
-  }, []);
+  const clearPersistedDraft = useDraftPersistence(activeConversationId, draft, setDraft);
   const hasOlderMessages = controller.hasOlderMessages;
   const isLoadingMessages = controller.isLoadingMessages;
   const isLoadingOlderMessages = controller.isLoadingOlderMessages;
@@ -491,13 +443,14 @@ export function AssistantExperienceView({
     if ((!draft.trim() && !hasPendingFileUploads) || interactionPending) return;
     const message = draft.trim();
     setDraft("");
+    clearPersistedDraft();
     scrollToBottom("smooth");
     // A run already in flight takes the follow-up as a steer: it joins that run
     // rather than starting a second one. Otherwise identical to a send —
     // attachments included, because the two go to the same endpoint shape and a
     // dropped file with no explanation is worse than either outcome.
     await (isConversationBusy ? steerMessage(message) : sendMessage(message));
-  }, [draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
+  }, [clearPersistedDraft, draft, hasPendingFileUploads, isConversationBusy, interactionPending, scrollToBottom, sendMessage, steerMessage, setDraft]);
 
   // Only the empty state offers suggestions, and it renders under
   // `showEmptyState={isConversationEmpty}` — which requires nothing to be

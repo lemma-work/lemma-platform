@@ -25,9 +25,7 @@ def build_dispatcher(gateway: Any) -> KindDispatcher:
     """
     from app.modules.connectors.infrastructure.kinds import build_kind_registry
 
-    return KindDispatcher(
-        build_kind_registry(composio_gateway=gateway, package_gateway=gateway)
-    )
+    return KindDispatcher(build_kind_registry(composio_gateway=gateway))
 
 
 def execution_request(dispatcher: KindDispatcher, resolved: Any):
@@ -36,7 +34,7 @@ def execution_request(dispatcher: KindDispatcher, resolved: Any):
 
     return dispatcher.build_request(
         connector_id=resolved.connector_id,
-        kind=ConnectorKind(resolved.kind or ConnectorKind.PACKAGE.value),
+        kind=ConnectorKind(resolved.kind or ConnectorKind.HTTP.value),
         operation=ResolvedOperation(
             name=resolved.operation_name or resolved.operation_execution_name,
             provider_operation_name=resolved.operation_execution_name,

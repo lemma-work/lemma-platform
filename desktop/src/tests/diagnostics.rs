@@ -1,0 +1,245 @@
+use super::*;
+use crate::diagnostics::*;
+
+/// Diagnostics masks the secrets it has never seen.
+///
+/// Every operator secret lives in the OS credential vault, and the file
+/// substitution this used to be could only mask values it had read off
+/// disk -- so the AI provider key, the Slack and Telegram tokens and the
+/// OAuth client secrets were unredactable by construction, while the
+/// README promised bounded, redacted output.
+#[test]
+fn diagnostics_masks_credentials_it_has_never_seen() {
+    let masked = mask_secret_shapes(
+        [
+            "provider rejected key sk-EXAMPLE-NOT-A-REAL-KEY-FOR-TESTS",
+            "slack bot xoxb-EXAMPLE-NOT-A-REAL-SLACK-TOKEN responded 200",
+            "GET /v1/models Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln",
+            "session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.QWxhZGRpbjpvcGVu expired",
+            "resend re_EXAMPLE-NOT-A-REAL-RESEND-KEY accepted",
+        ]
+        .join("\n"),
+    );
+
+    for leaked in [
+        "sk-EXAMPLE-NOT-A-REAL-KEY-FOR-TESTS",
+        "xoxb-EXAMPLE-NOT-A-REAL-SLACK-TOKEN",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.QWxhZGRpbjpvcGVu",
+        "re_EXAMPLE-NOT-A-REAL-RESEND-KEY",
+    ] {
+        assert!(!masked.contains(leaked), "{leaked} survived redaction");
+    }
+    assert!(
+        !masked.contains("Bearer eyJ"),
+        "an Authorization header carries the credential in full: {masked}"
+    );
+    // Still a diagnostic afterwards. A log masked so heavily that nobody
+    // can read it does not help the person reading it.
+    assert!(masked.contains("provider rejected key"));
+    assert!(masked.contains("responded 200"));
+    assert!(masked.contains("expired"));
+}
+
+/// Redaction does not reformat the log on the way past.
+///
+/// The masker used to rebuild each line with
+/// `split_whitespace().join(" ")`, which redacts correctly and flattens
+/// everything else: indentation, tabs, aligned columns. Diagnostics is
+/// where somebody reads a Python traceback, and a traceback with no
+/// indentation is a wall of text.
+///
+/// The neighbouring test could not see this -- every line in its fixture is
+/// single-spaced, so collapsing runs of whitespace is a no-op on it.
+#[test]
+fn redaction_leaves_the_shape_of_a_traceback_alone() {
+    let traceback = concat!(
+        "Traceback (most recent call last):\n",
+        "  File \"/app/main.py\", line 42, in handler\n",
+        "    raise RuntimeError(\"boom\")\n",
+        "\tRuntimeError: boom\n",
+        "  key   sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef\n",
+    );
+
+    let masked = mask_secret_shapes(traceback.to_owned());
+
+    assert!(
+        masked.contains("  File \"/app/main.py\", line 42, in handler"),
+        "two-space indentation is what makes a traceback readable:\n{masked}",
+    );
+    assert!(
+        masked.contains("    raise RuntimeError"),
+        "four-space indentation is gone:\n{masked}",
+    );
+    assert!(masked.contains('\t'), "a tab is whitespace too:\n{masked}");
+    assert!(
+        masked.contains("  key   [redacted]"),
+        "the run of spaces between a label and its value is alignment:\n{masked}",
+    );
+    // And the point of the exercise still holds.
+    assert!(!masked.contains("sk-ABCDEFGHIJ"), "{masked}");
+}
+
+/// Redaction must not eat the things a log is read for.
+#[test]
+fn diagnostics_keeps_paths_versions_and_digests_readable() {
+    let text = [
+        "installed /Applications/Lemma.app/Contents/MacOS/lemma-locald",
+        "release 0.7.0 pinned docker.io/pgvector/pgvector:0.8.3-pg18",
+        "sha256:c8a919765f2ef63681329fa21021b830cd4d79d1165bdca730dd016014e4da84",
+        "listening on http://app.lemma.localhost:49180",
+    ]
+    .join("\n");
+
+    assert_eq!(
+        mask_secret_shapes(text.clone()),
+        text,
+        "paths, versions and digests are not credentials"
+    );
+}
+
+#[test]
+fn a_growing_log_keeps_its_identity_so_the_tail_cursor_survives() {
+    // The identity exists to answer "is this still the same file", and the
+    // cursor is thrown away whenever it changes. Deriving it from anything
+    // that grows with the log -- size, last write time -- compiles fine and
+    // then re-sends the whole tail on every poll of an active log, i.e. it
+    // breaks precisely when someone is watching a failure happen.
+    use std::io::Write;
+
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("backend.log");
+    std::fs::write(&path, b"first\n").expect("seed the log");
+
+    let before = diagnostic_file_identity(&File::open(&path).expect("open"));
+    assert_ne!(
+        before, "",
+        "the identity should be readable on this platform"
+    );
+
+    let mut appended = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("append to the log");
+    appended.write_all(b"second\n").expect("write");
+    appended.flush().expect("flush");
+    drop(appended);
+
+    let after = diagnostic_file_identity(&File::open(&path).expect("reopen"));
+    assert_eq!(before, after, "appending to a log must not re-identify it");
+}
+
+#[test]
+fn replacing_a_log_changes_its_identity_so_a_stale_cursor_is_dropped() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("backend.log");
+    std::fs::write(&path, b"old\n").expect("seed the log");
+    let rotated = diagnostic_file_identity(&File::open(&path).expect("open"));
+
+    std::fs::rename(&path, directory.path().join("backend.log.1")).expect("rotate");
+    std::fs::write(&path, b"new\n").expect("fresh log");
+
+    let fresh = diagnostic_file_identity(&File::open(&path).expect("reopen"));
+    assert_ne!(
+        rotated, fresh,
+        "a rotated log is a different file and must reset the cursor"
+    );
+}
+
+/// A credential is not always a word of its own.
+///
+/// `mask_secret_shapes` split the line on whitespace and judged each word
+/// whole, so `OPENAI_API_KEY=sk-...` did not start with `sk-` and
+/// `{"api_key":"sk-..."}` kept its leading brace through the trim. Both went
+/// into a diagnostics bundle in full.
+#[test]
+fn a_credential_attached_to_its_key_is_redacted_too() {
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+    for line in [
+        format!("OPENAI_API_KEY={secret}"),
+        format!("  \"api_key\": \"{secret}\","),
+        format!("{{\"api_key\":\"{secret}\"}}"),
+        format!("env: ANTHROPIC_API_KEY={secret} rest"),
+        format!("token:{secret}"),
+    ] {
+        let masked = mask_secret_shapes(line.clone());
+        assert!(
+            !masked.contains(secret),
+            "the credential survived redaction: {line} -> {masked}"
+        );
+        assert!(
+            masked.contains("[redacted]"),
+            "nothing was marked as removed: {line} -> {masked}"
+        );
+    }
+    // The key itself is still readable, which is the point of redacting the
+    // value rather than the line.
+    assert!(mask_secret_shapes(format!("OPENAI_API_KEY={secret}")).starts_with("OPENAI_API_KEY="));
+    // Prose and paths are left alone.
+    for ordinary in [
+        "loading /usr/local/bin/lemma-locald: ok",
+        "GET https://api.example.com/v1/models 200",
+        "  File \"app/main.py\", line 42, in handler",
+    ] {
+        assert_eq!(mask_secret_shapes(ordinary.to_string()), ordinary);
+    }
+}
+
+/// Every source id `locald` can name is one this shell serves.
+///
+/// `read_diagnostic_log` refuses an id it has no file for, so an unknown one is
+/// not a fallback: the log panel gets an error instead of a log. The daemon
+/// used to answer `infrastructure` for a crashed guest kernel, and for anything
+/// mentioning a container, a registry or the guest -- which are exactly the
+/// failures a person opens the log to read.
+///
+/// The two vocabularies compile into different binaries, so nothing but a test
+/// can put them in the same room. The messages below are the ones
+/// `error_diagnostic_source` branches on; the point is not that each picks a
+/// particular log, which locald's own tests already pin, but that whatever it
+/// picks exists here.
+#[test]
+fn every_log_source_the_daemon_names_is_one_the_shell_serves() {
+    let served: Vec<&str> = diagnostic_log_sources()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
+
+    for message in [
+        "backend health gate: Linux guest kernel crashed",
+        "frontend failed: EADDRINUSE",
+        "migrations setup exited",
+        "registry DNS lookup failed",
+        "containerd refused to start",
+        "the managed runtime did not come up",
+        "backend never became healthy",
+        "alembic could not upgrade",
+        "something nobody has a branch for",
+    ] {
+        let (_, source) = lemma_locald::daemon::dispatch::error_diagnostic_source(message);
+        assert!(
+            served.contains(&source),
+            "locald points {message:?} at the {source:?} log, which this shell \
+             does not serve, so the log panel shows an error instead of the \
+             log. Served: {served:?}",
+        );
+    }
+}
+
+/// The ids the daemon writes into a phase event, for the same reason.
+///
+/// Literals in `stack_ops.rs` rather than a function, so they are listed here.
+/// One added there and not here is not caught -- but one added to both, and not
+/// served, is, which is the step that would otherwise be skipped.
+#[test]
+fn the_phase_log_sources_are_served_too() {
+    let served: Vec<&str> = diagnostic_log_sources()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
+    for source in ["migrations", "backend", "frontend", "locald", "vm", "guest"] {
+        assert!(
+            served.contains(&source),
+            "a phase event names the {source:?} log, which this shell does not serve",
+        );
+    }
+}

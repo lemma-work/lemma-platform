@@ -353,11 +353,7 @@ class TestDeadlines:
         from app.modules.connectors.domain.connector import McpKindSpec
         from app.modules.connectors.domain.kinds import ResolvedInstall
 
-        dispatcher = KindDispatcher(
-            build_kind_registry(
-                composio_gateway=AsyncMock(), package_gateway=AsyncMock()
-            )
-        )
+        dispatcher = KindDispatcher(build_kind_registry(composio_gateway=AsyncMock()))
         install = ResolvedInstall(
             connector_id="mcp",
             kind=ConnectorKind.MCP,
@@ -386,11 +382,7 @@ class TestThroughTheDispatcher:
         from app.modules.connectors.domain.connector import McpKindSpec
         from app.modules.connectors.domain.kinds import ResolvedInstall
 
-        dispatcher = KindDispatcher(
-            build_kind_registry(
-                composio_gateway=AsyncMock(), package_gateway=AsyncMock()
-            )
-        )
+        dispatcher = KindDispatcher(build_kind_registry(composio_gateway=AsyncMock()))
         install = ResolvedInstall(
             connector_id="mcp",
             kind=ConnectorKind.MCP,

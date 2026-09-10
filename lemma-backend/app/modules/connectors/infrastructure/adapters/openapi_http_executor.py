@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote, urlsplit
 
 import httpx
 
-from lemma_connectors.core.results import BinaryContentResult
+from app.modules.connectors.domain.results import BinaryContentResult
 
 from app.core.log.log import get_logger
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url, request_guarded
@@ -33,7 +34,6 @@ logger = get_logger(__name__)
 _MAX_REDIRECTS = 3
 _MAX_FILE_BYTES = 100 * 1024 * 1024
 _DEFAULT_USER_AGENT = "lemma-connectors"
-_DEFAULT_TIMEOUT_SECONDS = 60.0
 
 
 class OpenApiHttpExecutionError(Exception):
@@ -174,11 +174,91 @@ async def _assert_safe_base_url(base_url: str) -> None:
         ) from exc
 
 
+def _substitute_path(
+    path: str,
+    path_params: list[str],
+    payload: Mapping[str, object],
+    *,
+    multi_segment: set[str],
+    defaults: Mapping[str, object],
+) -> str:
+    """Fill an operation's ``{placeholders}`` from the payload.
+
+    A path parameter is one URL segment, so its own ``/`` is escaped. A few APIs
+    contradict that: GitHub's git-ref endpoints take a multi-segment ref
+    (``heads/main``) in a single ``{ref}`` placeholder and 404 on the
+    percent-encoded form. The descriptor names those explicitly rather than the
+    executor guessing from the value.
+    """
+    for name in path_params:
+        supplied = payload.get(name)
+        if supplied is None:
+            supplied = defaults.get(name)
+        if supplied is None:
+            raise OpenApiHttpExecutionError(
+                f"Missing required path parameter '{name}'."
+            )
+        value = _scalar(supplied)
+        if name in multi_segment:
+            # Keeping `/` literal also keeps `..` literal, which would let a
+            # parameter climb out of the endpoint it belongs to.
+            if any(segment in {".", ".."} for segment in value.split("/")):
+                raise OpenApiHttpExecutionError(
+                    f"Path parameter '{name}' must not contain relative segments."
+                )
+            path = path.replace("{" + name + "}", quote(value, safe="/"))
+            continue
+        path = path.replace("{" + name + "}", quote(value, safe=""))
+    return path
+
+
 def _summarize_error_body(content: bytes | None, *, limit: int = 600) -> str:
     if not content:
         return ""
     # errors="replace" cannot raise, so no guard is needed here.
     return content.decode("utf-8", errors="replace").strip()[:limit]
+
+
+def _raise_for_envelope(
+    payload: object, operation_name: str, envelope: Mapping[str, object]
+) -> None:
+    """Fail an RPC-over-200 response that reports its own error in the body.
+
+    Some providers answer every call with HTTP 200 and put success in the body:
+    Slack returns ``{"ok": false, "error": "channel_not_found"}`` for a missing
+    channel, an expired token and a revoked scope alike. Without this the
+    executor hands that back as a successful result, and an agent reads a
+    failure as data.
+
+    The mapping is declared per connector in the ``execution`` descriptor rather
+    than branched on here, so the rule stays a fact about the provider. Mapping
+    the provider's own error code onto an HTTP status is what makes the failure
+    ordinary: ``failure_translation`` then classifies it exactly as it
+    classifies a real 401 or 404 from any other connector, and the operation
+    breaker counts a 5xx as a 5xx.
+    """
+    if not isinstance(payload, dict):
+        return
+    success_field = str(envelope.get("success_field") or "ok")
+    if payload.get(success_field):
+        return
+    error_field = str(envelope.get("error_field") or "error")
+    raw_error = payload.get(error_field)
+    error = str(raw_error) if raw_error is not None else ""
+    by_error = envelope.get("status_by_error")
+    status = None
+    if isinstance(by_error, Mapping) and error:
+        mapped = by_error.get(error)
+        if isinstance(mapped, int):
+            status = mapped
+    if status is None:
+        default_status = envelope.get("default_status")
+        status = default_status if isinstance(default_status, int) else 400
+    raise OpenApiHttpExecutionError(
+        f"{operation_name} failed: {error or 'the provider reported an error'}.",
+        status_code=status,
+        details={"error": error, "status_code": status},
+    )
 
 
 class OpenApiHttpExecutor:
@@ -283,7 +363,12 @@ class OpenApiHttpExecutor:
                 details={"reason": exc.reason},
             ) from exc
 
-        return self._handle_response(response, operation_name, want_binary=want_binary)
+        return self._handle_response(
+            response,
+            operation_name,
+            want_binary=want_binary,
+            envelope=(execution.get("response") or {}).get("envelope"),
+        )
 
     # --- request building ---------------------------------------------------
 
@@ -342,29 +427,13 @@ class OpenApiHttpExecutor:
         default_headers: dict[str, str],
     ):
         payload = payload or {}
-        path = execution["path"]
-        # A path parameter is one URL segment, so its own `/` is escaped. A few
-        # APIs contradict that: GitHub's git-ref endpoints take a multi-segment
-        # ref (`heads/main`) in a single `{ref}` placeholder and 404 on the
-        # percent-encoded form. The descriptor names those explicitly rather
-        # than the executor guessing from the value.
-        multi_segment = set(execution.get("multi_segment_path_params") or [])
-        for name in execution.get("path_params", []):
-            if name not in payload or payload[name] is None:
-                raise OpenApiHttpExecutionError(
-                    f"Missing required path parameter '{name}'."
-                )
-            value = _scalar(payload[name])
-            if name in multi_segment:
-                # Keeping `/` literal also keeps `..` literal, which would let a
-                # parameter climb out of the endpoint it belongs to.
-                if any(segment in {".", ".."} for segment in value.split("/")):
-                    raise OpenApiHttpExecutionError(
-                        f"Path parameter '{name}' must not contain relative segments."
-                    )
-                path = path.replace("{" + name + "}", quote(value, safe="/"))
-                continue
-            path = path.replace("{" + name + "}", quote(value, safe=""))
+        path = _substitute_path(
+            execution["path"],
+            execution.get("path_params", []),
+            payload,
+            multi_segment=set(execution.get("multi_segment_path_params") or []),
+            defaults=execution.get("path_param_defaults") or {},
+        )
 
         params: list[tuple[str, str]] = list(auth_query.items())
         for spec in execution.get("query_params", []):
@@ -441,6 +510,18 @@ class OpenApiHttpExecutor:
         if content_type == "application/json" and not binary_fields:
             return {"json": body}
 
+        if content_type == "application/x-www-form-urlencoded":
+            # httpx sets the Content-Type itself for `data=`, and drops the keys
+            # the caller left out rather than sending empty values for them.
+            fields = body if isinstance(body, dict) else {}
+            return {
+                "data": {
+                    name: _scalar(value)
+                    for name, value in fields.items()
+                    if value is not None
+                }
+            }
+
         if content_type == "multipart/form-data":
             return _multipart_body(
                 body if isinstance(body, dict) else {},
@@ -456,7 +537,12 @@ class OpenApiHttpExecutor:
     # --- response handling --------------------------------------------------
 
     def _handle_response(
-        self, response: httpx.Response, operation_name: str, *, want_binary: bool
+        self,
+        response: httpx.Response,
+        operation_name: str,
+        *,
+        want_binary: bool,
+        envelope: Mapping[str, object] | None = None,
     ):
         status = response.status_code
         if status >= 400:
@@ -482,10 +568,13 @@ class OpenApiHttpExecutor:
                 response, fallback_media_type=content_type or "application/octet-stream"
             )
         try:
-            return response.json()
+            parsed = response.json()
         except ValueError:
             # Declared as JSON but not parseable — hand it back as bytes rather
             # than failing the whole operation.
             return BinaryContentResult.from_http_response(
                 response, fallback_media_type=content_type or "application/octet-stream"
             )
+        if envelope:
+            _raise_for_envelope(parsed, operation_name, envelope)
+        return parsed

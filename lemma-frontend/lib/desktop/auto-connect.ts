@@ -189,7 +189,7 @@ export function useAutoConnectThisComputer() {
         setTimeout(() => void refetch(), 500);
       }
     })();
-  }, [createPairing, isDesktop, refetch, status]);
+  }, [createPairing, failure, isDesktop, refetch, status]);
 
   return { ...computer, connectError: failure, retryConnect: retryAutoConnect };
 }

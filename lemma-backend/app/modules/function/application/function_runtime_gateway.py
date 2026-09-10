@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from uuid import UUID
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.concurrency.offload import run_blocking
 from app.core.redaction import redact_text
+from app.core.log.log import get_logger
 from app.modules.function.contracts.runtime import (
     RuntimeEventResponse,
     RuntimeFailure,
@@ -24,6 +27,9 @@ from app.modules.function.infrastructure.execution_repository import (
 )
 
 
+logger = get_logger(__name__)
+
+
 class RuntimeCredentialRejected(Exception):
     pass
 
@@ -36,6 +42,13 @@ class RuntimeArtifactCorrupt(Exception):
     pass
 
 
+#: Builds the repository this gateway reads through, from one open unit of
+#: work. Injected for the reason `uow_factory` and `storage_factory` already
+#: are: it is the gateway's third collaborator, and a test that reaches into
+#: the module to replace it is doubling the subject rather than isolating it.
+RepositoryFactory = Callable[[SqlAlchemyUnitOfWork], FunctionExecutionRepository]
+
+
 class FunctionRuntimeGateway:
     """Authorize artifact reads and JOB terminal reports with function auth."""
 
@@ -45,10 +58,12 @@ class FunctionRuntimeGateway:
         uow_factory: UnitOfWorkFactory,
         storage_factory: FunctionStorageFactoryPort,
         delegated_tokens_enabled: bool,
+        repository_factory: RepositoryFactory,
     ) -> None:
         self._uow_factory = uow_factory
         self._storage_factory = storage_factory
         self._delegated_tokens_enabled = delegated_tokens_enabled
+        self._repository = repository_factory
 
     async def definition_artifact(
         self,
@@ -61,24 +76,21 @@ class FunctionRuntimeGateway:
         """Return one exact immutable artifact authorized by standard claims."""
 
         async with self._uow_factory() as uow:
-            authorized = await FunctionExecutionRepository(
-                uow
-            ).authorize_definition_artifact(
+            repository = self._repository(uow)
+            authorized = await repository.authorize_definition_artifact(
                 function_id,
                 revision_hash,
                 principal,
                 delegated_tokens_enabled=self._delegated_tokens_enabled,
             )
             if authorized and generation is None:
-                generation = await FunctionExecutionRepository(uow).artifact_generation(
+                generation = await repository.artifact_generation(
                     function_id, revision_hash
                 )
         if not authorized:
             raise RuntimeCredentialRejected
-        artifact_path = FunctionArtifact(
-            revision_hash=revision_hash, generation=generation
-        ).artifact_path
-        data = await self._storage_factory(function_id).read_bytes(artifact_path)
+        artifact = FunctionArtifact(revision_hash=revision_hash, generation=generation)
+        data = await self._artifact_bytes(function_id, artifact)
         # Offloaded for the reason the builder already documents at its own
         # sha256 (`function_artifact_builder.py`): the artifact is the whole
         # bundle, user code plus resolved site-packages, so it grows with the
@@ -91,6 +103,47 @@ class FunctionRuntimeGateway:
             raise RuntimeArtifactCorrupt
         return data
 
+    async def _artifact_bytes(
+        self, function_id: UUID, artifact: FunctionArtifact
+    ) -> bytes:
+        """The artifact's bytes, whichever generation staged them.
+
+        Every artifact is written under `artifact-uploads/<generation>/`, and a
+        reader learns that generation one of two ways: the runtime sends it as
+        `X-Lemma-Artifact-Generation`, or the `function_revisions` row records
+        it. During a build neither is available. The row is written only after
+        schema extraction succeeds, and a sandbox runtime older than the
+        generation contract does not send the header -- so create and update
+        resolved the pre-generation path, missed, and returned 503 with the
+        function left in DRAFT. It does not self-heal: every later attempt on
+        that pod builds a new generation and misses again.
+
+        So when the generation is unknown, find it. The filename is the content
+        digest, which is what makes this safe rather than a guess: a match is
+        the requested bytes by construction, and the caller verifies the sha256
+        of what comes back regardless.
+        """
+        storage = self._storage_factory(function_id)
+        try:
+            return await storage.read_bytes(artifact.artifact_path)
+        except FileNotFoundError:
+            if artifact.generation is not None:
+                raise
+        staged = [
+            path
+            for path in await storage.list_prefix(artifact.STAGED_PREFIX)
+            if artifact.matches_staged_path(path)
+        ]
+        if not staged:
+            raise FileNotFoundError(f"File {artifact.artifact_path} not found")
+        logger.info(
+            "function.function_runtime_gateway.artifact_generation_recovered",
+            function_id=str(function_id),
+            revision_hash=artifact.revision_hash,
+            candidate_count=len(staged),
+        )
+        return await storage.read_bytes(staged[0])
+
     async def terminal(
         self,
         run_id: UUID,
@@ -98,7 +151,7 @@ class FunctionRuntimeGateway:
         request: RuntimeTerminalRequest,
     ) -> RuntimeEventResponse:
         async with self._uow_factory() as uow:
-            context = await FunctionExecutionRepository(uow).authorized_runtime_context(
+            context = await self._repository(uow).authorized_runtime_context(
                 run_id,
                 principal,
                 delegated_tokens_enabled=self._delegated_tokens_enabled,
@@ -115,7 +168,7 @@ class FunctionRuntimeGateway:
             else None
         )
         async with self._uow_factory() as uow:
-            _run, accepted, duplicate = await FunctionExecutionRepository(uow).complete(
+            _run, accepted, duplicate = await self._repository(uow).complete(
                 context,
                 completed=request.status == "completed",
                 output_data=request.output_data,

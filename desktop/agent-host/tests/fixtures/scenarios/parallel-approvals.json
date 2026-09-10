@@ -1,0 +1,269 @@
+{
+  "version": 1,
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "I will read the project file.\n"
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "read-a",
+            "kind": "read",
+            "status": "pending",
+            "title": "Read a.md"
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 901,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "scripted-session",
+          "toolCall": {
+            "toolCallId": "read-a",
+            "kind": "read",
+            "status": "pending",
+            "title": "Read a.md",
+            "rawInput": {
+              "path": "a.md"
+            }
+          },
+          "options": [
+            {
+              "optionId": "once",
+              "name": "Allow once",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "reject",
+              "name": "Deny",
+              "kind": "reject_once"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "scripted-session",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "read-b",
+            "kind": "read",
+            "status": "pending",
+            "title": "Read b.md"
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 902,
+        "method": "session/request_permission",
+        "params": {
+          "sessionId": "scripted-session",
+          "toolCall": {
+            "toolCallId": "read-b",
+            "kind": "read",
+            "status": "pending",
+            "title": "Read b.md",
+            "rawInput": {
+              "path": "b.md"
+            }
+          },
+          "options": [
+            {
+              "optionId": "once",
+              "name": "Allow once",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "reject",
+              "name": "Deny",
+              "kind": "reject_once"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "await_permission": {
+        "id": 901,
+        "selected": {
+          "once": [
+            {
+              "send": {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                  "sessionId": "scripted-session",
+                  "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "read-a",
+                    "status": "completed",
+                    "rawOutput": {
+                      "text": "# File A"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "send": {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                  "sessionId": "scripted-session",
+                  "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                      "type": "text",
+                      "text": "Read approved: # File A"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "cancelled": [
+          {
+            "send": {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "scripted-session",
+                "update": {
+                  "sessionUpdate": "tool_call_update",
+                  "toolCallId": "read-a",
+                  "status": "failed",
+                  "rawOutput": {
+                    "error": "Permission denied"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "send": {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "scripted-session",
+                "update": {
+                  "sessionUpdate": "agent_message_chunk",
+                  "content": {
+                    "type": "text",
+                    "text": "Read denied; no file was accessed."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "await_permission": {
+        "id": 902,
+        "selected": {
+          "once": [
+            {
+              "send": {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                  "sessionId": "scripted-session",
+                  "update": {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "read-b",
+                    "status": "completed",
+                    "rawOutput": {
+                      "text": "# File B"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "send": {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                  "sessionId": "scripted-session",
+                  "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {
+                      "type": "text",
+                      "text": "Read approved: # File B"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "cancelled": [
+          {
+            "send": {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "scripted-session",
+                "update": {
+                  "sessionUpdate": "tool_call_update",
+                  "toolCallId": "read-b",
+                  "status": "failed",
+                  "rawOutput": {
+                    "error": "Permission denied"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "send": {
+              "jsonrpc": "2.0",
+              "method": "session/update",
+              "params": {
+                "sessionId": "scripted-session",
+                "update": {
+                  "sessionUpdate": "agent_message_chunk",
+                  "content": {
+                    "type": "text",
+                    "text": "Read denied; no file was accessed."
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

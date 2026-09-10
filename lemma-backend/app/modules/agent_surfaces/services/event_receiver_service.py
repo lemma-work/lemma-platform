@@ -38,6 +38,7 @@ from app.modules.agent_surfaces.services.native_receiver_base import (
     NativeReceiverCandidate,
     ReceiverRunnerFactory,
     receiver_key as _receiver_key,
+    NativeReceiverConflict,
 )
 from app.modules.agent_surfaces.services.resend_polling_receiver import (
     ResendPollingReceiverRunner,
@@ -50,6 +51,11 @@ logger = get_logger(__name__)
 _RECEIVER_CHANGED_CHANNEL = "agent_surfaces.receiver.changed"
 _LEASE_TTL_SECONDS = 30
 _LEASE_REFRESH_SECONDS = 10
+# How long a receiver stands down after upstream told it another consumer owns
+# the credential. Long enough that the working consumer is left alone rather
+# than interrupted every scan interval; short enough that if that consumer is
+# switched off, this one takes over without anybody intervening.
+_CONFLICT_COOLDOWN_SECONDS = 10 * 60
 _DEFAULT_SCAN_INTERVAL_SECONDS = 15.0
 _RELEASE_LOCK_SCRIPT = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -187,6 +193,12 @@ class NativeSurfaceReceiverCoordinator:
         for key, candidate in desired.items():
             if key in self._tasks and not self._tasks[key].done():
                 continue
+            # Standing down after losing a fight for the same upstream
+            # credential. Taking the lease again here is what turned one
+            # misconfiguration into a permanent flap, with every attempt
+            # taking updates away from the consumer that is working.
+            if await self._is_conflicted(key):
+                continue
             if await self._acquire_lease(key):
                 self._tasks[key] = create_background_task(
                     self._run_leased_receiver(candidate),
@@ -254,20 +266,47 @@ class NativeSurfaceReceiverCoordinator:
 
     async def _run_leased_receiver(self, candidate: NativeReceiverCandidate) -> None:
         runner = self._runner_factories[candidate.platform](candidate)
+        # A flag, not an exception allowed out of the task.
+        # `create_background_task` logs any task that raises at error level
+        # with a traceback, so letting the conflict escape would report a
+        # misconfiguration this function handles as an unhandled crash, once
+        # per stand-down.
+        refused = False
+
+        async def run_receiver() -> None:
+            nonlocal refused
+            try:
+                await runner.run()
+            except NativeReceiverConflict:
+                refused = True
+
         runner_task = create_background_task(
-            runner.run(), name=f"surface-runner-{candidate.key}"
+            run_receiver(), name=f"surface-runner-{candidate.key}"
         )
         heartbeat = create_background_task(
             self._refresh_lease_loop(candidate.key),
             name=f"surface-receiver-lease-{candidate.key}",
         )
+        watched = {runner_task, heartbeat}
         try:
             done, pending = await asyncio.wait(
-                {runner_task, heartbeat},
+                watched,
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in done:
                 task.result()
+            if refused:
+                # Loud, and at a level that survives LOG_LEVEL=INFO. Silence
+                # here is what made a bot shared between two installations
+                # look like an unreliable bot rather than a configuration to
+                # fix.
+                logger.warning(
+                    "agent_surfaces.event_receiver_service.native_receiver_upstream_conflict.degraded",
+                    platform=candidate.platform.value,
+                    credential_label=candidate.credential_label,
+                    cooldown_seconds=_CONFLICT_COOLDOWN_SECONDS,
+                )
+                await self._mark_conflicted(candidate.key)
             for task in pending:
                 task.cancel()
             if pending:
@@ -280,10 +319,27 @@ class NativeSurfaceReceiverCoordinator:
                 exc_info=True,
             )
         finally:
-            for task in (runner_task, heartbeat):
+            for task in watched:
                 task.cancel()
-            await asyncio.gather(runner_task, heartbeat, return_exceptions=True)
+            await asyncio.gather(*watched, return_exceptions=True)
             await self._release_lease(candidate.key)
+
+    async def _is_conflicted(self, key: str) -> bool:
+        assert self._redis is not None
+        return bool(await self._redis.exists(_conflict_key(key)))
+
+    async def _mark_conflicted(self, key: str) -> None:
+        if self._redis is None:
+            return
+        # One mark for the whole deployment, so every worker stands down
+        # together rather than taking it in turns to lose. It expires on its
+        # own: if the other consumer goes away, this side takes the bot back
+        # without anyone having to clear anything.
+        await self._redis.set(
+            _conflict_key(key),
+            self._owner,
+            ex=_CONFLICT_COOLDOWN_SECONDS,
+        )
 
     async def _acquire_lease(self, key: str) -> bool:
         assert self._redis is not None
@@ -451,3 +507,7 @@ def _nested_credential(credentials: dict[str, Any], key: str) -> str | None:
 
 def _lease_key(key: str) -> str:
     return f"agent_surfaces:native_receiver:{key}"
+
+
+def _conflict_key(key: str) -> str:
+    return f"agent_surfaces:native_receiver_conflict:{key}"

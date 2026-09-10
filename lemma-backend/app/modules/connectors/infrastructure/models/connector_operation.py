@@ -33,7 +33,7 @@ class ConnectorOperation(StringAuditBase):
         ForeignKey("connectors.id", ondelete="CASCADE"),
         nullable=False,
     )
-    kind: Mapped[str] = mapped_column(String(50), default="package", nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), default="http", nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_operation_name: Mapped[str | None] = mapped_column(
         String(255), nullable=True

@@ -2,7 +2,7 @@
 
 The pure spec-walking helpers (``resolve_ref``/``deep_resolve_refs``/
 ``build_parameter_entry``/``pick_content_schema``/``prefers_binary_response`` …)
-are ported from ``lemma-connectors/scripts/generate_openapi_metadata.py`` (which
+are ported from the vendored connector package's metadata generator (which
 lives under ``scripts/`` and is not importable, and whose ``generate_metadata``/
 ``sanitize_spec`` are codegen-coupled and force request bodies to
 ``application/json`` — destroying multipart). We reimplement the walk here so it
@@ -16,6 +16,7 @@ by ``OpenApiHttpExecutor``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import Any
 
 from app.modules.connectors.infrastructure.openapi.spec_helpers import (
@@ -35,6 +36,7 @@ _HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
 _BODY_PREFERRED_TYPES = [
     "application/json",
     "multipart/form-data",
+    "application/x-www-form-urlencoded",
     "application/octet-stream",
     "*/*",
 ]
@@ -159,6 +161,28 @@ def _analyze_body(
         # provider's concern (e.g. GitHub contents API), not ours to decode.
         return [], [], body_schema
 
+    if (
+        normalized == "application/x-www-form-urlencoded"
+        and body_schema.get("type") == "object"
+    ):
+        # Every field is a scalar sent as a form value. Falling through to the
+        # blob case below would declare the whole body a file and hand the
+        # executor raw bytes -- which is what happened to all 89 of Slack's
+        # POST operations, whose API is form-encoded RPC rather than REST.
+        properties = dict(body_schema.get("properties") or {})
+        return (
+            [],
+            list(properties),
+            {
+                "type": "object",
+                "properties": properties,
+                "required": body_schema.get("required", []),
+                "additionalProperties": bool(
+                    body_schema.get("additionalProperties", False)
+                ),
+            },
+        )
+
     if normalized == "multipart/form-data" and body_schema.get("type") == "object":
         properties = dict(body_schema.get("properties") or {})
         binary_fields: list[str] = []
@@ -199,9 +223,22 @@ class _Parameters:
 
 
 def _collect_parameters(
-    spec: dict[str, Any], shared_parameters: list[Any], operation: dict[str, Any]
+    spec: dict[str, Any],
+    shared_parameters: list[Any],
+    operation: dict[str, Any],
+    drop_parameters: frozenset[str] = frozenset(),
 ) -> _Parameters:
-    """Merge path-level and operation-level parameters, grouped by location."""
+    """Merge path-level and operation-level parameters, grouped by location.
+
+    ``drop_parameters`` removes a name from every one of the four outputs. It is
+    per-connector rather than global (``IGNORED_PARAMETER_NAMES`` is the global
+    list) because the names worth dropping are the ones a provider declares but
+    the executor supplies itself -- Slack's ``token``, which it accepts as a
+    header or query parameter and which we always send as a bearer header.
+    Leaving it in makes the tool schema ask an agent for a credential, and on
+    the 112 Slack operations that mark it required, validation fails before the
+    call is ever made.
+    """
     properties: dict[str, Any] = {}
     required: list[str] = []
     path_params: list[str] = []
@@ -214,6 +251,8 @@ def _collect_parameters(
         if entry is None or entry["location"] == "cookie":
             continue
         name = entry["name"]
+        if name in drop_parameters:
+            continue
         schema = dict(entry["schema"])
         if entry.get("description") and "description" not in schema:
             schema["description"] = entry["description"]
@@ -254,9 +293,23 @@ def _collect_request_body(
     if not request_body:
         return None
     request_body = resolve_once(spec, request_body)
+    content = request_body.get("content") or {}
+    forced_type = override.get("body_content_type")
+    if forced_type:
+        # A spec that lists only exotic media types for a body it will happily
+        # accept as JSON. Gmail's send/insert/import routes declare twenty
+        # `message/*` variants and no `application/json`, so the preference list
+        # cannot help and the first entry wins -- `message/cpim`, which reads as
+        # a single opaque blob. Naming the type here picks the schema the
+        # provider actually documents and sends it as JSON.
+        preferred = [forced_type, *_BODY_PREFERRED_TYPES]
+    else:
+        preferred = _BODY_PREFERRED_TYPES
     content_type, body_schema, _ = pick_content_schema(
-        spec, request_body.get("content") or {}, preferred_types=_BODY_PREFERRED_TYPES
+        spec, content, preferred_types=preferred
     )
+    if forced_type:
+        content_type = forced_type
     binary_fields, form_fields, body_prop = _analyze_body(
         content_type, body_schema, override
     )
@@ -308,6 +361,7 @@ def _build_execution(
     binary: bool,
     override: dict[str, Any],
     default_headers: dict[str, str] | None,
+    response_envelope: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """The descriptor ``OpenApiHttpExecutor`` replays to make the call."""
     execution: dict[str, Any] = {
@@ -331,9 +385,31 @@ def _build_execution(
     ]
     if multi_segment:
         execution["multi_segment_path_params"] = multi_segment
+    # Path parameters with one sensible value the caller should not have to
+    # supply. Gmail marks `userId` required on all 79 of its operations and the
+    # only value anyone passes is "me"; a profile fetch calls with an empty
+    # payload and would otherwise fail on a missing path parameter.
+    param_defaults = {
+        name: value
+        for name, value in (override.get("path_param_defaults") or {}).items()
+        if name in params.path_params
+    }
+    if param_defaults:
+        execution["path_param_defaults"] = param_defaults
     if default_headers:
         execution["default_headers"] = dict(default_headers)
+    if response_envelope:
+        execution["response"]["envelope"] = dict(response_envelope)
     return execution
+
+
+def _required_minus_defaults(
+    required: list[str], defaults: Mapping[str, object]
+) -> list[str]:
+    """A parameter the descriptor fills in is not one the caller must supply."""
+    if not defaults:
+        return required
+    return [name for name in required if name not in defaults]
 
 
 def _build_operation(
@@ -346,6 +422,8 @@ def _build_operation(
     shared_parameters: list[Any],
     override: dict[str, Any],
     default_headers: dict[str, str] | None,
+    drop_parameters: frozenset[str] = frozenset(),
+    response_envelope: Mapping[str, object] | None = None,
 ) -> OpenAPIOperation:
     op_id = operation.get("operationId") or ""
     # Operation-level server override (e.g. GitHub asset uploads use
@@ -361,7 +439,9 @@ def _build_operation(
         operation.get("summary") or operation.get("description"), public_name
     )
 
-    params = _collect_parameters(spec, shared_parameters, operation)
+    params = _collect_parameters(
+        spec, shared_parameters, operation, drop_parameters=drop_parameters
+    )
     properties = dict(params.properties)
     required = list(params.required)
 
@@ -381,6 +461,9 @@ def _build_operation(
         "properties": properties,
         "additionalProperties": False,
     }
+    required = _required_minus_defaults(
+        required, override.get("path_param_defaults") or {}
+    )
     if required:
         input_schema["required"] = required
 
@@ -393,6 +476,7 @@ def _build_operation(
         binary=binary,
         override=override,
         default_headers=default_headers,
+        response_envelope=response_envelope,
     )
 
     return OpenAPIOperation(
@@ -413,13 +497,24 @@ def build_operation_descriptors(
     allowlist: list[dict[str, Any]] | None,
     overrides: dict[str, Any] | None = None,
     default_headers: dict[str, str] | None = None,
+    drop_parameters: frozenset[str] | set[str] | None = None,
+    response_envelope: Mapping[str, object] | None = None,
 ) -> list[OpenAPIOperation]:
     """Walk ``spec.paths`` and materialize operations.
 
     ``allowlist=None`` selects ALL operations (generic OpenAPI-URL connectors);
     a list (even empty) selects only the matching operationIds / method+path.
+
+    ``drop_parameters`` and ``response_envelope`` are whole-connector facts, so
+    they are arguments here rather than repeated in every override entry. See
+    ``_collect_parameters`` and ``OpenApiHttpExecutor._handle_response``.
     """
     overrides = overrides or {}
+    dropped = frozenset(drop_parameters or ())
+
+    def selected(op_id: str, method: str, path: str) -> bool:
+        return select_all or op_id in allowed_ids or (method, path) in allowed_paths
+
     select_all = allowlist is None
     allowed_ids, allowed_paths = _index_allowlist(allowlist)
     paths = spec.get("paths") or {}
@@ -434,11 +529,7 @@ def build_operation_descriptors(
             if method not in _HTTP_METHODS or not isinstance(operation, dict):
                 continue
             op_id = operation.get("operationId") or ""
-            if (
-                not select_all
-                and op_id not in allowed_ids
-                and (method, path) not in allowed_paths
-            ):
+            if not selected(op_id, method, path):
                 continue
             override = overrides.get(op_id) or overrides.get(f"{method} {path}") or {}
             results.append(
@@ -451,6 +542,8 @@ def build_operation_descriptors(
                     shared_parameters=shared_parameters,
                     override=override,
                     default_headers=default_headers,
+                    drop_parameters=dropped,
+                    response_envelope=response_envelope,
                 )
             )
     return results

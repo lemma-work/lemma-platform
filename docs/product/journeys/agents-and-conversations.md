@@ -284,6 +284,10 @@ it happens.
 - If a host disappears mid-run, then the system shall mark the run failed rather
   than leaving it appearing to run.
 - The system shall show a person what their host is running and what it has run.
+- A conversation shall save its working directory when created. Dispatched
+  local sessions shall open and resume using that same saved directory, with
+  `/workspace` mapped to `~/lemma` on the computer. Existing provider sessions
+  shall retain their previous directory across upgrades.
 
 **Contracts:** `agent.host.poll`, `agent.host.events.append`, `agent.host.harnesses.list`
 

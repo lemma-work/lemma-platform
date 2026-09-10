@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "genai-prices==0.1.3",
+    "genai-prices==0.1.6",
     "pydantic>=2.11.9",
     "email-validator>=2.1.0",
     "structlog>=25.4.0",
@@ -31,7 +31,6 @@ dependencies = [
     "anyio>=4.12.0",
     "fastapi[standard]>=0.128.0",
     "scalar-fastapi>=1.6.1",
-    "lemma-connectors",
     "composio>=0.11.0",
     "openinference-instrumentation-pydantic-ai>=0.1.12",
     "opentelemetry-exporter-otlp>=1.39.1",
@@ -46,7 +45,11 @@ dependencies = [
     "pydantic-ai-slim[anthropic,mcp,openai,retries]>=2.27.1,<3",
     # Direct dependency of app/mcp_server.py. It used to arrive via the
     # pydantic-ai `fastmcp` extra, which 2.x dropped.
-    "fastmcp>=3.4.2",
+    # 4.x, not 3.x. FastMCP 4 negotiates the protocol era per client -- the
+    # sessionless `2026-07-28` revision and the older handshake revisions at the
+    # same time -- and the server apps here rely on that. A 3.x install would
+    # satisfy the old floor and speak only the handshake era.
+    "fastmcp>=4.0.1",
     # History compaction for providers with no native CompactionPart support.
     "summarization-pydantic-ai>=0.1.11",
     "websockets>=16.0",
@@ -139,7 +142,7 @@ dev = [
     # connector clients and migrations. `make lint` runs the default set, so
     # an unbounded bump does not tighten the gate, it drowns it. Adopting
     # those rules is its own piece of work.
-    "ruff>=0.14.8,<0.16",
+    "ruff>=0.14.8,<0.17",
 ]
 
 [build-system]
@@ -159,7 +162,6 @@ packages = ["app", "sandbox_runtime"]
 allow-direct-references = true
 
 [tool.uv.sources]
-lemma-connectors = { path = "lemma-connectors", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 lemma-sdk = { path = "../lemma-python", editable = true }
 
@@ -215,6 +217,18 @@ select = [
     # instead means they are caught locally, in `make quality`, before a PR.
     "B015",  # useless comparison
     "B018",  # useless expression
+    # The rest of this block replaces what GitHub Code Quality used to report
+    # for Python. It was turned off for this language because 689 of its
+    # findings produced roughly four real latent defects, and 459 were the
+    # `Protocol` stub bodies above. These are the rules that covered the classes
+    # worth keeping, each at zero on this tree the day it was added -- so, like
+    # every family here, they carry no baseline and a finding is a real failure.
+    "B012",  # break/continue/return in `finally` discards the in-flight exception
+    "B025",  # the same exception listed twice in one `try`
+    "B031",  # a `groupby` result consumed more than once
+    "N804",  # first argument of a classmethod is not `cls`
+    "PLR0124", # a comparison whose two sides are the same expression
+    "PLW0127", # a variable assigned to itself
     "E4",    # imports
     "E7",    # statement-level errors
     "E9",    # runtime errors
@@ -271,6 +285,5 @@ typeCheckingMode = "standard"
 exclude = [
     "app/**/tests/**",
     "app/modules/test_support/**",
-    "lemma-connectors/**",
     "migrations/**",
 ]
