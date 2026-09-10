@@ -117,8 +117,28 @@ pub(crate) fn run_wsl_command(
         arguments.join(" "),
         output.status
     )?;
-    if !output.stderr.is_empty() {
-        writeln!(log, "{}", wsl_message(&output.stderr))?;
+    // Both streams, whole, not the first line of one of them.
+    //
+    // `wsl_message` takes a single line because that is what an error message
+    // needs; a log is a different job. The guest says why its data disk needs
+    // repair by printing `lemma-data: needs-repair: <reason>` -- on stdout,
+    // from `lemma-mount-data` and its siblings -- and on Windows this file is
+    // the only place that could ever have carried it. It did not, so the host
+    // waited out its whole two minutes and reported "did not become ready" for
+    // a problem the guest had already named.
+    //
+    // Bounded by the rotation at the top of this function rather than by
+    // truncation here, so a long boot keeps its detail and a busy one does not
+    // grow without limit.
+    for (stream, bytes) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
+        if bytes.is_empty() {
+            continue;
+        }
+        for line in decode_wsl_output(bytes).lines() {
+            if !line.trim().is_empty() {
+                writeln!(log, "  {stream}: {line}")?;
+            }
+        }
     }
     Ok(output)
 }

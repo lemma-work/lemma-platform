@@ -82,7 +82,10 @@ pub struct Daemon {
 
 mod agent_host_ops;
 mod config_ops;
-mod dispatch;
+// Public for one function: `error_diagnostic_source` names a diagnostic log
+// that the *shell* has to serve, and the two halves of that contract compile
+// into different binaries. See the guard in desktop/src/tests/diagnostics.rs.
+pub mod dispatch;
 mod environment;
 mod handshake;
 mod monitors;
@@ -501,5 +504,7 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
 
 #[cfg(test)]
 mod environment_tests;
+#[cfg(test)]
+mod error_classification_tests;
 #[cfg(test)]
 mod tests;
