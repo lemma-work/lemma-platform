@@ -10,6 +10,7 @@ rich because it has every toolset, not because its base prompt restates each too
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -422,9 +423,9 @@ def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> 
     cwd = _pod_cwd(ctx, conversation)
     return (
         "# Pod Files\n"
-        f"Your working directory in pod files is `{cwd}`. A pod-file path with "
-        "no leading `/` resolves there, so `report.pdf` means "
-        f"`{cwd}/report.pdf`.\n\n"
+        f"Your working directory in pod files is {_prompt_path(cwd)}. A "
+        "pod-file path with no leading `/` resolves there, so `report.pdf` "
+        f"means {_prompt_path(f'{cwd}/report.pdf')}.\n\n"
         "**Anything the person attached to a message in this conversation is "
         "in that directory.** Look there first and read it by name. It is not "
         "in the workspace sandbox.\n\n"
@@ -441,6 +442,28 @@ def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> 
 
 # Path segments this file is willing to write into a Markdown code span.
 _PLAIN_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._@+-]{1,64}")
+# A whole path it is willing to write into one: absolute, plain segments only.
+_PLAIN_PATH = re.compile(r"(?:/[A-Za-z0-9._@+-]{1,64})+/?")
+
+
+def _prompt_path(path: str) -> str:
+    """A path written into instructions, in a form that cannot restructure them.
+
+    A conversation's ``cwd`` is caller-supplied: ``metadata`` is free-form on
+    both the create and update requests, and ``workspace_location_for``
+    deliberately honours an explicit ``cwd`` over the derived one. It was then
+    interpolated straight into a Markdown code span, so a backtick closed the
+    span and a newline left the line -- and whatever followed became part of the
+    agent's instructions rather than part of a path.
+
+    A path this cannot render plainly is JSON-encoded and left outside a code
+    span, which is the answer Agent Host already gives for the native working
+    directory: the characters become data, the path is still stated exactly, and
+    nothing is silently rewritten into a path that does not exist.
+    """
+    if _PLAIN_PATH.fullmatch(path):
+        return f"`{path}`"
+    return f"{json.dumps(path)} (JSON-encoded path)"
 
 
 def _sandbox_root(cwd: str) -> str:
@@ -510,7 +533,7 @@ def _workspace_directory_section(
     )
     where = (
         (
-            f"Your Lemma sandbox working directory is `{cwd}`. Reach it **only "
+            f"Your Lemma sandbox working directory is {_prompt_path(cwd)}. Reach it **only "
             "through the Lemma tools** — `exec_command`, `execute_python` and "
             "the sandbox file tools. Native tools use the directory this "
             "process started in; native `pwd` reports that host directory. "
@@ -521,7 +544,7 @@ def _workspace_directory_section(
         )
         if runs_as_remote_process
         else (
-            f"Your working directory is `{cwd}`. Files you write here are "
+            f"Your working directory is {_prompt_path(cwd)}. Files you write here are "
             "private to you until you upload them to pod files."
         )
     )

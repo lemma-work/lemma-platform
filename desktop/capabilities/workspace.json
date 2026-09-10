@@ -16,6 +16,9 @@
   "permissions": [
     "allow-open-control-center",
     "allow-sandbox-image-status",
+    "allow-conversation-folder",
+    "allow-bind-conversation-folder",
+    "allow-unbind-conversation-folder",
     "allow-agent-host-status",
     "allow-agent-host-start",
     "allow-agent-host-pair",

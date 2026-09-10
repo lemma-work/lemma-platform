@@ -16,6 +16,7 @@ mod config_store;
 mod confirmation;
 mod connection;
 mod control_center;
+mod conversation_folders;
 mod diagnostics;
 mod ipc_read;
 mod local_recovery;
