@@ -65,6 +65,62 @@ class ReleaseParityTests(unittest.TestCase):
                 parity.scripts_called(workflow, "build"), {"check_macos_signing.py"}
             )
 
+    def test_a_script_named_in_a_trailing_comment_is_not_a_call(self) -> None:
+        """The dangerous direction. A commented-out call counts as a call, both
+        pipelines' sets agree, and the gate passes over the mismatch it exists
+        to find -- so this is a false pass, not a false alarm."""
+        self.assertEqual(
+            parity.without_inline_comment("true # desktop/scripts/check_online_payload.py"),
+            "true ",
+        )
+        self.assertEqual(
+            parity.without_inline_comment(
+                "python3 desktop/scripts/check_macos_signing.py app  # not check_updater_key.py"
+            ),
+            "python3 desktop/scripts/check_macos_signing.py app  ",
+        )
+
+    def test_a_hash_that_is_not_a_comment_is_left_alone(self) -> None:
+        """Cutting at every `#` would drop the rest of a real command, and stop
+        seeing a call that is genuinely there."""
+        for line in (
+            "grep '#' desktop/scripts/check_entitlements.py",
+            'grep "#" desktop/scripts/check_entitlements.py',
+            "echo foo#bar && python3 desktop/scripts/check_entitlements.py",
+            "python3 desktop/scripts/check_entitlements.py",
+        ):
+            self.assertIn("check_entitlements.py", parity.without_inline_comment(line), line)
+
+    def test_a_commented_call_does_not_reach_the_pipeline_set(self) -> None:
+        """The same thing through the function the gate actually calls."""
+        import tempfile
+        from pathlib import Path
+
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            workflow = Path(directory) / "w.yml"
+            workflow.write_text(
+                yaml.safe_dump(
+                    {
+                        "jobs": {
+                            "build": {
+                                "steps": [
+                                    {
+                                        "run": "true # desktop/scripts/check_online_payload.py\n"
+                                        "python3 desktop/scripts/check_macos_signing.py app "
+                                        "# desktop/scripts/check_updater_key.py\n"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                )
+            )
+            self.assertEqual(
+                parity.scripts_called(workflow, "build"), {"check_macos_signing.py"}
+            )
+
     def test_an_allowance_every_pipeline_outgrew_is_reported(self) -> None:
         """An exemption with no asymmetry left is not describing anything, and
         it would excuse the next real one."""

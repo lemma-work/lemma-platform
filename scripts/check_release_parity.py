@@ -49,6 +49,43 @@ ALLOWED_ASYMMETRY = {
 }
 
 
+def without_inline_comment(line: str) -> str:
+    """The line with any shell comment removed, including a trailing one.
+
+    Skipping only whole-line comments left `true # desktop/scripts/foo.py`
+    counting as a call to `foo.py`. That is the dangerous direction: the script
+    appears in both pipelines' sets, the difference disappears, and the gate
+    passes over a mismatch it exists to find.
+
+    `#` opens a comment only at the start of a word and only outside quotes --
+    `echo foo#bar` prints a hash and `grep '#' x.py` searches for one -- so
+    cutting at the first `#` would drop the rest of a real command and stop
+    seeing a call that is genuinely there. Both are handled here.
+
+    Where an exotic quoting case does defeat this, it defeats it by stripping
+    too much, which costs a reported asymmetry that is not real. That is the
+    safe direction: loud and wrong beats silent and wrong.
+    """
+    quote: str | None = None
+    index = 0
+    while index < len(line):
+        char = line[index]
+        # A backslash escapes the next character everywhere but inside single
+        # quotes, where it is an ordinary character.
+        if char == "\\" and quote != "'":
+            index += 2
+            continue
+        if quote is None:
+            if char in "'\"":
+                quote = char
+            elif char == "#" and (index == 0 or line[index - 1].isspace()):
+                return line[:index]
+        elif char == quote:
+            quote = None
+        index += 1
+    return line
+
+
 def scripts_called(workflow: Path, job: str) -> set[str]:
     document = yaml.safe_load(workflow.read_text())
     try:
@@ -65,9 +102,10 @@ def scripts_called(workflow: Path, job: str) -> set[str]:
             # note explaining why a pipeline *stopped* calling something counts
             # as still calling it, which is precisely the asymmetry this exists
             # to report.
-            if line.lstrip().startswith("#"):
-                continue
-            found.update(match.group("name") for match in SCRIPT_CALL.finditer(line))
+            command = without_inline_comment(line)
+            found.update(
+                match.group("name") for match in SCRIPT_CALL.finditer(command)
+            )
     return found
 
 
