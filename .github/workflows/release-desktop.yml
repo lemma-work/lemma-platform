@@ -333,6 +333,12 @@ jobs:
           npx -y "$TAURI_CLI" build \
             --config tauri.online.conf.json \
             --config tauri.updater.conf.json
+          # Emptied, not just created. This lives under `desktop/target`, which
+          # `Swatinem/rust-cache` restores, so a file left by an earlier run of
+          # an earlier commit could still be here -- and both the upload globs
+          # below and the evidence manifest take whatever they find. A stale
+          # DMG would be published as this release's, and recorded as such.
+          rm -rf target/release/release-artifacts
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
@@ -605,6 +611,36 @@ jobs:
           echo "Update feed:"
           cat "${artifacts}/latest.json"
 
+      # Written after everything is built, signed, notarized and verified, and
+      # before anything is published -- so it describes what is actually about
+      # to be attached, and `--verify` re-reads it against those exact files.
+      #
+      # It answers what the release page cannot: whether the DMG on somebody's
+      # laptop is the DMG we published, which release a given file belongs to,
+      # and which identity and updater key this build carries. A user reporting
+      # a bug could not tell us what they installed, and neither could we.
+      - name: Record what this release publishes
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          artifacts="desktop/target/release/release-artifacts"
+          # The same inputs, so `--verify` compares the manifest with this
+          # release rather than with its own claims. Hashes alone prove the
+          # files match the manifest; they say nothing about whether the
+          # manifest describes the release being published.
+          evidence=(
+            --version "${VERSION}"
+            --commit "${GITHUB_SHA}"
+            --repository "${GITHUB_REPOSITORY}"
+          )
+          python3 desktop/scripts/build_release_evidence.py "${artifacts}" \
+            "${evidence[@]}" \
+            --app "desktop/target/release/bundle/macos/Lemma.app"
+          python3 desktop/scripts/build_release_evidence.py "${artifacts}" \
+            "${evidence[@]}" --verify
+
       - name: Upload online DMG to release
         uses: softprops/action-gh-release@v3
         with:
@@ -623,6 +659,7 @@ jobs:
             desktop/target/release/release-artifacts/Lemma_*_aarch64.app.tar.gz
             desktop/target/release/release-artifacts/Lemma_*_aarch64.app.tar.gz.sig
             desktop/target/release/release-artifacts/latest.json
+            desktop/target/release/release-artifacts/release-evidence.json
 
       # The feed is only real once it is fetchable at the URL every installed
       # app polls. A malformed or unreachable one is silent: installs simply

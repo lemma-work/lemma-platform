@@ -35,7 +35,7 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
     [ValidateSet('sidecars', 'test', 'test-app', 'fmt', 'lint', 'concepts',
-                 'concepts-check', 'file-size', 'entrypoint-parity', 'entitlements',
+                 'concepts-check', 'file-size', 'image-pins', 'entrypoint-parity', 'entitlements',
                  'test-browser', 'check',
                  'runtime-fetch', 'exe', 'clean', 'version-check', 'help')]
     [string]$Verb,
@@ -101,6 +101,7 @@ switch ($Verb) {
         Write-Host '  desktop.ps1 concepts [-Check]     bake desktop/ui/concepts.gen.json'
         Write-Host '  desktop.ps1 concepts-check        the baked concepts are committed'
         Write-Host '  desktop.ps1 file-size             Rust file size ratchet (DES-09)'
+        Write-Host '  desktop.ps1 image-pins            the guest image base is pinned by digest'
         Write-Host '  desktop.ps1 entrypoint-parity     this script and the Makefile agree'
         Write-Host '  desktop.ps1 entitlements          each macOS binary is granted only what it uses'
         Write-Host '  desktop.ps1 test-browser          splash and settings browser journeys'
@@ -191,6 +192,16 @@ switch ($Verb) {
         Invoke-Checked 'check_file_size.py'
     }
 
+    # The guest image is Linux, but whether its base is pinned is a property of
+    # a text file in this repository, and a Windows contributor editing that
+    # Dockerfile should be able to ask.
+    'image-pins' {
+        Require-Command python 'install Python 3 from https://python.org'
+        Step 'Guest image base pins...'
+        python (Join-Path $DesktopDir 'scripts/check_image_pins.py')
+        Invoke-Checked 'check_image_pins.py'
+    }
+
     'entrypoint-parity' {
         Require-Command python 'install Python 3 from https://python.org'
         Step 'Makefile and desktop.ps1 offer the same verbs...'
@@ -229,7 +240,7 @@ switch ($Verb) {
     # cross-compiles the Windows paths from a Mac; there is nothing to
     # cross-compile when you are already on Windows.
     'check' {
-        foreach ($step in @('fmt', 'concepts-check', 'file-size', 'entrypoint-parity', 'entitlements', 'lint', 'test', 'test-browser')) {
+        foreach ($step in @('fmt', 'concepts-check', 'file-size', 'image-pins', 'entrypoint-parity', 'entitlements', 'lint', 'test', 'test-browser')) {
             & $PSCommandPath $step
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
