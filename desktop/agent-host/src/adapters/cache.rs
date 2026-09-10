@@ -1,4 +1,19 @@
 //! Installing an adapter into the cache, and verifying what is there.
+//!
+//! Downloaded on first run rather than shipped inside the app, which is a
+//! decision rather than an omission. Bundling the two npm adapters would add
+//! about 67 MB to every installer, and a real no-Node path would mean shipping
+//! Node itself on top of that -- roughly doubling it -- to serve a machine
+//! that either has no Node at all or cannot reach the registry. The app
+//! already downloads on first run, so an adapter is nothing new in kind, and
+//! the size is paid by everyone to spare an edge case.
+//!
+//! What that trade needs in exchange is a failure that says so, and the path
+//! is bounded at both ends: `npm` runs under a 300-second cap that kills the
+//! process tree, and whatever went wrong is recorded per adapter in
+//! `install_failures`, which `snapshot_for` turns into a named cause instead
+//! of a "Setting up, usually under a minute" that never ends. `doctor
+//! --repair` is the retry.
 
 use super::{
     AdapterManifest, AdapterSpec, Cancellation, Command, Digest, Duration, Mutex, Path, PathBuf,
