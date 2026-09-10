@@ -381,15 +381,23 @@ def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
     it silently did nothing for eleven days -- `--extra markitdown` had stopped
     existing -- and blocked every Desktop release while it did.
 
-    Two clauses have since come out of the filter, both because they selected
-    nothing. `not mock_sandbox_only` named two workflow tests that were excluded
-    here in #155 and given no other lane, so they ran nowhere for eight weeks --
-    and they pass in this lane's exact configuration, so the exclusion outlived
-    whatever it was for. `or surface_live` was inert by construction: that file
-    is `provider` at module level and this filter says `not provider`, so the
-    clause read like a lane and was one for nobody. Its `LEMMA_RUN_SURFACE_LIVE_E2E`
-    went with it; the smoke job in `e2e.yml` still sets it, which is where those
-    tests actually run.
+    Four clauses have since come out of the filter. Two selected nothing:
+    `not mock_sandbox_only` named two workflow tests that were excluded here in
+    #155 and given no other lane, so they ran nowhere for eight weeks -- and
+    they pass in this lane's exact configuration, so the exclusion outlived
+    whatever it was for; and `or surface_live` was inert by construction, since
+    that file is `provider` at module level and this filter says `not provider`.
+    Its `LEMMA_RUN_SURFACE_LIVE_E2E` went with it; the smoke job in `e2e.yml`
+    still sets it, which is where those tests actually run.
+
+    The other two selected something that could not report a defect from here,
+    which for a lane every release gate reads is the same failure wearing better
+    clothes. `or local_cli` selected fourteen tests needing a cargo-built
+    `lemma-agent-host` this job does not build, and CI's `Desktop contracts`
+    does; `not benchmark` drops a wall-clock p95 budget that
+    `sandbox-function-benchmark.yml` trends nightly. Both are argued at their
+    new homes, and `test_the_non_shard_lanes_match_their_workflows` is what
+    holds the planner to them.
     """
     makefile = (_REPO_ROOT / "lemma-backend/Makefile").read_text()
     workflow = (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
@@ -397,8 +405,8 @@ def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
     target = makefile.split("\ntest-e2e-runtime:\n", 1)[1].split("\n\n", 1)[0]
 
     marker = (
-        "e2e and (slow or workspace or indexing or local_cli "
-        "or protected) and not provider"
+        "e2e and (slow or workspace or indexing "
+        "or protected) and not provider and not benchmark"
     )
     assert marker in workflow, (
         "the protected workflow's marker filter changed; update this test and "
@@ -413,19 +421,31 @@ def test_the_protected_lane_can_be_reproduced_from_the_makefile() -> None:
         assert setting in target, f"{setting} missing from the target"
 
 
-def test_the_two_non_shard_lanes_match_their_workflows() -> None:
+def test_the_non_shard_lanes_match_their_workflows() -> None:
     """`--verify` decides coverage, so its copy of a lane must be the lane.
 
     The shard lanes need no such check: the gate reads their filters straight
     out of `.github/e2e-shards.json`, which is the file the workflow runs from.
-    The other two lanes are not in that file, so the planner holds a copy of
+    The other four lanes are not in that file, so the planner holds a copy of
     each -- and a stale copy would not fail loudly. It would report a test as
     covered by a lane whose filter no longer selects it, which is the exact
     shape of the bug the gate exists to catch, wearing the gate's own colours.
+
+    Three of the four own one file each, which is why each is checked here as
+    "this workflow runs this file, and runs all of it". `Desktop contracts` is
+    the strictest of those: it takes two passes to cover its file, split on
+    `agent_host_browser`, and it is only a lane at all because it builds the
+    Agent Host first.
     """
     planner = _load_planner()
     protected = (_REPO_ROOT / ".github/workflows/backend-protected-e2e.yml").read_text()
     e2e = (_REPO_ROOT / ".github/workflows/e2e.yml").read_text()
+    ci = (_REPO_ROOT / ".github/workflows/ci.yml").read_text()
+    benchmark_workflow = (
+        _REPO_ROOT / ".github/workflows/sandbox-function-benchmark.yml"
+    ).read_text()
+    root_makefile = (_REPO_ROOT / "Makefile").read_text()
+    backend_makefile = (_REPO_ROOT / "lemma-backend/Makefile").read_text()
 
     assert planner.PROTECTED_MARKERS in protected, (
         "plan_e2e_shards.PROTECTED_MARKERS no longer matches the protected "
@@ -436,6 +456,43 @@ def test_the_two_non_shard_lanes_match_their_workflows() -> None:
     )
     assert f"-m {planner.SMOKE_MARKERS}" in e2e, (
         "the surface-live smoke job's marker filter changed"
+    )
+
+    # `Desktop contracts`: two make targets, both named by ci.yml, that between
+    # them run every test in the Agent Host file. The split is the point --
+    # drop either target and half the file runs nowhere, which is exactly what
+    # the protected lane's `or local_cli` was papering over.
+    desktop_targets = {
+        name: root_makefile.split(f"\n{name}:\n", 1)[1].split("\n\n", 1)[0]
+        for name in ("desktop-agent-host-e2e", "desktop-agent-host-browser-e2e")
+    }
+    for name, recipe in desktop_targets.items():
+        assert f"make {name}" in ci, f"ci.yml no longer runs {name}"
+        assert planner.DESKTOP_CONTRACT_PATH in recipe, (
+            f"{name} no longer runs plan_e2e_shards.DESKTOP_CONTRACT_PATH"
+        )
+        assert "cargo build -p lemma-agent-host" in recipe, (
+            f"{name} no longer builds the binary its tests assert on; without "
+            f"it these tests fail on the build, not on the product"
+        )
+    plain, browser = (
+        desktop_targets["desktop-agent-host-e2e"],
+        desktop_targets["desktop-agent-host-browser-e2e"],
+    )
+    assert (
+        "-m 'not agent_host_browser'" in plain and "-m agent_host_browser" in browser
+    ), (
+        "the two Desktop contract passes no longer split on "
+        "`agent_host_browser`, so between them they may not run the whole file"
+    )
+
+    # The nightly benchmark: one target, run by its own workflow, on the file
+    # the planner credits it with.
+    assert "make benchmark-functions-docker" in benchmark_workflow, (
+        "sandbox-function-benchmark.yml no longer runs the Docker benchmark"
+    )
+    assert f"FUNCTION_BENCH_TEST = {planner.BENCHMARK_PATH}" in backend_makefile, (
+        "the benchmark target no longer runs plan_e2e_shards.BENCHMARK_PATH"
     )
 
 

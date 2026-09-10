@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import asynccontextmanager
 import hashlib
 import json
 import shlex
@@ -10,12 +10,12 @@ import statistics
 import time
 from uuid import UUID, uuid4
 
-import anyio
 import httpx
+import httpx2
 import pytest
 from fastapi import status
 from mcp import ClientSession
-from mcp.client.streamable_http import StreamableHTTPTransport
+from mcp.client.streamable_http import streamable_http_client
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
@@ -765,47 +765,35 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
 
 @asynccontextmanager
 async def _mcp_client_session(url: str, token: str):
-    async with httpx.AsyncClient(
-        timeout=None,
-        headers={"Authorization": f"Bearer {token}"},
-    ) as http_client:
-        read_stream_writer, read_stream = anyio.create_memory_object_stream(0)
-        write_stream, write_stream_reader = anyio.create_memory_object_stream(0)
-        transport = StreamableHTTPTransport(url)
+    """A real MCP client against the conversation's streamable-HTTP endpoint.
 
-        async with anyio.create_task_group() as task_group:
-            try:
-                async with AsyncExitStack() as stack:
-                    stack.push_async_callback(read_stream.aclose)
-                    stack.push_async_callback(read_stream_writer.aclose)
-                    stack.push_async_callback(write_stream.aclose)
-                    stack.push_async_callback(write_stream_reader.aclose)
+    Through the library's own entry point, deliberately. This used to hand-wire
+    `StreamableHTTPTransport.post_writer` onto a pair of plain
+    `anyio.create_memory_object_stream` channels -- a copy of
+    `streamable_http_client`'s body, one version behind it. The SDK's internal
+    wiring is not a contract, and `mcp` 2.x changed it: the client now carries
+    the sender's `contextvars.Context` across those channels and reads it back
+    as `write_stream_reader.last_context`, which a plain memory stream does not
+    have. Every session died in `post_writer` with an `AttributeError` the
+    caller only ever saw as `MCPError(-32000, 'Connection closed')` out of
+    `initialize()`.
 
-                    def start_get_stream() -> None:
-                        task_group.start_soon(
-                            transport.handle_get_stream,
-                            http_client,
-                            read_stream_writer,
-                        )
-
-                    task_group.start_soon(
-                        transport.post_writer,
-                        http_client,
-                        write_stream_reader,
-                        read_stream_writer,
-                        write_stream,
-                        start_get_stream,
-                        task_group,
-                    )
-
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        yield session
-
-                    if transport.session_id:
-                        await transport.terminate_session(http_client)
-            finally:
-                task_group.cancel_scope.cancel()
+    Nothing is lost by asking the library instead: `streamable_http_client`
+    takes the authenticated client, which is the only reason to be down here.
+    """
+    async with (
+        httpx2.AsyncClient(
+            timeout=None,
+            headers={"Authorization": f"Bearer {token}"},
+        ) as http_client,
+        streamable_http_client(url, http_client=http_client) as (
+            read_stream,
+            write_stream,
+        ),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await session.initialize()
+        yield session
 
 
 def _latency_summary(values: list[float]) -> dict[str, float]:
