@@ -54,3 +54,73 @@ fn the_quit_prompt_offers_the_alternative_it_is_replacing() {
     // And it has to say what is not lost, or "stop" reads as "delete".
     assert!(body.contains(&format!("stay on {THIS_COMPUTER}")));
 }
+
+/// The prompt has to come forward, not just exist.
+///
+/// Dock → Quit arrives while another app is frontmost. The confirmation was
+/// created, and its own webview was focused, but the window holding it was only
+/// `show()`n -- which un-hides a window without making the application active.
+/// So the prompt appeared behind whatever the person was looking at and the app
+/// seemed to have ignored the Quit.
+#[test]
+fn a_prompt_asks_for_the_foreground_and_not_only_for_visibility() {
+    let steps = std::cell::RefCell::new(Vec::new());
+    let result = bring_to_front(
+        || {
+            steps.borrow_mut().push("show");
+            Ok(())
+        },
+        || {
+            steps.borrow_mut().push("unminimize");
+            Ok(())
+        },
+        || {
+            steps.borrow_mut().push("focus");
+            Ok(())
+        },
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(
+        *steps.borrow(),
+        vec!["show", "unminimize", "focus"],
+        "focus is the step that was missing, and it comes last"
+    );
+}
+
+/// A window that was never minimized still has to be asked for focus.
+#[test]
+fn a_restore_that_fails_does_not_cost_the_prompt_its_focus() {
+    let focused = std::cell::Cell::new(false);
+    let result = bring_to_front(
+        || Ok(()),
+        || Err("not minimized".into()),
+        || {
+            focused.set(true);
+            Ok(())
+        },
+    );
+
+    assert!(result.is_ok());
+    assert!(
+        focused.get(),
+        "an unminimize that fails is not a reason to stop"
+    );
+}
+
+/// Nothing to focus if the window would not show at all.
+#[test]
+fn a_window_that_will_not_show_is_not_then_focused() {
+    let focused = std::cell::Cell::new(false);
+    let result = bring_to_front(
+        || Err("no window".into()),
+        || Ok(()),
+        || {
+            focused.set(true);
+            Ok(())
+        },
+    );
+
+    assert_eq!(result, Err("no window".into()));
+    assert!(!focused.get());
+}
