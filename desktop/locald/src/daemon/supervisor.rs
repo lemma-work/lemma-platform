@@ -88,6 +88,19 @@ impl Daemon {
         }
 
         let mut command = supervisor_command()?;
+        // Its own process group, so it can be stopped as a tree.
+        //
+        // The compatibility supervisor is `uv run --project lemma-stack
+        // lemma-stack supervise` in a checkout, which is uv, which is Python,
+        // which is the stack's own children. Killing the leader left all of
+        // that running -- and without a group of its own there is nothing to
+        // signal but the leader, because a negative PID would reach whatever
+        // group locald itself is in.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         command
             .env("LEMMA_DESKTOP", "1")
             // Handed straight to the bundled supervisor, which ships in the
