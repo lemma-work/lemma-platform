@@ -252,6 +252,12 @@
           <div id="service-list"></div>
           <div class="button-row"><button class="btn" data-action="start">Reconcile</button><button class="btn" data-action="restart">Restart application</button></div>
         </article>
+        <article class="panel">
+          <div class="panel-heading"><div><h2>Workspace sandbox</h2><p>Pods run code, shells and browsers inside a sandbox image on this computer. Coding agents do not need it — they run natively — so it is downloaded only when you ask.</p></div></div>
+          <p id="sandbox-image-state">Checking…</p>
+          <p class="limitation-note" id="sandbox-image-detail" hidden></p>
+          <div class="button-row"><button class="btn" data-action="prepare-sandbox-image">Download sandbox image</button></div>
+        </article>
         <article class="panel danger-zone">
           <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>

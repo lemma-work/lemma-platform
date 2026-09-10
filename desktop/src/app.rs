@@ -65,6 +65,7 @@ pub(crate) fn run() {
             agent_host_ui::agent_host_action,
             agent_host_ui::agent_host_status,
             agent_host_ui::sandbox_image_status,
+            operator_settings::prepare_sandbox_image,
             agent_host_ui::agent_host_start,
             agent_host_ui::agent_host_pair,
             agent_host_ui::agent_host_refresh,

@@ -42,6 +42,21 @@ impl Daemon {
                 self.start_runtime_prepare(request, client.clone());
                 return true;
             }
+            // Fetching the sandbox image is a decision now, not a side effect
+            // of starting. The reply is the acknowledgement; progress arrives
+            // on the `sandbox-images` broadcast like every other state here.
+            "sandbox.prepare" => {
+                self.warm_sandbox_images();
+                self.send_direct(
+                    client,
+                    json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "sandbox-prepare-started",
+                        "id": id.as_ref(),
+                    }),
+                );
+                return true;
+            }
             "local.reset-data" => {
                 self.start_local_data_reset(request, client.clone());
                 return true;

@@ -49,6 +49,13 @@ impl Daemon {
             "capabilities": self.host_processes.as_ref().and_then(|manager| manager.capabilities()),
             "release": self.host_processes.as_ref().map(|manager| manager.release()),
             "managed_runtime": self.managed_runtime.as_ref().and_then(|runtime| runtime.status()),
+            // Settings opens long after `ready` announced this, and a page
+            // that missed the broadcast would otherwise have to offer the
+            // download without knowing whether it had already happened.
+            "sandbox_images": self.managed_runtime.as_ref().map(|runtime| {
+                let status = runtime.sandbox_image_status();
+                json!({ "state": status.state, "detail": status.detail })
+            }),
             "sharing": self.sharing.as_ref().map(|sharing| sharing.snapshot(true)),
             "agent_host": self.agent_host.detailed_status(),
             "paths": {

@@ -393,28 +393,47 @@ impl Daemon {
             "operation_id": operation_id,
             "runtime_generation": runtime_generation,
         }));
-        self.warm_sandbox_images();
+        self.announce_sandbox_images();
         Ok(())
     }
 
-    /// Start fetching the sandbox images behind the workspace, and say so.
+    /// Say where the sandbox image stands, without fetching anything.
     ///
-    /// After `ready`, never before it. The images are only needed once a pod
-    /// runs something; fetching them inline held the startup bar at 68% behind
-    /// several hundred megabytes on a first run. The app shows this as a
-    /// notice it can take away again, rather than as a phase of starting.
-    /// Start fetching the sandbox images behind the workspace, and say so.
+    /// After `ready`, never before it, and it no longer starts a download.
+    /// Fetching on every start spent several hundred megabytes of someone
+    /// else's connection on a capability they may never use: the coding agents
+    /// run natively on this computer, and a person using only those has no pod
+    /// workload to put in a sandbox. They still got the download, and a toast
+    /// announcing it, for something they had not asked for.
     ///
-    /// After `ready`, never before it. The images are only needed once a pod
-    /// runs something; fetching them inline held the startup bar at 68% behind
-    /// several hundred megabytes on a first run. The app shows this as a
-    /// notice it can take away again, rather than as a phase of starting.
+    /// So this reports and stops. `sandbox.prepare` is how a fetch starts now,
+    /// and Settings is where it is offered. A pod that runs something before
+    /// then still works -- `sandbox.ensure` pulls what it needs on first use,
+    /// exactly as it did before any of this existed; it is slower once.
+    ///
+    /// Both states here are terminal, because the workspace polls until it
+    /// hears an answer that cannot change; silence left it asking every two
+    /// seconds for the rest of the session.
+    pub(super) fn announce_sandbox_images(self: &Arc<Self>) {
+        // Recorded as well as broadcast, so Settings -- which opens long after
+        // this and reads the snapshot rather than the event -- is told the same
+        // thing the workspace was.
+        let status = match self.managed_runtime.as_ref() {
+            Some(runtime) => runtime.note_sandbox_images_not_prepared(),
+            // No guest that could hold one -- a supervisor-mode stack.
+            None => SandboxImageStatus::new(SANDBOX_IMAGES_UNSUPPORTED, ""),
+        };
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "sandbox-images",
+            "state": status.state,
+            "detail": status.detail,
+        }));
+    }
+
+    /// Fetch the sandbox image because someone asked for it.
     pub(super) fn warm_sandbox_images(self: &Arc<Self>) {
         let Some(runtime) = self.managed_runtime.as_ref() else {
-            // No guest to warm -- this is a supervisor-mode stack. Said out
-            // loud, and terminally, because the workspace polls until it hears
-            // an answer that cannot change; silence here left it asking every
-            // two seconds for the rest of the session.
             self.broadcast(json!({
                 "v": PROTOCOL_VERSION,
                 "event": "sandbox-images",
@@ -464,7 +483,7 @@ impl Daemon {
             "mode": "managed-local",
             "release": manager.release(),
         }));
-        self.warm_sandbox_images();
+        self.announce_sandbox_images();
         Ok(())
     }
 
