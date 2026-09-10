@@ -9,13 +9,16 @@ mod agent_host;
 mod config;
 mod diagnostics;
 mod locald;
+mod locald_writer;
 mod misc;
 mod navigation;
 mod quit;
 mod quit_prompt;
 mod runtime;
 mod splash;
+mod telemetry_privacy;
 mod update_install;
+mod update_single_flight;
 mod window_placement;
 mod windows;
 
@@ -118,8 +121,8 @@ fn no_guard_looks_for_the_shell_inside_main() {
 /// read their own source and the bundled UI through `include_str!`. A
 /// needle containing `\n` then matches nothing -- but only sometimes:
 /// `find("\nfn ")` still matches inside `"\r\nfn "`, so most survived and
-/// exactly two did not. The failures appear only on the Windows job, which
-/// is not in the desktop path filter, so each one costs a push to see.
+/// exactly two did not. The failures appear only on the Windows job, the
+/// slowest lane in CI, so each one costs most of a run to see.
 ///
 /// Two defences, and this asserts the one that can be asserted from here:
 /// every `include_str!` bound for searching normalises on the way in.
@@ -149,7 +152,7 @@ fn every_included_source_is_read_with_normalised_line_endings() {
     );
 }
 
-fn granted(name: &str) -> Vec<String> {
+pub(crate) fn granted(name: &str) -> Vec<String> {
     capability(name)["permissions"]
         .as_array()
         .expect("permissions array")
@@ -158,12 +161,29 @@ fn granted(name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every `invoke("name")` a bundled page makes.
+/// Every `invoke("name")` a bundled page makes, whichever quote it used.
+///
+/// Both, because `confirmation.js` writes `invoke('resolve_confirmation')` and
+/// the double-quoted scan walked straight past it -- so the guard that checks
+/// a page is granted what it calls was not looking at that page's only call.
+/// A gap in a guard is invisible in exactly the way the thing it guards is
+/// not.
 fn invoked_commands(script: &str) -> Vec<String> {
-    script
-        .split("invoke(\"")
-        .skip(1)
-        .filter_map(|rest| rest.split('"').next().map(str::to_string))
+    [("invoke(\"", '"'), ("invoke('", '\'')]
+        .into_iter()
+        .flat_map(|(opening, quote)| {
+            script
+                .split(opening)
+                .skip(1)
+                .filter_map(move |rest| rest.split(quote).next().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .filter(|command| {
+            !command.is_empty()
+                && command
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        })
         .collect()
 }
 

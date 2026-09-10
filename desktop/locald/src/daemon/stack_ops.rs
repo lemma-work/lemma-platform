@@ -1,4 +1,7 @@
 use super::*;
+// The Agent Host's teardown, reused rather than rewritten: it already knows how
+// to stop a tree on both platforms, and there is only one right way to do it.
+use crate::agent_host::terminate_process_tree;
 
 impl Daemon {
     pub(super) fn start_daemon_shutdown(
@@ -59,14 +62,22 @@ impl Daemon {
                     failure.get_or_insert_with(|| error.to_string());
                 }
             }
-            if let Some(mut supervisor) = daemon
+            // Taken out under the lock; killed and reaped outside it. `wait`
+            // blocks until the process is gone, and every client thread that
+            // wants the supervisor takes this same lock.
+            let taken = daemon
                 .supervisor
                 .lock()
                 .expect("supervisor lock poisoned")
-                .take()
-            {
-                let _ = supervisor.child.kill();
-                let _ = supervisor.child.wait();
+                .take();
+            if let Some(mut supervisor) = taken {
+                // The tree, not the leader. `uv run ... lemma-stack supervise`
+                // is uv, then Python, then whatever the stack started; killing
+                // only the leader left the rest running with nothing to reap
+                // them. This is the same teardown the Agent Host uses, and the
+                // spawn puts the supervisor in its own group so it can be
+                // asked for.
+                let _ = terminate_process_tree(&mut supervisor.child);
             }
             if let Some(message) = failure {
                 daemon.shutdown_running.store(false, Ordering::Release);

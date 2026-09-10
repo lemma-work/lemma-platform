@@ -258,6 +258,7 @@ pub(crate) fn run_quit_watchdog(
 pub(crate) fn finish_quit(app: &AppHandle) {
     let shell: State<Shell> = app.state();
     shell.quit_confirmed.store(true, Ordering::Release);
+    note_session_length();
     let worker = app.clone();
     let exiting = app.clone();
     shell.shutdown.start(
@@ -267,7 +268,21 @@ pub(crate) fn finish_quit(app: &AppHandle) {
     );
 }
 
+/// How long this session lasted, once, however the app is quit.
+///
+/// Both quit paths end in a shutdown, and either can be reached first, so the
+/// once-only is here rather than at each call site.
+fn note_session_length() {
+    static NOTED: std::sync::Once = std::sync::Once::new();
+    NOTED.call_once(|| {
+        telemetry::note(telemetry::InstallEvent::Quit {
+            session_seconds: LAUNCH_START.get_or_init(Instant::now).elapsed().as_secs(),
+        });
+    });
+}
+
 pub(crate) fn finish_quit_after_daemon(app: &AppHandle) {
+    note_session_length();
     let worker = app.clone();
     let exiting = app.clone();
     app.state::<Shell>().shutdown.start(
@@ -396,4 +411,48 @@ pub(crate) fn request_desktop_release() -> Result<(), String> {
             _ => {}
         }
     }
+}
+
+/// What an `ExitRequested` should do, from the three facts that decide it.
+///
+/// Its own function because the arm that used to hold it ended in two branches
+/// that did the same thing -- one of them computing `quit_impact` and throwing
+/// the answer away to decide nothing. Two paths to one call is how one of them
+/// drifts, and inside a `RunEvent` closure neither could be tested at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExitDisposition {
+    /// Let the exit through. The shutdown worker has finished its work.
+    Allow,
+    /// Refuse the exit, and do nothing else about it.
+    Hold,
+    /// Refuse the exit and start the quit that will earn it.
+    Quit,
+}
+
+pub(crate) fn exit_disposition(
+    swapping_window: bool,
+    may_exit: bool,
+    quit_confirmed: bool,
+) -> ExitDisposition {
+    // A server switch closes one window and opens another. In between there
+    // are no windows, which looks exactly like the last one closing -- so the
+    // exit is held rather than asked about or taken.
+    if swapping_window {
+        return ExitDisposition::Hold;
+    }
+    if may_exit {
+        return ExitDisposition::Allow;
+    }
+    // Already on its way out. Asking again, or starting a second quit, is how
+    // a confirmed quit gets a second dialog in front of it.
+    if quit_confirmed {
+        return ExitDisposition::Hold;
+    }
+    // Whether or not there is anything to warn about, there is something to
+    // do: the daemon outlives the app deliberately, so quitting has to stop
+    // it. Letting the exit through here ran that on the main thread from
+    // `RunEvent::Exit`, which is why Dock -> Quit sat "not responding" for
+    // several seconds before the window went away. `request_quit` does the
+    // same work on a worker and exits when it is done.
+    ExitDisposition::Quit
 }

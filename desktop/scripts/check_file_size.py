@@ -8,10 +8,15 @@ find. The gate that enforces it -- `check_architecture.py` -- reads Python
 only, so the desktop crates were never measured, and `main.rs` reached 11,297
 lines without anything objecting.
 
-A ratchet rather than a hard limit, for the reason the standards document
-gives: the debt is real and rewriting it at once is not a plan. What this
-forbids is *more* of it. A file already over the limit may only shrink; a file
-that is not over it may not cross it.
+It began as a ratchet, for the reason the standards document gives: the debt
+was real -- twenty files, one of them 11,297 lines -- and rewriting it at once
+was not a plan. That work is done, and the baseline is empty, so this is a
+plain limit again: no Rust file under `desktop/` may exceed 600 lines.
+
+The ratchet stays because emptying a baseline is easier than never needing one.
+If a file has to go over -- something generated, something vendored -- record
+it with `--update-baseline` and the entry becomes its ceiling: it may shrink,
+and shrinking has to be re-recorded, but it may never grow.
 """
 
 from __future__ import annotations

@@ -16,6 +16,7 @@ interprocess = "2.4"
 keyring = "4.1.5"
 lemma-runtime-manager = { path = "../local-runtime/manager" }
 lemma-desktop-process = { path = "../process" }
+lemma-private-file = { path = "../private-file" }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 reqwest = { workspace = true }
 serde = { workspace = true }

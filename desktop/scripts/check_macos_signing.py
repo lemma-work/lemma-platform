@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import plistlib
 import subprocess
 
 
@@ -72,6 +73,78 @@ def designated_requirement(output: str) -> str:
     raise ValueError("signature has no designated requirement")
 
 
+# Without this key macOS never asks. It does not deny loudly either: the app
+# simply cannot reach anything on the local network, which for Lemma means its
+# own loopback services -- the backend, the frontend, the auth service. A build
+# missing it is broken on first launch and looks like a hung startup.
+LOCAL_NETWORK_USAGE_KEY = "NSLocalNetworkUsageDescription"
+
+
+def validate_bundle_metadata(app: Path) -> None:
+    """The Info.plist keys a shipped bundle cannot work without.
+
+    Checked here rather than in a workflow because both DMG pipelines call this
+    file and only one of them was checking it. The nightly asked for this key;
+    the release, which is the one that reaches users, did not.
+    """
+    info = app / "Contents/Info.plist"
+    try:
+        with info.open("rb") as handle:
+            payload = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException) as error:
+        raise ValueError(f"{info} could not be read: {error}") from error
+    description = payload.get(LOCAL_NETWORK_USAGE_KEY)
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError(
+            f"{app.name} has no {LOCAL_NETWORK_USAGE_KEY}. macOS will not ask "
+            f"for local network access, and the app cannot reach its own "
+            f"loopback services -- which looks like a startup that never "
+            f"finishes rather than a permission that was never requested"
+        )
+    print(f"verified {LOCAL_NETWORK_USAGE_KEY} is present")  # noqa: T201 -- CLI report
+
+
+VIRTUALIZATION = "com.apple.security.virtualization"
+
+# Where the guest helper lands in the bundle. A resource, not an externalBin,
+# which is why Tauri never re-signs it and why it can hold an entitlement the
+# app does not.
+VZ_HELPER = "Contents/Resources/lemma-vz"
+
+
+def entitlements(binary: Path) -> str:
+    return codesign("-d", "--entitlements", ":-", str(binary))
+
+
+def validate_entitlements(app: Path) -> None:
+    """The virtualization entitlement is on the helper, and only on the helper.
+
+    Read off the shipped bundle rather than off the plists, because the thing
+    that could go wrong is a signing step, not a file. Tauri applies one
+    entitlements file to the app and to every sidecar it signs, so a grant that
+    belongs to one binary reaches four; and it does not sign the resource that
+    actually needs one, so the grant can equally be missing.
+    """
+    if VIRTUALIZATION not in entitlements(app / VZ_HELPER):
+        raise ValueError(
+            f"{VZ_HELPER} is missing {VIRTUALIZATION}: it cannot start a guest, "
+            f"so the macOS runtime will never come up on an installed copy"
+        )
+    # Everything Tauri signs with the app's entitlements file: the bundle and
+    # the three externalBin sidecars. lemma-vz is in HELPERS too, and is the one
+    # thing excluded here -- it is the binary the entitlement belongs to.
+    signed_with_the_app = [".", *(name for name in HELPERS if name != VZ_HELPER)]
+    assert len(signed_with_the_app) == 4, signed_with_the_app
+    for relative in signed_with_the_app:
+        binary = app / relative
+        if VIRTUALIZATION in entitlements(binary):
+            raise ValueError(
+                f"{binary.name} carries {VIRTUALIZATION} and cannot use it. "
+                f"Only Contents/Resources/lemma-vz links Virtualization.framework"
+            )
+    print(f"verified {VIRTUALIZATION} is on lemma-vz alone")  # noqa: T201 -- CLI report
+
+
 def check(
     app: Path,
     *,
@@ -110,6 +183,8 @@ def check(
                 str(binary),
             )
         print(f"verified signing continuity: {identifier}")  # noqa: T201 -- CLI report
+    validate_bundle_metadata(app)
+    validate_entitlements(app)
 
 
 def main() -> None:

@@ -10,6 +10,11 @@ sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
 log_path = pathlib.Path(sys.argv[1])
+# What this agent has forgotten. "forget-session" makes `session/load` fail the
+# way a real provider's does when its rollout file has been pruned or its
+# session deleted from disk -- the case Lemma cannot predict and withholds the
+# conversation's history for.
+MODE = sys.argv[2] if len(sys.argv) > 2 else "remembers"
 
 
 def emit(message):
@@ -37,13 +42,21 @@ for raw_line in sys.stdin:
             {
                 "protocolVersion": 1,
                 "agentCapabilities": {
-                    "loadSession": False,
+                    "loadSession": MODE == "forget-session",
                     "mcpCapabilities": {"http": True, "sse": True},
                     "promptCapabilities": {"image": False, "audio": False},
                 },
                 "authMethods": [],
                 "agentInfo": {"name": "fake-acp", "version": "1.0.0"},
             },
+        )
+    elif method == "session/load" and MODE == "forget-session":
+        emit(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32603, "message": "session not found"},
+            }
         )
     elif method in {"session/new", "session/load"}:
         result(

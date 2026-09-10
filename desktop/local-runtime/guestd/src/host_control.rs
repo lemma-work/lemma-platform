@@ -34,7 +34,32 @@ pub(crate) fn set_realtime_clock(_epoch: u64) -> Result<(), GuestError> {
     ))
 }
 
+/// Whether this guest is a WSL distribution rather than a virtual machine.
+///
+/// `/mnt/wsl` is the tmpfs WSL mounts in every distribution and nothing else
+/// has it, which is what makes it the answer. Shared with
+/// `refuse_unbound_data`, which asks the same question and used to spell it
+/// out separately -- two spellings of "this guest is WSL" is one more than
+/// there should be.
+pub(crate) fn guest_is_wsl() -> bool {
+    Path::new("/mnt/wsl").is_dir()
+}
+
 pub(crate) fn schedule_shutdown() -> Result<Value, GuestError> {
+    if guest_is_wsl() {
+        // There is nothing here to ask. `wsl.conf` sets `systemd=false`
+        // deliberately, so `systemctl poweroff` cannot work -- and a
+        // distribution does not power itself off in any case: the host ends it
+        // with `wsl --terminate`, which is what its own stop path does
+        // immediately after this call.
+        //
+        // Saying so beats failing. The host discards this error, so nothing
+        // broke; what was lost is the answer -- `stop_all_containers` has
+        // already run by the time this is reached, and its count went into an
+        // error nobody reads. On Windows this call could only ever report
+        // failure, however well it had gone.
+        return Ok(json!({"stopping": true, "terminated_by_host": true}));
+    }
     let output = Command::new("/usr/bin/systemctl")
         .args(["--no-block", "poweroff"])
         .stdin(Stdio::null())
@@ -53,9 +78,19 @@ pub(crate) fn schedule_shutdown() -> Result<Value, GuestError> {
 
 impl<E: Engine + 'static> GuestService<E> {
     pub(crate) fn shutdown(&self) -> Result<Value, GuestError> {
-        let stopped_containers = self.stop_all_containers()?;
+        let stopped = self.stop_all_containers()?;
         let mut result = schedule_shutdown()?;
-        result["stopped_containers"] = json!(stopped_containers);
+        result["stopped_containers"] = json!(stopped.total());
+        // Split, because the two classes are given different grace periods and
+        // a stop that ran long is a question about which of them used it. The
+        // total is kept under its old name: the host records it.
+        result["stopped_sandboxes"] = json!(stopped.sandboxes);
+        result["stopped_core"] = json!(stopped.core);
+        // What the guest believes it may spend. The host's request budget has
+        // to exceed it, and the two are compiled into different binaries, so
+        // saying it here is the only way a mismatch shows up in a log rather
+        // than only as a stop that was cut short.
+        result["stop_budget_seconds"] = json!(GUEST_STOP_WORST_CASE_SECONDS);
         Ok(result)
     }
 

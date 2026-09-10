@@ -145,11 +145,17 @@ pub(crate) fn stage_from_manifest(
         total: download_total,
         bytes: true,
     });
+    // Before this one is created, so an install that was killed cannot leave
+    // its expanded runtime on the disk for ever. See `prune_abandoned_staging`:
+    // the retired-release prune skips hidden entries on purpose and can never
+    // do this.
+    let started_at = unix_millis()?;
+    prune_abandoned_staging(install_root, started_at);
     let staging = install_root.join("releases").join(format!(
         ".{}-{}-{}.staging",
         manifest.version,
         std::process::id(),
-        unix_millis()?
+        started_at
     ));
     fs::create_dir_all(&staging)?;
     let install_result: io::Result<()> = (|| {

@@ -9,7 +9,7 @@ use std::sync::mpsc;
 /// the arms that are pure protocol -- authentication, unknown commands, the
 /// stopping gate, the shapes of acks and errors -- can be driven without a
 /// VM, a backend or a tunnel. Those arms had no test at all.
-fn daemon() -> (tempfile::TempDir, std::sync::Arc<Daemon>) {
+pub(super) fn daemon() -> (tempfile::TempDir, std::sync::Arc<Daemon>) {
     let root = tempfile::tempdir().unwrap();
     let daemon = Daemon::new(LocalPaths::new(root.path().join("locald")))
         .expect("a daemon over an empty root");
@@ -201,14 +201,7 @@ fn a_subscriber_that_stopped_reading_is_dropped_rather_than_queued_for_ever() {
 }
 use std::collections::HashMap;
 
-use tempfile::tempdir;
-
-use super::environment::exact_origin_regex;
-use super::{
-    compose_backend_environment, error_diagnostic_source, runtime_operation_error_code,
-    sharing_environment,
-};
-use crate::sharing::SharingMode;
+use super::compose_backend_environment;
 
 #[test]
 fn operator_updates_preserve_private_runtime_endpoints() {
@@ -243,187 +236,6 @@ fn operator_updates_preserve_private_runtime_endpoints() {
         environment["SUPERTOKENS_CORE_URL"],
         "http://192.168.64.37:3567"
     );
-}
-
-#[test]
-fn windows_runtime_errors_have_stable_user_action_codes() {
-    assert_eq!(
-        runtime_operation_error_code(
-            "WSL 2 is required for Lemma's private runtime",
-            "host-operation-failed"
-        ),
-        "wsl-required"
-    );
-    assert_eq!(
-        runtime_operation_error_code(
-            "Windows must restart to finish enabling WSL 2",
-            "host-operation-failed"
-        ),
-        "wsl-reboot-required"
-    );
-    assert_eq!(
-        runtime_operation_error_code(
-            "Windows did not approve or complete WSL 2 setup",
-            "runtime-prepare-failed"
-        ),
-        "wsl-setup-denied"
-    );
-    assert_eq!(
-        runtime_operation_error_code("database failed", "host-operation-failed"),
-        "host-operation-failed"
-    );
-}
-
-/// Anything that says the marker phrase gets the code the reset button
-/// keys on -- however many different detectors end up raising it.
-#[test]
-fn stranded_local_data_is_reported_with_the_code_the_reset_button_uses() {
-    assert_eq!(
-        runtime_operation_error_code(
-            "this installation's secret was replaced, and anything encrypted with the \
-                 previous one can no longer be read; local data must be reset",
-            "host-operation-failed"
-        ),
-        "local-data-incompatible"
-    );
-    // The phrase is the whole contract, so a detector nobody has written
-    // yet gets the same treatment for free.
-    assert_eq!(
-        runtime_operation_error_code(
-            &format!(
-                "the workspace database was created by PostgreSQL 16 and this release \
-                     runs PostgreSQL 18; {}",
-                crate::paths::DATA_RESET_MARKER
-            ),
-            "host-operation-failed"
-        ),
-        "local-data-incompatible"
-    );
-}
-
-/// The marker is checked before the guest is touched.
-///
-/// Reaching `prepare_private_infra` would boot a VM to discover a failure
-/// already known on disk, and the failure it would then report is an opaque
-/// auth error rather than an offer to reset.
-#[test]
-fn a_recorded_data_reset_requirement_survives_until_it_is_cleared() {
-    let root = tempdir().unwrap();
-    assert!(crate::paths::data_reset_reason(root.path()).is_none());
-
-    crate::paths::require_data_reset(root.path(), "the passwords were replaced").unwrap();
-    let reason = crate::paths::data_reset_reason(root.path()).unwrap();
-    assert_eq!(reason, "the passwords were replaced");
-    assert_eq!(
-        runtime_operation_error_code(
-            &format!("{reason}; {}", crate::paths::DATA_RESET_MARKER),
-            "host-operation-failed"
-        ),
-        "local-data-incompatible"
-    );
-
-    crate::paths::clear_data_reset(root.path()).unwrap();
-    assert!(crate::paths::data_reset_reason(root.path()).is_none());
-    // Clearing twice is how a reset that retries behaves; it must not fail.
-    crate::paths::clear_data_reset(root.path()).unwrap();
-}
-
-#[test]
-fn startup_errors_select_the_relevant_diagnostic_log() {
-    let kernel_error = "backend health gate: Linux guest kernel crashed";
-    assert_eq!(
-        error_diagnostic_source(kernel_error),
-        ("infrastructure", "infrastructure")
-    );
-    assert_eq!(
-        runtime_operation_error_code(kernel_error, "host-operation-failed"),
-        "guest-kernel-failed"
-    );
-    assert_eq!(
-        error_diagnostic_source("frontend failed: EADDRINUSE"),
-        ("frontend", "frontend")
-    );
-    assert_eq!(
-        error_diagnostic_source("migrations setup exited"),
-        ("migrations", "migrations")
-    );
-    assert_eq!(
-        error_diagnostic_source("registry DNS lookup failed"),
-        ("infrastructure", "infrastructure")
-    );
-}
-
-#[test]
-fn public_canonical_environment_uses_one_prefixed_secure_origin() {
-    let (backend, frontend) =
-        sharing_environment("https://lemma.example.com/", SharingMode::Public);
-    assert_eq!(backend["API_URL"], "https://lemma.example.com/_lemma/api");
-    // A tunnel serves one origin and no app host, so the deployment must
-    // stop advertising one. Left set, every app's URL pointed at
-    // `<slug>.apps.lemma.localhost` -- which a visitor's browser resolves
-    // against their own machine.
-    assert_eq!(backend["APP_BASE_DOMAIN"], "");
-    assert_eq!(backend["APP_API_VIA_APP_ORIGIN"], "false");
-    assert_eq!(backend["FRONTEND_URL"], "https://lemma.example.com");
-    assert_eq!(backend["SUPERTOKENS_API_GATEWAY_PATH"], "/_lemma/api/st");
-    assert_eq!(backend["SESSION_COOKIE_SECURE"], "true");
-    assert_eq!(backend["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false");
-    assert_eq!(
-        backend["CORS_ORIGIN_REGEX"],
-        "^https://lemma\\.example\\.com$"
-    );
-    assert_eq!(
-        frontend["NEXT_PUBLIC_API_URL"],
-        "https://lemma.example.com/_lemma/api"
-    );
-    assert_eq!(
-        frontend["NEXT_PUBLIC_AUTH_URL"],
-        "https://lemma.example.com/auth"
-    );
-    assert_eq!(
-        frontend["NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED"],
-        "false"
-    );
-}
-
-#[test]
-fn lan_canonical_environment_keeps_host_only_nonsecure_cookies() {
-    let (backend, frontend) =
-        sharing_environment("http://192.168.1.20:51234", SharingMode::LocalNetwork);
-    assert_eq!(backend["SESSION_COOKIE_SECURE"], "false");
-    assert_eq!(backend["SESSION_COOKIE_DOMAIN"], "");
-    assert_eq!(frontend["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"], "");
-    assert_eq!(
-        exact_origin_regex("http://192.168.1.20:51234"),
-        "^http://192\\.168\\.1\\.20:51234$"
-    );
-}
-
-/// Exposing an installation raises its defences, in every mode.
-///
-/// The host pack turns every abuse control off, which is correct while only
-/// this Mac can reach the stack. This overlay is what runs when that stops
-/// being true, and it used to rewrite URLs and nothing else -- so a
-/// workspace on the LAN or the open internet had no sign-in rate limit, no
-/// ceiling on account creation, no ALTCHA, and answered unhandled errors
-/// with a source-annotated traceback.
-#[test]
-fn sharing_raises_the_abuse_controls_the_local_pack_turns_off() {
-    for (origin, mode) in [
-        ("https://lemma.example.com", SharingMode::Public),
-        ("http://192.168.1.20:51234", SharingMode::LocalNetwork),
-    ] {
-        let (backend, _) = sharing_environment(origin, mode);
-        assert_eq!(
-            backend["AUTH_ABUSE_PROTECTION_ENABLED"], "true",
-            "{origin} is reachable by someone other than this Mac"
-        );
-        assert_eq!(backend["AUTH_ALTCHA_ENABLED"], "true", "{origin}");
-        assert_eq!(
-            backend["DEBUG"], "false",
-            "{origin} must not answer strangers with tracebacks"
-        );
-    }
 }
 
 /// The one arm that erases somebody's work asks first, and had no test.
@@ -594,5 +406,41 @@ fn a_supervisor_is_spawned_under_the_lock_that_records_it() {
         !body.contains("self.supervisor_running()"),
         "checking through a helper gives the lock back between the check and \
          the spawn, which is the race itself:\n{body}"
+    );
+}
+
+/// The compatibility supervisor is stopped as a tree, and can be.
+///
+/// It is `uv run --project lemma-stack lemma-stack supervise` in a checkout --
+/// uv, then Python, then whatever the stack started. `child.kill()` reached the
+/// leader and left the rest running with nothing to reap them, which is the
+/// same defect the Agent Host had and fixed.
+///
+/// The two halves have to move together, which is why one test asserts both. A
+/// tree teardown without its own process group is worse than the bug: on unix
+/// it signals the negative PID, and without `process_group(0)` that is whatever
+/// group locald itself is in.
+///
+/// Asserted on the source because the alternative is spawning a real
+/// supervisor, which needs a checkout, uv, and a container runtime.
+#[test]
+fn the_supervisor_is_spawned_into_its_own_group_and_stopped_as_a_tree() {
+    let supervisor_source = include_str!("supervisor.rs").replace("\r\n", "\n");
+    let spawn = function_body(&supervisor_source, "fn ensure_supervisor(");
+    assert!(
+        spawn.contains("command.process_group(0)"),
+        "the supervisor needs its own process group, or there is nothing to \
+         signal but the leader:\n{spawn}"
+    );
+
+    let stack_source = include_str!("stack_ops.rs").replace("\r\n", "\n");
+    let stop = function_body(&stack_source, "fn start_daemon_shutdown(");
+    assert!(
+        stop.contains("terminate_process_tree(&mut supervisor.child)"),
+        "stopping the supervisor has to take the tree with it:\n{stop}"
+    );
+    assert!(
+        !stop.contains("supervisor.child.kill()"),
+        "killing the leader is what orphaned uv's children:\n{stop}"
     );
 }

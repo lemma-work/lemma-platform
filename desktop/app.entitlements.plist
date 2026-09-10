@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Lemma.app and the three sidecars Tauri signs with it: lemma-locald,
+     lemma-agent-host and lemma-runtime.
+
+     Empty on purpose. Tauri 2 has one entitlements setting per build and
+     applies it to every target it signs (the frameworks, each externalBin,
+     then the bundle), so anything written here is granted to all four. None of
+     them can use com.apple.security.virtualization: only lemma-vz links
+     Virtualization.framework, and it carries the entitlement in its own
+     signature. See lemma-vz.entitlements.plist.
+
+     Nothing else is needed either. The app is not sandboxed, so network access
+     needs no entitlement; WKWebView's JIT runs in the system's own WebContent
+     process, under Apple's signature and not this one; and every executable
+     Lemma starts (python, node, the guest helper) is a separate process
+     evaluated on its own signature.
+
+     A grant added here is a grant to the process that hosts a WebView. Put it
+     in the signature of the thing that needs it instead.
+     scripts/check_entitlements.py enforces exactly that. -->
+<plist version="1.0">
+<dict/>
+</plist>

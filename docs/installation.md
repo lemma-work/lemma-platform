@@ -323,12 +323,110 @@ does not delete the private data disk. If a child exits during startup, Lemma
 fails immediately with its status and recent log excerpt instead of waiting
 for the health timeout.
 
+### Anonymous install health
+
+**Local settings → Diagnostics** carries one switch: *Send anonymous install
+health*. It is on in official builds and off in every build without an
+ingestion key compiled in, which includes anything you build yourself.
+
+What it sends is whether the app started and whether its runtime installed:
+`desktop.launched`, `desktop.runtime_install`, `desktop.runtime_ready`,
+`desktop.mode_selected`, `desktop.quit`. Each carries the operating system, the
+architecture, the app version, and — for the two that measure something — a
+*bucket* rather than a number, so `0-5s` rather than `3,214 ms`. An install
+failure carries which step failed and one word for why, from a fixed list.
+
+It cannot express anything else. There is no field for a pod, an organization,
+a user, a file name, a hostname, a path, or an error message, and the event
+type is a closed Rust enum rather than a map: an event this app cannot name is
+an event it does not send.
+
+It goes to `https://eu.i.posthog.com`, identified by a random id minted once
+for this installation and stored beside it. The id is random — never derived
+from your hostname, MAC address or machine id — and **Start over** takes it
+with it, so a reset installation is a new one.
+
+Three switches turn it off, and any one is enough:
+
+```bash
+LEMMA_TELEMETRY=0            # this launch
+```
+
+the toggle in Local settings, which is remembered and is never overridden by an
+upgrade; and building without an ingestion key, which is the default for a
+local build.
+
 ## Updates, data, and uninstall
 
 Local Lemma stores application data and runs Lemma services on your computer.
 Configured LLM providers, connectors, and online features can send requested
 prompts, tool results, and connector payloads to external services. Local mode
 does not mean offline operation.
+
+### Checking for updates
+
+Opening **Local settings**, and pressing **Check for updates** or **Install
+update** there, fetches one file:
+
+```
+https://github.com/lemma-work/lemma-platform/releases/latest/download/latest.json
+```
+
+A nightly build reads `.../releases/download/desktop-nightly/latest.json`
+instead — a tag whose contents are rewritten in place, so the address stays
+constant.
+
+Nothing else asks. There is no background poll and no check on launch, so an
+installation whose settings are never opened never contacts GitHub about
+updates at all.
+
+The address carries nothing about your machine. Tauri's updater can interpolate
+the installed version, target and architecture into an endpoint URL; Lemma's
+endpoints contain no such placeholders, so the request is a plain GET for a
+fixed path. GitHub sees what it sees for any download: your IP address, the
+time, and the `User-Agent` the updater sends. The install id from
+[Anonymous install health](#anonymous-install-health) is not part of it, and
+turning telemetry off does not affect this request — they are unrelated paths.
+
+If the update is installed, the payload and its signature are downloaded from
+the same release, and the signature is checked against a public key built into
+the app before anything is replaced.
+
+### Rotating the update signing key
+
+An installed app trusts exactly one public key: the one it was built with, in
+`desktop/tauri.conf.json`. It has no way to learn a new one except by being
+replaced, and it will only install a replacement signed by the key it already
+trusts. So the order is fixed, and the wrong order strands every installed copy
+permanently.
+
+1. Generate the new pair with `tauri signer generate`. Keep the old private key
+   until step 3 has shipped and been installed — it is the only thing that can
+   still reach the installed base.
+2. Commit the **new public key** to `desktop/tauri.conf.json`, but leave
+   `TAURI_UPDATER_PRIVATE_KEY` set to the **old private key**. Cut a release.
+   That release is signed with the old key, so installed apps accept it, and it
+   carries the new public key forward.
+3. Wait for that release to be installed. Until an app has taken it, it still
+   verifies with the old key.
+4. Replace `TAURI_UPDATER_PRIVATE_KEY` with the new private key. From the next
+   release on, the pair agrees again.
+
+`desktop/scripts/check_updater_key.py` runs in both release workflows and
+compares the key that signed the payload with the key committed in
+`tauri.conf.json`. It is deliberately a comparison of minisign key ids, not of
+key material: the private key is never decrypted and never leaves the runner.
+
+Between steps 2 and 4 the two disagree on purpose, and the check would
+otherwise refuse the release. Set `LEMMA_UPDATER_KEY_ROTATION=1` on the step 2
+release, and only on it: with that set the check *requires* the mismatch, so a
+flag left switched on afterwards fails the next release rather than silently
+disabling the check for good. Say which key signed the build in the release
+notes.
+
+A lost private key is not recoverable through this path. Installed apps can only
+be moved to a new key by a build signed with the old one, so the remaining route
+is a fresh download by hand.
 
 Settings refreshes preserve unsaved drafts. Save applies the selected section;
 Discard reloads that section from the saved configuration. If another save

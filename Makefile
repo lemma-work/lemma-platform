@@ -78,6 +78,10 @@ SCENARIOS_DIR := tests/scenarios
 # Desktop is one cargo workspace: the app shell, the durable daemon, the Agent
 # Host, and the runtime helpers share a lockfile and a target directory. That
 # is why these point at `desktop` and not at five separate crates.
+# The Node this repository is built with. Read from .nvmrc rather than written
+# down again: two "install Node.js 22" messages outlived .nvmrc moving to 24,
+# and nothing objected, because a message is not a check.
+NODE_VERSION  := $(shell tr -d '[:space:]' < .nvmrc)
 DESKTOP_DOWNLOAD_DIR := $(DESKTOP_DIR)/runtime/download
 DESKTOP_BUNDLED_DIR  := $(DESKTOP_DIR)/runtime/bundled
 # Pinned in one file, read by the Makefile, dev-local.sh, desktop.ps1, and every
@@ -936,7 +940,7 @@ desktop-dev:
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@command -v node >/dev/null 2>&1 || \
-		(echo "  ✗ node not found — install Node.js 22 from https://nodejs.org"; exit 1)
+		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
 	@$(DESKTOP_DIR)/scripts/dev-local.sh --source $(if $(filter 1,$(CONTROL)),--control,)
 
 # Four binaries from one cargo invocation. Asking for them separately would
@@ -1032,10 +1036,12 @@ desktop-host-pack-check:
 
 # Compile the Windows code paths from a Mac, before pushing.
 #
-# The `desktop-windows` CI job is not in the desktop path filter, so its result
-# arrives a push later -- and it has now caught four separate things one round
-# at a time: unix-only test helpers, a `Path` import behind the wrong cfg, CRLF
-# breaking source searches, and tests that spawn `/bin/sh`.
+# The `desktop-windows` CI job has caught four separate things one round at a
+# time: unix-only test helpers, a `Path` import behind the wrong cfg, CRLF
+# breaking source searches, and tests that spawn `/bin/sh`. It is in the desktop
+# path filter now, so it runs on the same push rather than a later one -- but a
+# Windows runner is the slowest lane in CI, and finding out here costs a minute
+# instead of the whole job.
 #
 # This catches the *compile* half of that class locally. `lemma-agent-host` is
 # left out on purpose: it pulls `libsqlite3-sys`, whose build script needs a
@@ -1062,15 +1068,38 @@ desktop-host-pack-check:
 # Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
 # They need release certificates, so they cannot run on a contributor's machine
 # -- `make desktop-dmg` is the local approximation.
-desktop-check: desktop-fmt desktop-concepts-check desktop-file-size desktop-lint desktop-test desktop-check-windows desktop-test-browser
+desktop-check: desktop-fmt desktop-concepts-check desktop-file-size desktop-image-pins desktop-entrypoint-parity desktop-entitlements desktop-lint desktop-test desktop-check-windows desktop-test-browser
 	@echo ""
-	@echo "  ✓ desktop: fmt, concepts, file size, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
+	@echo "  ✓ desktop: fmt, concepts, file size, image pins, entrypoint parity, entitlements, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
 
 # DES-09 reaches the desktop crates. `check_architecture.py` reads Python only,
 # which is how main.rs got to 11,297 lines with nothing objecting.
 desktop-file-size:
 	@echo "→ Rust file size (DES-09)…"
 	@python3 desktop/scripts/check_file_size.py
+
+# A moving base tag makes the same commit build a different guest. Checked here
+# rather than only in the guest-image CI job, which the desktop path filter
+# skips whenever a change did not touch that directory.
+.PHONY: desktop-image-pins
+desktop-image-pins:
+	@echo "→ Guest image base pins…"
+	@python3 desktop/scripts/check_image_pins.py
+
+# Windows has no `make`, so desktop.ps1 carries the same verbs -- and it said so
+# while four cross-platform gates were missing from it.
+.PHONY: desktop-entrypoint-parity
+desktop-entrypoint-parity:
+	@echo "→ Makefile and desktop.ps1 offer the same verbs…"
+	@python3 desktop/scripts/check_entrypoint_parity.py
+
+# The signing arrangement is invisible in the diff that would break it: Tauri
+# applies one entitlements file to the app and every sidecar it signs, and the
+# one binary that needs an entitlement is the one Tauri does not sign at all.
+.PHONY: desktop-entitlements
+desktop-entitlements:
+	@echo "→ Entitlements (least privilege per binary)…"
+	@python3 desktop/scripts/check_entitlements.py
 
 .PHONY: desktop-test-browser
 desktop-test-browser:
@@ -1082,10 +1111,13 @@ desktop-check-windows:
 	@rustup target list --installed | grep -q x86_64-pc-windows-msvc || ( \
 		echo "→ Adding the Windows target…"; \
 		rustup target add x86_64-pc-windows-msvc)
-	@echo "→ Windows compile check (locald, runtime manager, bridge, process)…"
+	@echo "→ Windows compile check (locald, runtime manager, bridge, process, job object)…"
+	# lemma-agent-host is deliberately absent: it depends on libsqlite3-sys,
+	# which needs a Windows C toolchain to cross-compile. CI's windows-latest
+	# job builds and tests it, and that is the only place it can be checked.
 	@cd $(DESKTOP_DIR) && cargo clippy \
 		-p lemma-locald -p lemma-runtime-manager \
-		-p lemma-runtime -p lemma-desktop-process \
+		-p lemma-runtime -p lemma-desktop-process -p lemma-job-object \
 		--target x86_64-pc-windows-msvc --all-targets --locked -- -D warnings
 	@echo "  ✓ the Windows code paths compile and lint"
 
@@ -1180,7 +1212,7 @@ desktop-dmg:
 	@command -v swift >/dev/null 2>&1 || \
 		(echo "  ✗ swift not found — install Xcode or the Command Line Tools"; exit 1)
 	@command -v node >/dev/null 2>&1 || \
-		(echo "  ✗ node not found — install Node.js 22 from https://nodejs.org"; exit 1)
+		(echo "  ✗ node not found — install Node.js $(NODE_VERSION) from https://nodejs.org"; exit 1)
 	@command -v jq >/dev/null 2>&1 || (echo "  ✗ jq not found — brew install jq"; exit 1)
 	@test -d $(DESKTOP_DOWNLOAD_DIR) || ( \
 		echo "  ✗ no runtime artifacts in $(DESKTOP_DOWNLOAD_DIR)"; \
@@ -1203,7 +1235,7 @@ desktop-dmg:
 	@# as CI does it.
 	@echo "→ Re-sealing the virtualization helper…"
 	@codesign --force --options runtime \
-		--entitlements $(DESKTOP_DIR)/entitlements.plist \
+		--entitlements $(DESKTOP_DIR)/local-runtime/macos-vz/lemma-vz.entitlements.plist \
 		--sign "$${APPLE_SIGNING_IDENTITY:--}" \
 		$(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE) 2>/dev/null
 	@codesign --verify --strict $(DESKTOP_DIR)/binaries/lemma-vz-$(MACOS_TRIPLE)
@@ -1396,6 +1428,14 @@ _desktop-verify-dist-app:
 	test -n "$$(plutil -extract NSLocalNetworkUsageDescription raw -o - "$$app/Contents/Info.plist")"; \
 	codesign -d --entitlements :- "$$app/Contents/Resources/lemma-vz" 2>&1 \
 		| grep -qF "com.apple.security.virtualization"; \
+	for over in "" MacOS/lemma-locald MacOS/lemma-agent-host MacOS/lemma-runtime; do \
+		target="$$app"; test -z "$$over" || target="$$app/Contents/$$over"; \
+		if codesign -d --entitlements :- "$$target" 2>&1 \
+			| grep -qF "com.apple.security.virtualization"; then \
+			echo "  ✗ $$target carries com.apple.security.virtualization and cannot use it"; \
+			exit 1; \
+		fi; \
+	done; \
 	for helper in locald agent-host runtime vz; do \
 		location="MacOS"; test "$$helper" != vz || location="Resources"; \
 		codesign -dvvv "$$app/Contents/$$location/lemma-$$helper" 2>&1 \
@@ -1925,6 +1965,8 @@ quality:
 	@$(MAKE) --no-print-directory script-portability-check
 	@echo "→ CI aggregators + job timeouts…"
 	@cd $(BACKEND_DIR) && uv run python ../scripts/check_ci_aggregators.py
+	@echo "→ Both DMG pipelines verify the same things…"
+	@uv run --no-project --with pyyaml python scripts/check_release_parity.py
 	@echo "→ Test census (no suite has quietly stopped running)…"
 	@python3 scripts/check_pytest_census.py
 	@echo "→ E2E shard layout…"

@@ -14,7 +14,6 @@ mod protocol;
 mod run_contract;
 
 use super::*;
-use crate::capacity::*;
 use crate::protocol::*;
 use crate::service::*;
 
@@ -82,6 +81,20 @@ pub(super) struct GatedPullEngine {
     started: std::sync::mpsc::Sender<String>,
     present: Mutex<std::collections::HashSet<String>>,
     invalid: Mutex<std::collections::HashSet<String>>,
+}
+
+impl GatedPullEngine {
+    pub(super) fn new(
+        release: std::sync::mpsc::Receiver<bool>,
+        started: std::sync::mpsc::Sender<String>,
+    ) -> Self {
+        Self {
+            release: Mutex::new(release),
+            started,
+            present: Mutex::new(std::collections::HashSet::new()),
+            invalid: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
 }
 
 impl Engine for GatedPullEngine {

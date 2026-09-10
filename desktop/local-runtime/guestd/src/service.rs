@@ -25,6 +25,22 @@ pub struct GuestService<E: Engine> {
     pub(crate) image_warmups: Arc<Mutex<HashMap<SandboxImageSet, ImageWarmupState>>>,
     /// Held for the duration of every mutating operation. See `handle`.
     pub(crate) mutations: Arc<Mutex<()>>,
+    /// Whether this process exits as soon as it has answered.
+    ///
+    /// True for `lemma-guestd request`, which is how Windows reaches the
+    /// guest: `wsl.exe --exec` starts one guestd per request and it ends with
+    /// the reply. False for `serve-vsock`, which is resident and serves every
+    /// request on the machine over one channel.
+    ///
+    /// It decides who owns a long download. A resident guest hands the caller
+    /// a retryable answer and keeps fetching on a worker thread, so its single
+    /// control channel stays free for health and for every other sandbox. A
+    /// per-request guest has no thread that can outlive the reply -- `main`
+    /// returning ends them all -- so the same code left `nerdctl` orphaned,
+    /// recorded neither success nor failure anywhere a later request could
+    /// read, and answered "still downloading" for ever however the transfer
+    /// had actually gone.
+    pub(crate) per_request_process: bool,
 }
 
 impl<E: Engine> Clone for GuestService<E> {
@@ -39,6 +55,7 @@ impl<E: Engine> Clone for GuestService<E> {
             kernel_taint_path: self.kernel_taint_path.clone(),
             mutations: Arc::clone(&self.mutations),
             image_warmups: Arc::clone(&self.image_warmups),
+            per_request_process: self.per_request_process,
         }
     }
 }
@@ -114,7 +131,17 @@ impl<E: Engine + 'static> GuestService<E> {
             kernel_taint_path: None,
             image_warmups: Arc::new(Mutex::new(HashMap::new())),
             mutations: Arc::new(Mutex::new(())),
+            per_request_process: false,
         })
+    }
+
+    /// Say that this process ends with the request it is answering.
+    ///
+    /// Called by the `request` subcommand, not inferred from the platform:
+    /// what matters is the process model, and the binary is the only thing
+    /// that knows which one it was started in.
+    pub fn set_per_request_process(&mut self) {
+        self.per_request_process = true;
     }
 
     /// The address the *host* can reach this guest on, if it has one.

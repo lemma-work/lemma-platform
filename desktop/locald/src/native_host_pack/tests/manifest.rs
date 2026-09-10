@@ -222,3 +222,127 @@ fn managed_infrastructure_images_must_be_digest_pinned() {
     .unwrap_err();
     assert!(error.to_string().contains("Redis image must be pinned"));
 }
+
+/// Every setting the local pack switches off is a decision somebody made.
+///
+/// The pack turns abuse controls off because only this Mac can reach the
+/// installation, and `sharing_environment` is what runs when that stops being
+/// true. That overlay used to rewrite URLs and nothing else; three controls
+/// were added to it, and `DESKTOP_AUTH_CREATE_LIMIT` was missed -- so a shared
+/// installation had an unbounded desktop-auth-handoff endpoint, and the miss
+/// was invisible because nothing compared the two lists.
+///
+/// This compares them. Anything the pack disables must be either restored when
+/// the installation is shared, or recorded below as deliberately left off. A
+/// new `AUTH_..._ENABLED=false` or `..._LIMIT=0` added to the pack fails here
+/// until somebody says which it is.
+#[test]
+fn every_control_the_pack_switches_off_is_restored_or_recorded() {
+    /// Off whether the installation is shared or not, each for its own reason.
+    ///
+    /// None of these is an oversight, and the reason is part of the entry
+    /// because the reason is the whole content of the decision. The auth ones
+    /// depend on SMTP or on a public URL that a local install does not have, so
+    /// switching them on when the address becomes reachable would lock the
+    /// owner out of their own account rather than protect it. The last two are
+    /// features, not controls: they cost resources and reaching the address
+    /// does not change whether somebody wanted them.
+    const OFF_BY_DESIGN: &[(&str, &str)] = &[
+        (
+            "AUTH_EMAIL_VERIFICATION_REQUIRED",
+            "no SMTP: mail is written to a directory",
+        ),
+        (
+            "AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED",
+            "no SMTP to check against",
+        ),
+        (
+            "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED",
+            "no SMTP: the address is the owner's own",
+        ),
+        (
+            "AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED",
+            "needs Lemma's global number",
+        ),
+        (
+            "LOCAL_KREUZBERG_ENABLED",
+            "OCR document processing: opt-in, and heavy",
+        ),
+        (
+            "OBSERVABILITY_ENABLED",
+            "traces and metrics nobody is collecting locally",
+        ),
+    ];
+
+    let root = tempdir().unwrap();
+    let pack = root.path().join("pack");
+    fs::create_dir_all(&pack).unwrap();
+    fixture(&pack);
+    let paths = LocalPaths::new(root.path().join("locald"));
+    paths.ensure().unwrap();
+    let output = prepare(
+        &paths,
+        &pack,
+        ManagedManifestMaterial {
+            postgres_password: "a".repeat(64),
+            redis_password: "b".repeat(64),
+            bridge_executable: PathBuf::from("/signed/lemma-runtime"),
+        },
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let manifest: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+    let packed = manifest["services"][0]["env"].as_object().unwrap();
+
+    let (shared, _) = crate::daemon::sharing_environment(
+        "https://lemma.example.com",
+        crate::sharing::SharingMode::Public,
+    );
+    let recorded: Vec<&str> = OFF_BY_DESIGN.iter().map(|(key, _)| *key).collect();
+
+    // What "switched off" looks like in these files: a disabled flag, or a cap
+    // of zero, which the backend documents as no cap at all.
+    let switched_off = |key: &str, value: &str| {
+        (value == "false" && key.ends_with("_ENABLED"))
+            || (value == "false" && key.contains("_REQUIRED"))
+            || (value == "0" && key.contains("LIMIT"))
+    };
+
+    let mut unclassified = Vec::new();
+    for (key, value) in packed {
+        let value = value.as_str().unwrap_or_default();
+        if !switched_off(key, value) || recorded.contains(&key.as_str()) {
+            continue;
+        }
+        // Naming the control is not restoring it. `contains_key` alone accepted
+        // an overlay that carried the key forward still disabled -- so an
+        // overlay setting AUTH_ALTCHA_ENABLED=false would have satisfied the
+        // gate whose whole purpose is to require it be switched back on.
+        if shared
+            .get(key.as_str())
+            .is_some_and(|shared_value| !switched_off(key, shared_value))
+        {
+            continue;
+        }
+        unclassified.push(format!("{key}={value}"));
+    }
+    unclassified.sort();
+    assert!(
+        unclassified.is_empty(),
+        "the local pack switches these off and nothing says what happens when \
+         the installation is shared. Either add them to `sharing_environment`, \
+         or record them in OFF_BY_DESIGN with the reason:\n  {}",
+        unclassified.join("\n  "),
+    );
+
+    // And the list stays honest: something recorded as deliberately off has to
+    // actually be off in the pack, or it is describing a decision nobody made.
+    for (key, reason) in OFF_BY_DESIGN {
+        assert_eq!(
+            packed.get(*key).and_then(Value::as_str),
+            Some("false"),
+            "{key} is recorded as deliberately off ({reason}) and the pack does \
+             not switch it off",
+        );
+    }
+}
