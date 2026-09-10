@@ -18,7 +18,13 @@ from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.domain.sandbox import SandboxKind
 
 WORKSPACE_RUNTIME_PORT = 8080
+#: The agent-browser dashboard. Serves `display_resource(BROWSER)`, which is a
+#: person following a signed link to watch — no input path, by its own design.
 WORKSPACE_BROWSER_PORT = 4848
+#: The browser relay: the backend's own door to the sandbox's browser, and the
+#: one channel that carries input. Separate from the dashboard because they
+#: answer to different callers with different credentials.
+WORKSPACE_BROWSER_RELAY_PORT = 4850
 FUNCTION_RUNTIME_PORT = 8090
 
 
@@ -66,7 +72,11 @@ def workspace_profile(*, image: str | None = None) -> SandboxProfile:
         image=resolved_image,
         kind=SandboxKind.WORKSPACE,
         runtime_port=WORKSPACE_RUNTIME_PORT,
-        published_ports=(WORKSPACE_RUNTIME_PORT, WORKSPACE_BROWSER_PORT),
+        published_ports=(
+            WORKSPACE_RUNTIME_PORT,
+            WORKSPACE_BROWSER_PORT,
+            WORKSPACE_BROWSER_RELAY_PORT,
+        ),
         working_dir="/workspace",
     )
 

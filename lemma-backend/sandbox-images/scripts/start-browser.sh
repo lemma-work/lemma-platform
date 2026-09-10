@@ -54,6 +54,11 @@ if [ ! -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]; then
   sleep 0.4
 fi
 
+# The relay is what the backend reaches; the dashboard is what a person could
+# reach directly if a fabric published its port. Both are started here, and only
+# the relay is ever addressed from outside.
+start-browser-relay || true
+
 agent-browser dashboard start --port "$DASHBOARD_INTERNAL_PORT" >/tmp/agent-browser-dashboard.log 2>&1 || true
 if ! pgrep -f "socat.*TCP-LISTEN:${DASHBOARD_PORT}" >/dev/null 2>&1; then
   nohup socat TCP-LISTEN:"$DASHBOARD_PORT",fork,reuseaddr,bind=0.0.0.0 \
