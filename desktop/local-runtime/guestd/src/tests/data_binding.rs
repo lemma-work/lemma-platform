@@ -78,13 +78,25 @@ fn a_guest_whose_data_is_not_bound_refuses_to_write() {
         .find("fn refuse_unbound_data")
         .expect("the guard exists")..];
     let guard_body = &guard_body[..guard_body.find("\n}\n").expect("it ends")];
+    // Through `guest_is_wsl`, which is where that question is answered now --
+    // the shutdown path asks it too, and two spellings of "this guest is WSL"
+    // is one more than there should be.
     assert!(
-        guard_body.contains("Path::new(\"/mnt/wsl\").is_dir()"),
-        "the platform check has to be /mnt/wsl, not the share:\n{guard_body}"
+        guard_body.contains("guest_is_wsl()"),
+        "the platform check has to be the shared one:\n{guard_body}"
+    );
+    let answer = &source[source
+        .find("pub(crate) fn guest_is_wsl")
+        .expect("the shared check exists")..];
+    let answer = &answer[..answer.find("\n}\n").expect("it ends")];
+    assert!(
+        answer.contains("Path::new(\"/mnt/wsl\").is_dir()"),
+        "and it has to be /mnt/wsl, not the share:\n{answer}"
     );
     assert!(
-        !guard_body.contains("Path::new(\"/mnt/wsl/lemma-data\")"),
-        "an absent share is the failure, not a reason to skip:\n{guard_body}"
+        !answer.contains("lemma-data")
+            && !guard_body.contains("Path::new(\"/mnt/wsl/lemma-data\")"),
+        "an absent share is the failure, not a reason to skip",
     );
 
     // The guard is only worth having if it runs before the work, so this

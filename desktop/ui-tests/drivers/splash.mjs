@@ -10,6 +10,30 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
+// What the app itself serves, so the harness cannot pass on an asset the app
+// would refuse or refuse one the app serves. Tauri derives the type from the
+// extension (`tauri-utils::mime_type`), and `.mjs` is `text/javascript` there.
+const CONTENT_TYPES = {
+  html: 'text/html',
+  js: 'text/javascript',
+  mjs: 'text/javascript',
+  css: 'text/css',
+  json: 'application/json',
+  woff2: 'font/woff2',
+};
+
+/** The extension of `name`, refusing one nothing has a type for. */
+function extension(name) {
+  const found = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : '';
+  if (!Object.hasOwn(CONTENT_TYPES, found)) {
+    throw new Error(
+      `no content type for .${found}: add it to CONTENT_TYPES, and check the `
+      + `app serves it too`,
+    );
+  }
+  return found;
+}
+
 export const DEFAULT_STATE = {
   mode: 'undecided',
   phaseKey: 'boot',
@@ -52,9 +76,18 @@ export async function launchSplash(browser, t, {
     const name = new URL(route.request().url()).pathname.slice(1);
     const file = new URL(name, assets);
     if (!file.href.startsWith(assets.href)) return route.abort();
-    const contentType = name.endsWith('.html') ? 'text/html'
-      : name.endsWith('.js') ? 'text/javascript'
-        : name.endsWith('.json') ? 'application/json' : 'application/octet-stream';
+    let contentType;
+    try {
+      contentType = CONTENT_TYPES[extension(name)];
+    } catch (error) {
+      // Louder than serving it as bytes. A module or a stylesheet delivered as
+      // application/octet-stream is *refused* by the browser, and the page then
+      // fails in whatever way the missing file happens to cause -- for a module
+      // the whole importing script never runs, which arrives as every assertion
+      // timing out and nothing saying why. This is how `screen-state.mjs` was
+      // found, thirty seconds at a time.
+      throw new Error(`${error.message} (requested by the page under test)`);
+    }
     try {
       await route.fulfill({ body: await readFile(file), contentType });
     } catch {

@@ -176,6 +176,13 @@ fn a_download_already_under_way_is_joined_rather_than_started_again() {
     );
 
     drop(held);
+    // Immediately, with nothing in between. Releasing a `flock` is closing a
+    // descriptor, and the kernel does not make that visible to the next attempt
+    // instantly -- measured at 489 microseconds, under the contention of a
+    // parallel test run. `claim_pull` allows for it; without that this line
+    // fails roughly once in eight runs at `--test-threads=8`, and a guest that
+    // had just finished a download would tell the next caller it was still
+    // going.
     service.pull_image(image).expect("the claim was released");
     assert_eq!(service.engine.commands.lock().unwrap()[0][0], "pull");
 }
