@@ -1068,15 +1068,30 @@ desktop-host-pack-check:
 # Not covered here, deliberately: the DMG/NSIS bundle and codesigning steps.
 # They need release certificates, so they cannot run on a contributor's machine
 # -- `make desktop-dmg` is the local approximation.
-desktop-check: desktop-fmt desktop-concepts-check desktop-file-size desktop-entitlements desktop-lint desktop-test desktop-check-windows desktop-test-browser
+desktop-check: desktop-fmt desktop-concepts-check desktop-file-size desktop-image-pins desktop-entrypoint-parity desktop-entitlements desktop-lint desktop-test desktop-check-windows desktop-test-browser
 	@echo ""
-	@echo "  ✓ desktop: fmt, concepts, file size, entitlements, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
+	@echo "  ✓ desktop: fmt, concepts, file size, image pins, entrypoint parity, entitlements, clippy, Rust and browser tests, and the locald/runtime-manager Windows paths"
 
 # DES-09 reaches the desktop crates. `check_architecture.py` reads Python only,
 # which is how main.rs got to 11,297 lines with nothing objecting.
 desktop-file-size:
 	@echo "→ Rust file size (DES-09)…"
 	@python3 desktop/scripts/check_file_size.py
+
+# A moving base tag makes the same commit build a different guest. Checked here
+# rather than only in the guest-image CI job, which the desktop path filter
+# skips whenever a change did not touch that directory.
+.PHONY: desktop-image-pins
+desktop-image-pins:
+	@echo "→ Guest image base pins…"
+	@python3 desktop/scripts/check_image_pins.py
+
+# Windows has no `make`, so desktop.ps1 carries the same verbs -- and it said so
+# while four cross-platform gates were missing from it.
+.PHONY: desktop-entrypoint-parity
+desktop-entrypoint-parity:
+	@echo "→ Makefile and desktop.ps1 offer the same verbs…"
+	@python3 desktop/scripts/check_entrypoint_parity.py
 
 # The signing arrangement is invisible in the diff that would break it: Tauri
 # applies one entitlements file to the app and every sidecar it signs, and the

@@ -26,9 +26,28 @@ impl GuestTransport {
     }
 }
 
+/// The guest's own worst case for a stop, restated here.
+///
+/// `stop_all_containers` gives a sandbox one second and a data service fifteen,
+/// and `nerdctl stop` works through its arguments one at a time -- so with the
+/// sandbox ceiling at sixteen the guest can legitimately spend
+/// 30 x 1 + 3 x 15 = 75 seconds. The budget below has to exceed that.
+///
+/// It was eight seconds. Whichever container was still stopping when that
+/// expired had the guest terminated underneath it, and the container most
+/// likely to still be stopping is the one that takes longest, which is the
+/// database. `guestd::GUEST_STOP_WORST_CASE_SECONDS` is the same number on the
+/// other side; the two are compiled into different binaries, so this comment is
+/// the link and the test below is the check.
+pub(crate) const GUEST_STOP_WORST_CASE_SECONDS: u64 = 75;
+
 pub(crate) fn guest_request_budget(operation: &str, transport: GuestTransport) -> Duration {
     match operation {
-        "system.shutdown" => Duration::from_secs(8),
+        // A backstop against a hang, not a target. A stop on an ordinary
+        // installation is a second or two: nothing waits out this budget
+        // unless something is genuinely stuck, and cutting it short is how a
+        // busy database gets killed mid-checkpoint.
+        "system.shutdown" => Duration::from_secs(GUEST_STOP_WORST_CASE_SECONDS + 15),
         "health" | "core.sandbox_images_status" => Duration::from_secs(5),
         // Pulling images is the one operation whose length is set by the
         // user's connection rather than by the guest. A first install fetches
