@@ -3,10 +3,10 @@
 use super::{
     AdapterManifest, AdapterSpec, Arc, BUILTIN_MANIFEST, Digest, HarnessSnapshot, HashMap, Mutex,
     Path, PathBuf, ResolvedAdapter, Sha256, TRANSIENT_MARKER, VERSION_PROBE_TIMEOUT,
-    VersionUnknown, cached_adapter_directory, cached_adapter_executable, fingerprint_path,
-    probe_version, reason_is_transient, reason_without_marker, resolve_executable,
-    snapshot_installing, snapshot_ready, snapshot_unavailable, verify_cached_adapter,
-    version_is_at_least,
+    VersionUnknown, cached_adapter_directory, cached_adapter_executable, ensure_adapter_node_runs,
+    fingerprint_path, probe_version, reason_is_transient, reason_without_marker,
+    resolve_executable, snapshot_installing, snapshot_ready, snapshot_unavailable,
+    verify_cached_adapter, version_is_at_least,
 };
 
 impl AdapterManifest {
@@ -116,6 +116,17 @@ impl AdapterManifest {
         };
         let upstream_command = resolve_executable(&spec.upstream_command)
             .ok_or_else(|| anyhow::anyhow!("{} executable was not found", spec.upstream_command))?;
+        // After the cache is known good and after both executables are known,
+        // because the Node this checks has to be the Node the adapter's shim
+        // will find -- and that is decided by a `PATH` with these two
+        // directories in front of it. A cache installed under a Node that has
+        // since been replaced is the same problem as one installed under a
+        // Node that never qualified, and this is where both pass through.
+        if let Some(cache_root) = self.cache_root.as_ref()
+            && spec.distribution.starts_with("npm:")
+        {
+            ensure_adapter_node_runs(&spec, cache_root, &command, &upstream_command)?;
+        }
         let probed = probe_version(&upstream_command, &spec.upstream_version_args);
         let upstream_version = probed.clone().ok();
         if let Some(minimum) = spec.minimum_upstream_version.as_deref() {
