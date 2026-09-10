@@ -1227,13 +1227,26 @@ jobs:
           TAG: ${{ steps.tag.outputs.release_tag }}
         run: |
           set -euo pipefail
-          dmg="desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
-          gh release upload "${TAG}" "${dmg}" --clobber
+          artifacts="desktop/target/release/release-artifacts"
+          dmg="${artifacts}/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
+          # The same record the stable release carries. It matters more here:
+          # a nightly is identified by eight characters of a commit, several
+          # exist at once, and a tester with a DMG on their desk has no other
+          # way to say which one they are looking at.
+          python3 desktop/scripts/build_release_evidence.py "${artifacts}" \
+            --version "nightly-${GITHUB_SHA:0:8}" \
+            --commit "${GITHUB_SHA}" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --app "desktop/target/release/bundle/macos/Lemma.app"
+          python3 desktop/scripts/build_release_evidence.py "${artifacts}" --verify
+          gh release upload "${TAG}" "${dmg}" "${artifacts}/release-evidence.json" --clobber
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${dmg}")"
           {
             echo "### Lemma Desktop nightly"
             echo
             echo "[Download the DMG](${url})"
+            echo
+            echo "SHA-256: \`$(shasum -a 256 "${dmg}" | cut -d" " -f1)\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       # Tauri notarizes and staples the .app, then tars it. That ordering is
