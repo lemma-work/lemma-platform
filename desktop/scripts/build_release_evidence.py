@@ -136,9 +136,31 @@ def build(
     }
 
 
-def verify(directory: Path, manifest: dict[str, object]) -> list[str]:
-    """Re-read the manifest against the files beside it."""
+def verify(
+    directory: Path,
+    manifest: dict[str, object],
+    *,
+    expected: dict[str, object] | None = None,
+) -> list[str]:
+    """Re-read the manifest against the files beside it, and against its inputs.
+
+    Hashes alone are not enough. They prove the files are the files the manifest
+    describes; they say nothing about whether the manifest describes *this*
+    release. A version, commit or repository that is simply wrong -- a rerun
+    against a stale checkout, a copied step, a hand-edited file -- passed a
+    hash-only check while claiming to be a release it is not, which is the one
+    question this file exists to answer.
+
+    `expected` is the same values the build was given. Recomputed rather than
+    trusted, so what is compared is what this run actually is.
+    """
     problems: list[str] = []
+    for field, value in (expected or {}).items():
+        if manifest.get(field) != value:
+            problems.append(
+                f"the manifest records {field}={manifest.get(field)!r} and this "
+                f"release is {value!r}"
+            )
     recorded = {entry["name"]: entry for entry in manifest["artifacts"]}
     present = {path.name for path in directory.iterdir() if path.is_file()} - EXCLUDED
     for missing in sorted(recorded.keys() - present):
@@ -189,7 +211,22 @@ def main() -> int:
     target = arguments.directory / MANIFEST_NAME
 
     if arguments.verify:
-        problems = verify(arguments.directory, json.loads(target.read_text()))
+        # The same inputs the build was given, so the check is against this
+        # release rather than against the manifest's own claims.
+        expected = {
+            field: value
+            for field, value in (
+                ("version", arguments.version),
+                ("commit", arguments.commit),
+                ("repository", arguments.repository),
+            )
+            if value
+        }
+        expected["updater_key_id"] = updater_key_id(arguments.config)
+        expected["runtime"] = runtime_versions(arguments.runtime_manifest)
+        problems = verify(
+            arguments.directory, json.loads(target.read_text()), expected=expected
+        )
         for problem in problems:
             print(f"::error::release evidence: {problem}", file=sys.stderr)
         if problems:

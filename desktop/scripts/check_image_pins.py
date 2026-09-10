@@ -29,7 +29,12 @@ DOCKERFILES = [DESKTOP / "local-runtime/guest-image/Dockerfile"]
 # `FROM <image>[:tag][@digest] [AS stage]`, with the ARG-less forms this repo
 # uses. A `FROM $BUILDER` referring to an earlier stage is not a registry
 # reference and is left alone.
-FROM_LINE = re.compile(r"^FROM\s+(?P<image>\S+)(?:\s+AS\s+(?P<stage>\S+))?\s*$")
+# Case-insensitive, because Dockerfile instructions are: `from ubuntu:24.04`
+# is the same instruction as `FROM`, and a checker that only knows one spelling
+# is a checker somebody can step around without meaning to.
+FROM_LINE = re.compile(
+    r"^FROM\s+(?P<image>\S+)(?:\s+AS\s+(?P<stage>\S+))?\s*$", re.IGNORECASE
+)
 
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 
@@ -51,9 +56,14 @@ def failures() -> list[str]:
             if not match:
                 continue
             image = match.group("image")
+            # Decide about this line's image *before* recording its stage. The
+            # other order let `FROM ubuntu AS ubuntu` add "ubuntu" to the stage
+            # set and then match itself as an earlier stage, so the one line
+            # that names a moving tag was the one line exempted from the check.
+            known = image.lower() == "scratch" or image in stages or image.startswith("$")
             if match.group("stage"):
                 stages.add(match.group("stage"))
-            if image == "scratch" or image in stages or image.startswith("$"):
+            if known:
                 continue
             if not DIGEST.search(image):
                 problems.append(

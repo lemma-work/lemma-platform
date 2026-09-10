@@ -74,6 +74,30 @@ class ReleaseEvidenceTests(unittest.TestCase):
 
         self.assertEqual(evidence.verify(self.artifacts, manifest), [])
 
+    def test_a_manifest_describing_another_release_is_caught(self) -> None:
+        """Hashes prove the files match the manifest. They say nothing about
+        whether the manifest describes the release being published -- a rerun
+        against a stale checkout, or a copied step, passed a hash-only check
+        while claiming to be a release it is not."""
+        manifest = self.build()
+        expected = {"version": "1.2.3", "commit": "abc123", "repository": "lemma-work/lemma-platform"}
+
+        self.assertEqual(evidence.verify(self.artifacts, manifest, expected=expected), [])
+
+        for field, wrong in [
+            ("version", "9.9.9"),
+            ("commit", "deadbeef"),
+            ("repository", "somebody/else"),
+        ]:
+            drifted = dict(manifest)
+            drifted[field] = wrong
+            problems = evidence.verify(self.artifacts, drifted, expected=expected)
+
+            self.assertTrue(
+                any(field in problem for problem in problems),
+                f"{field}={wrong} was accepted",
+            )
+
     def test_a_changed_artifact_is_caught(self) -> None:
         """The question this exists to answer: is the file we have the file we published."""
         manifest = self.build()

@@ -44,6 +44,23 @@ class ImagePinTests(unittest.TestCase):
             [],
         )
 
+    def test_a_lowercase_instruction_is_still_an_instruction(self) -> None:
+        """Dockerfile keywords are case-insensitive, and a checker that knows
+        one spelling is one somebody steps around without meaning to."""
+        for line in ["from ubuntu:24.04\n", "From ubuntu:24.04 as runtime\n"]:
+            self.assertEqual(len(self.check(line)), 1, line)
+
+    def test_a_stage_cannot_exempt_the_line_that_names_it(self) -> None:
+        """`FROM ubuntu AS ubuntu` recorded the stage before deciding about the
+        image, so the one line naming a moving tag exempted itself."""
+        problems = self.check("FROM ubuntu AS ubuntu\n")
+
+        self.assertEqual(len(problems), 1)
+        self.assertIn("moving tag", problems[0])
+
+    def test_scratch_is_exempt_however_it_is_spelled(self) -> None:
+        self.assertEqual(self.check("FROM scratch AS a\nfrom SCRATCH AS b\n"), [])
+
     def test_a_truncated_or_malformed_digest_does_not_count(self) -> None:
         for bad in ["@sha256:abc", "@sha512:" + "a" * 128, "@" + "a" * 64]:
             self.assertEqual(len(self.check(f"FROM ubuntu:24.04{bad}\n")), 1, bad)
