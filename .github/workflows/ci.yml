@@ -179,6 +179,7 @@ jobs:
               - '.github/workflows/**'
               - '.github/e2e-shards.json'
               - 'scripts/check_ci_aggregators.py'
+              - 'scripts/check_release_parity.py'
               - 'scripts/check_ci_job_results.py'
               - 'scripts/check_pytest_census.py'
               - 'scripts/check_test_run.py'
@@ -680,6 +681,13 @@ jobs:
       - name: CI aggregators watch every job
         run: uv run --no-project --with pyyaml python scripts/check_ci_aggregators.py
 
+      # The two DMG pipelines drifted in both directions before this
+      # existed: one did not verify the guest helper's entitlement, the
+      # other did not verify that macOS would ask for local network
+      # access. Each was green on its own terms.
+      - name: Both DMG pipelines verify the same things
+        run: uv run --no-project --with pyyaml python scripts/check_release_parity.py
+
   windows-cli:
     name: Windows CLI smoke test
     timeout-minutes: 45
@@ -784,6 +792,18 @@ jobs:
         working-directory: desktop
         run: cargo test -p lemma-locald -p lemma-guestd --locked
 
+      # The Rust half of the Agent Host's wire contract. This job runs on
+      # backend-only pull requests -- `lemma-backend/**` is in its filter --
+      # and it did not run the half that would notice. Both sides of
+      # `tests/fixtures/wire_contract.json` are assertions over a committed
+      # file; only the named suites, because the rest of this crate's tests
+      # spawn agents.
+      - name: Agent Host wire contract
+        working-directory: desktop
+        run: >-
+          cargo test -p lemma-agent-host --locked
+          --test wire_contract --test control_plane_contract
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
@@ -803,12 +823,48 @@ jobs:
             lemma-frontend/package-lock.json
             desktop/ui-tests/package-lock.json
 
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
+
       - name: Install chat UI test dependencies
         run: |
           npm ci --prefix lemma-typescript
           npm ci --prefix lemma-frontend
           npm ci --prefix desktop/ui-tests
-          npm exec --prefix desktop/ui-tests -- playwright install --with-deps chromium
+          # The browser first, from the cache above, with no apt involved.
+          npm exec --prefix desktop/ui-tests -- playwright install chromium
+          # Then the system libraries it wants. This is the apt half, and it is
+          # the half that fails: `--with-deps` fetches Google's Chrome
+          # repository index, and a "Hash Sum mismatch" there exits 100 and
+          # takes the lane down after every Rust test in it has already passed.
+          # Four times in one afternoon, on an index this repository neither
+          # controls nor needs -- the browser is already downloaded.
+          #
+          # Retrying it was the wrong fix and is gone: a mismatch is apt saying
+          # its cached index disagrees with the server, so the same fetch fails
+          # the same way, which is exactly what three attempts did.
+          #
+          # Not fatal now. `ubuntu-latest` ships the libraries Chromium needs,
+          # so this is belt and braces; if that ever stops being true the
+          # browser fails to launch in the next step and names the library it
+          # is missing, which is a better failure than a lane that dies on a
+          # mirror being mid-update.
+          if ! npm exec --prefix desktop/ui-tests -- playwright install-deps chromium; then
+            echo "::warning::playwright install-deps failed; continuing on the runner image's own libraries"
+          fi
 
       - name: Chat UI with JSON ACP agents
         run: make desktop-agent-host-browser-e2e
@@ -944,6 +1000,22 @@ jobs:
       - name: Guest boot tooling tests
         run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
 
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
+
       - name: Settings behavior tests
         working-directory: desktop/ui-tests
         shell: bash
@@ -969,7 +1041,7 @@ jobs:
           args=(
             --force
             --options runtime
-            --entitlements desktop/entitlements.plist
+            --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist
             --sign "${APPLE_SIGNING_IDENTITY}"
           )
           if [[ "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
@@ -1002,7 +1074,30 @@ jobs:
             ${{ (github.event_name == 'push'
             || needs.changes.outputs.desktop_packaging == 'true')
             && 'app,dmg' || 'app' }}
-        run: npx -y "$TAURI_CLI" build --config tauri.online.conf.json --bundles "$BUNDLES"
+        run: |
+          set -euo pipefail
+          # Retried, and the detach between attempts is the part that matters.
+          # `bundle_dmg.sh` failing partway leaves its image attached, so a
+          # second attempt meets the first one's leftovers and fails the same
+          # way -- the same shape as retrying an apt fetch whose cached index
+          # is the thing that is wrong. Cargo has already compiled by then, so
+          # a retry costs the bundling and the signing, not the build.
+          #
+          # Measured: this took main red once today, after every test in the
+          # job had passed, and the re-run went green untouched.
+          for attempt in 1 2 3; do
+            npx -y "$TAURI_CLI" build \
+              --config tauri.online.conf.json --bundles "$BUNDLES" && break
+            if [ "$attempt" = 3 ]; then
+              echo "::error::tauri build failed three times; this is not hdiutil"
+              exit 1
+            fi
+            echo "tauri build failed (attempt $attempt); detaching leftovers and retrying"
+            for volume in /Volumes/Lemma*; do
+              [ -d "$volume" ] && hdiutil detach "$volume" -force || true
+            done
+            sleep 20
+          done
 
       - name: Verify application signature
         shell: bash
@@ -1026,6 +1121,25 @@ jobs:
           codesign --verify --strict --verbose=2 "${vz}"
           codesign -d --entitlements :- "${vz}" 2>/dev/null \
             | grep -F "com.apple.security.virtualization"
+          # And nothing else carries it. Tauri applies one entitlements file to
+          # the app and to every externalBin it signs, so the app's file used to
+          # hand this to four processes -- one of which hosts a WebView -- for a
+          # capability only lemma-vz can use. lemma-vz keeps it because it ships
+          # as a resource, which Tauri does not re-sign.
+          #
+          # Dumped into a variable first: under `pipefail` a codesign that fails
+          # would make the grep pipeline non-zero, and "no match" would read as a
+          # pass on a binary nobody managed to inspect.
+          for signed_with_the_app in "${app}" "${locald}" "${runtime_bridge}" \
+              "${app}/Contents/MacOS/lemma-agent-host"; do
+            dumped="$(codesign -d --entitlements :- "${signed_with_the_app}" 2>&1)"
+            if grep -qF "com.apple.security.virtualization" <<<"${dumped}"; then
+              echo "::error::$(basename "${signed_with_the_app}") carries" \
+                   "com.apple.security.virtualization and cannot use it." \
+                   "Only Contents/Resources/lemma-vz links Virtualization.framework."
+              exit 1
+            fi
+          done
           # The daemon's keychain access is keyed to this identifier, and Tauri
           # re-signs sidecars without one of its own -- so this asserts the
           # embedded Info.plist survived bundling. Ad-hoc builds re-prompt either
@@ -1291,6 +1405,22 @@ jobs:
 
       - name: Guest packaging tests
         run: uv run --no-project python -m unittest discover -s desktop/scripts -p 'test_*.py'
+
+      # Chromium is ~150 MB and byte-identical between runs; the only thing
+      # that changes it is a Playwright version bump, which changes the
+      # lockfile. Restoring it turns a download into a hash check.
+      #
+      # Safe to restore stale or partial: `playwright install` still checks
+      # what it finds and fetches whatever is missing, so a bad cache costs a
+      # download rather than the wrong browser.
+      - name: Cache the Playwright browser
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('desktop/ui-tests/package-lock.json') }}
 
       - name: Settings behavior tests
         working-directory: desktop/ui-tests

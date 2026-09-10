@@ -15,7 +15,16 @@ fn process_ledger_reclaims_only_an_exact_owned_process() {
     let ledger_path = root.path().join("processes.json");
     let installation_id = "0123456789abcdef0123456789abcdef";
     let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-    let identity = process_identity(child.id()).unwrap();
+    // Settled, the way `record_child` records one, not sampled the instant
+    // after `spawn`. Between `fork` and `exec` a Linux child is a copy of its
+    // parent, so `/proc/<pid>/exe` names *this test binary* rather than
+    // `sleep` -- a plausible path that happens to be the wrong one. Recording
+    // that made the reclaim below decline to signal a record whose executable
+    // no longer matched, and this test then waited out the whole `sleep 30`
+    // and failed saying the process had exited on its own. Which is exactly
+    // the window `settled_process_identity` exists to wait out, and what its
+    // own doc comment predicts on a loaded runner.
+    let identity = settled_process_identity(&mut child).unwrap();
     let mut backend = service("backend", &[]);
     backend.command = vec!["/bin/sleep".into(), "30".into()];
     let value = manifest(vec![backend, service("frontend", &["backend"])]);
@@ -72,7 +81,11 @@ fn process_ledger_never_kills_a_pid_with_the_wrong_start_identity() {
     let ledger_path = root.path().join("processes.json");
     let installation_id = "0123456789abcdef0123456789abcdef";
     let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-    let identity = process_identity(child.id()).unwrap();
+    // Settled, for the reason the guard above gives. Here it decides whether
+    // this test proves anything: an unsettled executable is a second reason
+    // not to signal, so the assertion below would pass without the start
+    // identity -- the one thing it is about -- being consulted at all.
+    let identity = settled_process_identity(&mut child).unwrap();
     let mut backend = service("backend", &[]);
     backend.command = vec!["/bin/sleep".into(), "30".into()];
     let value = manifest(vec![backend, service("frontend", &["backend"])]);

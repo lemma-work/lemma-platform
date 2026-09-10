@@ -19,8 +19,10 @@ edition = "2021"
 [workspace]
 resolver = "2"
 members = [
+    "job-object",
     "locald",
     "agent-host",
+    "private-file",
     "process",
     "local-runtime/manager",
     "local-runtime/hostctl",
@@ -74,6 +76,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 lemma-desktop-process = { path = "process" }
+lemma-job-object = { path = "job-object" }
+lemma-private-file = { path = "private-file" }
 # macos-private-api is what gates WebviewWindowBuilder::transparent, which an
 # NSVisualEffectView has to sit behind to be visible at all. It is also what
 # makes a build ineligible for the Mac App Store — fine for the dmg/app targets
@@ -111,6 +115,10 @@ tempfile = { workspace = true }
 # minisign key rather than a placeholder. A dev dependency, so it is not
 # linked into the shipped app.
 base64 = "0.22"
+# The daemon names a diagnostic log source in every startup error, and the shell
+# is what serves those sources. Only a test puts the two vocabularies in the
+# same process; the shipped app talks to locald over a socket, as before.
+lemma-locald = { path = "locald" }
 
 # A workspace ignores [profile] in anything but the root manifest — with a
 # warning that is easy to miss — so every member's release profile lives here.

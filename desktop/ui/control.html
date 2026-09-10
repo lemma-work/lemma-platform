@@ -318,6 +318,11 @@
             <div class="log-tabs" id="diag-log-tabs"></div>
             <pre class="log-view" id="diag-log" tabindex="0">Loading…</pre>
           </article>
+          <article class="panel span-two" id="telemetry-panel" hidden>
+            <div class="panel-heading"><div><h2>Anonymous install health</h2><p>Whether Lemma started, and whether its runtime installed. Nothing about your pods, your files, your account or your network.</p></div></div>
+            <label class="check"><input type="checkbox" id="telemetry-enabled" /> Send anonymous install health</label>
+            <p class="hint" id="telemetry-detail"></p>
+          </article>
           <article class="panel span-two"><div class="panel-heading"><div><h2>Non-destructive repair</h2><p>Replaces signed application/runtime files only. Databases, files, and workspaces are preserved.</p></div></div><div class="button-row"><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
         </div>
       </section>

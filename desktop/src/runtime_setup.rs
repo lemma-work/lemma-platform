@@ -97,6 +97,15 @@ pub(crate) fn ensure_runtime_artifacts_inner(
         let mut ui = shell.ui.lock().unwrap();
         ui.active_operation_id = install_operation_id.clone();
     }
+    telemetry::note(telemetry::InstallEvent::RuntimeInstallStarted);
+    {
+        let shell: State<Shell> = app.state();
+        shell.ui.lock().unwrap().installed_this_launch = true;
+    }
+    // Where the install got to, for the failure event. A install that dies is
+    // only useful to hear about if we know which step died, and the progress
+    // callback is the only thing that knows.
+    let reached = std::sync::Arc::new(std::sync::Mutex::new("resolve"));
     emit_runtime_install_progress(
         app,
         "resolve",
@@ -119,6 +128,9 @@ pub(crate) fn ensure_runtime_artifacts_inner(
         &runtime_install_root(),
         env!("CARGO_PKG_VERSION"),
         &mut |progress| {
+            if let Some(step) = install_step(progress.stage) {
+                *reached.lock().expect("install step lock poisoned") = step;
+            }
             let fraction = progress
                 .current
                 .saturating_mul(1000)
@@ -157,11 +169,31 @@ pub(crate) fn ensure_runtime_artifacts_inner(
             );
         },
     )
-    .map_err(|error| format!("could not install the local runtime: {error}"))?;
-    stop_locald_for_runtime_maintenance(app).map_err(|error| {
-        format!("could not stop the previous local runtime before activation: {error}")
+    .map_err(|error| {
+        let detail = format!("could not install the local runtime: {error}");
+        telemetry::note(telemetry::InstallEvent::RuntimeInstallFailed {
+            step: *reached.lock().expect("install step lock poisoned"),
+            class: runtime_install_failure_class(&detail),
+        });
+        detail
     })?;
-    activate_installed_runtime(&installed)?;
+    // Reported the same way as the install itself. These two run *after*
+    // `RuntimeInstallStarted`, so a failure here used to end the attempt with
+    // no terminal event at all -- an install that started and, as far as the
+    // numbers went, never finished. Install health is the one thing this
+    // telemetry is for, so the funnel has to close on every path out of it.
+    let activation = stop_locald_for_runtime_maintenance(app)
+        .map_err(|error| {
+            format!("could not stop the previous local runtime before activation: {error}")
+        })
+        .and_then(|()| activate_installed_runtime(&installed));
+    if let Err(detail) = activation {
+        telemetry::note(telemetry::InstallEvent::RuntimeInstallFailed {
+            step: "activate",
+            class: runtime_install_failure_class(&detail),
+        });
+        return Err(detail);
+    }
     emit_runtime_install_progress(
         app,
         "activate",
@@ -180,7 +212,53 @@ pub(crate) fn ensure_runtime_artifacts_inner(
             ui.active_operation_id.clear();
         }
     }
+    telemetry::note(telemetry::InstallEvent::RuntimeInstallCompleted);
     Ok(())
+}
+
+/// The installer's own stage names, narrowed to the ones worth reporting.
+///
+/// A closed set on purpose: the event carries this verbatim, and an unbounded
+/// string from the installer is how a path or a URL ends up in an analytics
+/// database.
+fn install_step(stage: &str) -> Option<&'static str> {
+    match stage {
+        "download" => Some("download"),
+        "verify" => Some("verify"),
+        "host-extract" => Some("host-extract"),
+        "guest-extract" => Some("guest-extract"),
+        "validate" => Some("validate"),
+        _ => None,
+    }
+}
+
+/// Why an install failed, as one of a fixed set of words.
+///
+/// The same taxonomy `actionable_runtime_install_error` uses to decide what to
+/// tell the person, reduced to something countable. Never the error text: that
+/// carries paths, hostnames and occasionally a URL with a token in it.
+fn runtime_install_failure_class(error: &str) -> &'static str {
+    let lowered = error.to_ascii_lowercase();
+    if error.contains("artifact download failed with HTTP 404") {
+        return "artifact-missing";
+    }
+    if lowered.contains("http 401") || lowered.contains("http 403") || lowered.contains("http 429")
+    {
+        return "download-blocked";
+    }
+    if lowered.contains("could not connect") || lowered.contains("dns") {
+        return "network-unreachable";
+    }
+    if lowered.contains("no space") || lowered.contains("not enough space") {
+        return "disk-full";
+    }
+    if lowered.contains("digest") || lowered.contains("signature") || lowered.contains("checksum") {
+        return "verification-failed";
+    }
+    if lowered.contains("permission denied") || lowered.contains("read-only") {
+        return "permission-denied";
+    }
+    "other"
 }
 
 /// Turn an installer failure into something the person reading it can do.

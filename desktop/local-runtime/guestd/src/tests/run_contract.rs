@@ -92,3 +92,48 @@ fn function_contract_is_read_only_ephemeral_and_exposes_only_its_runtime() {
     assert!(joined.contains("0.0.0.0::8090"));
     assert!(!joined.contains("dst=/workspace"));
 }
+
+/// A sandbox cannot fill the guest's disk with its own log.
+///
+/// The data disk is a fixed size, and a container's log lives on it. Nothing
+/// bounded that log, so a sandbox with a chatty loop in it -- an agent
+/// retrying, a dependency printing a warning per file -- could grow one until
+/// the disk was full. A full data disk is not a lost sandbox: Postgres and
+/// everything else in the guest stop with it.
+#[test]
+fn every_sandbox_runs_with_a_bounded_log() {
+    for kind in [WorkloadKind::Workspace, WorkloadKind::Function] {
+        let workspace = kind == WorkloadKind::Workspace;
+        let parameters = EnsureParameters {
+            sandbox_id: "box-1".into(),
+            workload_kind: kind,
+            image: "ghcr.io/lemma/workspace@sha256:abc".into(),
+            env: BTreeMap::new(),
+            metadata: BTreeMap::new(),
+            runtime_token: workspace.then(|| "runtime-secret".into()),
+            apps: if workspace {
+                workspace_apps()
+            } else {
+                Vec::new()
+            },
+            resources: ResourceSpec::default(),
+            callback: CallbackSpec::default(),
+        };
+        let arguments = build_run_arguments(
+            &parameters,
+            workspace.then_some(Path::new("/var/lib/lemma/workspaces/box-1")),
+            workspace.then_some(Path::new("/var/lib/lemma/run/runtime-token-box-1/token")),
+            Path::new("/var/lib/lemma/run/private-env"),
+            "192.168.64.1",
+        );
+        let joined = arguments.join(" ");
+        assert!(
+            joined.contains("--log-opt max-size=16m"),
+            "{kind:?} runs with no size cap on its log: {joined}"
+        );
+        assert!(
+            joined.contains("--log-opt max-file=3"),
+            "{kind:?} keeps one file, so rotation truncates instead of freeing: {joined}"
+        );
+    }
+}

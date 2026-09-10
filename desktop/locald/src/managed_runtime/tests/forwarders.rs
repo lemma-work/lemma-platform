@@ -1,6 +1,7 @@
 //! The forwarders that reach the guest's private services.
 
 use super::*;
+use std::io::Write;
 
 #[test]
 fn stopping_forwarder_closes_idle_connections_in_both_directions() {

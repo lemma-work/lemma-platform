@@ -4,16 +4,27 @@
 
 .DESCRIPTION
     The repository's Makefile is the macOS and Linux entrypoint. Windows has no
-    `make`, so the same verbs live here, one per `desktop-*` target, over the
-    same underlying scripts — build-sidecar.ps1, cargo, extract-concepts.mjs,
-    prepare_desktop_test_runtime.py. Neither entrypoint reimplements the other,
-    so they cannot drift.
+    `make`, so the same verbs live here, over the same underlying scripts —
+    build-sidecar.ps1, cargo, extract-concepts.mjs,
+    prepare_desktop_test_runtime.py.
+
+    They had drifted: the Makefile carried four cross-platform targets this
+    script did not — the file-size ratchet, the baked-concepts check, the
+    browser journeys, and `check` itself — so a Windows contributor could not
+    run the gate that decides whether their change is acceptable. The claim
+    that the two "cannot drift" was written here and was not true.
+
+    check_entrypoint_parity.py is what makes it true. Every `desktop-*` target
+    has a verb here or is recorded there with the reason it cannot — a DMG is
+    macOS, a guest image is Linux — and a new target on either side fails until
+    somebody says which it is.
 
     There is deliberately no `dev` verb. Running the app from source is macOS
-    only for now: dev-local.sh has no Windows counterpart, and the WSL
-    distribution name the managed runtime uses is a global constant, so a dev
-    run in a throwaway state root would adopt and mutate the distro a real
-    install owns. On Windows, build and install the app instead — `exe`.
+    only for now: dev-local.sh has no Windows counterpart. The distribution
+    name is no longer the blocker it was — a state root other than the standard
+    one gets its own `LemmaRuntime-<hash>`, and `LEMMA_RUNTIME_WSL_DISTRIBUTION`
+    overrides it — so a dev run in a throwaway root no longer adopts the distro
+    a real install owns. On Windows, build and install the app instead — `exe`.
 
 .EXAMPLE
     pwsh desktop\scripts\desktop.ps1 test
@@ -24,6 +35,8 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
     [ValidateSet('sidecars', 'test', 'test-app', 'fmt', 'lint', 'concepts',
+                 'concepts-check', 'file-size', 'image-pins', 'entrypoint-parity', 'entitlements',
+                 'test-browser', 'check',
                  'runtime-fetch', 'exe', 'clean', 'version-check', 'help')]
     [string]$Verb,
 
@@ -86,6 +99,13 @@ switch ($Verb) {
         Write-Host '  desktop.ps1 lint                  clippy, warnings are errors'
         Write-Host '  desktop.ps1 fmt [-Fix]            rustfmt check, or rewrite'
         Write-Host '  desktop.ps1 concepts [-Check]     bake desktop/ui/concepts.gen.json'
+        Write-Host '  desktop.ps1 concepts-check        the baked concepts are committed'
+        Write-Host '  desktop.ps1 file-size             Rust file size ratchet (DES-09)'
+        Write-Host '  desktop.ps1 image-pins            the guest image base is pinned by digest'
+        Write-Host '  desktop.ps1 entrypoint-parity     this script and the Makefile agree'
+        Write-Host '  desktop.ps1 entitlements          each macOS binary is granted only what it uses'
+        Write-Host '  desktop.ps1 test-browser          splash and settings browser journeys'
+        Write-Host '  desktop.ps1 check                 fmt, concepts, file size, lint, tests'
         Write-Host '  desktop.ps1 runtime-fetch -Run <id>  download runtime artifacts from a CI run'
         Write-Host '  desktop.ps1 exe                   self-contained Windows installer'
         Write-Host '  desktop.ps1 clean                 remove build output and staged runtime'
@@ -162,6 +182,70 @@ switch ($Verb) {
     }
 
     'concepts' { Invoke-Concepts -Strict:$Check }
+
+    'concepts-check' { Invoke-Concepts -Strict }
+
+    'file-size' {
+        Require-Command python 'install Python 3 from https://python.org'
+        Step 'Rust file size (DES-09)...'
+        python (Join-Path $DesktopDir 'scripts/check_file_size.py')
+        Invoke-Checked 'check_file_size.py'
+    }
+
+    # The guest image is Linux, but whether its base is pinned is a property of
+    # a text file in this repository, and a Windows contributor editing that
+    # Dockerfile should be able to ask.
+    'image-pins' {
+        Require-Command python 'install Python 3 from https://python.org'
+        Step 'Guest image base pins...'
+        python (Join-Path $DesktopDir 'scripts/check_image_pins.py')
+        Invoke-Checked 'check_image_pins.py'
+    }
+
+    'entrypoint-parity' {
+        Require-Command python 'install Python 3 from https://python.org'
+        Step 'Makefile and desktop.ps1 offer the same verbs...'
+        python (Join-Path $DesktopDir 'scripts/check_entrypoint_parity.py')
+        Invoke-Checked 'check_entrypoint_parity.py'
+    }
+
+    # The subject is macOS signing; the check is plists and JSON, and reads the
+    # same on any machine. A Windows contributor editing tauri.conf.json can ask
+    # whether they just handed the WebView an entitlement.
+    'entitlements' {
+        Require-Command python 'install Python 3 from https://python.org'
+        Step 'Entitlements (least privilege per binary)...'
+        python (Join-Path $DesktopDir 'scripts/check_entitlements.py')
+        Invoke-Checked 'check_entitlements.py'
+    }
+
+    'test-browser' {
+        Require-Command npm 'install Node.js from https://nodejs.org'
+        $uiTests = Join-Path $DesktopDir 'ui-tests'
+        Step 'Browser journeys...'
+        npm ci --prefix $uiTests --ignore-scripts --no-audit --no-fund
+        Invoke-Checked 'npm ci'
+        Push-Location $uiTests
+        try {
+            npx --no-install playwright install chromium
+            Invoke-Checked 'playwright install'
+            npm run test:browser
+            Invoke-Checked 'npm run test:browser'
+        } finally { Pop-Location }
+        Ok 'browser journeys pass'
+    }
+
+    # The aggregate, so `check` means the same thing on both entrypoints.
+    # `desktop-check` on the Makefile also runs `desktop-check-windows`, which
+    # cross-compiles the Windows paths from a Mac; there is nothing to
+    # cross-compile when you are already on Windows.
+    'check' {
+        foreach ($step in @('fmt', 'concepts-check', 'file-size', 'image-pins', 'entrypoint-parity', 'entitlements', 'lint', 'test', 'test-browser')) {
+            & $PSCommandPath $step
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+        Ok 'desktop: fmt, concepts, file size, clippy, Rust and browser tests'
+    }
 
     'runtime-fetch' {
         Require-Command gh 'install from https://cli.github.com'

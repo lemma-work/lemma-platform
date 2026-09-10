@@ -54,6 +54,67 @@ pub(crate) fn prune_retired_releases(install_root: &Path, keep: &[PathBuf]) -> V
     removed
 }
 
+/// How long an unfinished install may sit before it is treated as abandoned.
+///
+/// Generous by a wide margin: an install is minutes of work, and this is a day.
+/// The cost of being wrong in one direction is deleting a directory somebody is
+/// still writing to; in the other, it is leaving 2.2 GB on the disk until the
+/// next attempt. Only one of those is recoverable by waiting.
+const ABANDONED_STAGING: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Remove staging directories no install could still be using.
+///
+/// `prune_retired_releases` cannot: it skips hidden entries on purpose,
+/// precisely because a `.staging` may be a live install in progress. So
+/// nothing removed these. A failed install cleans up after itself, but a
+/// *killed* one cannot -- a crash, a power cut, quitting mid-install -- and
+/// each one it leaves is a fully expanded runtime, about 2.2 GB, hidden, for
+/// the life of the installation.
+///
+/// Decided on the timestamp the name already carries, not on the directory's
+/// mtime: extracting into it keeps the mtime fresh, so an install that died
+/// hours in would look like it had just started. A name that does not parse is
+/// not one of ours and is left alone.
+pub(crate) fn prune_abandoned_staging(install_root: &Path, now_millis: u128) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(install_root.join("releases")) else {
+        return Vec::new();
+    };
+    let mut removed = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let Some(started) = staging_started_at(&path) else {
+            continue;
+        };
+        // `saturating_sub`, because a clock that went backwards should leave
+        // the directory alone rather than make everything look ancient.
+        if now_millis.saturating_sub(started) < ABANDONED_STAGING.as_millis() {
+            continue;
+        }
+        if fs::remove_dir_all(&path).is_ok() {
+            removed.push(path);
+        }
+    }
+    removed
+}
+
+/// When a staging directory was created, from its own name.
+///
+/// `.<version>-<pid>-<millis>.staging`, read from the right because a version
+/// may contain a hyphen of its own.
+fn staging_started_at(path: &Path) -> Option<u128> {
+    let name = path.file_name()?.to_str()?;
+    let body = name.strip_prefix('.')?.strip_suffix(".staging")?;
+    let (rest, millis) = body.rsplit_once('-')?;
+    let (version, pid) = rest.rsplit_once('-')?;
+    if version.is_empty() || pid.parse::<u32>().is_err() {
+        return None;
+    }
+    millis.parse().ok()
+}
+
 pub(crate) fn installed_runtime(root: &Path, release: &str) -> InstalledRuntime {
     InstalledRuntime {
         release: release.to_owned(),

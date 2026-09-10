@@ -23,6 +23,8 @@ from scripts.build_local_host_pack import (
     WINDOWS_PATH_BUDGET,
     _resolve_rpath_libraries,
     enforce_windows_path_budget,
+    prune_unused_twilio_domains,
+    report_windows_path_headroom,
     copy_browser_assets,
     copy_node_runtime,
     npm_executable,
@@ -317,3 +319,80 @@ def test_the_budget_leaves_room_for_where_the_pack_is_installed():
     assert release_directory + 1 + WINDOWS_PATH_BUDGET <= usable, (
         "the budget has to fit under the directory the pack is installed into"
     )
+
+
+def test_twilio_keeps_its_client_and_loses_the_api_nobody_calls(tmp_path: Path) -> None:
+    """Twilio is here by accident of the dependency graph.
+
+    Nothing in `app` imports it. `supertokens_python` does, at module level, so
+    that its passwordless recipe can send a code by SMS -- a feature this
+    product does not enable. So the package has to stay importable while the
+    REST tree it never walks does not: that tree is where a source file sat
+    past the Windows path budget, which fails the build rather than shipping a
+    pack whose backend cannot import a module in its own directory listing.
+    """
+    site_packages = tmp_path / "site-packages"
+    rest = site_packages / "twilio" / "rest"
+    (rest / "api" / "v2010" / "account" / "sip").mkdir(parents=True)
+    (rest / "api" / "v2010" / "account" / "sip" / "domain.py").write_text("x")
+    (rest / "messaging").mkdir()
+    (rest / "__init__.py").write_text("from twilio.base.client_base import ClientBase")
+    (site_packages / "twilio" / "base").mkdir()
+    (site_packages / "twilio" / "base" / "client_base.py").write_text("class ClientBase: ...")
+    (site_packages / "twilio" / "__init__.py").write_text("")
+
+    prune_unused_twilio_domains(site_packages)
+
+    assert (rest / "__init__.py").is_file(), "the module supertokens imports has to survive"
+    assert (site_packages / "twilio" / "base" / "client_base.py").is_file(), (
+        "and everything it imports at module level with it"
+    )
+    assert not (rest / "api").exists(), "the domain holding the over-budget path is gone"
+    assert not (rest / "messaging").exists(), "and so are its siblings; none are reachable"
+
+
+def test_pruning_twilio_is_safe_where_twilio_is_absent(tmp_path: Path) -> None:
+    """A pack built without it is not a pack that fails to build."""
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    prune_unused_twilio_domains(site_packages)
+
+
+def test_a_pack_says_how_much_windows_path_budget_is_left(tmp_path, capsys) -> None:
+    """The gate only speaks once something has crossed the line.
+
+    Which makes every crossing a surprise: a build that was fine yesterday
+    fails today because a dependency grew a directory level. A `twilio` file
+    sat nine characters over, and nothing before it had ever said how much room
+    was left.
+    """
+    # Under the pack root directly: `installed_path` is what prepends
+    # `local-runtime/`, so building one here would count it twice.
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "short.py").write_text("x")
+
+    report_windows_path_headroom(pack)
+
+    printed = capsys.readouterr().out
+    assert "longest installed path is" in printed
+    assert "below the 170-character Windows budget" in printed
+    assert "::warning::" not in printed, "a short path is not worth a warning"
+
+
+def test_a_pack_close_to_the_limit_says_so_before_it_fails(tmp_path, capsys) -> None:
+    """The last quiet release before a failure should not look like the rest."""
+    pack = tmp_path / "pack"
+    deep = pack / ("d" * 120)
+    deep.mkdir(parents=True)
+    # Inside the budget, and only just. `installed_path` adds the
+    # `local-runtime/` prefix, so that is counted here rather than created.
+    prefix = len("local-runtime/") + 120 + 1
+    name = "n" * (WINDOWS_PATH_BUDGET - prefix - len(".py"))
+    (deep / f"{name}.py").write_text("x")
+
+    report_windows_path_headroom(pack)
+
+    printed = capsys.readouterr().out
+    assert "::warning::" in printed, printed
+    assert "will fail the build" in printed

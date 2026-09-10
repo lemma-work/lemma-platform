@@ -169,3 +169,84 @@ def test_expensive_security_jobs_are_change_scoped() -> None:
     assert "if: needs.changes.outputs.javascript == 'true'" in workflow
     assert "if: needs.changes.outputs.python_dependencies == 'true'" in workflow
     assert "if: needs.changes.outputs.backend_image == 'true'" in workflow
+
+
+def test_every_job_that_installs_a_browser_restores_it_from_cache() -> None:
+    """Chromium is downloaded once per Playwright version, not once per run.
+
+    It is ~150 MB and byte-identical between runs, so three desktop jobs were
+    each fetching it on every push. The cache has to sit *before* the install
+    in the same job -- a restore afterwards is a restore of nothing -- and it
+    has to be keyed on the lockfile, because that is the file a Playwright
+    version bump changes.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_read(".github/workflows/ci.yml"))
+    installing = set()
+    for name, job in workflow["jobs"].items():
+        for index, step in enumerate(job.get("steps", [])):
+            if "playwright install" not in str(step.get("run", "")):
+                continue
+            installing.add(name)
+            cache = [
+                earlier
+                for earlier in job["steps"][:index]
+                if earlier.get("uses", "").startswith("actions/cache@")
+                and "ms-playwright" in str(earlier.get("with", {}).get("path", ""))
+            ]
+            assert cache, f"{name} downloads a browser it never restores"
+            key = cache[-1]["with"]["key"]
+            assert "desktop/ui-tests/package-lock.json" in key, (
+                f"{name} keys its browser cache on something other than the "
+                "lockfile a version bump changes"
+            )
+            paths = cache[-1]["with"]["path"]
+            # One step for three runners: the browser lives somewhere different
+            # on each, and a path that does not exist is skipped rather than
+            # failing.
+            for expected in (
+                "~/.cache/ms-playwright",
+                "~/Library/Caches/ms-playwright",
+                "~/AppData/Local/ms-playwright",
+            ):
+                assert expected in paths, f"{name} misses {expected}"
+    assert installing, "no job installs a browser; this contract found nothing"
+
+
+def test_every_dmg_build_survives_a_busy_hdiutil() -> None:
+    """`bundle_dmg.sh` fails on a busy `hdiutil`, and it fails late.
+
+    By then the workspace has compiled, every test in the job has passed, and
+    the only thing left is wrapping a signed `.app` in a disk image. That took
+    main red once, and the re-run went green untouched.
+
+    The retry is not enough on its own, which is the part worth pinning: a
+    failed run leaves its image attached and a half-built bundle behind, so an
+    attempt that does not clear both meets the last one's leftovers and fails
+    the same way. Retrying an unchanged failure is how the first version of the
+    apt retry managed three identical failures.
+    """
+    import yaml
+
+    building = []
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/release-local-images.yml",
+    ):
+        workflow = yaml.safe_load(_read(path))
+        for name, job in workflow["jobs"].items():
+            for step in job.get("steps", []):
+                run = step.get("run") or ""
+                # The steps that *invoke* the CLI to build, not the one that
+                # puts its version in the environment — and not the
+                # Windows-only `--bundles nsis` one, which makes no disk image.
+                if '"$TAURI_CLI" build' not in run or "nsis" in run:
+                    continue
+                building.append((path, name))
+                assert "for attempt in" in run, f"{name} bundles a DMG without retrying"
+                assert "hdiutil detach" in run, (
+                    f"{name} retries without detaching what the failure left "
+                    "attached, so the retry asks the same broken question"
+                )
+    assert len(building) == 2, f"expected both DMG lanes, found {building}"

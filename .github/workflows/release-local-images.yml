@@ -1095,7 +1095,7 @@ jobs:
           set -euo pipefail
           helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
           codesign --force --timestamp --options runtime \
-            --entitlements desktop/entitlements.plist \
+            --entitlements desktop/local-runtime/macos-vz/lemma-vz.entitlements.plist \
             --sign "${APPLE_SIGNING_IDENTITY}" \
             "${helper}"
           codesign --verify --strict --verbose=2 "${helper}"
@@ -1133,11 +1133,30 @@ jobs:
           # nightly is already the online config.
           overlay="${RUNNER_TEMP}/tauri.nightly.conf.json"
           printf '{"version": "%s"}\n' "${VERSION}" > "${overlay}"
-          rm -rf target/release/bundle/macos target/release/bundle/dmg
-          npx -y "$TAURI_CLI" build \
-            --config tauri.online.conf.json \
-            --config tauri.updater.conf.json \
-            --config "${overlay}"
+          # Retried, and each attempt starts from the same clean state as the
+          # first. `bundle_dmg.sh` fails on a busy `hdiutil`, and when it does
+          # it leaves its image attached and a half-built bundle behind -- so
+          # an attempt that does not clear both meets the last one's leftovers
+          # and fails the same way. Cargo has compiled by then, so a retry
+          # costs the bundling and the signing rather than the build.
+          for attempt in 1 2 3; do
+            rm -rf target/release/bundle/macos target/release/bundle/dmg
+            for volume in /Volumes/Lemma*; do
+              [ -d "${volume}" ] && hdiutil detach "${volume}" -force || true
+            done
+            npx -y "$TAURI_CLI" build \
+              --config tauri.online.conf.json \
+              --config tauri.updater.conf.json \
+              --config "${overlay}" && break
+            if [ "${attempt}" = 3 ]; then
+              echo "::error::the nightly DMG failed to build three times"
+              exit 1
+            fi
+            echo "nightly DMG build failed (attempt ${attempt}); retrying"
+            sleep 20
+          done
+          # See release-desktop.yml: this lives under a restored `desktop/target`.
+          rm -rf target/release/release-artifacts
           mkdir -p target/release/release-artifacts
           dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
           [[ "${#dmg[@]}" == 1 ]]
@@ -1183,7 +1202,10 @@ jobs:
           python3 desktop/scripts/check_online_payload.py --macos-app "${app}"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Identifier=work.lemma.desktop"
-          test -n "$(plutil -extract NSLocalNetworkUsageDescription raw -o - "${app}/Contents/Info.plist")"
+          # NSLocalNetworkUsageDescription used to be asserted here, and only
+          # here -- so the release, which is the pipeline that reaches users,
+          # shipped without the check. It is in check_macos_signing.py above
+          # now, which both pipelines run and which has tests.
           xcrun stapler validate "${app}"
           xcrun stapler validate \
             "desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
@@ -1210,13 +1232,30 @@ jobs:
           TAG: ${{ steps.tag.outputs.release_tag }}
         run: |
           set -euo pipefail
-          dmg="desktop/target/release/release-artifacts/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
-          gh release upload "${TAG}" "${dmg}" --clobber
+          artifacts="desktop/target/release/release-artifacts"
+          dmg="${artifacts}/Lemma-nightly-${GITHUB_SHA:0:8}_aarch64.dmg"
+          # The same record the stable release carries. It matters more here:
+          # a nightly is identified by eight characters of a commit, several
+          # exist at once, and a tester with a DMG on their desk has no other
+          # way to say which one they are looking at.
+          evidence=(
+            --version "nightly-${GITHUB_SHA:0:8}"
+            --commit "${GITHUB_SHA}"
+            --repository "${GITHUB_REPOSITORY}"
+          )
+          python3 desktop/scripts/build_release_evidence.py "${artifacts}" \
+            "${evidence[@]}" \
+            --app "desktop/target/release/bundle/macos/Lemma.app"
+          python3 desktop/scripts/build_release_evidence.py "${artifacts}" \
+            "${evidence[@]}" --verify
+          gh release upload "${TAG}" "${dmg}" "${artifacts}/release-evidence.json" --clobber
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "${dmg}")"
           {
             echo "### Lemma Desktop nightly"
             echo
             echo "[Download the DMG](${url})"
+            echo
+            echo "SHA-256: \`$(shasum -a 256 "${dmg}" | cut -d" " -f1)\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       # Tauri notarizes and staples the .app, then tars it. That ordering is
@@ -1231,6 +1270,10 @@ jobs:
           tarball="desktop/target/release/bundle/macos/Lemma.app.tar.gz"
           test -f "${tarball}"
           test -f "${tarball}.sig"
+          # The nightly is the channel that updates itself every night, so it is
+          # where a key that no longer matches the committed public half shows
+          # up first -- and the reason to check here rather than only at release.
+          python3 desktop/scripts/check_updater_key.py --signature-file "${tarball}.sig"
           workdir="$(mktemp -d)"
           tar -xzf "${tarball}" -C "${workdir}"
           app="${workdir}/Lemma.app"

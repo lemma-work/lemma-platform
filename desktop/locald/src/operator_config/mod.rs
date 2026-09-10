@@ -4,8 +4,8 @@
 //! Was one 2,423-line file. Split by what is being done to the config.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs::{self};
+use std::io::{self};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::provider_probe::{HttpModelProviderProbe, ModelProviderProbe};
+pub(crate) use lemma_private_file::{
+    make_private as ensure_private_file, write_atomic as write_private_atomic,
+};
 
 const CONFIG_SCHEMA_VERSION: u64 = 1;
 const VAULT_SERVICE: &str = "work.lemma.local";
@@ -67,62 +70,6 @@ pub struct OperatorConfigStore {
 pub(crate) struct OperatorConfigState {
     config: OperatorConfig,
     secrets: BTreeMap<String, Option<String>>,
-}
-
-pub(crate) fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "config path has no parent"))?;
-    fs::create_dir_all(parent)?;
-    let temporary = path.with_extension(format!("next-{}", std::process::id()));
-    let _ = fs::remove_file(&temporary);
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)?;
-    #[cfg(unix)]
-    fs::File::open(parent)?.sync_all()?;
-    ensure_private_file(path)
-}
-
-/// Make sure the config is a regular file only this user can read.
-///
-/// Over-broad permissions are *repaired* rather than rejected. Refusing to
-/// start does not make the file any less readable -- it just means the
-/// installation never runs again -- and the way this actually happens is
-/// somebody moving their state directory with `cp -R` instead of `cp -Rp`,
-/// which lands 0644 and used to be permanently fatal, silently.
-///
-/// Anything that is not a regular file still fails: a symlink or a directory
-/// here is not a permissions accident, and following one would be the bug.
-pub(crate) fn ensure_private_file(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "private configuration is not a regular file: {}",
-                path.display()
-            ),
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        if metadata.mode() & 0o077 != 0 {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
 }
 
 impl OperatorConfigStore {

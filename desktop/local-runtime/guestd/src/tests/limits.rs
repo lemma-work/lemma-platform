@@ -114,3 +114,81 @@ fn available_memory_comes_from_the_kernels_own_estimate() {
 fn the_sandbox_ceiling_is_configurable() {
     assert_eq!(max_sandboxes(), DEFAULT_MAX_SANDBOXES);
 }
+
+/// The guest says how much room is left where it keeps everything.
+///
+/// Nothing reported this at all, and the disk it describes is a fixed size
+/// shared by every image, every unpacked snapshot, every workspace and the
+/// database. The first sign it had run out was whatever broke first, which is
+/// usually Postgres refusing to write.
+#[test]
+fn health_reports_what_is_left_of_the_data_disk() {
+    let root = tempdir().unwrap();
+    let service = GuestService::new(
+        FakeEngine::new(vec![output(true, "")]),
+        root.path().into(),
+        Some("192.168.64.2".into()),
+        "192.168.64.1".into(),
+        None,
+    )
+    .unwrap();
+
+    let health = service.health().expect("a healthy guest answers");
+    let disk = &health["data_disk"];
+    let free = disk["free_bytes"].as_u64().expect("free bytes reported");
+    let total = disk["total_bytes"].as_u64().expect("total bytes reported");
+    assert!(total > 0, "a real filesystem has a size: {disk}");
+    assert!(free <= total, "free cannot exceed total: {disk}");
+}
+
+/// A filesystem that cannot be measured is reported as unknown, not as full.
+///
+/// A fabricated zero reads as "out of space" and a fabricated large number
+/// reads as "fine". Both are worse than saying nothing, and the host already
+/// treats an absent field as a guest too old to have one.
+#[test]
+fn an_unmeasurable_filesystem_reports_nothing_rather_than_a_guess() {
+    assert!(crate::capacity::data_disk_space(std::path::Path::new(
+        "/definitely/not/a/directory/on/this/machine"
+    ))
+    .is_none());
+}
+
+/// The shutdown reply says what it stopped, split by class, and what it was
+/// willing to spend.
+///
+/// The relationships between the constants are compile-time assertions beside
+/// them. What a test adds is that the numbers reach the host at all: a stop
+/// that was cut short is otherwise indistinguishable from one that finished.
+#[test]
+fn the_stop_budget_and_the_split_counts_are_reportable() {
+    assert_eq!(
+        GUEST_STOP_WORST_CASE_SECONDS,
+        SANDBOX_STOP_GRACE_SECONDS * MAX_SANDBOX_CEILING as u32
+            + CORE_STOP_GRACE_SECONDS * CORE_CONTAINERS.len() as u32,
+    );
+    // The override cannot ask for more than the budget covers. Without the
+    // clamp, `LEMMA_GUEST_MAX_SANDBOXES=32` needed seventeen seconds more than
+    // the host waits, and the guest would be terminated mid-shutdown.
+    assert!(max_sandboxes() <= MAX_SANDBOX_CEILING);
+    let stopped = StoppedContainers {
+        sandboxes: 4,
+        core: 3,
+    };
+    assert_eq!(stopped.total(), 7);
+}
+
+/// An id the engine did not print is not stopped, and one it printed in a
+/// shape we do not recognise stops the whole thing rather than being guessed
+/// at -- these ids go into an engine command line.
+#[test]
+fn only_real_container_ids_reach_the_stop_command() {
+    assert_eq!(
+        parse_container_ids("abc123\n\n  def456  \n").unwrap(),
+        vec!["abc123".to_owned(), "def456".to_owned()],
+    );
+    assert_eq!(parse_container_ids("").unwrap(), Vec::<String>::new());
+    for hostile in ["--time", "abc; rm -rf /", "abcg", &"a".repeat(129)] {
+        assert!(parse_container_ids(hostile).is_err(), "{hostile}");
+    }
+}

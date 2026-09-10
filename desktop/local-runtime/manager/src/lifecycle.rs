@@ -2,6 +2,25 @@
 
 use super::*;
 
+/// The last reason the guest gave for its data disk needing repair.
+///
+/// The newest wins: a guest that failed, was repaired, and failed again for a
+/// different reason should report the reason it is stuck on now, not the one it
+/// got past.
+///
+/// Its own function because the text arrives from a different place on each
+/// platform -- a VZ console this host owns, or the output of the `wsl.exe` that
+/// started a distribution -- and the reading of it should not be one of the
+/// things that differs.
+pub(crate) fn needs_repair_reason(text: &str) -> Option<String> {
+    const MARKER: &str = "lemma-data: needs-repair:";
+    text.lines()
+        .rev()
+        .find_map(|line| line.split_once(MARKER))
+        .map(|(_, reason)| reason.trim().to_owned())
+        .filter(|reason| !reason.is_empty())
+}
+
 impl ManagedRuntime {
     pub fn start(&self) -> io::Result<ManagedRuntimeStatus> {
         self.ensure_capability()?;
@@ -190,17 +209,23 @@ impl ManagedRuntime {
     /// it could report over is running -- `lemma-guestd` requires the mount
     /// that just failed. That makes the console the only channel available for
     /// this class of failure, and it is already a Diagnostics source.
-    #[cfg(target_os = "macos")]
-    /// Only this boot's console is consulted -- see the rotation in `start`,
-    /// which is what makes that true.
+    #[cfg(any(target_os = "macos", windows))]
+    /// Only this boot's output is consulted -- see the rotation in `start` on
+    /// macOS, and `rotate_log` in `run_wsl_command` on Windows, which is what
+    /// makes that true on each.
     pub(crate) fn guest_needs_data_repair(&self) -> Option<String> {
-        const MARKER: &str = "lemma-data: needs-repair:";
-        let console = self.config.local_root.join("runtime/macos/console.log");
-        let text = fs::read_to_string(console).ok()?;
-        text.lines()
-            .rev()
-            .find_map(|line| line.split_once(MARKER))
-            .map(|(_, reason)| reason.trim().to_owned())
+        // Where the guest says it, on each platform. The words are the guest's
+        // either way -- `lemma-mount-data` and its siblings print them -- and
+        // only the channel differs: a VZ guest writes to a console this host
+        // owns, and a WSL distribution writes to the output of the `wsl.exe`
+        // that started it.
+        #[cfg(target_os = "macos")]
+        let source = self.config.local_root.join("runtime/macos/console.log");
+        #[cfg(windows)]
+        let source = self.config.local_root.join("logs/wsl.log");
+        #[cfg(not(any(target_os = "macos", windows)))]
+        let source = self.config.local_root.join("runtime/console.log");
+        needs_repair_reason(&fs::read_to_string(source).ok()?)
     }
 
     pub fn check_guest_kernel(&self) -> io::Result<()> {
@@ -223,7 +248,11 @@ impl ManagedRuntime {
             // answer: `lemma-data.service` failed, and `lemma-guestd.service`
             // requires it. Waiting out the remaining budget would turn a known,
             // named problem into "did not become ready".
-            #[cfg(target_os = "macos")]
+            // Both platforms. The guest names this problem the same way on
+            // each, and only macOS was listening -- so on Windows a named,
+            // actionable failure spent the full budget and arrived as "did not
+            // become ready".
+            #[cfg(any(target_os = "macos", windows))]
             if let Some(reason) = self.guest_needs_data_repair() {
                 return Err(io::Error::other(format!(
                     "Lemma's private data disk needs repair: {reason}; {DATA_RESET_MARKER}"

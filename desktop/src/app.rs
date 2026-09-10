@@ -52,7 +52,6 @@ pub(crate) fn run() {
             stack_control::restart,
             stack_control::open_app,
             stack_control::open_logs,
-            diagnostics::installer_log,
             diagnostics::diagnostic_logs,
             connection::choose_connection_mode,
             connection::set_connection_mode,
@@ -80,6 +79,8 @@ pub(crate) fn run() {
             prompts::resolve_confirmation,
             diagnostics::open_developer_tools,
             local_recovery::local_recovery_options,
+            telemetry::telemetry_status,
+            telemetry::set_telemetry_enabled,
             local_recovery::reset_local_data,
             local_recovery::reset_full_reinstall,
             local_recovery::restart_into_recovery,
@@ -134,6 +135,12 @@ pub(crate) fn run() {
                 "resume: hit, opening the workspace directly"
             } else {
                 "resume: miss, falling back to the splash"
+            });
+            // Cold means this launch found nothing already serving and has to
+            // bring the stack up. It is the launch that can go wrong, and the
+            // one whose duration is worth knowing.
+            telemetry::note(telemetry::InstallEvent::Launched {
+                cold: resume.is_none(),
             });
 
             let initial_url = if mode == "hosted" {
@@ -379,33 +386,18 @@ pub(crate) fn run() {
             // to say so about.
             tauri::RunEvent::ExitRequested { api, .. } => {
                 let shell: State<Shell> = app.state();
-                // A server switch closes the window and opens another one. In
-                // between there are no windows, which looks exactly like the
-                // last one closing -- so hold the exit rather than asking about
-                // it or taking it.
-                if shell.swapping_window.load(Ordering::Acquire) {
-                    api.prevent_exit();
-                    return;
+                match exit_disposition(
+                    shell.swapping_window.load(Ordering::Acquire),
+                    shell.shutdown.may_exit(),
+                    shell.quit_confirmed.load(Ordering::Acquire),
+                ) {
+                    ExitDisposition::Allow => {}
+                    ExitDisposition::Hold => api.prevent_exit(),
+                    ExitDisposition::Quit => {
+                        api.prevent_exit();
+                        request_quit(app);
+                    }
                 }
-                if shell.shutdown.may_exit() {
-                    return;
-                }
-                api.prevent_exit();
-                if shell.quit_confirmed.load(Ordering::Acquire) {
-                    return;
-                }
-                if quit_impact(app).is_empty() {
-                    // Nothing to warn about, but still something to do: the
-                    // daemon outlives the app deliberately, so quitting has to
-                    // stop it. Letting the exit through here ran that on the
-                    // main thread from `RunEvent::Exit` -- which is why Dock ->
-                    // Quit sat "not responding" for several seconds before the
-                    // window went away. `finish_quit` does the same work on a
-                    // worker and exits when it is done.
-                    request_quit(app);
-                    return;
-                }
-                request_quit(app);
             }
             tauri::RunEvent::Exit => {
                 // Cleanup belongs to the worker admitted by ExitRequested.

@@ -88,6 +88,19 @@ impl Daemon {
         }
 
         let mut command = supervisor_command()?;
+        // Its own process group, so it can be stopped as a tree.
+        //
+        // The compatibility supervisor is `uv run --project lemma-stack
+        // lemma-stack supervise` in a checkout, which is uv, which is Python,
+        // which is the stack's own children. Killing the leader left all of
+        // that running -- and without a group of its own there is nothing to
+        // signal but the leader, because a negative PID would reach whatever
+        // group locald itself is in.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         command
             .env("LEMMA_DESKTOP", "1")
             // Handed straight to the bundled supervisor, which ships in the
@@ -339,4 +352,21 @@ pub(super) fn transitional_provider(managed_runtime_available: bool) -> String {
         // present. Render the matching backend profile in advance.
         _ => "podman".into(),
     }
+}
+
+/// The size and modification time of the executable this daemon is running.
+///
+/// Paired with `executable` in the handshake: see the comment there for why a
+/// path is not an identity on Windows.
+pub(super) fn executable_stamp() -> Option<(u64, u128)> {
+    let path = std::env::current_exe().ok()?;
+    let resolved = std::fs::canonicalize(&path).unwrap_or(path);
+    let metadata = std::fs::metadata(&resolved).ok()?;
+    let modified = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    Some((metadata.len(), modified))
 }
