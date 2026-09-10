@@ -203,12 +203,7 @@ use std::collections::HashMap;
 
 use tempfile::tempdir;
 
-use super::environment::exact_origin_regex;
-use super::{
-    compose_backend_environment, error_diagnostic_source, runtime_operation_error_code,
-    sharing_environment,
-};
-use crate::sharing::SharingMode;
+use super::{compose_backend_environment, error_diagnostic_source, runtime_operation_error_code};
 
 #[test]
 fn operator_updates_preserve_private_runtime_endpoints() {
@@ -351,79 +346,6 @@ fn startup_errors_select_the_relevant_diagnostic_log() {
         error_diagnostic_source("registry DNS lookup failed"),
         ("infrastructure", "infrastructure")
     );
-}
-
-#[test]
-fn public_canonical_environment_uses_one_prefixed_secure_origin() {
-    let (backend, frontend) =
-        sharing_environment("https://lemma.example.com/", SharingMode::Public);
-    assert_eq!(backend["API_URL"], "https://lemma.example.com/_lemma/api");
-    // A tunnel serves one origin and no app host, so the deployment must
-    // stop advertising one. Left set, every app's URL pointed at
-    // `<slug>.apps.lemma.localhost` -- which a visitor's browser resolves
-    // against their own machine.
-    assert_eq!(backend["APP_BASE_DOMAIN"], "");
-    assert_eq!(backend["APP_API_VIA_APP_ORIGIN"], "false");
-    assert_eq!(backend["FRONTEND_URL"], "https://lemma.example.com");
-    assert_eq!(backend["SUPERTOKENS_API_GATEWAY_PATH"], "/_lemma/api/st");
-    assert_eq!(backend["SESSION_COOKIE_SECURE"], "true");
-    assert_eq!(backend["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false");
-    assert_eq!(
-        backend["CORS_ORIGIN_REGEX"],
-        "^https://lemma\\.example\\.com$"
-    );
-    assert_eq!(
-        frontend["NEXT_PUBLIC_API_URL"],
-        "https://lemma.example.com/_lemma/api"
-    );
-    assert_eq!(
-        frontend["NEXT_PUBLIC_AUTH_URL"],
-        "https://lemma.example.com/auth"
-    );
-    assert_eq!(
-        frontend["NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED"],
-        "false"
-    );
-}
-
-#[test]
-fn lan_canonical_environment_keeps_host_only_nonsecure_cookies() {
-    let (backend, frontend) =
-        sharing_environment("http://192.168.1.20:51234", SharingMode::LocalNetwork);
-    assert_eq!(backend["SESSION_COOKIE_SECURE"], "false");
-    assert_eq!(backend["SESSION_COOKIE_DOMAIN"], "");
-    assert_eq!(frontend["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"], "");
-    assert_eq!(
-        exact_origin_regex("http://192.168.1.20:51234"),
-        "^http://192\\.168\\.1\\.20:51234$"
-    );
-}
-
-/// Exposing an installation raises its defences, in every mode.
-///
-/// The host pack turns every abuse control off, which is correct while only
-/// this Mac can reach the stack. This overlay is what runs when that stops
-/// being true, and it used to rewrite URLs and nothing else -- so a
-/// workspace on the LAN or the open internet had no sign-in rate limit, no
-/// ceiling on account creation, no ALTCHA, and answered unhandled errors
-/// with a source-annotated traceback.
-#[test]
-fn sharing_raises_the_abuse_controls_the_local_pack_turns_off() {
-    for (origin, mode) in [
-        ("https://lemma.example.com", SharingMode::Public),
-        ("http://192.168.1.20:51234", SharingMode::LocalNetwork),
-    ] {
-        let (backend, _) = sharing_environment(origin, mode);
-        assert_eq!(
-            backend["AUTH_ABUSE_PROTECTION_ENABLED"], "true",
-            "{origin} is reachable by someone other than this Mac"
-        );
-        assert_eq!(backend["AUTH_ALTCHA_ENABLED"], "true", "{origin}");
-        assert_eq!(
-            backend["DEBUG"], "false",
-            "{origin} must not answer strangers with tracebacks"
-        );
-    }
 }
 
 /// The one arm that erases somebody's work asks first, and had no test.

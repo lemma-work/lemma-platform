@@ -209,3 +209,48 @@ fn a_missing_wsl_executable_keeps_its_not_found_kind() {
     .expect_err("a missing executable cannot succeed");
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
 }
+
+/// The host waits longer than the stop it asked for can take.
+///
+/// This was eight seconds, for an operation whose own worst case is
+/// sixty-one: sandboxes at one second each up to the ceiling of sixteen, then
+/// three data services at fifteen. `nerdctl stop` works through its arguments
+/// one at a time, so those add rather than overlap.
+///
+/// Whichever container was still stopping when the budget expired had the
+/// guest terminated underneath it -- and the one most likely to still be
+/// stopping is the one that takes longest, which is the database. Past its
+/// grace the engine sends SIGKILL, and the next start replays the WAL instead
+/// of opening.
+#[test]
+fn a_shutdown_is_given_longer_than_the_guest_can_spend_stopping() {
+    for transport in [GuestTransport::Resident, GuestTransport::PerRequest] {
+        let budget = guest_request_budget("system.shutdown", transport);
+        assert!(
+            budget.as_secs() > GUEST_STOP_WORST_CASE_SECONDS,
+            "a shutdown gets {budget:?}, and the guest may legitimately spend \
+             {GUEST_STOP_WORST_CASE_SECONDS}s. Raising the guest's grace \
+             periods means raising this too, or the guest is terminated while \
+             a database is still checkpointing.",
+        );
+    }
+}
+
+/// The one arithmetic this rests on, spelled out so a changed constant on the
+/// guest side is a failure here rather than a silent regression.
+///
+/// The numbers live in `lemma-guestd`, which does not compile for Windows and
+/// so cannot be a dependency of this crate. The link is this test and the
+/// comment beside the constant.
+#[test]
+fn the_worst_case_is_the_sum_the_guest_computes() {
+    const SANDBOX_GRACE: u64 = 1;
+    const SANDBOX_CEILING: u64 = 16;
+    const CORE_GRACE: u64 = 15;
+    const CORE_SERVICES: u64 = 3;
+
+    assert_eq!(
+        GUEST_STOP_WORST_CASE_SECONDS,
+        SANDBOX_GRACE * SANDBOX_CEILING + CORE_GRACE * CORE_SERVICES,
+    );
+}

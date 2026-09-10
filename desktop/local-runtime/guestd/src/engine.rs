@@ -190,6 +190,21 @@ impl<E: Engine + 'static> GuestService<E> {
         Ok(parsed.as_array().and_then(|items| items.first()).cloned())
     }
 
+    /// The engine's id for a container named `name`, if it has one.
+    ///
+    /// Asked by name because the stop path has to tell the data services apart
+    /// from everything else, and `ps --quiet` prints ids alone.
+    pub(crate) fn container_id(&self, name: &str) -> Result<Option<String>, GuestError> {
+        let Some(details) = self.inspect_raw(name)? else {
+            return Ok(None);
+        };
+        Ok(details
+            .get("Id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned))
+    }
+
     /// Why a core container is not answering, in its own words.
     ///
     /// This used to return the single last non-empty line, which is fine for a

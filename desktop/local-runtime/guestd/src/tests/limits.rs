@@ -153,3 +153,38 @@ fn an_unmeasurable_filesystem_reports_nothing_rather_than_a_guess() {
     ))
     .is_none());
 }
+
+/// The shutdown reply says what it stopped, split by class, and what it was
+/// willing to spend.
+///
+/// The relationships between the constants are compile-time assertions beside
+/// them. What a test adds is that the numbers reach the host at all: a stop
+/// that was cut short is otherwise indistinguishable from one that finished.
+#[test]
+fn the_stop_budget_and_the_split_counts_are_reportable() {
+    assert_eq!(
+        GUEST_STOP_WORST_CASE_SECONDS,
+        SANDBOX_STOP_GRACE_SECONDS * DEFAULT_MAX_SANDBOXES as u32
+            + CORE_STOP_GRACE_SECONDS * CORE_CONTAINERS.len() as u32,
+    );
+    let stopped = StoppedContainers {
+        sandboxes: 4,
+        core: 3,
+    };
+    assert_eq!(stopped.total(), 7);
+}
+
+/// An id the engine did not print is not stopped, and one it printed in a
+/// shape we do not recognise stops the whole thing rather than being guessed
+/// at -- these ids go into an engine command line.
+#[test]
+fn only_real_container_ids_reach_the_stop_command() {
+    assert_eq!(
+        parse_container_ids("abc123\n\n  def456  \n").unwrap(),
+        vec!["abc123".to_owned(), "def456".to_owned()],
+    );
+    assert_eq!(parse_container_ids("").unwrap(), Vec::<String>::new());
+    for hostile in ["--time", "abc; rm -rf /", "abcg", &"a".repeat(129)] {
+        assert!(parse_container_ids(hostile).is_err(), "{hostile}");
+    }
+}
