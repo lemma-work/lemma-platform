@@ -105,11 +105,31 @@ pub fn replace(source: &Path, destination: &Path) -> io::Result<()> {
         /// enough that a real permissions failure is still reported promptly.
         const PATIENCE: Duration = Duration::from_secs(2);
 
+        /// Wait a little longer each time, and not for the same length as
+        /// anybody else.
+        ///
+        /// The retry used to sleep a flat 10ms. Two hundred attempts fitted in
+        /// the budget and it still gave up under eight-way contention, because
+        /// the attempts were not independent: every thread slept the same
+        /// amount, woke at the same instant and collided again, so the loser of
+        /// the first race kept losing the same race. Growing the wait spreads
+        /// them out, and the jitter is what stops them re-synchronising --
+        /// derived from the thread's own identity so two threads in one process
+        /// differ, with no dependency added for it.
+        fn backoff(attempt: u32) -> Duration {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::thread::current().id().hash(&mut hasher);
+            let jitter = hasher.finish() % 8;
+            Duration::from_millis((2u64 << attempt.min(4)) + jitter)
+        }
+
         let wide =
             |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
         let source = wide(source);
         let destination = wide(destination);
         let deadline = Instant::now() + PATIENCE;
+        let mut attempt = 0u32;
         loop {
             // SAFETY: both strings are NUL-terminated and outlive the call,
             // and the return value is checked.
@@ -129,7 +149,8 @@ pub fn replace(source: &Path, destination: &Path) -> io::Result<()> {
             {
                 return Err(error);
             }
-            std::thread::sleep(Duration::from_millis(10));
+            std::thread::sleep(backoff(attempt));
+            attempt = attempt.saturating_add(1);
         }
     }
 }
