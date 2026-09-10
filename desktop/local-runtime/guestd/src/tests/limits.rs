@@ -164,9 +164,13 @@ fn an_unmeasurable_filesystem_reports_nothing_rather_than_a_guess() {
 fn the_stop_budget_and_the_split_counts_are_reportable() {
     assert_eq!(
         GUEST_STOP_WORST_CASE_SECONDS,
-        SANDBOX_STOP_GRACE_SECONDS * DEFAULT_MAX_SANDBOXES as u32
+        SANDBOX_STOP_GRACE_SECONDS * MAX_SANDBOX_CEILING as u32
             + CORE_STOP_GRACE_SECONDS * CORE_CONTAINERS.len() as u32,
     );
+    // The override cannot ask for more than the budget covers. Without the
+    // clamp, `LEMMA_GUEST_MAX_SANDBOXES=32` needed seventeen seconds more than
+    // the host waits, and the guest would be terminated mid-shutdown.
+    assert!(max_sandboxes() <= MAX_SANDBOX_CEILING);
     let stopped = StoppedContainers {
         sandboxes: 4,
         core: 3,

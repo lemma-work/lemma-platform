@@ -236,21 +236,52 @@ fn a_shutdown_is_given_longer_than_the_guest_can_spend_stopping() {
     }
 }
 
-/// The one arithmetic this rests on, spelled out so a changed constant on the
-/// guest side is a failure here rather than a silent regression.
+/// The one arithmetic this rests on, read from the guest rather than restated.
 ///
 /// The numbers live in `lemma-guestd`, which does not compile for Windows and
-/// so cannot be a dependency of this crate. The link is this test and the
-/// comment beside the constant.
+/// so cannot be a dependency of this crate. Restating them here made two
+/// independent copies of one contract -- the failure being a guest that raises
+/// its grace periods while the host keeps its old deadline, and terminates a
+/// shutdown that was still going. `guest_pull_timeout` above solves the same
+/// problem the same way.
 #[test]
 fn the_worst_case_is_the_sum_the_guest_computes() {
-    const SANDBOX_GRACE: u64 = 1;
-    const SANDBOX_CEILING: u64 = 16;
-    const CORE_GRACE: u64 = 15;
-    const CORE_SERVICES: u64 = 3;
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../guestd/src/capacity.rs"),
+    )
+    .expect("the guest daemon's capacity source");
+
+    let declared = |name: &str| -> u64 {
+        source
+            .split(&format!("{name}: u32 = "))
+            .nth(1)
+            .or_else(|| source.split(&format!("{name}: usize = ")).nth(1))
+            .unwrap_or_else(|| panic!("{name} is declared in one place"))
+            .split(';')
+            .next()
+            .expect("a terminated declaration")
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("{name} is a plain integer"))
+    };
+    let sandbox_grace = declared("SANDBOX_STOP_GRACE_SECONDS");
+    let core_grace = declared("CORE_STOP_GRACE_SECONDS");
+    let ceiling = declared("MAX_SANDBOX_CEILING");
+    let core_services = source
+        .split("CORE_CONTAINERS: [&str; ")
+        .nth(1)
+        .expect("the core container list is declared with its length")
+        .split(']')
+        .next()
+        .expect("a terminated array type")
+        .parse::<u64>()
+        .expect("a plain length");
 
     assert_eq!(
         GUEST_STOP_WORST_CASE_SECONDS,
-        SANDBOX_GRACE * SANDBOX_CEILING + CORE_GRACE * CORE_SERVICES,
+        sandbox_grace * ceiling + core_grace * core_services,
+        "the guest's own numbers say {}s; this crate's budget is derived from \
+         {GUEST_STOP_WORST_CASE_SECONDS}s and has to move with them",
+        sandbox_grace * ceiling + core_grace * core_services,
     );
 }

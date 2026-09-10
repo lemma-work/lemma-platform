@@ -44,9 +44,38 @@ pub(crate) const CORE_CONTAINERS: [&str; 3] = ["supertokens", "redis", "postgres
 /// rather than the maximum. The host's `system.shutdown` budget must exceed it:
 /// a budget below this terminates the guest while a database is still
 /// checkpointing, which is the failure this arithmetic exists to prevent.
+/// Computed from `MAX_SANDBOX_CEILING`, not from the default. An installation
+/// that raised `LEMMA_GUEST_MAX_SANDBOXES` still has to fit, and the ceiling is
+/// what bounds how far it can raise it -- computed from the default, an
+/// override of 32 needed seventeen seconds more than the host was willing to
+/// wait, and the guest would have been terminated mid-shutdown by the very
+/// arithmetic meant to prevent that.
+///
+/// It covers the containers Lemma creates. One nobody here started, running in
+/// this guest without the sandbox label, is given the longer grace -- more time
+/// rather than less, which is the safe direction -- and extends a stop past
+/// this number.
 pub(crate) const GUEST_STOP_WORST_CASE_SECONDS: u32 = SANDBOX_STOP_GRACE_SECONDS
-    * DEFAULT_MAX_SANDBOXES as u32
+    * MAX_SANDBOX_CEILING as u32
     + CORE_STOP_GRACE_SECONDS * CORE_CONTAINERS.len() as u32;
+
+// Checked when this file compiles, because they are statements about the
+// constants above rather than about any run.
+const _: () = assert!(
+    CORE_STOP_GRACE_SECONDS > SANDBOX_STOP_GRACE_SECONDS,
+    "a data service must not be given less grace than a scratch workload",
+);
+const _: () = assert!(
+    MAX_SANDBOX_CEILING >= DEFAULT_MAX_SANDBOXES,
+    "the ceiling cannot sit below the default, or the default is unreachable",
+);
+// `lemma-runtime-manager` needs this number and cannot link this crate, so its
+// test reads these declarations out of this file. Changing any of them changes
+// the host's shutdown budget with it.
+const _: () = assert!(
+    GUEST_STOP_WORST_CASE_SECONDS == 75,
+    "the host's shutdown budget is derived from this; both move together",
+);
 
 /// What a stop actually stopped, split by what each class stood to lose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +107,13 @@ pub(crate) fn parse_container_ids(output: &str) -> Result<Vec<String>, GuestErro
         .collect()
 }
 
+/// The most sandboxes any override may ask for.
+///
+/// The override raises the ceiling for a larger guest; it does not get to move
+/// a number on the other side of a socket. `max_sandboxes()` clamps to this so
+/// the stop budget below covers whatever an installation actually runs.
+pub(crate) const MAX_SANDBOX_CEILING: usize = 30;
+
 /// The concurrent-sandbox ceiling, overridable for a larger guest.
 pub(crate) fn max_sandboxes() -> usize {
     std::env::var("LEMMA_GUEST_MAX_SANDBOXES")
@@ -85,6 +121,7 @@ pub(crate) fn max_sandboxes() -> usize {
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_MAX_SANDBOXES)
+        .min(MAX_SANDBOX_CEILING)
 }
 
 impl<E: Engine + 'static> GuestService<E> {
@@ -239,11 +276,25 @@ impl<E: Engine + 'static> GuestService<E> {
     /// container holds rather than measurements -- `GUEST_STOP_WORST_CASE` is
     /// the arithmetic they add up to, and the host's budget has to exceed it.
     pub(crate) fn stop_all_containers(&self) -> Result<StoppedContainers, GuestError> {
+        // Classified by the label the sandboxes carry, asked of the engine
+        // twice, rather than by inspecting each core container by name.
+        //
+        // `inspect_raw` turns any non-zero exit into "no such container", so an
+        // inspect that failed for any other reason -- a busy engine, a
+        // truncated response -- would have taken the database out of the core
+        // set and stopped it with the one-second sandbox grace. That is exactly
+        // the defect this function exists to fix, reachable through a transient
+        // failure, and silent when it happened.
+        //
+        // `sandbox_run` is the only thing that applies MANAGED_LABEL, so
+        // everything else running here is core by definition. Anything
+        // unexpected therefore lands in the group that waits longer, which is
+        // the safe direction to be wrong in.
         let running = self.running_container_ids()?;
-        let core = self.core_container_ids()?;
-        let sandboxes: Vec<String> = running
+        let sandboxes = self.running_sandbox_ids()?;
+        let core: Vec<String> = running
             .iter()
-            .filter(|id| !core.contains(*id))
+            .filter(|id| !sandboxes.contains(*id))
             .cloned()
             .collect();
 
@@ -272,21 +323,19 @@ impl<E: Engine + 'static> GuestService<E> {
         parse_container_ids(&output)
     }
 
-    /// The data services, by the names `ensure_*` gives them.
+    /// The sandboxes, by the label only a sandbox carries.
     ///
-    /// Asked for by name rather than filtered out of the full list, so a
-    /// container the engine reports in an unexpected shape is treated as a
-    /// sandbox -- stopped briefly -- rather than silently given the database's
-    /// grace, or missed.
-    fn core_container_ids(&self) -> Result<Vec<String>, GuestError> {
-        let mut ids = Vec::new();
-        for name in CORE_CONTAINERS {
-            let container = format!("lemma-core-{name}");
-            if let Some(id) = self.container_id(&container)? {
-                ids.push(id);
-            }
-        }
-        Ok(ids)
+    /// The same question `running_sandbox_count` asks, for the same reason: it
+    /// is the engine's own answer, and it cannot mistake a data service for a
+    /// workspace the way a failed inspection could.
+    fn running_sandbox_ids(&self) -> Result<Vec<String>, GuestError> {
+        let output = self.run_checked(&[
+            "ps".into(),
+            "--quiet".into(),
+            "--filter".into(),
+            format!("label={MANAGED_LABEL}"),
+        ])?;
+        parse_container_ids(&output)
     }
 }
 

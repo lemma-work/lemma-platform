@@ -300,15 +300,28 @@ fn every_control_the_pack_switches_off_is_restored_or_recorded() {
     );
     let recorded: Vec<&str> = OFF_BY_DESIGN.iter().map(|(key, _)| *key).collect();
 
+    // What "switched off" looks like in these files: a disabled flag, or a cap
+    // of zero, which the backend documents as no cap at all.
+    let switched_off = |key: &str, value: &str| {
+        (value == "false" && key.ends_with("_ENABLED"))
+            || (value == "false" && key.contains("_REQUIRED"))
+            || (value == "0" && key.contains("LIMIT"))
+    };
+
     let mut unclassified = Vec::new();
     for (key, value) in packed {
         let value = value.as_str().unwrap_or_default();
-        // What "switched off" looks like in this file: a disabled flag, or a
-        // cap of zero, which the backend documents as no cap at all.
-        let disabled = (value == "false" && key.ends_with("_ENABLED"))
-            || (value == "false" && key.contains("_REQUIRED"))
-            || (value == "0" && key.contains("LIMIT"));
-        if !disabled || shared.contains_key(key) || recorded.contains(&key.as_str()) {
+        if !switched_off(key, value) || recorded.contains(&key.as_str()) {
+            continue;
+        }
+        // Naming the control is not restoring it. `contains_key` alone accepted
+        // an overlay that carried the key forward still disabled -- so an
+        // overlay setting AUTH_ALTCHA_ENABLED=false would have satisfied the
+        // gate whose whole purpose is to require it be switched back on.
+        if shared
+            .get(key.as_str())
+            .is_some_and(|shared_value| !switched_off(key, shared_value))
+        {
             continue;
         }
         unclassified.push(format!("{key}={value}"));

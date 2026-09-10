@@ -31,7 +31,7 @@ impl GuestTransport {
 /// `stop_all_containers` gives a sandbox one second and a data service fifteen,
 /// and `nerdctl stop` works through its arguments one at a time -- so with the
 /// sandbox ceiling at sixteen the guest can legitimately spend
-/// 16 x 1 + 3 x 15 = 61 seconds. The budget below has to exceed that.
+/// 30 x 1 + 3 x 15 = 75 seconds. The budget below has to exceed that.
 ///
 /// It was eight seconds. Whichever container was still stopping when that
 /// expired had the guest terminated underneath it, and the container most
@@ -39,7 +39,7 @@ impl GuestTransport {
 /// database. `guestd::GUEST_STOP_WORST_CASE_SECONDS` is the same number on the
 /// other side; the two are compiled into different binaries, so this comment is
 /// the link and the test below is the check.
-pub(crate) const GUEST_STOP_WORST_CASE_SECONDS: u64 = 61;
+pub(crate) const GUEST_STOP_WORST_CASE_SECONDS: u64 = 75;
 
 pub(crate) fn guest_request_budget(operation: &str, transport: GuestTransport) -> Duration {
     match operation {
