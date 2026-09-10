@@ -35,7 +35,8 @@
 param(
     [Parameter(Position = 0, Mandatory = $true)]
     [ValidateSet('sidecars', 'test', 'test-app', 'fmt', 'lint', 'concepts',
-                 'concepts-check', 'file-size', 'entrypoint-parity', 'test-browser', 'check',
+                 'concepts-check', 'file-size', 'entrypoint-parity', 'entitlements',
+                 'test-browser', 'check',
                  'runtime-fetch', 'exe', 'clean', 'version-check', 'help')]
     [string]$Verb,
 
@@ -101,6 +102,7 @@ switch ($Verb) {
         Write-Host '  desktop.ps1 concepts-check        the baked concepts are committed'
         Write-Host '  desktop.ps1 file-size             Rust file size ratchet (DES-09)'
         Write-Host '  desktop.ps1 entrypoint-parity     this script and the Makefile agree'
+        Write-Host '  desktop.ps1 entitlements          each macOS binary is granted only what it uses'
         Write-Host '  desktop.ps1 test-browser          splash and settings browser journeys'
         Write-Host '  desktop.ps1 check                 fmt, concepts, file size, lint, tests'
         Write-Host '  desktop.ps1 runtime-fetch -Run <id>  download runtime artifacts from a CI run'
@@ -196,6 +198,16 @@ switch ($Verb) {
         Invoke-Checked 'check_entrypoint_parity.py'
     }
 
+    # The subject is macOS signing; the check is plists and JSON, and reads the
+    # same on any machine. A Windows contributor editing tauri.conf.json can ask
+    # whether they just handed the WebView an entitlement.
+    'entitlements' {
+        Require-Command python 'install Python 3 from https://python.org'
+        Step 'Entitlements (least privilege per binary)...'
+        python (Join-Path $DesktopDir 'scripts/check_entitlements.py')
+        Invoke-Checked 'check_entitlements.py'
+    }
+
     'test-browser' {
         Require-Command npm 'install Node.js from https://nodejs.org'
         $uiTests = Join-Path $DesktopDir 'ui-tests'
@@ -217,7 +229,7 @@ switch ($Verb) {
     # cross-compiles the Windows paths from a Mac; there is nothing to
     # cross-compile when you are already on Windows.
     'check' {
-        foreach ($step in @('fmt', 'concepts-check', 'file-size', 'entrypoint-parity', 'lint', 'test', 'test-browser')) {
+        foreach ($step in @('fmt', 'concepts-check', 'file-size', 'entrypoint-parity', 'entitlements', 'lint', 'test', 'test-browser')) {
             & $PSCommandPath $step
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }

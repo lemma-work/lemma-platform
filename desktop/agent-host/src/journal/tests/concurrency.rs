@@ -202,7 +202,6 @@ fn a_fast_stream_never_surfaces_a_busy_journal() {
     journal
         .accept_start(target, &command, &spec, "codex", "1.0")
         .unwrap();
-    let started = std::time::Instant::now();
     std::thread::scope(|scope| {
         scope.spawn(|| {
             for index in 0..CHUNKS {
@@ -245,11 +244,64 @@ fn a_fast_stream_never_surfaces_a_busy_journal() {
         sequences.windows(2).all(|pair| pair[1] == pair[0] + 1),
         "sequences must stay contiguous under concurrent reads"
     );
-    // Loose enough not to be a benchmark, tight enough that reintroducing
-    // an fsync-per-chunk open/close cycle fails here rather than in a chat.
-    assert!(
-        started.elapsed() < Duration::from_secs(20),
-        "journalling {CHUNKS} chunks took {:?}",
-        started.elapsed()
+    // The elapsed-time assertion that used to be here is gone, and
+    // `the_journal_keeps_one_connection_and_never_fsyncs_an_append` below asks
+    // the same question without a stopwatch. It was wrong in both directions:
+    // twenty seconds for 600 chunks is thirty-three milliseconds each, which is
+    // looser than the open/close/fsync cycle it named on a slow disk, and tight
+    // enough to fail a busy CI runner that was doing nothing wrong. It did the
+    // second on a change that touched none of this.
+    //
+    // What is above -- every chunk recorded exactly once, sequences contiguous
+    // under concurrent reads -- is the part of this test that only concurrency
+    // can establish, and it is deterministic.
+}
+
+/// One connection, in WAL, never fsyncing an append.
+///
+/// This is what the stopwatch was standing in for. The failure it guards is
+/// AH-2: a connection per operation, each opening the file, setting three
+/// pragmas, syncing FULL and closing -- which is both slow and, under a fast
+/// stream, a `SQLITE_BUSY` that fails the run and loses the turn.
+///
+/// Asked directly, all three parts are deterministic, and they hold on a CI
+/// runner that is busy.
+#[test]
+fn the_journal_keeps_one_connection_and_never_fsyncs_an_append() {
+    let (_directory, journal, _target, _command, _spec) = fixture();
+
+    // A temporary table lives in the connection that made it. Seeing it from a
+    // clone is the same statement as "these share one connection", which is
+    // what long-lived means here -- a per-operation connection would not.
+    journal
+        .connection()
+        .execute_batch("CREATE TEMP TABLE one_connection (marker)")
+        .expect("the journal's connection must accept a temp table");
+    let elsewhere = journal.clone();
+    let seen: i64 = elsewhere
+        .connection()
+        .query_row("SELECT count(*) FROM one_connection", [], |row| row.get(0))
+        .expect("a clone must be looking at the same connection, not its own");
+    assert_eq!(seen, 0);
+
+    let mode: String = journal
+        .connection()
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        mode.to_ascii_lowercase(),
+        "wal",
+        "a rollback journal serialises readers against every append",
+    );
+
+    // 0 = OFF, 1 = NORMAL, 2 = FULL. FULL is an fsync per commit, and every
+    // streamed chunk is a commit.
+    let synchronous: i64 = journal
+        .connection()
+        .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        synchronous, 1,
+        "synchronous must be NORMAL: FULL fsyncs every appended chunk",
     );
 }
