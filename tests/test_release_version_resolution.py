@@ -34,14 +34,43 @@ RELEASE_WORKFLOWS = (
     "release-lemma-typescript.yml",
 )
 
-#: What each trigger leaves populated. `github.ref`/`github.ref_name` are set on
-#: every event, but only name the version on a tag push -- on a dispatch from a
-#: branch `ref_name` is the branch, which is why `inputs.version` has to win.
+#: What each trigger leaves non-empty. `github.ref`/`github.ref_name` are set on
+#: every event, which is the point: on a dispatch from a branch `ref_name` is
+#: the *branch*, so it is populated and wrong.
 POPULATED_BY = {
     "release": {"github.event.release.tag_name", "github.ref", "github.ref_name"},
-    "workflow_dispatch": {"inputs.version"},
+    "workflow_dispatch": {"inputs.version", "github.ref", "github.ref_name"},
     "push": {"github.ref", "github.ref_name"},
 }
+
+#: Which operand must actually win on each trigger. Separate from POPULATED_BY
+#: because "is non-empty" and "is the version" are different questions, and only
+#: the second one is what a publish needs.
+#:
+#: `||` takes the first non-empty operand, so order is the whole behaviour. An
+#: expression spelled `github.ref_name || inputs.version` references a populated
+#: field on every trigger and would satisfy a test that only asked whether one
+#: was referenced -- while publishing a package named after the branch somebody
+#: dispatched from.
+EXPECTED_VERSION_SOURCE = {
+    "release": "github.event.release.tag_name",
+    "workflow_dispatch": "inputs.version",
+    "push": "github.ref_name",
+}
+
+#: The checkout resolves a git ref rather than a version string, so it ends in
+#: `github.ref` (`refs/tags/v0.8.0`) where the version expressions end in
+#: `github.ref_name` (`v0.8.0`).
+EXPECTED_CHECKOUT_REF = (
+    "github.event.release.tag_name",
+    "inputs.version",
+    "github.ref",
+)
+
+
+def _operands(expression: str) -> list:
+    """The `||` alternatives, in the order GitHub evaluates them."""
+    return [operand.strip() for operand in expression.split("||")]
 
 EXPRESSION = re.compile(r"\$\{\{([^}]*)\}\}")
 
@@ -83,23 +112,72 @@ def test_the_version_resolves_on_every_trigger_the_workflow_declares(name):
             "cannot say whether the version resolves for it".format(name, trigger)
         )
         for field, expression in expressions:
-            referenced = set(re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", expression))
-            assert referenced & POPULATED_BY[trigger], (
+            operands = _operands(expression)
+            resolved = next(
+                (operand for operand in operands if operand in POPULATED_BY[trigger]),
+                None,
+            )
+            assert resolved is not None, (
                 "{}: {} resolves to nothing on a '{}' event -- it reads {} and "
                 "none of those is populated by that trigger.".format(
-                    name, field, trigger, sorted(referenced)
+                    name, field, trigger, operands
+                )
+            )
+            assert resolved == EXPECTED_VERSION_SOURCE[trigger], (
+                "{}: {} resolves to '{}' on a '{}' event, not '{}'. `||` takes "
+                "the first non-empty operand, so the order in {} is the "
+                "behaviour -- this would publish the wrong string.".format(
+                    name,
+                    field,
+                    resolved,
+                    trigger,
+                    EXPECTED_VERSION_SOURCE[trigger],
+                    operands,
                 )
             )
 
 
+def _checkout_steps(document: dict) -> list:
+    """Every `actions/checkout` step in the workflow, with its `with:` block."""
+    found = []
+    for job in (document.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            if str(step.get("uses", "")).startswith("actions/checkout"):
+                found.append(step)
+    return found
+
+
 @pytest.mark.parametrize("name", RELEASE_WORKFLOWS)
-def test_the_checkout_pins_a_ref(name):
-    """Without one, a dispatch builds the default branch under a release's name."""
-    text = (WORKFLOWS / name).read_text(encoding="utf-8")
-    assert re.search(r"^\s+ref:\s*\$\{\{", text, re.MULTILINE), (
-        "{}: the checkout takes no ref, so a workflow_dispatch would publish "
-        "whatever the default branch holds under the release's version".format(name)
-    )
+def test_the_checkout_takes_the_triggering_ref(name):
+    """The checkout must follow the release, not the default branch.
+
+    Asserted against the checkout step itself rather than any `ref:` in the
+    file: a workflow-wide search also passes for an unrelated `ref` field, and
+    for a fixed value like `github.sha` that ignores `inputs.version` entirely
+    -- which is the bug this is meant to exclude, not a spelling of the fix.
+
+    Without a ref, a dispatch checks out the default branch and the version
+    input merely rewrites the version string: the release's name on somebody
+    else's tree, at a version number that can never be re-cut.
+    """
+    document = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+    steps = _checkout_steps(document)
+    assert steps, "{}: no actions/checkout step".format(name)
+
+    for step in steps:
+        ref = (step.get("with") or {}).get("ref")
+        assert ref, (
+            "{}: the checkout takes no ref, so a dispatch would publish "
+            "whatever the default branch holds under the release's "
+            "version".format(name)
+        )
+        match = EXPRESSION.search(str(ref))
+        assert match, "{}: checkout ref '{}' is not an expression".format(name, ref)
+        assert tuple(_operands(match.group(1))) == EXPECTED_CHECKOUT_REF, (
+            "{}: checkout ref resolves {}, expected {} in that order.".format(
+                name, _operands(match.group(1)), list(EXPECTED_CHECKOUT_REF)
+            )
+        )
 
 
 @pytest.mark.parametrize("name", RELEASE_WORKFLOWS)
