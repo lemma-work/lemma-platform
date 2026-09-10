@@ -14,7 +14,14 @@ pub(super) fn compose_backend_environment(
     operator
 }
 
-pub(super) fn sharing_environment(
+/// The handoff cap a shared installation runs with.
+///
+/// The backend's own default for `desktop_auth_create_limit`. Restated here
+/// rather than left to that default, because the host pack has already
+/// overridden it to 0 and an override is only undone by another override.
+const SHARED_DESKTOP_AUTH_CREATE_LIMIT: u32 = 100;
+
+pub(crate) fn sharing_environment(
     origin: &str,
     mode: SharingMode,
 ) -> (HashMap<String, String>, HashMap<String, String>) {
@@ -73,6 +80,15 @@ pub(super) fn sharing_environment(
         // mode.
         ("AUTH_ABUSE_PROTECTION_ENABLED".into(), "true".into()),
         ("AUTH_ALTCHA_ENABLED".into(), "true".into()),
+        // A number, not a flag, and the one control this overlay missed. The
+        // host pack sets it to 0, which the backend documents as "disable the
+        // application-level cap" -- so a shared installation had an unbounded
+        // desktop-auth-handoff endpoint, and anyone who reached the address
+        // could create handoff records without limit.
+        (
+            "DESKTOP_AUTH_CREATE_LIMIT".into(),
+            SHARED_DESKTOP_AUTH_CREATE_LIMIT.to_string(),
+        ),
         ("DEBUG".into(), "false".into()),
     ]);
     let frontend = HashMap::from([

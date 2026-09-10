@@ -96,7 +96,11 @@ mod startup_state;
 mod supervisor;
 
 use dispatch::{error_diagnostic_source, runtime_operation_error_code};
-use environment::{compose_backend_environment, sharing_environment, validate_canonical_origin};
+use environment::{compose_backend_environment, validate_canonical_origin};
+// Reachable from the host-pack tests, which compare what the pack switches off
+// with what this overlay switches back on. The two lists live in different
+// modules and nothing else can put them side by side.
+pub(crate) use environment::sharing_environment;
 use startup_state::remember_derived_origin;
 use supervisor::{executable_stamp, prepare_compatibility_host_manifest};
 
@@ -498,6 +502,8 @@ fn create_listener(paths: &LocalPaths) -> io::Result<LocalSocketListener> {
     }
 }
 
+#[cfg(test)]
+mod environment_tests;
 #[cfg(test)]
 mod error_classification_tests;
 #[cfg(test)]

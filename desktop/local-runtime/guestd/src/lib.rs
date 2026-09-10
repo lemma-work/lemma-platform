@@ -38,6 +38,7 @@ mod service;
 mod spec;
 mod validate;
 
+pub(crate) use capacity::*;
 pub(crate) use core_data::*;
 pub(crate) use diagnostics::*;
 pub(crate) use engine::*;

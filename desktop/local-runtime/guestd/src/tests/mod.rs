@@ -14,7 +14,6 @@ mod protocol;
 mod run_contract;
 
 use super::*;
-use crate::capacity::*;
 use crate::protocol::*;
 use crate::service::*;
 
