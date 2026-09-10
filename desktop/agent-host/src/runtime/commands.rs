@@ -6,6 +6,77 @@ use super::{
     TargetWorker, Utc, Value, redact_error, short_revision, terminal_failure,
 };
 
+/// Why a command was refused, decided where the refusal happens.
+///
+/// This used to be recovered afterwards by matching English substrings against
+/// the error's message -- and against the message *after* `redact_error` had
+/// rewritten parts of it. Two things were wrong with that. Rewording any
+/// `bail!` on the start path silently changed the machine-readable code the
+/// workspace acts on, with nothing failing when it did; and the words are not
+/// specific enough to carry the meaning, so an unrelated failure that happened
+/// to say "expired" -- a provider credential, a certificate -- was reported to
+/// Lemma as `CommandExpired`, which is not retryable, for a run that a retry
+/// would have fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefusedBecause {
+    Draining,
+    CommandExpired,
+    HarnessNotFound,
+    ConfigRevisionStale,
+    CapacityLost,
+    AdapterUnavailable,
+}
+
+impl RefusedBecause {
+    /// The code the workspace stores and acts on.
+    fn code(self) -> RejectionCode {
+        match self {
+            Self::Draining => RejectionCode::Draining,
+            Self::CommandExpired => RejectionCode::CommandExpired,
+            Self::HarnessNotFound => RejectionCode::HarnessNotFound,
+            Self::ConfigRevisionStale => RejectionCode::ConfigRevisionStale,
+            Self::CapacityLost => RejectionCode::CapacityLost,
+            Self::AdapterUnavailable => RejectionCode::AdapterUnavailable,
+        }
+    }
+
+    /// Whether Lemma may mint the same run again without a person deciding.
+    ///
+    /// Only the two that describe this host being momentarily full or on its
+    /// way out. The rest need something to change first -- a revision to be
+    /// republished, an adapter to be installed -- so retrying reproduces them.
+    fn retryable(self) -> bool {
+        matches!(self, Self::Draining | Self::CapacityLost)
+    }
+}
+
+/// A refusal, carrying both the reason and the sentence a person reads.
+///
+/// The `Display` is the detail alone, so every existing log line and stored
+/// rejection detail reads exactly as it did. The reason travels beside it
+/// instead of inside it.
+#[derive(Debug)]
+pub(crate) struct Refusal {
+    because: RefusedBecause,
+    detail: String,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// Refuse a command for a stated reason.
+pub(crate) fn refuse(because: RefusedBecause, detail: impl std::fmt::Display) -> anyhow::Error {
+    anyhow::Error::new(Refusal {
+        because,
+        detail: detail.to_string(),
+    })
+}
+
 pub(crate) fn command_rejection(
     command: &Command,
     error: &anyhow::Error,
@@ -16,22 +87,15 @@ pub(crate) fn command_rejection(
     let run_id = command.run_id?;
     let lease_epoch = command.lease_epoch?;
     let detail = redact_error(&error.to_string());
-    let normalized = detail.to_ascii_lowercase();
-    let (code, retryable) = if normalized.contains("draining") {
-        (RejectionCode::Draining, true)
-    } else if normalized.contains("expired") {
-        (RejectionCode::CommandExpired, false)
-    } else if normalized.contains("unknown harness") {
-        (RejectionCode::HarnessNotFound, false)
-    } else if normalized.contains("revision changed") {
-        (RejectionCode::ConfigRevisionStale, false)
-    } else if normalized.contains("capacity changed") {
-        (RejectionCode::CapacityLost, true)
-    } else if normalized.contains("adapter") || normalized.contains("executable") {
-        (RejectionCode::AdapterUnavailable, false)
-    } else {
-        (RejectionCode::InvalidCommand, false)
-    };
+    // Not the message. A refusal raised anywhere on the start path says why it
+    // refused; anything else that reaches here is a failure this file did not
+    // anticipate, and the workspace can only treat that as a command it cannot
+    // act on -- which is what `InvalidCommand`, not retryable, already means.
+    let (code, retryable) = error
+        .downcast_ref::<Refusal>()
+        .map_or((RejectionCode::InvalidCommand, false), |refusal| {
+            (refusal.because.code(), refusal.because.retryable())
+        });
     Some(CommandRejection {
         command_id: command.command_id,
         run_id,
@@ -44,7 +108,9 @@ pub(crate) fn command_rejection(
 
 impl TargetWorker {
     pub(crate) fn handle_command(&mut self, command: &Command) -> anyhow::Result<()> {
-        anyhow::ensure!(command.expires_at >= Utc::now(), "command is expired");
+        if command.expires_at < Utc::now() {
+            return Err(refuse(RefusedBecause::CommandExpired, "command is expired"));
+        }
         match command.kind {
             CommandKind::StartRun => self.handle_start(command),
             CommandKind::CancelRun => self.handle_cancel(command),
@@ -82,13 +148,20 @@ impl TargetWorker {
     }
 
     pub(crate) fn handle_start(&mut self, command: &Command) -> anyhow::Result<()> {
-        anyhow::ensure!(!self.draining, "Agent Host is draining");
+        if self.draining {
+            return Err(refuse(RefusedBecause::Draining, "Agent Host is draining"));
+        }
         let spec: RunSpec = serde_json::from_value(command.payload.clone())?;
         let published = self
             .harnesses
             .get(&spec.harness_id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("command references an unknown harness"))?;
+            .ok_or_else(|| {
+                refuse(
+                    RefusedBecause::HarnessNotFound,
+                    "command references an unknown harness",
+                )
+            })?;
         if published.config_revision != spec.profile_revision {
             // Both revisions, because the question a reader has is always "how
             // far behind was the command?", and one hash alone cannot answer
@@ -112,13 +185,16 @@ impl TargetWorker {
             // the command, and "how far behind was it?" is the first question
             // asked of a run that died here — on a machine whose log nobody
             // reading the run will ever see.
-            anyhow::bail!(
-                "harness configuration revision changed: this computer publishes {} at {}, \
-                 and the run was minted against {}",
-                published.harness_key,
-                short_revision(&published.config_revision),
-                short_revision(&spec.profile_revision),
-            );
+            return Err(refuse(
+                RefusedBecause::ConfigRevisionStale,
+                format!(
+                    "harness configuration revision changed: this computer publishes {} at {}, \
+                     and the run was minted against {}",
+                    published.harness_key,
+                    short_revision(&published.config_revision),
+                    short_revision(&spec.profile_revision),
+                ),
+            ));
         }
         if self.active_runs.contains_key(&spec.agent_run_id) {
             let outcome = self.journal.accept_start(
@@ -138,7 +214,13 @@ impl TargetWorker {
         // ACCEPTED. Once ACCEPTED is durable, Lemma must not start a cloud
         // fallback, so waiting on the semaphore after that point can duplicate
         // provider work.
-        let adapter = self.manifest.resolve(&published.harness_key)?;
+        // Wrapped, not bubbled: the manifest reports a missing or unusable
+        // adapter in its own words, and those words are what a person needs.
+        // The reason is what Lemma needs, and only this call site knows it.
+        let adapter = self
+            .manifest
+            .resolve(&published.harness_key)
+            .map_err(|error| refuse(RefusedBecause::AdapterUnavailable, error))?;
         let probe = self.probes.get(&published.harness_key).cloned();
         let can_load_session = probe
             .as_ref()
@@ -146,7 +228,12 @@ impl TargetWorker {
         let published_config_options = probe.map(|probe| probe.config_options).unwrap_or_default();
         let permit = Arc::clone(&self.global_capacity)
             .try_acquire_owned()
-            .map_err(|_| anyhow::anyhow!("Agent Host capacity changed; command will be retried"))?;
+            .map_err(|_| {
+                refuse(
+                    RefusedBecause::CapacityLost,
+                    "Agent Host capacity changed; command will be retried",
+                )
+            })?;
         let outcome = self.journal.accept_start(
             self.target.target_id,
             command,

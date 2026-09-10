@@ -135,3 +135,77 @@ fn every_terminal_path_wakes_the_poll_that_reports_it() {
         "the scan found no terminal paths, so it is asserting nothing"
     );
 }
+
+/// A host on its way out refuses starts, and says so in a way Lemma may act
+/// on: this run belongs somewhere else, so re-mint it rather than failing it.
+#[tokio::test]
+async fn a_start_refused_because_the_host_is_draining_is_retryable() {
+    let mut harness = Harness::new().await;
+    harness.worker.draining = true;
+    let command = start_command(Uuid::new_v4(), Utc::now() + chrono::Duration::minutes(1));
+
+    let error = harness.worker.handle_command(&command).unwrap_err();
+    let rejection = command_rejection(&command, &error).expect("a refused start is reported");
+
+    assert_eq!(rejection.code, RejectionCode::Draining);
+    assert!(rejection.retryable);
+}
+
+/// A command that sat in a queue past its own deadline is not retried: the
+/// deadline is Lemma's, and Lemma is the one that decides whether to mint
+/// another.
+#[tokio::test]
+async fn a_start_that_arrived_too_late_is_not_retryable() {
+    let mut harness = Harness::new().await;
+    let command = start_command(Uuid::new_v4(), Utc::now() - chrono::Duration::seconds(1));
+
+    let error = harness.worker.handle_command(&command).unwrap_err();
+    let rejection = command_rejection(&command, &error).expect("a refused start is reported");
+
+    assert_eq!(rejection.code, RejectionCode::CommandExpired);
+    assert!(!rejection.retryable);
+}
+
+/// Minted against a harness this computer does not publish. Retrying cannot
+/// help until the harness exists here, so the run fails rather than looping.
+#[tokio::test]
+async fn a_start_for_a_harness_this_host_never_published_is_not_retryable() {
+    let mut harness = Harness::new().await;
+    let command = start_command(Uuid::new_v4(), Utc::now() + chrono::Duration::minutes(1));
+
+    let error = harness.worker.handle_command(&command).unwrap_err();
+    let rejection = command_rejection(&command, &error).expect("a refused start is reported");
+
+    assert_eq!(rejection.code, RejectionCode::HarnessNotFound);
+    assert!(!rejection.retryable);
+}
+
+/// A start command for `harness_id`, due at `expires_at`.
+fn start_command(harness_id: Uuid, expires_at: chrono::DateTime<Utc>) -> Command {
+    let run_id = Uuid::new_v4();
+    let spec = RunSpec {
+        agent_run_id: run_id,
+        conversation_id: Uuid::new_v4(),
+        harness_id,
+        profile_revision: "revision".into(),
+        model_name: None,
+        config_selections: JsonMap::new(),
+        system_prompt: String::new(),
+        prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+        resume_session_id: None,
+        workspace_cwd: None,
+        context: JsonMap::new(),
+        mcp: serde_json::json!({}),
+        run_deadline: Utc::now() + chrono::Duration::minutes(5),
+        system_prompt_delivery: None,
+    };
+    Command {
+        command_id: Uuid::new_v4(),
+        kind: CommandKind::StartRun,
+        created_at: Utc::now(),
+        expires_at,
+        run_id: Some(run_id),
+        lease_epoch: Some(1),
+        payload: serde_json::to_value(&spec).unwrap(),
+    }
+}
