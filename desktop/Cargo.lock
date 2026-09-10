@@ -2766,6 +2766,7 @@ dependencies = [
  "interprocess",
  "lemma-desktop-process",
  "lemma-job-object",
+ "lemma-locald",
  "lemma-private-file",
  "libc",
  "objc2",

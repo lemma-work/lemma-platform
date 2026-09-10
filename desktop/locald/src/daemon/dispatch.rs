@@ -221,10 +221,26 @@ pub(super) fn runtime_operation_error_code(message: &str, fallback: &'static str
     }
 }
 
-pub(super) fn error_diagnostic_source(message: &str) -> (&'static str, &'static str) {
+/// Which component failed, and which diagnostic log will say why.
+///
+/// The second half is a *log source id*, and the shell serves a fixed set of
+/// them (`diagnostic_log_sources` in `desktop/src/diagnostics.rs`). It used to
+/// answer "infrastructure", which is not one of them: `read_diagnostic_log`
+/// refuses an id it does not serve, so a guest-kernel failure -- or anything
+/// mentioning a container, a registry or the guest -- selected a tab that
+/// could not be read. Those are the failures a person opens the log *for*.
+///
+/// `vm` is `logs/runtime.log`, which the runtime manager writes on both
+/// platforms and is where all of these are recorded. The first half is a label,
+/// not an id, and stays as it was.
+///
+/// `pub` so `every_log_source_the_daemon_names_is_one_the_shell_serves` can ask
+/// it. The two halves of this contract are compiled into different binaries,
+/// and nothing else can put them in the same room.
+pub fn error_diagnostic_source(message: &str) -> (&'static str, &'static str) {
     let message = message.to_ascii_lowercase();
     if message.contains("guest kernel") {
-        ("infrastructure", "infrastructure")
+        ("infrastructure", "vm")
     } else if message.contains("migration") || message.contains("alembic") {
         ("migrations", "migrations")
     } else if message.contains("frontend") || message.contains("eaddrinuse") {
@@ -236,7 +252,7 @@ pub(super) fn error_diagnostic_source(message: &str) -> (&'static str, &'static 
         || message.contains("registry")
         || message.contains("guest")
     {
-        ("infrastructure", "infrastructure")
+        ("infrastructure", "vm")
     } else {
         ("locald", "events")
     }

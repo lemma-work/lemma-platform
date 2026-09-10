@@ -183,3 +183,63 @@ fn a_credential_attached_to_its_key_is_redacted_too() {
         assert_eq!(mask_secret_shapes(ordinary.to_string()), ordinary);
     }
 }
+
+/// Every source id `locald` can name is one this shell serves.
+///
+/// `read_diagnostic_log` refuses an id it has no file for, so an unknown one is
+/// not a fallback: the log panel gets an error instead of a log. The daemon
+/// used to answer `infrastructure` for a crashed guest kernel, and for anything
+/// mentioning a container, a registry or the guest -- which are exactly the
+/// failures a person opens the log to read.
+///
+/// The two vocabularies compile into different binaries, so nothing but a test
+/// can put them in the same room. The messages below are the ones
+/// `error_diagnostic_source` branches on; the point is not that each picks a
+/// particular log, which locald's own tests already pin, but that whatever it
+/// picks exists here.
+#[test]
+fn every_log_source_the_daemon_names_is_one_the_shell_serves() {
+    let served: Vec<&str> = diagnostic_log_sources()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
+
+    for message in [
+        "backend health gate: Linux guest kernel crashed",
+        "frontend failed: EADDRINUSE",
+        "migrations setup exited",
+        "registry DNS lookup failed",
+        "containerd refused to start",
+        "the managed runtime did not come up",
+        "backend never became healthy",
+        "alembic could not upgrade",
+        "something nobody has a branch for",
+    ] {
+        let (_, source) = lemma_locald::daemon::dispatch::error_diagnostic_source(message);
+        assert!(
+            served.contains(&source),
+            "locald points {message:?} at the {source:?} log, which this shell \
+             does not serve, so the log panel shows an error instead of the \
+             log. Served: {served:?}",
+        );
+    }
+}
+
+/// The ids the daemon writes into a phase event, for the same reason.
+///
+/// Literals in `stack_ops.rs` rather than a function, so they are listed here.
+/// One added there and not here is not caught -- but one added to both, and not
+/// served, is, which is the step that would otherwise be skipped.
+#[test]
+fn the_phase_log_sources_are_served_too() {
+    let served: Vec<&str> = diagnostic_log_sources()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
+    for source in ["migrations", "backend", "frontend", "locald", "vm", "guest"] {
+        assert!(
+            served.contains(&source),
+            "a phase event names the {source:?} log, which this shell does not serve",
+        );
+    }
+}
