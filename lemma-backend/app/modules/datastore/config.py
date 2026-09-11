@@ -448,6 +448,14 @@ class DatastoreSettings(BaseSettings):
             "signed URLs. Requests above this are clamped down."
         ),
     )
+    datastore_signed_url_row_retention_seconds: int = Field(
+        default=604800,
+        description=(
+            "How long a public signed URL's row is kept after the link expires. "
+            "The link stops resolving at expiry regardless; this is only so a "
+            "pod can still see what it recently handed out. Defaults to 7 days."
+        ),
+    )
     datastore_signed_url_code_bytes: int = Field(
         default=9,
         description=(

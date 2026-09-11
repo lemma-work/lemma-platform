@@ -129,6 +129,26 @@ export class FilesNamespace {
     return this.client.request(() => FilesService.fileSignedUrl(this.podId(), path, body));
   }
 
+  /**
+   * Every public signed URL this pod has minted, newest first. Pass
+   * `includeDead` to also see links that have expired or been revoked, which
+   * are kept for a grace period.
+   */
+  listSignedUrls(options: { includeDead?: boolean } = {}) {
+    return this.client.request(() =>
+      FilesService.fileSignedUrlList(this.podId(), options.includeDead ?? false),
+    );
+  }
+
+  /**
+   * Kill a public signed URL now rather than waiting out its expiry. `revoked`
+   * is false when the code was already dead or was never this pod's — reported
+   * rather than thrown, so a cleanup pass cannot use this to discover codes.
+   */
+  revokeSignedUrl(code: string) {
+    return this.client.request(() => FilesService.fileSignedUrlRevoke(this.podId(), code));
+  }
+
   delete(path: string) {
     return this.client.request(() => FilesService.fileDelete(this.podId(), path));
   }

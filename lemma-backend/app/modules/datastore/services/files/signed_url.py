@@ -1,12 +1,44 @@
 """Public, hit-capped, short signed URLs for datastore files.
 
-Unlike the stateless HMAC tokens in ``file_url.py``, these links are backed by
-Redis so we can:
+Unlike the stateless HMAC tokens in ``file_url.py``, these links are looked up
+rather than decoded, so we can:
 
 - keep them **short** (a random code, not an embedded payload) — easy for an
   agent to copy/paste and pass around, and
 - enforce a **maximum hit count** per link so a leaked link can't run up
   unbounded egress on a large file.
+
+Two stores, and which owns what is the whole design:
+
+**Postgres owns whether the link exists**, where it points, and when it dies.
+A link is a capability grant, not a cache — it is all that stands between a URL
+and someone's file — and it now lasts up to seven days. Redis durability is a
+property of the deployment rather than of this code (the compose stack snapshots
+every 60s with no AOF; managed key-value services differ again), so a link that
+lived only there survived or vanished according to how the operator had
+deployed. That is not a lifetime anyone can promise a recipient. The row is also
+what makes revocation possible at all: you cannot kill a link that exists only
+as a key nobody has listed.
+
+**Redis owns the spend counter**, and caches the claims so the common fetch
+touches no database. The counter deliberately stays lossy. ``/s/`` is
+unauthenticated and unrate-limited, so a database write per byte-serving fetch
+would be an anonymous write lever and would serialize every reader of a popular
+link on one row — worse since Range landed, because a video player issues dozens
+of requests per view. And it fails the right way round: lose Redis and links
+still resolve while budget accounting resets, where losing the record instead
+would kill links that are perfectly valid. Expiry still bounds a link whose
+counter was lost.
+
+Resetting the budget that way is accepted, not tolerated. The cap exists to stop
+a *leaked* link running up unbounded egress; it is not an accounting guarantee,
+and nothing bills against it. Losing one link's worth of counting to a Redis
+failover costs at most one link's worth of extra egress, which is well inside
+what the cap was ever meant to prevent. Do not "fix" this by moving the counter
+into Postgres — the paragraph above is why. If it ever needs to be tighter, the
+move is a windowed budget (per hour, say, checkpointed durably), which bounds a
+failover's loss to one window instead of the whole link and still keeps the hot
+path in Redis.
 
 The code *is* the capability: anyone holding ``{api_url}/s/{code}`` can fetch the
 bytes (until the link expires or its budget is spent). Bytes are streamed
@@ -33,13 +65,23 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from uuid import UUID, uuid7
+
 from redis.asyncio import Redis
 
+from app.core.infrastructure.db.session import get_session_maker
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
 from app.modules.datastore.config import datastore_settings
-from app.modules.datastore.domain.file_entities import DatastoreFileEntity
+from app.modules.datastore.domain.file_entities import (
+    DatastoreFileEntity,
+    DatastoreSignedLinkEntity,
+)
+from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
+    SignedLinkRepository,
+)
 from app.modules.datastore.services.files.projection import datastore_storage_key
 from app.core.log.log import get_logger
 
@@ -127,6 +169,7 @@ class SignedUrlStore:
         self,
         *,
         file: DatastoreFileEntity,
+        created_by_user_id: UUID | None = None,
         expires_seconds: int | None = None,
         max_hits: int | None = None,
     ) -> tuple[str, str, datetime, int]:
@@ -157,36 +200,69 @@ class SignedUrlStore:
         )
 
         code = secrets.token_urlsafe(datastore_settings.datastore_signed_url_code_bytes)
+        expires_at = datetime.fromtimestamp(
+            int(time.time()) + expires_seconds, tz=timezone.utc
+        )
+
+        # The durable record first, deliberately. If Redis then fails the link
+        # still resolves — the next fetch rehydrates from this row. The other
+        # order gives you a link that works until Redis forgets it, which is the
+        # failure this table exists to remove.
+        link = DatastoreSignedLinkEntity(
+            id=uuid7(),
+            code=code,
+            pod_id=file.pod_id,
+            created_by_user_id=created_by_user_id,
+            path=file.path,
+            object_key=object_key,
+            content_type=file.content_type,
+            filename=file.name,
+            content_sha256=content_sha256,
+            size_bytes=size_bytes,
+            max_hits=max_hits,
+            expires_at=expires_at,
+        )
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            await SignedLinkRepository(uow).create(link)
+            await uow.commit()
+
+        await self._cache(link)
+        signed_url = f"{settings.api_url.rstrip('/')}/s/{code}"
+        return code, signed_url, expires_at, max_hits
+
+    async def _cache(self, link: DatastoreSignedLinkEntity) -> None:
+        """Put a link's claims in Redis with the counter it will spend against.
+
+        Called on mint and again whenever a fetch finds nothing cached, which is
+        what makes a lost Redis a slow first request rather than a dead link.
+        """
+        ttl = int((link.expires_at - datetime.now(timezone.utc)).total_seconds())
+        if ttl <= 0:
+            return
         redis = await self._get_redis()
-        key = self._key(code)
+        key = self._key(link.code)
         async with redis.pipeline(transaction=True) as pipe:
             pipe.hset(
                 key,
                 mapping={
-                    "object_key": object_key,
-                    "pod_id": str(file.pod_id),
-                    "path": file.path,
-                    "content_sha256": content_sha256 or "",
-                    "content_type": file.content_type,
-                    "filename": file.name,
-                    "size_bytes": size_bytes,
-                    "max_hits": max_hits,
+                    "object_key": link.object_key,
+                    "pod_id": str(link.pod_id),
+                    "path": link.path,
+                    "content_sha256": link.content_sha256 or "",
+                    "content_type": link.content_type,
+                    "filename": link.filename,
+                    "size_bytes": link.size_bytes,
+                    "max_hits": link.max_hits,
                     # A budget of 0 means "uncounted", which is what an unknown
                     # or zero size has to fall back to: multiplying it out would
                     # otherwise mint a link that is exhausted before its first
                     # fetch. Expiry still bounds such a link.
-                    "budget_bytes": size_bytes * max_hits,
+                    "budget_bytes": link.size_bytes * link.max_hits,
                     "spent_bytes": 0,
                 },
             )
-            pipe.expire(key, expires_seconds)
+            pipe.expire(key, ttl)
             await pipe.execute()
-
-        expires_at = datetime.fromtimestamp(
-            int(time.time()) + expires_seconds, tz=timezone.utc
-        )
-        signed_url = f"{settings.api_url.rstrip('/')}/s/{code}"
-        return code, signed_url, expires_at, max_hits
 
     async def peek_claims(self, code: str) -> SignedUrlClaims:
         """The link's claims, charging nothing.
@@ -214,14 +290,30 @@ class SignedUrlStore:
         key = self._key(code)
         result = await redis.eval(_CONSUME_LUA, 1, key, max(0, bytes_wanted))
 
+        if not result or int(result[0]) == -1:
+            # Nothing cached. Either this code never existed, or Redis lost it
+            # while the link is still live — indistinguishable from here, so ask
+            # the durable record and try once more. Note the budget starts over
+            # when this happens; see the module docstring for why that is the
+            # side to fail on.
+            if not await self._rehydrate(code):
+                raise SignedUrlNotFound(code)
+            result = await redis.eval(_CONSUME_LUA, 1, key, max(0, bytes_wanted))
+
         if not result:
             raise SignedUrlNotFound(code)
         head = int(result[0])
         if head == -1:
             raise SignedUrlNotFound(code)
         if head == -2:
-            # Burn the link so further attempts short-circuit as not-found
-            # rather than repeatedly re-reporting a spent budget.
+            # Durably first, then burn the cached copy. The other order — which
+            # is what this was before the record existed — drops the key and
+            # leaves a live row behind, so the very next fetch rehydrates, mints
+            # a fresh budget and serves the file again. The cap has to be spent
+            # somewhere that survives losing the counter.
+            async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+                await SignedLinkRepository(uow).mark_exhausted(code)
+                await uow.commit()
             with suppress(Exception):
                 await redis.delete(key)
             raise SignedUrlExhausted(code)
@@ -232,6 +324,41 @@ class SignedUrlStore:
             content_type=result[4] or "application/octet-stream",
             filename=result[5] or result[2].rsplit("/", 1)[-1] or "file",
         )
+
+    async def _rehydrate(self, code: str) -> bool:
+        """Reload a link's claims into Redis from the durable record.
+
+        Returns whether the link is live. The session is opened and closed here
+        rather than handed in, because the caller is the public serving route:
+        it goes on to stream a response body, and a pooled connection held
+        across that is a connection held for as long as the download takes.
+        """
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            link = await SignedLinkRepository(uow).get_by_code(code)
+        if link is None or not link.is_live:
+            return False
+        await self._cache(link)
+        logger.debug(
+            "datastore.signed_url.rehydrated_link_from_record.observed",
+            code=code,
+        )
+        return True
+
+    async def revoke(self, pod_id: UUID, code: str) -> bool:
+        """Kill a link now, before it expires. Returns whether it was live.
+
+        Both halves, and the cache first: while the row is what makes the link
+        exist, the cache is what actually answers a fetch, so dropping it is
+        what makes revocation take effect immediately. A failure between the two
+        leaves the link dead in Redis and revocable again from the record.
+        """
+        redis = await self._get_redis()
+        with suppress(Exception):
+            await redis.delete(self._key(code))
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            revoked = await SignedLinkRepository(uow).revoke(pod_id, code)
+            await uow.commit()
+        return revoked
 
     async def consume(self, code: str) -> str:
         """Compatibility wrapper returning only the object key."""

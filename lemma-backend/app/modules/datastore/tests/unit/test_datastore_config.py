@@ -109,6 +109,11 @@ EXPECTED = [
         200,
     ),
     ("datastore_signed_url_max_hits", "DATASTORE_SIGNED_URL_MAX_HITS", 1000),
+    (
+        "datastore_signed_url_row_retention_seconds",
+        "DATASTORE_SIGNED_URL_ROW_RETENTION_SECONDS",
+        604800,
+    ),
     ("datastore_signed_url_code_bytes", "DATASTORE_SIGNED_URL_CODE_BYTES", 9),
 ]
 

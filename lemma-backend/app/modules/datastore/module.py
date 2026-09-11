@@ -139,6 +139,9 @@ def _routers():
     from app.modules.datastore.api.controllers.query_controller import router as query
     from app.modules.datastore.api.controllers.table_controller import router as table
     from app.modules.datastore.api.controllers.file_controller import router as file
+    from app.modules.datastore.api.controllers.signed_link_controller import (
+        router as signed_link,
+    )
     from app.modules.datastore.api.controllers.public_file_controller import (
         router as public_file,
     )
@@ -149,7 +152,10 @@ def _routers():
         router as changes,
     )
 
-    return [record, query, table, file, public_file, signed_file, changes]
+    # `signed_link` before `file`, and the order is load-bearing: routes match
+    # in registration order, and `file` owns `/files/{file_id}` — which happily
+    # matches `/files/signed-urls` and then fails parsing it as a UUID.
+    return [record, query, table, signed_link, file, public_file, signed_file, changes]
 
 
 def _event_routers():

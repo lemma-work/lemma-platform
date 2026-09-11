@@ -12266,6 +12266,53 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List this pod's public signed URLs
+     * @param podId
+     * @param includeDead Also list links that have expired or been revoked.
+     * @returns SignedUrlListResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlList(podId, includeDead = false) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/files/signed-urls",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "include_dead": includeDead
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Revoke a public signed URL
+     * Kill a link now rather than waiting out its expiry.
+     *
+     * Answers 200 either way: a code that is already dead, or was never this
+     * pod's, is reported as ``revoked: false`` rather than 404, so that a caller
+     * cleaning up cannot use this endpoint to discover which codes exist.
+     * @param podId
+     * @param code
+     * @returns SignedUrlRevokeResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlRevoke(podId, code) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/files/signed-urls/{code}",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Directory Tree
      * @param podId
      * @param rootPath
@@ -12481,6 +12528,27 @@ var LemmaClient = (() => {
         max_hits: options.maxHits
       };
       return this.client.request(() => FilesService.fileSignedUrl(this.podId(), path, body));
+    }
+    /**
+     * Every public signed URL this pod has minted, newest first. Pass
+     * `includeDead` to also see links that have expired or been revoked, which
+     * are kept for a grace period.
+     */
+    listSignedUrls(options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return FilesService.fileSignedUrlList(this.podId(), (_a = options.includeDead) != null ? _a : false);
+        }
+      );
+    }
+    /**
+     * Kill a public signed URL now rather than waiting out its expiry. `revoked`
+     * is false when the code was already dead or was never this pod's — reported
+     * rather than thrown, so a cleanup pass cannot use this to discover codes.
+     */
+    revokeSignedUrl(code) {
+      return this.client.request(() => FilesService.fileSignedUrlRevoke(this.podId(), code));
     }
     delete(path) {
       return this.client.request(() => FilesService.fileDelete(this.podId(), path));

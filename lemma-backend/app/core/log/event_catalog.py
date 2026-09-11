@@ -514,6 +514,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'datastore.reranker.openai_compat_reranking_requires_lemma.diagnostic': EventSpec('debug', frozenset()),
     'datastore.schema_manager.dropped_schema_pod.observed': EventSpec('debug', frozenset({'pod_id'})),
     'datastore.search.visibility_filter.degraded': EventSpec('warning', frozenset({'hidden_count', 'pod_id', 'visible_count'})),
+    'datastore.signed_url.purged_expired_link_rows.observed': EventSpec('info', frozenset({'count'})),
+    'datastore.signed_url.rehydrated_link_from_record.observed': EventSpec('debug', frozenset({'code'})),
     'datastore.storage.deleting_datastore_file_s.propagated': EventSpec('debug', frozenset()),
     'datastore.storage.deleting_datastore_prefix_s.propagated': EventSpec('debug', frozenset()),
     'datastore.storage_phase.deleted_file_search_purge.failed': EventSpec('error', frozenset({'file_id'})),

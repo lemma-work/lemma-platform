@@ -525,3 +525,163 @@ class TestSignedUrlBudget:
         for _ in range(5):
             resp = await async_client.get(f"/s/{code}")
             assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+class TestSignedUrlDurability:
+    """The record outlives Redis; the counter deliberately does not."""
+
+    async def _sign(self, api: DatastoreApi, path: str, body: dict) -> dict:
+        resp = await api.request(
+            "POST",
+            FILES.format(pod_id=api.pod_id) + "/signed-url",
+            params={"path": path},
+            json=body,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.text
+        return resp.json()
+
+    @pytest.mark.asyncio
+    async def test_link_survives_losing_its_redis_key(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """The whole reason the row exists.
+
+        Deleting the key is what a Redis restart, failover or eviction looks
+        like from here — the link must still resolve, rehydrated from the
+        record.
+        """
+        from app.modules.datastore.services.files.signed_url import (
+            get_signed_url_store,
+        )
+
+        content = b"durable payload"
+        uploaded = await _upload(
+            pod_api, "/me/durable", "d.txt", content, content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+        code = _code_of(body["signed_url"])
+
+        store = get_signed_url_store()
+        redis = await store._get_redis()
+        # Not inside the assert: `python -O` strips assertions, and the delete
+        # *is* the scenario — stripped, this would pass without testing anything.
+        dropped = await redis.delete(store._key(code))
+        assert dropped == 1
+
+        served = await async_client.get(f"/s/{code}")
+        assert served.status_code == status.HTTP_200_OK, served.text
+        assert served.content == content
+
+        # And it is cached again, so the next fetch touches no database.
+        assert await redis.exists(store._key(code)) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_code_still_404s_rather_than_hitting_the_record_twice(
+        self, async_client: AsyncClient
+    ):
+        resp = await async_client.get("/s/definitely-not-a-real-code")
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_revoked_link_stops_resolving_and_stays_stopped(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        uploaded = await _upload(
+            pod_api, "/me/revoke", "r.txt", b"secret", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+        code = _code_of(body["signed_url"])
+
+        assert (await async_client.get(f"/s/{code}")).status_code == status.HTTP_200_OK
+
+        revoked = await pod_api.request(
+            "DELETE", FILES.format(pod_id=pod_api.pod_id) + f"/signed-urls/{code}"
+        )
+        assert revoked.status_code == status.HTTP_200_OK, revoked.text
+        assert revoked.json() == {"code": code, "revoked": True}
+
+        # Dead immediately, and the rehydrate path must not resurrect it.
+        assert (
+            await async_client.get(f"/s/{code}")
+        ).status_code == status.HTTP_404_NOT_FOUND
+        assert (
+            await async_client.get(f"/s/{code}")
+        ).status_code == status.HTTP_404_NOT_FOUND
+
+        # Revoking again is reported, not an error.
+        again = await pod_api.request(
+            "DELETE", FILES.format(pod_id=pod_api.pod_id) + f"/signed-urls/{code}"
+        )
+        assert again.json()["revoked"] is False
+
+    @pytest.mark.asyncio
+    async def test_revoking_an_unknown_code_reports_rather_than_404s(
+        self, pod_api: DatastoreApi
+    ):
+        """A 404 here would tell a caller which codes exist."""
+        resp = await pod_api.request(
+            "DELETE", FILES.format(pod_id=pod_api.pod_id) + "/signed-urls/nosuchcode"
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        assert resp.json()["revoked"] is False
+
+    @pytest.mark.asyncio
+    async def test_pod_can_list_what_it_handed_out(self, pod_api: DatastoreApi):
+        uploaded = await _upload(
+            pod_api, "/me/listing", "l.txt", b"listed", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {"max_hits": 3})
+        code = _code_of(body["signed_url"])
+
+        listed = await pod_api.request(
+            "GET", FILES.format(pod_id=pod_api.pod_id) + "/signed-urls"
+        )
+        assert listed.status_code == status.HTTP_200_OK, listed.text
+        entry = next(
+            (link for link in listed.json()["links"] if link["code"] == code), None
+        )
+        assert entry is not None, listed.json()
+        assert entry["filename"] == "l.txt"
+        assert entry["max_hits"] == 3
+        assert entry["revoked_at"] is None
+
+        await pod_api.request(
+            "DELETE", FILES.format(pod_id=pod_api.pod_id) + f"/signed-urls/{code}"
+        )
+
+        live = await pod_api.request(
+            "GET", FILES.format(pod_id=pod_api.pod_id) + "/signed-urls"
+        )
+        assert all(link["code"] != code for link in live.json()["links"])
+
+        dead = await pod_api.request(
+            "GET",
+            FILES.format(pod_id=pod_api.pod_id) + "/signed-urls",
+            params={"include_dead": "true"},
+        )
+        revoked = next(link for link in dead.json()["links"] if link["code"] == code)
+        assert revoked["revoked_at"] is not None
+
+    @pytest.mark.asyncio
+    async def test_another_pod_cannot_revoke_this_pods_link(
+        self, pod_api: DatastoreApi, async_client: AsyncClient, member_users
+    ):
+        """Revocation is scoped in the UPDATE, not checked beforehand."""
+        uploaded = await _upload(
+            pod_api, "/shared", "cross.txt", b"x", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+        code = _code_of(body["signed_url"])
+
+        from uuid import uuid4
+
+        other = await pod_api.request(
+            "DELETE",
+            FILES.format(pod_id=uuid4()) + f"/signed-urls/{code}",
+        )
+        assert other.status_code in (
+            status.HTTP_403_FORBIDDEN,
+            status.HTTP_404_NOT_FOUND,
+        ), other.text
+        # Still live for its own pod.
+        assert (await async_client.get(f"/s/{code}")).status_code == status.HTTP_200_OK

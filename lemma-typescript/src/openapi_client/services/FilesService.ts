@@ -14,6 +14,8 @@ import type { FileSearchResponse } from '../models/FileSearchResponse.js';
 import type { FileSignedUrlRequest } from '../models/FileSignedUrlRequest.js';
 import type { FileSignedUrlResponse } from '../models/FileSignedUrlResponse.js';
 import type { FileUrlResponse } from '../models/FileUrlResponse.js';
+import type { SignedUrlListResponse } from '../models/SignedUrlListResponse.js';
+import type { SignedUrlRevokeResponse } from '../models/SignedUrlRevokeResponse.js';
 import type { update } from '../models/update.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
@@ -354,6 +356,59 @@ export class FilesService {
             },
             body: requestBody,
             mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * List this pod's public signed URLs
+     * @param podId
+     * @param includeDead Also list links that have expired or been revoked.
+     * @returns SignedUrlListResponse Successful Response
+     * @throws ApiError
+     */
+    public static fileSignedUrlList(
+        podId: string,
+        includeDead: boolean = false,
+    ): CancelablePromise<SignedUrlListResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/datastore/files/signed-urls',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'include_dead': includeDead,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Revoke a public signed URL
+     * Kill a link now rather than waiting out its expiry.
+     *
+     * Answers 200 either way: a code that is already dead, or was never this
+     * pod's, is reported as ``revoked: false`` rather than 404, so that a caller
+     * cleaning up cannot use this endpoint to discover which codes exist.
+     * @param podId
+     * @param code
+     * @returns SignedUrlRevokeResponse Successful Response
+     * @throws ApiError
+     */
+    public static fileSignedUrlRevoke(
+        podId: string,
+        code: string,
+    ): CancelablePromise<SignedUrlRevokeResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/datastore/files/signed-urls/{code}',
+            path: {
+                'pod_id': podId,
+                'code': code,
+            },
             errors: {
                 422: `Validation Error`,
             },

@@ -6778,6 +6778,8 @@
           "expires_seconds": {
             "anyOf": [
               {
+                "maximum": 604800.0,
+                "minimum": 1.0,
                 "type": "integer"
               },
               {
@@ -6789,6 +6791,8 @@
           "max_hits": {
             "anyOf": [
               {
+                "maximum": 1000.0,
+                "minimum": 1.0,
                 "type": "integer"
               },
               {
@@ -13492,6 +13496,121 @@
           "surface_id"
         ],
         "title": "SetDefaultSurfaceRequest",
+        "type": "object"
+      },
+      "SignedUrlListResponse": {
+        "properties": {
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/SignedUrlSummary"
+            },
+            "title": "Links",
+            "type": "array"
+          }
+        },
+        "required": [
+          "links"
+        ],
+        "title": "SignedUrlListResponse",
+        "type": "object"
+      },
+      "SignedUrlRevokeResponse": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "revoked": {
+            "title": "Revoked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "revoked"
+        ],
+        "title": "SignedUrlRevokeResponse",
+        "type": "object"
+      },
+      "SignedUrlSummary": {
+        "description": "One live public link, as its pod sees it.\n\nDeliberately carries the ``code`` and not the full URL: this is the listing\na pod member reads to decide what to revoke, and the code is what revoking\ntakes. Anyone who needs the openable URL already has it.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "exhausted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exhausted At"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "max_hits": {
+            "title": "Max Hits",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "path",
+          "filename",
+          "content_type",
+          "size_bytes",
+          "max_hits",
+          "expires_at"
+        ],
+        "title": "SignedUrlSummary",
         "type": "object"
       },
       "StepRecordResponse": {
@@ -26716,6 +26835,131 @@
           "resource": "file",
           "result": "entity",
           "verb": "signed_url"
+        }
+      }
+    },
+    "/pods/{pod_id}/datastore/files/signed-urls": {
+      "get": {
+        "operationId": "file.signed_url.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Also list links that have expired or been revoked.",
+            "in": "query",
+            "name": "include_dead",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also list links that have expired or been revoked.",
+              "title": "Include Dead",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUrlListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List this pod's public signed URLs",
+        "tags": [
+          "files"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "file.signed_url",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/datastore/files/signed-urls/{code}": {
+      "delete": {
+        "description": "Kill a link now rather than waiting out its expiry.\n\nAnswers 200 either way: a code that is already dead, or was never this\npod's, is reported as ``revoked: false`` rather than 404, so that a caller\ncleaning up cannot use this endpoint to discover which codes exist.",
+        "operationId": "file.signed_url.revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "title": "Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUrlRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke a public signed URL",
+        "tags": [
+          "files"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "file.signed_url"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "file.signed_url",
+          "result": "void",
+          "verb": "revoke"
         }
       }
     },

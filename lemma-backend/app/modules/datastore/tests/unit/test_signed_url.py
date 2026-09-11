@@ -10,6 +10,7 @@ from app.modules.datastore.api.file_stream_response import (
     is_inline_media_type,
     parse_byte_range,
 )
+from app.modules.datastore.domain.file_entities import DatastoreSignedLinkEntity
 from app.modules.datastore.services.files.signed_url import _clamp
 
 
@@ -138,3 +139,61 @@ class TestContentDisposition:
     def test_name_with_no_ascii_at_all_still_has_a_fallback(self):
         header = build_content_disposition("inline", "报告")
         assert 'filename="download"' in header
+
+
+class TestLinkLiveness:
+    """`is_live` is what the rehydrate path consults when Redis has nothing."""
+
+    @staticmethod
+    def _link(**overrides) -> DatastoreSignedLinkEntity:
+        from datetime import datetime, timedelta, timezone
+        from uuid import uuid4
+
+        defaults = {
+            "id": uuid4(),
+            "code": "abc123",
+            "pod_id": uuid4(),
+            "path": "/me/f.txt",
+            "object_key": "pods/p/files/me/f.txt",
+            "content_type": "text/plain",
+            "filename": "f.txt",
+            "size_bytes": 10,
+            "max_hits": 5,
+            "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        }
+        return DatastoreSignedLinkEntity(**{**defaults, **overrides})
+
+    def test_a_fresh_link_is_live(self):
+        assert self._link().is_live is True
+
+    def test_expiry_kills_it(self):
+        from datetime import datetime, timedelta, timezone
+
+        expired = self._link(
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        )
+        assert expired.is_live is False
+
+    def test_a_naive_expiry_is_read_as_utc(self):
+        """Postgres can hand back a naive datetime; comparing it to an aware
+        `now` raises rather than answering, which would 500 the serving route."""
+        from datetime import datetime, timedelta
+
+        naive = self._link(expires_at=datetime.utcnow() + timedelta(hours=1))
+        assert naive.is_live is True
+
+    def test_revocation_kills_it(self):
+        from datetime import datetime, timezone
+
+        assert self._link(revoked_at=datetime.now(timezone.utc)).is_live is False
+
+    def test_a_spent_budget_kills_it_durably(self):
+        """Without this the serving path resurrects an exhausted link.
+
+        Spending the budget drops the Redis key, so the next fetch finds nothing
+        cached and rehydrates from the row — which would hand back a fresh
+        budget and serve the file again, for as long as the link had left.
+        """
+        from datetime import datetime, timezone
+
+        assert self._link(exhausted_at=datetime.now(timezone.utc)).is_live is False

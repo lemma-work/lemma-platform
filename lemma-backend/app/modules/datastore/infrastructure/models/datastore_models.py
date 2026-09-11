@@ -22,7 +22,10 @@ from app.core.infrastructure.db.base import UUIDAuditBase
 
 if TYPE_CHECKING:
     from app.modules.datastore.domain.datastore_entities import DatastoreTableEntity
-    from app.modules.datastore.domain.file_entities import DatastoreFileEntity
+    from app.modules.datastore.domain.file_entities import (
+        DatastoreFileEntity,
+        DatastoreSignedLinkEntity,
+    )
 
 
 class DatastoreTable(UUIDAuditBase):
@@ -162,4 +165,74 @@ class DatastoreFile(UUIDAuditBase):
             content_sha256=self.content_sha256,
             created_at=self.created_at,
             updated_at=self.updated_at,
+        )
+
+
+class DatastoreSignedLink(UUIDAuditBase):
+    """A public short link (``/s/{code}``) to one datastore file.
+
+    The link record lives here rather than only in Redis because it is a
+    capability grant, not a cache: it is the whole of what stands between a URL
+    and someone's file, and it now lasts up to seven days. Redis durability
+    varies by deployment — the compose stack snapshots every 60 seconds with no
+    append-only file, managed key-value services differ again — so a link that
+    existed only there survived or vanished depending on how the operator had
+    deployed, which is not a lifetime anyone can promise a recipient.
+
+    Redis still serves every fetch; see ``services/files/signed_url.py`` for
+    which half owns what, and why the spend counter deliberately stays there.
+    """
+
+    __tablename__ = "datastore_signed_links"
+
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    pod_id: Mapped[UUID] = mapped_column(ForeignKey("pods.id", ondelete="CASCADE"))
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    path: Mapped[str] = mapped_column(Text)
+    object_key: Mapped[str] = mapped_column(Text)
+    content_type: Mapped[str] = mapped_column(String(255))
+    filename: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    max_hits: Mapped[int] = mapped_column(Integer, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    exhausted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        # Serves the pod's own "which links are live" listing, and the sweeper
+        # scans `expires_at` on its own.
+        Index("ix_datastore_signed_link_pod_created", "pod_id", "created_at"),
+        Index("ix_datastore_signed_link_expires_at", "expires_at"),
+    )
+
+    def to_entity(self) -> "DatastoreSignedLinkEntity":
+        from app.modules.datastore.domain.file_entities import (
+            DatastoreSignedLinkEntity,
+        )
+
+        return DatastoreSignedLinkEntity(
+            id=self.id,
+            code=self.code,
+            pod_id=self.pod_id,
+            created_by_user_id=self.created_by_user_id,
+            path=self.path,
+            object_key=self.object_key,
+            content_type=self.content_type,
+            filename=self.filename,
+            content_sha256=self.content_sha256,
+            size_bytes=self.size_bytes,
+            max_hits=self.max_hits,
+            expires_at=self.expires_at,
+            revoked_at=self.revoked_at,
+            exhausted_at=self.exhausted_at,
+            created_at=self.created_at,
         )

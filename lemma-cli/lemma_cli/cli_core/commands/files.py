@@ -633,3 +633,43 @@ def share_file(
     )
     if result is not None:
         emit(state, result)
+
+
+@app.command("shares")
+def list_shares(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(None, "--pod"),
+    include_dead: bool = typer.Option(
+        False, "--all", help="Also show links that have expired or been revoked."
+    ),
+) -> None:
+    """List the public links this pod has handed out, newest first."""
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).files.list_signed_urls(
+            include_dead=include_dead
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("unshare")
+def revoke_share(
+    ctx: typer.Context,
+    code: str = typer.Argument(..., help="The code from the /s/<code> link."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Kill a public link now, rather than waiting out its expiry.
+
+    Reports `revoked: false` for a code that was already dead or was never this
+    pod's, rather than failing — so this is safe to run over a list.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).files.revoke_signed_url(code),
+    )
+    if result is not None:
+        emit(state, result)

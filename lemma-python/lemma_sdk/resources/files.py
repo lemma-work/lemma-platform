@@ -21,6 +21,8 @@ from ..openapi_client.api.files import (
     file_markdown_detach,
     file_search,
     file_signed_url,
+    file_signed_url_list,
+    file_signed_url_revoke,
     file_tree,
     file_update,
     file_url,
@@ -35,6 +37,8 @@ from ..openapi_client.models.file_search_request import FileSearchRequest
 from ..openapi_client.models.file_search_response import FileSearchResponse
 from ..openapi_client.models.file_signed_url_request import FileSignedUrlRequest
 from ..openapi_client.models.file_signed_url_response import FileSignedUrlResponse
+from ..openapi_client.models.signed_url_list_response import SignedUrlListResponse
+from ..openapi_client.models.signed_url_revoke_response import SignedUrlRevokeResponse
 from ..openapi_client.models.file_url_response import FileUrlResponse
 from ..openapi_client.models.update import Update
 from ..openapi_client.types import File
@@ -129,6 +133,28 @@ class PodFiles(BoundResource):
             body_model=FileSignedUrlRequest,
             path=path,
         )
+
+    def list_signed_urls(self, *, include_dead: bool = False) -> SignedUrlListResponse:
+        """Every public signed URL this pod has minted, newest first.
+
+        ``include_dead`` also returns links that have expired or been revoked,
+        which are kept for a grace period so you can see what was recently
+        handed out.
+        """
+        return self._call(
+            file_signed_url_list,
+            self._pod_uuid(),
+            include_dead=include_dead,
+        )
+
+    def revoke_signed_url(self, code: str) -> SignedUrlRevokeResponse:
+        """Kill a public signed URL now rather than waiting out its expiry.
+
+        ``revoked`` is False when the code was already dead or was never this
+        pod's — reported rather than raised, so a cleanup pass cannot use this
+        to discover which codes exist.
+        """
+        return self._call(file_signed_url_revoke, self._pod_uuid(), code=code)
 
     def create_folder(
         self,

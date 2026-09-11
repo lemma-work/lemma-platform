@@ -30,6 +30,9 @@ from app.modules.datastore.domain.events import (
 from app.modules.datastore.infrastructure.repositories import (
     DatastoreFileRepository,
 )
+from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
+    SignedLinkRepository,
+)
 from app.modules.datastore.infrastructure.reindex_queue import (
     get_datastore_reindex_queue,
 )
@@ -47,6 +50,10 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
+
+# Most a single nightly sweep will delete. A backlog drains over successive
+# nights rather than holding the table for one very long run.
+_SIGNED_LINK_PURGE_CEILING = 50_000
 
 router = RedisRouter()
 
@@ -275,4 +282,35 @@ async def recover_stuck_processing_files() -> None:
     except Exception:
         logger.error(
             "datastore.handlers.stuck_file_recovery_cron_s.failed", exc_info=True
+        )
+
+
+@streaq_cron("41 4 * * *", name="purge_expired_signed_links", lane=Lane.BULK)
+async def purge_expired_signed_links() -> None:
+    """Delete short-link rows whose links expired.
+
+    Redis drops its own copy on TTL, so an expired link stops resolving whether
+    or not this runs; the row is what would otherwise accumulate forever. Daily
+    and off-peak because nothing depends on the timing — a stale row costs a few
+    bytes and answers nothing, since the serving path checks expiry itself.
+
+    Deletes in bounded batches, and keeps rows for a grace period past expiry so
+    a pod listing with ``include_dead`` can still show what was recently handed
+    out.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=datastore_settings.datastore_signed_url_row_retention_seconds
+    )
+    total = 0
+    while True:
+        async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+            deleted = await SignedLinkRepository(uow).delete_expired(before=cutoff)
+            await uow.commit()
+        total += deleted
+        if deleted == 0 or total >= _SIGNED_LINK_PURGE_CEILING:
+            break
+    if total:
+        logger.info(
+            "datastore.signed_url.purged_expired_link_rows.observed",
+            count=total,
         )
