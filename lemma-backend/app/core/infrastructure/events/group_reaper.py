@@ -53,6 +53,48 @@ if TYPE_CHECKING:  # the client type only; redis stays a runtime import here
 
 logger = get_logger(__name__)
 
+#: Check and destroy in one atomic step.
+#:
+#: The Python version of this could not be made safe. The scan reads every
+#: stream before any destroy runs, and re-reading just before the destroy only
+#: narrows that gap -- a consumer can still XREADGROUP between the re-read and
+#: the XGROUP DESTROY, and lose its pending entries to a decision made before it
+#: woke up.
+#:
+#: `WATCH` does not help, which was measured rather than assumed: watching the
+#: stream key aborts the transaction on `XADD`, and does **not** abort on
+#: `XREADGROUP` or `XACK`. Those are exactly the two commands that create and
+#: clear pending entries, so Redis offers no compare-and-destroy for consumer
+#: group state at the transaction level.
+#:
+#: A script does, because Redis runs one to completion with nothing interleaved.
+#: Every liveness fact is re-read inside the script, immediately before the
+#: destroy it guards, and the claim is checked against the value the scan saw so
+#: an expired claim still sitting there does not block the destroy while a
+#: renewed one does.
+_DESTROY_IF_STILL_ABANDONED = """
+local claimed = redis.call('HGET', KEYS[2], ARGV[3])
+if claimed == false then claimed = '' end
+if claimed ~= ARGV[4] then return 'claimed' end
+local groups = redis.call('XINFO', 'GROUPS', KEYS[1])
+for _, g in ipairs(groups) do
+  local name, pending, delivered
+  for i = 1, #g, 2 do
+    if g[i] == 'name' then name = g[i+1]
+    elseif g[i] == 'pending' then pending = g[i+1]
+    elseif g[i] == 'last-delivered-id' then delivered = g[i+1] end
+  end
+  if name == ARGV[1] then
+    if tonumber(pending) ~= 0 then return 'pending' end
+    if delivered ~= ARGV[2] then return 'moved' end
+    redis.call('XGROUP', 'DESTROY', KEYS[1], ARGV[1])
+    redis.call('HDEL', KEYS[2], ARGV[3])
+    return 'destroyed'
+  end
+end
+return 'gone'
+"""
+
 _CLAIMS_KEY = "lemma:stream-group-claims"
 _CLAIMS_EPOCH_KEY = "lemma:stream-group-claims:since"
 
@@ -303,68 +345,39 @@ async def reap_abandoned_consumer_groups(
     return found
 
 
-async def _unchanged_since_judged(client: "Redis", candidate: AbandonedGroup) -> bool:
-    """Re-read the group and confirm nothing about it moved since it was judged.
-
-    The scan reads every stream before any destroy happens, so without this the
-    gap between deciding and acting is the whole pass. A deployment coming back
-    in that gap re-creates its group, reads from it, and would lose the
-    pending-entries list to a destroy decided before it woke up.
-
-    This narrows that gap to a single round trip; it does not close it. Redis
-    has no compare-and-destroy for a consumer group -- WATCH guards keys, not
-    group state -- so an atomic version would need a lease that every consumer
-    also took, which is a protocol imposed on every subscriber to save a case
-    that a 24-hour window already makes remote. The honest summary is: narrowed,
-    not eliminated, and destruction is off by default.
-    """
-    try:
-        groups = await client.xinfo_groups(candidate.stream)
-        claimed = await client.hget(
-            _CLAIMS_KEY, _field(candidate.stream, candidate.group)
-        )
-    except RedisError, TypeError, ValueError:
-        return False
-    # Compared against what the scan saw, not merely tested for existence. A
-    # claim only disappears when a destroy succeeds, so a group that was once
-    # declared and then deleted from the code keeps its stale claim forever --
-    # and `_is_abandoned` deliberately treats an *expired* claim as evidence
-    # for abandonment. Rejecting any claim here contradicted that: such a group
-    # was detected on every pass and destroyed on none of them.
-    reread = _int(claimed) if claimed is not None else None
-    if reread != candidate.observed_claim:
-        return False  # written or renewed while the scan was still running
-    if not isinstance(groups, list):
-        return False
-    for group in groups:
-        if _text(_value(group, "name", "")) != candidate.group:
-            continue
-        return (
-            _int(_value(group, "pending", 0)) == 0
-            and _text(_value(group, "last-delivered-id", ""))
-            == candidate.last_delivered_id
-        )
-    return False  # already gone
-
-
 async def _destroy(client: "Redis", groups: list[AbandonedGroup]) -> None:
+    """Destroy each candidate, re-checking everything atomically as it goes."""
     for candidate in groups:
         try:
-            if not await _unchanged_since_judged(client, candidate):
-                logger.warning(
-                    "redis.stream.abandoned_consumer_group_revived.degraded",
-                    stream_name=candidate.stream,
-                    group=candidate.group,
+            outcome = _text(
+                await client.eval(
+                    _DESTROY_IF_STILL_ABANDONED,
+                    2,
+                    candidate.stream,
+                    _CLAIMS_KEY,
+                    candidate.group,
+                    candidate.last_delivered_id,
+                    _field(candidate.stream, candidate.group),
+                    ""
+                    if candidate.observed_claim is None
+                    else str(candidate.observed_claim),
                 )
-                continue
-            await client.xgroup_destroy(
-                name=candidate.stream, groupname=candidate.group
             )
-            await client.hdel(_CLAIMS_KEY, _field(candidate.stream, candidate.group))
         except RedisError, TypeError, ValueError:
             logger.warning(
                 "redis.stream.abandoned_consumer_group_destroy.degraded",
                 stream_name=candidate.stream,
                 group=candidate.group,
                 exc_info=True,
+            )
+            continue
+        if outcome != "destroyed":
+            # It changed between the scan and now. Not an error: the next pass
+            # will look again, and the group keeping its pending entries is the
+            # outcome this check exists to produce.
+            logger.warning(
+                "redis.stream.abandoned_consumer_group_revived.degraded",
+                stream_name=candidate.stream,
+                group=candidate.group,
+                reason=outcome,
             )

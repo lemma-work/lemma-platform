@@ -6,6 +6,10 @@ consumers and a frozen last-delivered-id, pinning the XTRIM watermark until
 `schedule_events` reached 825MB against a 256MB budget and Redis hit `maxmemory`
 -- twice, taking login down with it.
 
+These cover detection, which is ordinary Python. The destroy is a single atomic
+Lua script and is proved in `test_group_reaper_e2e` against a real Redis; a mock
+cannot execute it, so assertions about what it destroys do not belong here.
+
 Destroying a group deletes its pending-entries list and every delivery in flight
 with it, so the tests that matter here are the ones proving the reaper does
 NOTHING: to a group another process claims, to one with pending work, to one that
@@ -84,7 +88,7 @@ async def test_a_group_this_process_declares_is_never_a_candidate() -> None:
     client = _client(groups=[_group("live")])
 
     assert await group_reaper.reap_abandoned_consumer_groups(client) == []
-    client.xgroup_destroy.assert_not_awaited()
+    client.eval.assert_not_awaited()
 
 
 async def test_a_group_claimed_by_the_fleet_is_left_alone() -> None:
@@ -96,7 +100,7 @@ async def test_a_group_claimed_by_the_fleet_is_left_alone() -> None:
     )
 
     assert await group_reaper.reap_abandoned_consumer_groups(client) == []
-    client.xgroup_destroy.assert_not_awaited()
+    client.eval.assert_not_awaited()
 
 
 async def test_a_group_with_pending_entries_is_never_destroyed() -> None:
@@ -104,7 +108,7 @@ async def test_a_group_with_pending_entries_is_never_destroyed() -> None:
     client = _client(groups=[_group("dead", pending=1)])
 
     assert await group_reaper.reap_abandoned_consumer_groups(client) == []
-    client.xgroup_destroy.assert_not_awaited()
+    client.eval.assert_not_awaited()
 
 
 async def test_a_group_that_delivered_recently_is_left_alone() -> None:
@@ -128,7 +132,7 @@ async def test_nothing_is_reaped_until_the_ledger_outlives_the_window() -> None:
     client = _client(groups=[_group("dead")], epoch_age_seconds=60)
 
     assert await group_reaper.reap_abandoned_consumer_groups(client) == []
-    client.xgroup_destroy.assert_not_awaited()
+    client.eval.assert_not_awaited()
 
 
 async def test_an_unreadable_ledger_reaps_nothing() -> None:
@@ -145,7 +149,7 @@ async def test_report_only_names_the_group_and_destroys_nothing() -> None:
     found = await group_reaper.reap_abandoned_consumer_groups(client)
 
     assert [g.group for g in found] == ["surface-schedule-events"]
-    client.xgroup_destroy.assert_not_awaited()
+    client.eval.assert_not_awaited()
 
 
 async def test_a_stale_unclaimed_group_is_destroyed_when_enabled(
@@ -156,9 +160,15 @@ async def test_a_stale_unclaimed_group_is_destroyed_when_enabled(
     found = await group_reaper.reap_abandoned_consumer_groups(client)
 
     assert [g.group for g in found] == ["surface-schedule-events"]
-    client.xgroup_destroy.assert_awaited_once_with(
-        name="schedule_events", groupname="surface-schedule-events"
-    )
+    # The destroy itself is one atomic Lua script, so what a mock can check is
+    # that the candidate reached it intact. Whether it actually destroys, and
+    # what it refuses, is `test_group_reaper_e2e` against a real Redis -- a mock
+    # cannot run the script, and a test that asserted on its absence would pass
+    # for the wrong reason.
+    client.eval.assert_awaited_once()
+    args = client.eval.await_args.args
+    assert args[2] == "schedule_events"
+    assert args[4] == "surface-schedule-events"
 
 
 async def test_claiming_stamps_every_declared_pair() -> None:
@@ -217,79 +227,3 @@ async def test_a_group_that_never_delivered_but_is_claimed_survives() -> None:
     )
 
     assert await group_reaper.reap_abandoned_consumer_groups(client) == []
-
-
-async def test_a_group_that_comes_back_between_the_check_and_the_destroy_survives(
-    destroy_enabled,
-) -> None:
-    """The scan reads every stream before any destroy, so the gap is the pass.
-
-    A deployment returning in that window re-creates its group and reads from
-    it. Destroying it then would take the pending-entries list of a group that
-    is alive again. The re-read catches it by the position having moved.
-
-    This narrows the race to one round trip rather than closing it -- Redis has
-    no compare-and-destroy for a consumer group -- which is why destruction is
-    off by default.
-    """
-    client = _client(groups=[_group("came-back")])
-    moved = int(time.time() * _MS)
-    client.xinfo_groups.side_effect = [
-        [_group("came-back")],  # the scan
-        [{"name": "came-back", "pending": 3, "last-delivered-id": f"{moved}-0"}],
-    ]
-
-    found = await group_reaper.reap_abandoned_consumer_groups(client)
-
-    assert [g.group for g in found] == ["came-back"]
-    client.xgroup_destroy.assert_not_awaited()
-
-
-async def test_a_claim_appearing_mid_pass_stops_the_destroy(destroy_enabled) -> None:
-    """Somebody declared it after the ledger snapshot was taken."""
-    client = _client(groups=[_group("reclaimed")])
-    client.hget.return_value = str(int(time.time() * _MS))
-
-    await group_reaper.reap_abandoned_consumer_groups(client)
-
-    client.xgroup_destroy.assert_not_awaited()
-
-
-async def test_an_expired_claim_still_sitting_there_does_not_block_the_destroy(
-    destroy_enabled,
-) -> None:
-    """The lifecycle the reaper exists for: declared, claimed, then deleted.
-
-    A claim is only removed when a destroy succeeds, so a group whose code was
-    deleted keeps its last claim in the ledger forever. `_is_abandoned` reads an
-    *expired* claim as evidence for abandonment -- but revalidation used to
-    reject any claim at all, so this group was detected on every pass and
-    destroyed on none of them. The two halves have to agree on what a claim
-    means, which is why revalidation compares against what the scan saw rather
-    than testing for existence.
-    """
-    stale = int(time.time() * _MS) - (WINDOW * 2 * _MS)
-    field = group_reaper._field("schedule_events", "was-declared-once")
-    client = _client(groups=[_group("was-declared-once")], claims={field: str(stale)})
-    client.hget.return_value = str(stale)  # unchanged since the scan read it
-
-    found = await group_reaper.reap_abandoned_consumer_groups(client)
-
-    assert [g.group for g in found] == ["was-declared-once"]
-    client.xgroup_destroy.assert_awaited_once_with(
-        name="schedule_events", groupname="was-declared-once"
-    )
-
-
-async def test_a_claim_renewed_since_the_scan_still_blocks_the_destroy(
-    destroy_enabled,
-) -> None:
-    """The case the comparison must keep catching: renewed, not merely present."""
-    stale = int(time.time() * _MS) - (WINDOW * 2 * _MS)
-    field = group_reaper._field("schedule_events", "came-back")
-    client = _client(groups=[_group("came-back")], claims={field: str(stale)})
-    client.hget.return_value = str(int(time.time() * _MS))  # renewed mid-pass
-
-    await group_reaper.reap_abandoned_consumer_groups(client)
-
-    client.xgroup_destroy.assert_not_awaited()

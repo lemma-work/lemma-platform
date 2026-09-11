@@ -148,3 +148,72 @@ async def test_the_streaq_workers_group_survives_a_full_pass(client) -> None:
         assert {g["name"] for g in await client.xinfo_groups(lane)} == {"workers"}
     finally:
         await client.delete(lane)
+
+
+async def _candidate(client, group: str) -> group_reaper.AbandonedGroup:
+    """A candidate judged from the group's state right now."""
+    info = {g["name"]: g for g in await client.xinfo_groups(_STREAM)}[group]
+    claimed = await client.hget(
+        group_reaper._CLAIMS_KEY, group_reaper._field(_STREAM, group)
+    )
+    return group_reaper.AbandonedGroup(
+        stream=_STREAM,
+        group=group,
+        last_delivered_age_seconds=_WINDOW * 2,
+        last_delivered_id=info["last-delivered-id"],
+        observed_claim=int(claimed) if claimed is not None else None,
+    )
+
+
+async def test_a_consumer_reading_after_the_judgement_keeps_its_group(client) -> None:
+    """The race the script exists for, reproduced with the timing forced open.
+
+    The candidate is judged, a consumer then reads, and only afterwards is the
+    destroy attempted. Redis runs the script to completion with nothing
+    interleaved, so the pending entry the consumer just created is seen by the
+    same call that would have destroyed it.
+    """
+    await _seed(client, dead_reads=False)
+    await _age_the_ledger(client)
+    candidate = await _candidate(client, _DEAD)
+
+    await client.xreadgroup(_DEAD, "late-consumer", {_STREAM: ">"}, count=10)
+    await group_reaper._destroy(client, [candidate])
+
+    assert _DEAD in await _group_names(client)
+
+
+async def test_a_claim_renewed_after_the_judgement_keeps_its_group(client) -> None:
+    """A deployment that came back and re-claimed while the scan was running."""
+    await _seed(client, dead_reads=False)
+    await _age_the_ledger(client)
+    candidate = await _candidate(client, _DEAD)
+
+    await client.hset(
+        group_reaper._CLAIMS_KEY,
+        group_reaper._field(_STREAM, _DEAD),
+        str(int(time.time() * 1000)),
+    )
+    await group_reaper._destroy(client, [candidate])
+
+    assert _DEAD in await _group_names(client)
+
+
+async def test_an_expired_claim_left_behind_does_not_block_the_destroy(client) -> None:
+    """Declared, claimed, then deleted from the code -- the reaper's own case.
+
+    A claim is only removed when a destroy succeeds, so this group keeps its
+    last one forever. An earlier revalidation rejected any claim at all, which
+    meant such a group was detected on every pass and destroyed on none.
+    """
+    await _seed(client, dead_reads=False)
+    await _age_the_ledger(client)
+    stale = str(int(time.time() * 1000) - (_WINDOW + 600) * 1000)
+    await client.hset(
+        group_reaper._CLAIMS_KEY, group_reaper._field(_STREAM, _DEAD), stale
+    )
+
+    found = await _reap(client)
+
+    assert [g.group for g in found] == [_DEAD]
+    assert await _group_names(client) == {_LIVE}
