@@ -347,6 +347,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.telegram.callback_acknowledgement_best_effort': EventSpec('debug', frozenset()),
     'agent_surfaces.telegram.callback_keyboard_cleanup_best_effort': EventSpec('debug', frozenset()),
     'agent_surfaces.telegram.empty_message_not_sent': EventSpec('warning', frozenset({'has_reply_markup'})),
+    'agent_surfaces.telegram.mini_app_sync_failed.degraded': EventSpec('warning', frozenset({'surface_id'})),
     'agent_surfaces.telegram_manager.bot_branding_best_effort': EventSpec('debug', frozenset({'method'})),
     'agent_surfaces.telegram_manager.bot_profile_photo_best_effort': EventSpec('debug', frozenset()),
     'agent_surfaces.telegram_manager.managed_bot_provisioning_failed': EventSpec('error', frozenset()),
