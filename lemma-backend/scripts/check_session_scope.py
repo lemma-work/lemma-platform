@@ -635,6 +635,59 @@ def _deferred_to_after_commit(
     return registered
 
 
+def _released_spans(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[int, int]]:
+    """Line spans in which this function is not holding a pooled connection.
+
+    Several places commit on purpose before a slow call, and say so:
+    `create_auth_config` -- "Nothing is written yet, so this only hands the
+    pooled connection back -- which is the point" -- plus `update_install`,
+    `notification_service.deliver` and `skill_loader._download_text_file`.
+    Without reading statement order every one of those looks like a hold, and so
+    does every caller of them, two frames up.
+
+    Spans rather than a single line, because the real shape is commit, call out,
+    then write: `create_auth_config` commits, negotiates with a tenant-named MCP
+    server, and only then inserts. The network work is genuinely released and
+    the insert genuinely re-acquires, so one boundary cannot describe it.
+
+    Narrow in two ways, both because the failure mode of guessing is a blind gate:
+
+    * Only a top-level statement counts as the commit. One inside `if` or `try`
+      may not run, and a function that sometimes keeps its connection keeps it.
+    * Only an await on a repository / session / uow / outbox receiver counts as
+      re-acquiring -- the same `DB_RECEIVERS` the index already uses to decide
+      what is a query. Treating every non-slow await as a query closed the span
+      immediately and cleared nothing.
+    """
+    spans: list[tuple[int, int]] = []
+    open_at: int | None = None
+    for statement in node.body:
+        if _is_commit_statement(statement):
+            if open_at is None:
+                open_at = statement.lineno
+            continue
+        if open_at is None:
+            continue
+        if any(
+            isinstance(child, ast.Await)
+            and isinstance(child.value, ast.Call)
+            and _dotted(child.value.func).split(".")[-1] != "commit"
+            and DB_RECEIVERS.search(_dotted(child.value.func).lower())
+            for child in ast.walk(statement)
+        ):
+            spans.append((open_at, statement.lineno))
+            open_at = None
+    if open_at is not None:
+        spans.append((open_at, node.end_lineno or open_at))
+    return spans
+
+
+def _inside(line: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start < line < end for start, end in spans)
+
+
 def _awaited_calls(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[set[str], str | None]:
@@ -653,6 +706,7 @@ def _awaited_calls(
     awaited: set[str] = set()
     direct: str | None = None
     deferred = _deferred_to_after_commit(node)
+    released_spans = _released_spans(node)
     stack: list[ast.AST] = list(ast.iter_child_nodes(node))
     while stack:
         current = stack.pop()
@@ -671,6 +725,12 @@ def _awaited_calls(
                 # A yield to the loop, not a wait -- and the index has to agree
                 # with the visitor about that, or the name stays slow for every
                 # caller while the site itself reports clean.
+                stack.extend(ast.iter_child_nodes(current))
+                continue
+            if _inside(current.lineno, released_spans):
+                # After a top-level commit: the connection is back, so what this
+                # function does next does not hold one and must not mark the name
+                # slow for every caller. See `_commit_release_line`.
                 stack.extend(ast.iter_child_nodes(current))
                 continue
             callee = _dotted(current.value.func)
@@ -751,6 +811,21 @@ def _hands_the_connection_back(
         ):
             return True
     return False
+
+
+def _is_commit_statement(statement: ast.stmt) -> bool:
+    """A bare ``await <something>.commit()`` at statement level.
+
+    Only a bare statement: a commit inside an `if` or a `try` may not run, and a
+    block that sometimes keeps its connection keeps it as far as this checker is
+    concerned. Same rule `_hands_the_connection_back` applies for the same reason.
+    """
+    if not isinstance(statement, ast.Expr):
+        return False
+    value = statement.value
+    if not isinstance(value, ast.Await) or not isinstance(value.value, ast.Call):
+        return False
+    return _dotted(value.value.func).split(".")[-1] == "commit"
 
 
 @dataclass(frozen=True)
@@ -860,6 +935,48 @@ class SessionScopeChecker(ast.NodeVisitor):
         self.generic_visit(node)
         self._scope.pop()
 
+    def _visit_block(self, statements: list[ast.stmt]) -> None:
+        """Walk statements in order, honouring a commit that hands the connection back.
+
+        `await uow.commit()` ends the transaction and returns the connection to
+        the pool, and several places here do exactly that on purpose before a
+        slow call. `create_auth_config` and `update_install` both commit with a
+        comment saying the network work must not be waited on holding one, and
+        `notification_service` commits immediately before it sends. Read without
+        statement order those are indistinguishable from a hold, and reporting
+        them would mean either baselining correct code or "fixing" it into
+        something worse.
+
+        The release lasts only until something queries again. Any await the
+        index does not consider slow is treated as re-acquiring, because in this
+        tree a non-slow await inside a session block is a query. Without that,
+        the gate would go blind after the first commit in every function -- which
+        is a far more expensive mistake than the one it is fixing.
+        """
+        outer = self._session_depth
+        released = False
+        for statement in statements:
+            if self._session_depth and _is_commit_statement(statement):
+                self._session_depth = 0
+                released = True
+            elif released and self._reacquires(statement):
+                self._session_depth = outer
+                released = False
+            self.visit(statement)
+        self._session_depth = outer
+
+    def _reacquires(self, statement: ast.stmt) -> bool:
+        """Whether this statement awaits something that is not slow -- i.e. a query."""
+        for child in ast.walk(statement):
+            if not (isinstance(child, ast.Await) and isinstance(child.value, ast.Call)):
+                continue
+            callee = _dotted(child.value.func)
+            if callee.split(".")[-1] == "commit":
+                continue
+            if DB_RECEIVERS.search(callee.lower()):
+                return True
+        return False
+
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
         if any(
             SESSION_RELEASERS.search(_dotted(item.context_expr)) for item in node.items
@@ -881,8 +998,7 @@ class SessionScopeChecker(ast.NodeVisitor):
                 node.lineno, "nested-session", _dotted(node.items[0].context_expr)
             )
         self._session_depth += 1
-        for child in node.body:
-            self.visit(child)
+        self._visit_block(node.body)
         self._session_depth -= 1
         # The context managers themselves are evaluated outside the block.
         for item in node.items:

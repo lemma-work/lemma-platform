@@ -670,3 +670,68 @@ class Service:
             await run_blocking(extract, document)
 """
     assert "non-db-await" in _rules(source)
+
+
+# --- committing on purpose before a slow call ---------------------------------
+
+
+def test_a_commit_before_the_slow_call_is_not_a_hold():
+    """`create_auth_config` and `update_install` do exactly this, deliberately.
+
+    Both commit with a comment saying the network work must not be waited on
+    holding a pooled connection. Read without statement order they look like
+    holds, and so does every controller that calls them.
+    """
+    source = """
+async def install(uow_factory):
+    async with uow_factory() as uow:
+        await uow.session.execute("select 1")
+        await uow.commit()
+        await run_blocking(negotiate_with_server)
+"""
+    assert _rules(source) == set()
+
+
+def test_a_query_after_the_commit_re_acquires():
+    """The span closes when something queries again, or the gate goes blind.
+
+    Commit, insert, then call out is a real hold: the insert took a connection
+    back out and the call is waiting on it.
+    """
+    source = """
+async def install(uow_factory):
+    async with uow_factory() as uow:
+        await uow.commit()
+        await uow.session.execute("insert into installs values (1)")
+        await run_blocking(negotiate_with_server)
+"""
+    assert "non-db-await" in _rules(source)
+
+
+def test_slow_work_between_a_commit_and_a_write_is_still_released():
+    """The shape one boundary could not describe: commit, call out, then write.
+
+    `create_auth_config` negotiates with a tenant-named MCP server after its
+    commit and inserts afterwards. The negotiation is genuinely released; the
+    insert genuinely re-acquires.
+    """
+    source = """
+async def install(uow_factory):
+    async with uow_factory() as uow:
+        await uow.commit()
+        await run_blocking(negotiate_with_server)
+        await uow.auth_config_repository.create(row)
+"""
+    assert _rules(source) == set()
+
+
+def test_a_commit_inside_a_branch_does_not_release():
+    """It may not run, and a block that sometimes keeps its connection keeps it."""
+    source = """
+async def install(uow_factory, should_commit):
+    async with uow_factory() as uow:
+        if should_commit:
+            await uow.commit()
+        await run_blocking(negotiate_with_server)
+"""
+    assert "non-db-await" in _rules(source)
