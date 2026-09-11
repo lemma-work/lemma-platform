@@ -28,7 +28,12 @@ class AggregateRoot(Entity):
     # which is the slowest thing to introspect. That is 63us per entity against
     # 2.6us for this line: a 24x tax on every domain object the process builds.
     # It stalled the API event loop for up to 1.7s listing one pod's files, and
-    # was 75% of all measured loop-stall time in production.
+    # the stall sampler named this frame in 38 of the 55 reports on the release
+    # it was measured on. (Across the whole preceding week it is 8%: that window
+    # is dominated by a decode path fixed in #618 but not yet deployed. The
+    # sampler reports a stall once it crosses a one-second threshold, so its
+    # counts compare sites against each other -- they are not a measure of total
+    # blocked time.)
     #
     # `scripts/check_io_hygiene.py` fails the build if this comes back.
     _domain_events: list["DomainEvent"] = PrivateAttr(default=[])

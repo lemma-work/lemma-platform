@@ -304,14 +304,31 @@ def test_the_constant_default_is_the_fix() -> None:
     ["uuid7", "lambda: datetime.now()", "_build_state"],
     ids=["uuid", "lambda", "named-function"],
 )
-def test_a_factory_that_computes_a_value_is_left_alone(factory: str) -> None:
-    """These have no constant form, so flagging them would be noise.
+def test_a_factory_that_computes_a_value_is_still_reported(factory: str) -> None:
+    """These pay the same per-instance `inspect.signature` as the constant ones.
 
-    The gate's own history is the argument: a rule that cries wolf gets
-    baselined into irrelevance, which is worse than no rule at all.
+    The rule reports them without the ``(constant)`` marker, so the remedy can
+    say there is no cheaper form and the entry should be baselined. A Python
+    function is cheaper to introspect than a C builtin -- 8us against 63us --
+    but it is not free, and the gate is ratcheted, so reporting costs nothing.
     """
     source = f"class M(BaseModel):\n    _x: object = PrivateAttr(default_factory={factory})\n"
-    assert _rules(source) == []
+    rules = _rules(source)
+    assert rules == ["per-instance-signature-default"]
+
+
+@pytest.mark.parametrize(
+    "factory", ["tuple", "OrderedDict", "Counter", "frozenset", "deque"]
+)
+def test_the_other_constant_factories_are_reported_too(factory: str) -> None:
+    """The first cut of this rule only knew `list`/`dict`/`set` and missed these.
+
+    Each has an exact `default=<constant>` equivalent and pays the identical
+    per-instance cost, so a narrower rule would have let the same defect back in
+    under a different spelling.
+    """
+    source = f"class M(BaseModel):\n    _x: object = PrivateAttr(default_factory={factory})\n"
+    assert _rules(source) == ["per-instance-signature-default"]
 
 
 def test_a_normal_field_factory_is_not_this_rule() -> None:

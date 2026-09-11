@@ -269,6 +269,16 @@ def _exception_info(
     exc_info = event_dict.get("exc_info")
     if exc_info is True:
         exc_info = sys.exc_info()
+    elif isinstance(exc_info, BaseException):
+        # structlog accepts the exception itself, and eleven call sites pass it
+        # that way -- `logger.error(..., exc_info=exc)` inside an `except exc`.
+        # Every one of them fell through the tuple check below and lost the
+        # message, the traceback, the frames and the stack hash, leaving an
+        # ERROR line that says a thing failed and nothing about why. That is
+        # what the logging contract exists to prevent, and it is what made
+        # `background_task.failed` unreadable: a worker lane dying in
+        # production with `error_type=ExceptionGroup` and an empty traceback.
+        exc_info = (type(exc_info), exc_info, exc_info.__traceback__)
     if not exc_info:
         record: logging.LogRecord | None = event_dict.get("_record")
         exc_info = record.exc_info if record is not None else None

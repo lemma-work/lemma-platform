@@ -50,7 +50,7 @@ worker or a pinned connection hours later.
     modules whose whole job is to own one of these singletons.
 
 ``per-instance-signature-default``
-    ``PrivateAttr(default_factory=list)`` (or ``dict``/``set``) on a model.
+    Any ``default_factory`` on a ``PrivateAttr``.
 
     Unlike a normal ``Field``, whose default is resolved once when the schema is
     built, a *private* attribute's default is resolved again for every instance:
@@ -62,8 +62,8 @@ worker or a pinned connection hours later.
 
     Two lines carrying this cost the API 63us per domain entity against 2.6us
     without it. Listing one pod's files builds an entity per file, so a large
-    pod blocked the event loop for up to 1.7 seconds -- 75% of all loop-stall
-    time measured in production over a week.
+    pod blocked the event loop for up to 1.7 seconds, and the stall sampler
+    named that frame in 38 of the 55 reports on the release it was measured on.
 
     The fix is ``default=[]``: pydantic deep-copies a private attribute's
     default into each instance, so the list is still per-instance, and no
@@ -143,11 +143,13 @@ PROCESS_LIFETIME_OWNERS = (
 
 MEMOIZING_DECORATORS = {"lru_cache", "cache", "cached", "cached_property"}
 
-# Factories that build an *empty* collection, for which `default=<empty>` is an
-# exact, cheaper equivalent. Deliberately not every `default_factory`: one that
-# computes a real value (a uuid, a timestamp) has no constant form, so flagging
-# it would be noise this gate cannot act on.
-EMPTY_COLLECTION_FACTORIES = {"list", "dict", "set"}
+# Factories whose result is a constant, for which `default=<constant>` is an
+# exact and far cheaper equivalent. Named rather than inferred so the remedy the
+# gate prints is always actionable.
+CONSTANT_FACTORIES = {
+    "list", "dict", "set", "tuple", "frozenset", "str", "int", "float", "bytes",
+    "OrderedDict", "Counter", "defaultdict", "deque",
+}
 
 # Dotted callees that hand work to a thread pool this process does not bound.
 UNLIMITED_OFFLOADS = {
@@ -182,8 +184,11 @@ REMEDIES = {
         "memoize it (@lru_cache) so the process builds it once, not per call."
     ),
     "per-instance-signature-default": (
-        "use PrivateAttr(default=[]) -- a private attribute's default_factory is "
-        "re-resolved through inspect.signature on every single instantiation."
+        "a private attribute's default_factory is re-resolved through "
+        "inspect.signature on every single instantiation. If the default is a "
+        "constant use PrivateAttr(default=<constant>) -- pydantic copies it per "
+        "instance. If it genuinely computes a value there is no cheaper form: "
+        "baseline it."
     ),
 }
 
@@ -328,13 +333,17 @@ class IoHygieneChecker(ast.NodeVisitor):
             factory = next(
                 (kw for kw in node.keywords if kw.arg == "default_factory"), None
             )
-            if factory is not None and _dotted(factory.value) in (
-                EMPTY_COLLECTION_FACTORIES
-            ):
+            if factory is not None:
+                # Every `default_factory` on a private attribute pays the same
+                # per-instance `inspect.signature`, so all of them are reported.
+                # Naming the constant ones separately is what lets the remedy
+                # say "use default=X" instead of "think about it".
+                name = _dotted(factory.value) or "<lambda>"
                 self._record(
                     node.lineno,
                     "per-instance-signature-default",
-                    f"default_factory={_dotted(factory.value)}",
+                    f"default_factory={name}"
+                    + (" (constant)" if name in CONSTANT_FACTORIES else ""),
                 )
 
         if not self._lifetime_owner and self._in_uncached_sync_function():
