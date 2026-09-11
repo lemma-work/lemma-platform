@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
@@ -361,6 +362,13 @@ def _build_service(
             get=AsyncMock(side_effect=_fake_get),
             execute=AsyncMock(return_value=_EmptyExecuteResult()),
             flush=AsyncMock(),
+            # `connection_released` commits through the *session*, and
+            # `commit_now` reaches the unit of work through `session.info`.
+            # Without both, every release on the ingress path is a silent no-op
+            # here and the tests certify a hold as clean -- which is how this
+            # double looked when the dedup claims were still holding one.
+            commit=AsyncMock(),
+            info={},
         ),
         # Egress releases the pooled connection before every platform call, so
         # the double needs the method the real unit of work has. Given rather
@@ -369,6 +377,7 @@ def _build_service(
         # connection is quietly held across the send.
         commit=AsyncMock(),
     )
+    uow.session.info[SESSION_UOW_KEY] = uow
 
     adapter.enrich_inbound_event.side_effect = lambda *, credentials, event: event
     adapter.unresolved_sender_reply = Mock(return_value=None)
@@ -2759,3 +2768,196 @@ async def test_send_to_member_says_the_person_is_in_another_workspace():
     assert undeliverable == UndeliverableReason.wrong_tenant_on("SLACK")
     assert undeliverable != UndeliverableReason.never_interacted_on("SLACK")
     adapter.send_message.assert_not_awaited()
+
+
+def _journal_awaits(obj, entries: list[str], label: str) -> None:
+    """Record every awaitable attribute of `obj` into `entries` as it is called."""
+    for name in dir(obj):
+        if name.startswith("__"):
+            continue
+        attr = getattr(obj, name, None)
+        if not isinstance(attr, AsyncMock):
+            continue
+
+        def _wrap(inner=attr, tag=f"{label}.{name}"):
+            async def _call(*args, **kwargs):
+                entries.append(tag)
+                return await inner(*args, **kwargs)
+
+            return _call
+
+        setattr(obj, name, _wrap())
+
+
+def _journal_named(obj, entries: list[str], label: str, names) -> None:
+    """`_journal_awaits` for named attributes, where walking would be unsafe."""
+    for name in names:
+        inner = getattr(obj, name, None)
+        if not isinstance(inner, AsyncMock):
+            continue
+
+        def _wrap(inner=inner, tag=f"{label}.{name}"):
+            async def _call(*args, **kwargs):
+                entries.append(tag)
+                return await inner(*args, **kwargs)
+
+            return _call
+
+        setattr(obj, name, _wrap())
+
+
+def _claim_journal(service) -> list[str]:
+    """Every await on the ingress path, in order.
+
+    An ordering, not a count: a commit that lands anywhere before the claim
+    satisfies a count, and this path releases several times on its way down --
+    so the only assertion that means anything is that the release is the event
+    *immediately* before the claim, with nothing in between to re-acquire.
+    """
+    entries: list[str] = []
+
+    async def _release(*_args, **_kwargs) -> None:
+        entries.append("release")
+
+    async def _claim(**_kwargs) -> bool:
+        entries.append("claim")
+        return True
+
+    # The adapter, the repositories and the identity service -- named rather
+    # than walked off `service`, because a repository double *is* an
+    # `AsyncMock` and walking the service's attributes would replace
+    # `surface_repository` with a function. Everything the path can await
+    # between the release and the claim has to be in here, or "the release is
+    # the event immediately before the claim" is satisfied by an unrelated
+    # earlier one and the test passes with the fix reverted.
+    for target, label in (
+        (service.adapter_registry.get(SurfacePlatform.SLACK), "adapter"),
+        (service.surface_repository, "surfaces"),
+        (service.conversation_link_repository, "links"),
+        (service.identity_service, "identity"),
+        (service.pod_membership_port, "membership"),
+    ):
+        if target is not None:
+            _journal_awaits(target, entries, label)
+    _journal_named(
+        service,
+        entries,
+        "creds",
+        (
+            "_resolve_credentials",
+            "_resolve_credentials_from_context",
+            "_resolve_account_credentials",
+        ),
+    )
+
+    service.uow.session.commit = _release
+    service.uow.commit = _release
+    service.event_dedup_store.claim_message = _claim
+    return entries
+
+
+async def test_the_routed_dedup_claim_does_not_hold_a_pooled_connection():
+    """The Redis claim in the middle of the routed ingress path.
+
+    `claim_message` is a `SET NX EX` against Redis reached with the request's
+    unit of work open. Everything above it on this path has only read, so the
+    connection genuinely goes back for it; the writes that follow (the
+    external-user upsert, the conversation link) re-acquire one, which is the
+    correct shape rather than a hold across the round trip.
+    """
+    surface = _teams_surface()
+    user_id = uuid4()
+    event = ParsedInboundSurfaceEvent(
+        platform="TEAMS",
+        conversation_type=ConversationType.EXTERNAL_GROUP,
+        tenant_id="tenant-123",
+        external_channel_id="19:channel",
+        external_thread_id="17001",
+        external_message_id="17002",
+        sender_external_user_id="8:orgid:user-1",
+        sender_display_name="Asha",
+        message_text="hello",
+        mentioned_agent=True,
+        reply_target={"team_id": "team-1", "channel_id": "19:channel"},
+    )
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    adapter.fetch_sender_profile.return_value = SurfaceSenderProfile(
+        external_user_id="8:orgid:user-1",
+        display_name="Asha",
+    )
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id,
+            external_user_id="8:orgid:user-1",
+            display_name="Asha",
+        ),
+        conversation=_conversation(surface, user_id),
+    )
+    entries = _claim_journal(service)
+
+    await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="teams", payload={}, headers={})
+    )
+
+    assert "claim" in entries, "the webhook never reached its dedup claim"
+    assert entries[entries.index("claim") - 1] == "release", entries
+
+
+async def test_the_unrouted_dedup_claim_does_not_hold_a_pooled_connection():
+    """The same claim on the fallback path, where only a commit will do.
+
+    A DM to a shared system bot that matches no surface still records the
+    sender's identity before it decides how to answer -- so the session is dirty
+    by the time the claim runs, `safe_to_release` correctly refuses, and
+    `connection_released` would hand nothing back. The commit is the only thing
+    that actually returns the connection.
+    """
+    surfaces = [
+        AgentSurfaceEntity(
+            id=uuid4(),
+            pod_id=uuid4(),
+            name=f"telegram-{index}",
+            agent_id=uuid4(),
+            surface_type=SurfacePlatform.TELEGRAM,
+            mode=SurfaceMode.DM,
+            account_id=None,
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+            config=SurfaceConfig(),
+            is_active=True,
+        )
+        for index in range(2)
+    ]
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="dm-123",
+        external_thread_id="dm-123",
+        external_message_id="message-123",
+        sender_external_user_id="external-123",
+        message_text="hello",
+        is_dm=True,
+        reply_target={"chat_id": "dm-123"},
+    )
+    adapter.unresolved_sender_reply.return_value = None
+    service = _build_service(
+        adapter=adapter,
+        surfaces=surfaces,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=None,
+            external_user_id="external-123",
+        ),
+    )
+    entries = _claim_journal(service)
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="telegram", payload={}, headers={})
+    )
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert context.surface_id is None, "this must be the unrouted fallback path"
+    assert "claim" in entries, "the webhook never reached its dedup claim"
+    assert entries[entries.index("claim") - 1] == "release", entries

@@ -18,6 +18,7 @@ import asyncio
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
 from app.core.infrastructure.redis.client import get_redis
+from app.core.infrastructure.events.group_reaper import claim_registered_groups
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +37,9 @@ async def ensure_consumer_groups_once() -> None:
     client = get_redis(decode_responses=False, blocking=True)
     try:
         await ensure_consumer_groups(client, warn_on_create=False)
+        # Claim at startup too, so a fresh process is on the ledger before the
+        # reaper's first pass rather than a reconcile interval later.
+        await claim_registered_groups(client)
     except Exception:  # pragma: no cover - defensive
         # A worker that starts without its groups consumes nothing until the
         # reconcile loop's first tick, and on a Redis that is down it consumes
@@ -50,6 +54,10 @@ async def reconcile_consumer_groups_once(redis_client) -> None:
     """One reconcile tick. Reports its own failure; never raises."""
     try:
         await ensure_consumer_groups(redis_client)
+        # Renew this process's claim on the groups it owns. The reaper reads a
+        # field that stopped being renewed as its evidence, so this has to ride
+        # the same tick that proves the groups are wanted.
+        await claim_registered_groups(redis_client)
     except Exception:
         # The loop is the only thing that revives a lost group, so a tick that
         # cannot run means delivery stays stopped for as long as it lasts.

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 
 from app.core.authorization.delegation import agent_display_name
+from app.core.infrastructure.db.session_uow import commit_now
 from app.core.infrastructure.db.transaction_locks import connection_released
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 from app.modules.agent_surfaces.services.inbound_enrichment import enrich_or_drop
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
@@ -132,6 +134,14 @@ def _needs_mention_verification(
 
 
 class SurfaceInboundMixin(SurfaceInboundMessageMixin):
+    #: Supplied by `AgentSurfaceIngressService`, which composes these mixins.
+    #: `None` in the worker's factory mode, which is why every reader here goes
+    #: through `getattr(..., "session", None)` -- the idiom `surface_egress`
+    #: already uses. Declared so these reads type-check instead of reading as
+    #: "this class has no `uow`", the shape of most of this file's baselined
+    #: type errors.
+    uow: SqlAlchemyUnitOfWork | None
+
     async def _prepare_platform_webhook_ingress(
         self, request: SurfacePlatformWebhookIngress
     ) -> AgentSurfaceContext | None:
@@ -144,7 +154,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             return None
 
         # No connection held for the platform call; see `connection_released`.
-        async with connection_released(self.uow.session):
+        async with connection_released(getattr(self.uow, "session", None)):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             logger.debug(
@@ -169,7 +179,9 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             surfaces = _system_bot_surfaces(surfaces, platform)
 
         if _needs_mention_verification(platform, parsed, surfaces):
-            async with connection_released(self.uow.session):  # Telegram API
+            async with connection_released(
+                getattr(self.uow, "session", None)
+            ):  # Telegram API
                 parsed = await self._telegram_text_mention_enrich(parsed, surfaces[0])
 
         candidates = [
@@ -253,7 +265,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         if adapter is None:
             return None
 
-        async with connection_released(self.uow.session):
+        async with connection_released(getattr(self.uow, "session", None)):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             return None
@@ -297,6 +309,14 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         display_name = agent_display_name(
             (await self.agent_name_for_surface(surface)) if surface else None
         )
+        # `prepare_unrouted_context` opens with a Redis dedup claim, and
+        # `_resolve_sender_identity` above has flushed an external-user upsert --
+        # so `connection_released` would decline and hand nothing back. Commit
+        # instead: what has been written by here is a durable fact about the
+        # sender, not something the decision to reply should be able to undo,
+        # and a batched delivery would otherwise carry the first part's writes
+        # through every later part's Redis round trip.
+        await commit_now(self.uow)
         return await prepare_unrouted_context(
             platform=platform,
             surface=surface,
@@ -326,7 +346,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         fallback_agent_display_name = agent_display_name(fallback_agent_name)
 
         # `enrich_or_drop` is module-level: no session of its own to release.
-        async with connection_released(self.uow.session):
+        async with connection_released(getattr(self.uow, "session", None)):
             enriched = await enrich_or_drop(
                 adapter=adapter, surface=surface, parsed=parsed, credentials=credentials
             )
@@ -344,13 +364,18 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         # Claimed only with the message in hand: claiming earlier burns it on an
         # attempt that had no body, so the retry is discarded as a duplicate.
         # Enrichment also changes the ids this keys on.
-        claimed = await self.event_dedup_store.claim_message(
-            surface_installation_id=surface.id,
-            platform=surface.surface_type,
-            external_channel_id=parsed.external_channel_id,
-            external_thread_id=parsed.external_thread_id,
-            external_message_id=parsed.external_message_id,
-        )
+        # The connection goes back for the claim itself: it is a Redis round
+        # trip, and only reads have happened by here -- the identity upsert and
+        # the conversation link are below, so this release is real rather than a
+        # `safe_to_release` no-op.
+        async with connection_released(getattr(self.uow, "session", None)):
+            claimed = await self.event_dedup_store.claim_message(
+                surface_installation_id=surface.id,
+                platform=surface.surface_type,
+                external_channel_id=parsed.external_channel_id,
+                external_thread_id=parsed.external_thread_id,
+                external_message_id=parsed.external_message_id,
+            )
         if not claimed:
             logger.debug(
                 "agent_surfaces.ingress_service.agent_surface_ignored_duplicate_external.observed",

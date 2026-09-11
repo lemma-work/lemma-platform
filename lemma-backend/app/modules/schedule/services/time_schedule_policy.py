@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.concurrency.offload import run_blocking
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.schedule.config import schedule_settings
 from app.modules.schedule.domain.cron import CronSchedule, resolve_zone
 from app.modules.schedule.domain.errors import (
@@ -81,6 +82,7 @@ async def validated_time_schedule_config(
     config: TimeScheduleConfig,
     *,
     now: datetime | None = None,
+    session: object | None = None,
 ) -> datetime | CronSchedule:
     """:func:`validate_time_schedule_config`, off the event loop.
 
@@ -88,10 +90,18 @@ async def validated_time_schedule_config(
     expression walks thousands of them through a pure-Python cron library. Run
     inline from a request handler that is what a second-long loop stall looks
     like, so callers on the loop use this.
+
+    ``session`` is handed back for the duration when given. Every caller is a
+    schedule write in the middle of a request's unit of work, so the pooled
+    connection was otherwise held across a thread hop *and* the wait for a slot
+    on the ``cpu_bound`` limiter -- which under contention is the longer of the
+    two. Nothing in here reads a database, so there is nothing to re-acquire
+    for; ``None`` is a no-op.
     """
-    return await run_blocking(
-        validate_time_schedule_config, config, now=now, limiter="cpu_bound"
-    )
+    async with connection_released(session):
+        return await run_blocking(
+            validate_time_schedule_config, config, now=now, limiter="cpu_bound"
+        )
 
 
 def validate_time_schedule_config(

@@ -9,6 +9,7 @@ from app.modules.schedule.domain.errors import (
 from app.modules.schedule.services.time_schedule_policy import (
     validate_cron_expression,
     validate_time_schedule_config,
+    validated_time_schedule_config,
 )
 
 
@@ -155,3 +156,46 @@ def test_no_timezone_key_still_means_utc() -> None:
         {"scheduled_at": "2099-07-01T09:00:00", "timezone": "UTC"}
     )
     assert without == explicit == datetime(2099, 7, 1, 9, 0, tzinfo=timezone.utc)
+
+
+class _ReleaseRecorder:
+    """A session double that says when its connection was handed back.
+
+    `connection_released` asks `safe_to_release` first, and that reads
+    `new`/`dirty`/`deleted` and `in_transaction` off the session -- so a clean
+    one has to look clean, not merely be a mock.
+    """
+
+    def __init__(self) -> None:
+        self.released = 0
+        self.new: list = []
+        self.dirty: list = []
+        self.deleted: list = []
+        self.info: dict = {}
+
+    def in_transaction(self) -> bool:
+        return True
+
+    async def commit(self) -> None:
+        self.released += 1
+
+
+@pytest.mark.asyncio
+async def test_the_cron_walk_does_not_hold_a_pooled_connection():
+    """Where the release has to be, not merely that validation works.
+
+    Walking fire times for a dense expression runs thousands of iterations of a
+    pure-Python cron library on a worker thread, and every caller is a schedule
+    write in the middle of a request's unit of work. The connection went with
+    it, across both the thread hop and the wait for a `cpu_bound` slot.
+    """
+    session = _ReleaseRecorder()
+
+    await validated_time_schedule_config({"cron": "0 * * * *"}, session=session)
+
+    assert session.released == 1
+
+    # And the release is not unconditional damage: no session, no commit, and
+    # the validation still happens.
+    with pytest.raises(ScheduleTooFrequentError):
+        await validated_time_schedule_config({"cron": "* * * * *"})

@@ -14,6 +14,7 @@ three platforms where ``acknowledge_interaction`` was a no-op.
 from __future__ import annotations
 
 from app.core.infrastructure.db.transaction_locks import connection_released
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.current import reset_current_context, set_current_context
 from app.core.authorization.factory import create_authorization_data_service
 
@@ -53,6 +54,9 @@ logger = get_logger(__name__)
 
 
 class SurfaceInteractionMixin:
+    #: Supplied by `AgentSurfaceIngressService`; see `SurfaceInboundMixin`.
+    uow: SqlAlchemyUnitOfWork | None
+
     async def try_handle_interaction(
         self,
         request: SurfacePlatformWebhookIngress | SurfaceDirectWebhookIngress,
@@ -74,7 +78,7 @@ class SurfaceInteractionMixin:
             adapter = self.adapter_registry.get(platform) if platform else None
         if adapter is None:
             return False
-        async with connection_released(self.uow.session):
+        async with connection_released(getattr(self.uow, "session", None)):
             parsed = await adapter.parse_inbound_interaction(
                 request.payload, request.headers
             )
@@ -88,7 +92,7 @@ class SurfaceInteractionMixin:
                         break
             if surface is not None:
                 credentials = await self._resolve_credentials(surface)
-                async with connection_released(self.uow.session):
+                async with connection_released(getattr(self.uow, "session", None)):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,
@@ -142,7 +146,7 @@ class SurfaceInteractionMixin:
                     conversation_id=conversation_id,
                     tool_call_id=tool_call_id,
                 )
-                async with connection_released(self.uow.session):
+                async with connection_released(getattr(self.uow, "session", None)):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,
@@ -152,13 +156,19 @@ class SurfaceInteractionMixin:
 
             # Replay protection: each submission is processed once. A repeat is an
             # expected double-tap, not an error — debug only.
-            claimed = await self.event_dedup_store.claim_message(
-                surface_installation_id=surface.id,
-                platform=surface.surface_type,
-                external_channel_id=parsed.external_channel_id,
-                external_thread_id=parsed.external_thread_id,
-                external_message_id=parsed.dedup_id,
-            )
+            #
+            # The connection goes back for it. This is a Redis round trip in the
+            # middle of the interaction path, and everything above it has only
+            # read -- the writes start below, so `safe_to_release` genuinely
+            # releases here rather than quietly declining.
+            async with connection_released(getattr(self.uow, "session", None)):
+                claimed = await self.event_dedup_store.claim_message(
+                    surface_installation_id=surface.id,
+                    platform=surface.surface_type,
+                    external_channel_id=parsed.external_channel_id,
+                    external_thread_id=parsed.external_thread_id,
+                    external_message_id=parsed.dedup_id,
+                )
             if not claimed:
                 logger.debug(
                     "agent_surfaces.ingress_service.surface_interaction_ignored_replay_duplicate.observed",
@@ -184,7 +194,7 @@ class SurfaceInteractionMixin:
                 # to answer" is wrong when the truth is that nothing identified
                 # the person who tapped. Either way the typed reply still works,
                 # so the sentence has to point at it.
-                async with connection_released(self.uow.session):
+                async with connection_released(getattr(self.uow, "session", None)):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,
@@ -204,7 +214,7 @@ class SurfaceInteractionMixin:
                     "agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic",
                     conversation_id=conversation_id,
                 )
-                async with connection_released(self.uow.session):
+                async with connection_released(getattr(self.uow, "session", None)):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,
@@ -224,7 +234,7 @@ class SurfaceInteractionMixin:
                     return
                 link, conversation, restarted = refreshed
                 if restarted:
-                    async with connection_released(self.uow.session):
+                    async with connection_released(getattr(self.uow, "session", None)):
                         await adapter.acknowledge_interaction(
                             credentials=credentials,
                             interaction=parsed,
@@ -239,7 +249,7 @@ class SurfaceInteractionMixin:
                     user_id=conversation.user_id,
                     pod_id=conversation.pod_id,
                 )
-                async with connection_released(self.uow.session):
+                async with connection_released(getattr(self.uow, "session", None)):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,
@@ -276,7 +286,7 @@ class SurfaceInteractionMixin:
                 )
             finally:
                 reset_current_context(token)
-            async with connection_released(self.uow.session):
+            async with connection_released(getattr(self.uow, "session", None)):
                 await adapter.acknowledge_interaction(
                     credentials=credentials,
                     interaction=parsed,
@@ -285,7 +295,7 @@ class SurfaceInteractionMixin:
                 )
         except Exception:
             if adapter is not None and credentials is not None:
-                async with connection_released(self.uow.session):
+                async with connection_released(getattr(self.uow, "session", None)):
                     await adapter.acknowledge_interaction(
                         credentials=credentials,
                         interaction=parsed,

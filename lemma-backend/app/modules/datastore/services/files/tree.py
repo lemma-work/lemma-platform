@@ -111,7 +111,21 @@ class DirectoryTreeBuilder:
             requester_user_id=requester_user_id,
             ctx=ctx,
         )
-        all_items = await self.file_repository.get_all_by_datastore(pod_id)
+        # A tree needs its subtree, not the pod. For any request below the root
+        # the rows outside it were being loaded and thrown away; only `/` still
+        # asks for everything, because there the subtree *is* the pod.
+        #
+        # Safe because `children_by_directory` is keyed on the parent path and
+        # `build_node` only ever descends from this root, so no key it can reach
+        # is missing. The root row itself is never read out of `all_items` --
+        # `build_node` is handed the directory's own fields -- which is why
+        # `get_descendants` excluding the prefix row does not matter here.
+        subtree_root = root_directory.path if root_directory is not None else "/"
+        all_items = (
+            await self.file_repository.get_all_by_datastore(pod_id)
+            if subtree_root == "/"
+            else await self.file_repository.get_descendants(pod_id, subtree_root)
+        )
         visible_items = await self.authorizer.filter_visible_items(
             all_items,
             requester_user_id,

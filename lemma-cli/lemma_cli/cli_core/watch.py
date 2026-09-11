@@ -100,6 +100,11 @@ async def _run(
 
     cursor = since
     attempt = 0
+    # One free immediate reconnect per successful connection. `refresh_auth_session`
+    # returns True when *another process* already rotated the tokens, without this
+    # one ever proving the new token is accepted -- so an unconditional `continue`
+    # below skipped both the sleep and the backoff increment and span at zero delay.
+    refreshed_since_connect = False
     _err.print(
         f"[dim]Watching {table or 'all tables'} in pod {pod_id}… Ctrl-C to stop.[/dim]"
     )
@@ -120,6 +125,7 @@ async def _run(
                 ssl=ssl_option,
             ) as websocket:
                 attempt = 0  # reset backoff once connected
+                refreshed_since_connect = False
                 async for raw in websocket:
                     cursor = _handle_message(state, raw, cursor)
         except asyncio.CancelledError:
@@ -127,7 +133,12 @@ async def _run(
         except InvalidStatus as exc:
             status_code = getattr(getattr(exc, "response", None), "status_code", None)
             if status_code in {401, 403}:
-                if not use_env and refresh_auth_session(state):
+                if (
+                    not use_env
+                    and not refreshed_since_connect
+                    and refresh_auth_session(state)
+                ):
+                    refreshed_since_connect = True
                     _err.print("[dim]Session refreshed; reconnecting…[/dim]")
                     continue
                 fail("Authentication failed. Run `lemma auth login` and try again.")

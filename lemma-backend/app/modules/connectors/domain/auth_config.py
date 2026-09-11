@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import model_validator
 
 from app.core.domain.entity import Entity
 from app.modules.connectors.domain.errors import ConnectorValidationError
@@ -62,10 +61,6 @@ class AuthConfigEntity(Entity):
     metadata: dict[str, Any] | None = None
     created_by_user_id: UUID | None = None
     updated_by_user_id: UUID | None = None
-
-    model_config = ConfigDict(from_attributes=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @model_validator(mode="before")
     @classmethod

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert
 
+from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
 from app.core.infrastructure.db.transaction_locks import (
     clear_transaction_scoped_lock,
 )
@@ -39,17 +40,17 @@ class SqlAlchemyUnitOfWork(IUnitOfWork):
         # defer work to after the commit. Services are constructed from the
         # session, not the unit of work, and threading one through every
         # constructor to schedule a cache invalidation is a worse trade.
-        # Tolerant of a session double that has no `info` mapping: this is a
-        # convenience for deferring work, never a requirement for committing.
+        # Read it back with `active_uow`; tolerant of a session double that has
+        # no `info` mapping, because this is a convenience for deferring work
+        # and never a requirement for committing.
         info = getattr(session, "info", None)
         if isinstance(info, dict):
             # Last writer wins: two units of work wrapping one session
             # sequentially will each claim it, and only the newest is
-            # reachable. That is what the readers want (the active UoW), and
-            # the reference is only ever used to ask whether events are
-            # pending -- but it is a cycle and a shared slot, so nothing more
-            # should be hung off it.
-            info["lemma_uow"] = self
+            # reachable. That is what the readers want (the active UoW) -- but
+            # it is a cycle and a shared slot, so nothing more should be hung
+            # off it.
+            info[SESSION_UOW_KEY] = self
 
     def after_commit(self, callback: Callable[[], Awaitable[object]]) -> None:
         """Run ``callback`` once the transaction has actually committed.

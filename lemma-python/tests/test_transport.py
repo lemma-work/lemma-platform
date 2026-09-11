@@ -3,6 +3,7 @@ retry + error-mapping + timeout paths against fakes (no live backend, no sleeps)
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -10,13 +11,14 @@ import httpx
 import pytest
 
 from lemma_sdk.errors import (
+    LemmaAuthError,
     LemmaConnectionError,
     LemmaNotFoundError,
     LemmaRateLimitError,
     LemmaServerError,
     LemmaTimeoutError,
 )
-from lemma_sdk.transport import LemmaTransport
+from lemma_sdk.transport import _RETRYABLE_STATUS, LemmaTransport
 
 
 @pytest.fixture(autouse=True)
@@ -339,3 +341,148 @@ def test_stream_maps_an_error_status_to_a_typed_error_with_request_id():
     assert excinfo.value.code == "not_found"
     assert excinfo.value.request_id == "req-7"
     assert excinfo.value.message == "no such conversation"
+
+
+# --- 401: refresh, then one replay ----------------------------------------
+
+
+class _RefreshServer:
+    """A refresh endpoint, and a record of what was asked of it."""
+
+    def __init__(self, *, status: int = 200, payload: Any = None) -> None:
+        self.status = status
+        self.payload = (
+            payload
+            if payload is not None
+            else {
+                "access_token": "fresh",
+                "refresh_token": "rotated",
+            }
+        )
+        self.requests: list[dict] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(
+            {
+                "url": str(request.url),
+                "body": json.loads(request.content or b"{}"),
+                "authorization": request.headers.get("authorization"),
+            }
+        )
+        return httpx.Response(self.status, json=self.payload)
+
+
+def _transport_with_refresh(server: _RefreshServer | None, **kwargs: Any):
+    """A transport whose httpx client answers the refresh endpoint locally."""
+    transport = LemmaTransport(
+        base_url="https://api.example.test",
+        token="stale",
+        max_retries=2,
+        **kwargs,
+    )
+    client = transport.generated.get_httpx_client()
+    if server is not None:
+        client._transport = httpx.MockTransport(server)
+    return transport
+
+
+def test_a_401_refreshes_once_and_replays_the_request():
+    """The whole point: an access token that died mid-process is replaced.
+
+    `LEMMA_REFRESH_TOKEN` was documented and did nothing, so a long-lived
+    process using the SDK simply started failing when its token aged out.
+    """
+    server = _RefreshServer()
+    transport = _transport_with_refresh(server, refresh_token="rt")
+    endpoint = FakeEndpoint([FakeResponse(401), FakeResponse(200, parsed={"ok": True})])
+
+    assert transport.call(endpoint) == {"ok": True}
+    assert endpoint.calls == 2
+    assert len(server.requests) == 1
+    assert server.requests[0]["body"] == {"refresh_token": "rt"}
+    assert server.requests[0]["url"].endswith("/auth/cli/refresh")
+
+
+def test_the_replay_carries_the_new_token_on_the_client_already_built():
+    """The header is baked into the `httpx.Client` and cached.
+
+    Setting `generated.token` alone changes what a *future* client would send,
+    so the replay would go out with the dead token and 401 again.
+    """
+    server = _RefreshServer()
+    transport = _transport_with_refresh(server, refresh_token="rt")
+    client = transport.generated.get_httpx_client()
+
+    transport.call(FakeEndpoint([FakeResponse(401), FakeResponse(200, parsed={})]))
+
+    assert transport.generated.token == "fresh"
+    assert client.headers["Authorization"] == "Bearer fresh"
+
+
+def test_a_401_never_loops():
+    """One refresh per call, whatever the server keeps saying.
+
+    The CLI shipped this exact spin, and every turn of it is a round trip
+    against an endpoint that is already refusing.
+    """
+    server = _RefreshServer()
+    transport = _transport_with_refresh(server, refresh_token="rt")
+    endpoint = FakeEndpoint([FakeResponse(401)] * 6)
+
+    with pytest.raises(LemmaAuthError):
+        transport.call(endpoint)
+    assert endpoint.calls == 2
+    assert len(server.requests) == 1
+
+
+def test_no_refresh_token_means_the_401_is_simply_raised():
+    """Most callers have none; they must not pay a round trip to learn that."""
+    server = _RefreshServer()
+    transport = _transport_with_refresh(server)
+    endpoint = FakeEndpoint([FakeResponse(401)])
+
+    with pytest.raises(LemmaAuthError):
+        transport.call(endpoint)
+    assert endpoint.calls == 1
+    assert server.requests == []
+
+
+def test_a_refusing_refresh_endpoint_surfaces_the_original_401():
+    """ "Your session expired", not whatever went wrong while renewing it."""
+    server = _RefreshServer(status=401, payload={"message": "refresh token expired"})
+    transport = _transport_with_refresh(server, refresh_token="rt")
+    endpoint = FakeEndpoint([FakeResponse(401), FakeResponse(200, parsed={})])
+
+    with pytest.raises(LemmaAuthError):
+        transport.call(endpoint)
+    assert endpoint.calls == 1
+
+
+def test_an_error_status_is_not_a_session_whatever_its_body_says():
+    """The status is checked, not just the shape of the body.
+
+    An error envelope that happens to echo the fields it was sent -- a gateway,
+    a proxy, a misconfigured error handler -- would otherwise read as a
+    successful refresh, and the SDK would install a token the server never
+    issued and replay the request with it.
+    """
+    server = _RefreshServer(
+        status=403, payload={"access_token": "not-yours", "refresh_token": "nope"}
+    )
+    transport = _transport_with_refresh(server, refresh_token="rt")
+    endpoint = FakeEndpoint([FakeResponse(401), FakeResponse(200, parsed={})])
+
+    with pytest.raises(LemmaAuthError):
+        transport.call(endpoint)
+    assert endpoint.calls == 1
+    assert transport.generated.token == "stale"
+
+
+def test_401_is_not_in_the_retry_set():
+    """Replaying a dead token just fails again; the refresh is the fix.
+
+    Pinned separately because `_RETRYABLE_STATUS` is asserted by equality in
+    `test_sdk_reliability.py`, and adding 401 there would make every expired
+    session cost three identical rejections.
+    """
+    assert 401 not in _RETRYABLE_STATUS

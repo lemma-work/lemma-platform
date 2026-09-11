@@ -368,9 +368,20 @@ class AgentService:
 
         await teardown_agent_surfaces(self.uow, pod_id=pod_id, agent_id=agent.id)
         await self.agent_repository.delete(agent.id)
+
         # Revoke any in-flight delegated token minted for this agent so it stops
         # working immediately rather than lingering until the token expires.
-        await revoke_delegation(actor_id=agent.id)
+        #
+        # After the commit, not inside it, for both reasons that keep recurring:
+        # a Redis write with the transaction open holds a pooled connection
+        # across it, and revoking before the delete is durable would leave a
+        # working agent whose tokens had been killed if this rolled back.
+        agent_id = agent.id
+
+        async def _revoke() -> None:
+            await revoke_delegation(actor_id=agent_id)
+
+        self.uow.after_commit(_revoke)
 
     def _normalize_names(self, values: list[str], *, label: str) -> list[str]:
         normalized: list[str] = []
