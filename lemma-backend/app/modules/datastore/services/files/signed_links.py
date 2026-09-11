@@ -17,7 +17,11 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.domain.errors import (
+    DatastoreSignedLinkLimitError,
+    DatastoreValidationError,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreSignedLinkEntity,
@@ -53,6 +57,7 @@ class SignedLinks:
         entity = await self._reader.get_file_by_path(pod_id, path, ctx.user_id, ctx=ctx)
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
+        await self._check_live_link_allowance(pod_id, ctx.user_id)
         (
             _code,
             signed_url,
@@ -65,6 +70,27 @@ class SignedLinks:
             max_hits=max_hits,
         )
         return entity, signed_url, expires_at, effective_max_hits
+
+    async def _check_live_link_allowance(
+        self, pod_id: UUID, user_id: UUID | None
+    ) -> None:
+        """Refuse to mint when this person is already at their live-link limit.
+
+        The bound this puts on abuse is the number of links, because the egress
+        one leaked link can run up is already bounded by its own budget — what
+        was unbounded was how many a loop could mint. A runaway agent reaches the
+        limit in seconds and then gets a 429 it can act on; ordinary use does not
+        come near it.
+
+        Checked, not locked: two concurrent mints can both pass and leave the
+        count one over. Bounding a minting loop does not need to be exact, and
+        the alternative is serializing every mint in a pod behind a row lock.
+        """
+        limit = datastore_settings.datastore_signed_url_max_active_per_user
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            live = await SignedLinkRepository(uow).count_live_for_user(pod_id, user_id)
+        if live >= limit:
+            raise DatastoreSignedLinkLimitError(limit=limit, live=live)
 
     async def list(
         self, pod_id: UUID, *, include_dead: bool = False

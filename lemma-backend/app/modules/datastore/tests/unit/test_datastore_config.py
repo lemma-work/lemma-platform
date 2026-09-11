@@ -110,6 +110,11 @@ EXPECTED = [
     ),
     ("datastore_signed_url_max_hits", "DATASTORE_SIGNED_URL_MAX_HITS", 1000),
     (
+        "datastore_signed_url_max_active_per_user",
+        "DATASTORE_SIGNED_URL_MAX_ACTIVE_PER_USER",
+        500,
+    ),
+    (
         "datastore_signed_url_row_retention_seconds",
         "DATASTORE_SIGNED_URL_ROW_RETENTION_SECONDS",
         604800,

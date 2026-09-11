@@ -685,3 +685,135 @@ class TestSignedUrlDurability:
         ), other.text
         # Still live for its own pod.
         assert (await async_client.get(f"/s/{code}")).status_code == status.HTTP_200_OK
+
+
+class TestSignedUrlLiveLimit:
+    """A person may only have so many live links at once."""
+
+    async def _sign(self, api: DatastoreApi, path: str):
+        return await api.request(
+            "POST",
+            FILES.format(pod_id=api.pod_id) + "/signed-url",
+            params={"path": path},
+            json={},
+        )
+
+    @pytest.mark.asyncio
+    async def test_minting_past_the_limit_is_refused_and_says_why(
+        self, pod_api: DatastoreApi, monkeypatch
+    ):
+        from app.modules.datastore.config import datastore_settings
+
+        monkeypatch.setattr(
+            datastore_settings, "datastore_signed_url_max_active_per_user", 2
+        )
+        uploaded = await _upload(
+            pod_api, "/me/limit", "cap.txt", b"capped", content_type="text/plain"
+        )
+
+        for _ in range(2):
+            ok = await self._sign(pod_api, uploaded["path"])
+            assert ok.status_code == status.HTTP_201_CREATED, ok.text
+
+        refused = await self._sign(pod_api, uploaded["path"])
+        assert refused.status_code == status.HTTP_429_TOO_MANY_REQUESTS, refused.text
+        body = refused.json()
+        assert body["code"] == "DATASTORE_SIGNED_LINK_LIMIT"
+        # Actionable, not just a refusal: an agent has to choose between
+        # revoking one and waiting, and needs the numbers to decide.
+        assert body["details"] == {"limit": 2, "live": 2}
+
+    @pytest.mark.asyncio
+    async def test_revoking_frees_a_slot_immediately(
+        self, pod_api: DatastoreApi, monkeypatch
+    ):
+        """The limit counts live links, so it clears without waiting for expiry."""
+        from app.modules.datastore.config import datastore_settings
+
+        monkeypatch.setattr(
+            datastore_settings, "datastore_signed_url_max_active_per_user", 1
+        )
+        uploaded = await _upload(
+            pod_api, "/me/freeslot", "f.txt", b"free", content_type="text/plain"
+        )
+
+        first = await self._sign(pod_api, uploaded["path"])
+        assert first.status_code == status.HTTP_201_CREATED, first.text
+        code = _code_of(first.json()["signed_url"])
+
+        assert (
+            await self._sign(pod_api, uploaded["path"])
+        ).status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+        await pod_api.request(
+            "DELETE", FILES.format(pod_id=pod_api.pod_id) + f"/signed-urls/{code}"
+        )
+
+        after = await self._sign(pod_api, uploaded["path"])
+        assert after.status_code == status.HTTP_201_CREATED, after.text
+
+    @pytest.mark.asyncio
+    async def test_a_dead_link_does_not_hold_a_slot(
+        self, pod_api: DatastoreApi, async_client: AsyncClient, monkeypatch
+    ):
+        """An exhausted link is dead, so it must not count against the limit.
+
+        Otherwise the cap would fill up with links nobody can use and the only
+        remedy would be revoking each one by hand.
+        """
+        from app.modules.datastore.config import datastore_settings
+
+        monkeypatch.setattr(
+            datastore_settings, "datastore_signed_url_max_active_per_user", 1
+        )
+        uploaded = await _upload(
+            pod_api, "/me/deadslot", "d.txt", b"spend me", content_type="text/plain"
+        )
+
+        minted = await pod_api.request(
+            "POST",
+            FILES.format(pod_id=pod_api.pod_id) + "/signed-url",
+            params={"path": uploaded["path"]},
+            json={"max_hits": 1},
+        )
+        assert minted.status_code == status.HTTP_201_CREATED, minted.text
+        code = _code_of(minted.json()["signed_url"])
+
+        # Spend it: one download, then the next request exhausts it.
+        assert (await async_client.get(f"/s/{code}")).status_code == status.HTTP_200_OK
+        assert (
+            await async_client.get(f"/s/{code}")
+        ).status_code == status.HTTP_410_GONE
+
+        after = await self._sign(pod_api, uploaded["path"])
+        assert after.status_code == status.HTTP_201_CREATED, after.text
+
+    @pytest.mark.asyncio
+    async def test_the_limit_is_per_person_not_per_pod(
+        self, pod_api: DatastoreApi, async_client: AsyncClient, member_users
+    ):
+        """One member at their limit must not stop another member sharing."""
+        from app.modules.datastore.config import datastore_settings
+
+        original = datastore_settings.datastore_signed_url_max_active_per_user
+        datastore_settings.datastore_signed_url_max_active_per_user = 1
+        try:
+            uploaded = await _upload(
+                pod_api, "/shared", "team.txt", b"team", content_type="text/plain"
+            )
+            first = await self._sign(pod_api, uploaded["path"])
+            assert first.status_code == status.HTTP_201_CREATED, first.text
+            assert (
+                await self._sign(pod_api, uploaded["path"])
+            ).status_code == status.HTTP_429_TOO_MANY_REQUESTS
+
+            viewer = DatastoreApi(async_client, pod_api.pod_id, member_users["viewer"])
+            theirs = await viewer.request(
+                "POST",
+                FILES.format(pod_id=pod_api.pod_id) + "/signed-url",
+                params={"path": uploaded["path"]},
+                json={},
+            )
+            assert theirs.status_code == status.HTTP_201_CREATED, theirs.text
+        finally:
+            datastore_settings.datastore_signed_url_max_active_per_user = original

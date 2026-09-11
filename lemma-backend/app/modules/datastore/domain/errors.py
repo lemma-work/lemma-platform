@@ -35,6 +35,28 @@ class DatastoreConflictError(DatastoreDomainError):
         )
 
 
+class DatastoreSignedLinkLimitError(DatastoreDomainError):
+    """This person already has as many live share links as they may have.
+
+    429 rather than 403: nothing is forbidden, there is simply no slot right now,
+    and the condition clears on its own as links expire. The details say what the
+    limit is and how many are live, because the caller — often an agent — has to
+    decide between revoking one and waiting.
+    """
+
+    def __init__(self, *, limit: int, live: int):
+        super().__init__(
+            (
+                f"You already have {live} live share links in this pod, and the "
+                f"limit is {limit}. Revoke one you no longer need, or wait for "
+                f"one to expire."
+            ),
+            code="DATASTORE_SIGNED_LINK_LIMIT",
+            status_code=429,
+            details={"limit": limit, "live": live},
+        )
+
+
 class DatastoreNotFoundError(DatastoreDomainError):
     def __init__(self, message: str = "Datastore not found"):
         super().__init__(message, code="DATASTORE_NOT_FOUND", status_code=404)

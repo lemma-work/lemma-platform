@@ -448,6 +448,17 @@ class DatastoreSettings(BaseSettings):
             "signed URLs. Requests above this are clamped down."
         ),
     )
+    datastore_signed_url_max_active_per_user: int = Field(
+        default=500,
+        description=(
+            "How many public signed URLs one person may have live in one pod at "
+            "once. Counts only links that still resolve — revoking one, or "
+            "letting it expire, frees the slot immediately. Bounds a runaway "
+            "minting loop, which is the only way this number is reached in "
+            "practice: an agent emailing 50 attachments a day would sit at ~350 "
+            "against a 7-day lifetime."
+        ),
+    )
     datastore_signed_url_row_retention_seconds: int = Field(
         default=604800,
         description=(

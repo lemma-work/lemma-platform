@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.modules.datastore.domain.file_entities import DatastoreSignedLinkEntity
 from app.modules.datastore.infrastructure.models.datastore_models import (
@@ -61,6 +61,32 @@ class SignedLinkRepository(DatastoreRepositoryBase):
         stmt = stmt.order_by(DatastoreSignedLink.created_at.desc()).limit(limit)
         rows = await self.session.scalars(stmt)
         return [row.to_entity() for row in rows]
+
+    async def count_live_for_user(self, pod_id: UUID, user_id: UUID | None) -> int:
+        """How many of this person's links in this pod still resolve.
+
+        Scoped per person rather than per pod so that one member's runaway agent
+        cannot spend a shared pod's whole allowance, and so two people working in
+        the same busy pod do not compete for it.
+
+        Counts live links only, using the same three conditions as ``is_live``,
+        which is what makes the limit self-clearing: revoke one, or let one
+        expire, and the slot is back.
+        """
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(DatastoreSignedLink)
+                .where(
+                    DatastoreSignedLink.pod_id == pod_id,
+                    DatastoreSignedLink.created_by_user_id == user_id,
+                    DatastoreSignedLink.revoked_at.is_(None),
+                    DatastoreSignedLink.exhausted_at.is_(None),
+                    DatastoreSignedLink.expires_at > datetime.now(timezone.utc),
+                )
+            )
+            or 0
+        )
 
     async def revoke(self, pod_id: UUID, code: str) -> bool:
         """Mark a link dead. Returns whether this call is what killed it.
