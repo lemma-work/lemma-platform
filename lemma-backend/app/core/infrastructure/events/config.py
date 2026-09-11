@@ -149,6 +149,33 @@ class EventTransportSettings(BaseSettings):
     redis_stream_snapshot_interval_seconds: float = Field(default=300.0, ge=0)
     redis_stream_stale_consumer_seconds: int = Field(default=900, ge=1)
     consumer_group_reconcile_interval_seconds: float = Field(default=30.0, ge=0)
+    redis_stream_group_reap_after_seconds: int = Field(
+        default=86_400,
+        ge=0,
+        description=(
+            "How long a consumer group must go unclaimed by every process in "
+            "the fleet -- with nothing pending, nothing delivered, and no "
+            "consumer that is not idle -- before it counts as abandoned. Must "
+            "be far larger than "
+            "``consumer_group_reconcile_interval_seconds``, which is how often "
+            "a live process renews its claim, and larger than any rollout or "
+            "planned outage: a group destroyed while its deployment is merely "
+            "down loses its pending-entries list. 0 disables the reaper. Env: "
+            "``REDIS_STREAM_GROUP_REAP_AFTER_SECONDS``."
+        ),
+    )
+    redis_stream_group_destroy_enabled: bool = Field(
+        default=False,
+        description=(
+            "Whether an abandoned group is destroyed or only reported. Off by "
+            "default, which is the point: the warning names every candidate, so "
+            "the set can be read against what is expected before anything is "
+            "deleted. XGROUP DESTROY removes the group's pending-entries list "
+            "with it, and a wrong answer here is unrecoverable, so this earns "
+            "its observation period rather than assuming one. Env: "
+            "``REDIS_STREAM_GROUP_DESTROY_ENABLED``."
+        ),
+    )
     event_completed_retention_days: int = Field(
         default=7,
         ge=1,

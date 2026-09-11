@@ -26,9 +26,22 @@ async def trim_streams_to_budget_task() -> None:
     Off the hour from the other event cron so two Redis-heavy passes do not
     land together.
     """
+    from app.core.infrastructure.events.group_reaper import (
+        reap_abandoned_consumer_groups,
+    )
     from app.core.infrastructure.redis.client import get_redis
 
-    reclaimed = await trim_streams_to_budget(get_redis())
+    client = get_redis()
+    # Before the trim, not after: a group nobody consumes any more pins the
+    # XTRIM watermark, so reaping it is what lets the same pass reclaim the
+    # bytes rather than give up and log that it could not.
+    abandoned = await reap_abandoned_consumer_groups(client)
+    if abandoned:
+        logger.info(
+            "redis.stream.abandoned_consumer_groups_reaped.observed",
+            group_count=len(abandoned),
+        )
+    reclaimed = await trim_streams_to_budget(client)
     if total := sum(reclaimed.values()):
         logger.info(
             "redis.stream.budget_trimmed.observed",
