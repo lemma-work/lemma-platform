@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.config import settings
 from app.core.object_storage import storage_supports_native_signed_urls
 from app.core.crypto import get_secret_signer
@@ -198,15 +199,28 @@ async def build_file_url(
     entity: DatastoreFileEntity,
     *,
     expires_seconds: int | None = None,
+    session: object | None = None,
 ) -> tuple[str, datetime]:
-    """Short-lived URL for a file entity's original bytes."""
+    """Short-lived URL for a file entity's original bytes.
+
+    Pass ``session`` and the pooled connection goes back for the duration. By
+    the time a URL is minted the entity is already resolved and authorized and
+    nothing below here touches the database -- it is a Redis lookup and, on GCS,
+    a signing round trip. Callers reach this from the request-scoped unit of
+    work and from the agent's file tools, both of which otherwise keep a
+    connection checked out for the whole of it.
+
+    Optional because the local-storage path and the tests call it with no
+    session, and ``connection_released(None)`` is a no-op.
+    """
     key = datastore_storage_key(entity)
-    return await build_object_url(
-        storage,
-        key,
-        expires_seconds=expires_seconds,
-        content_sha256=entity.content_sha256,
-    )
+    async with connection_released(session):
+        return await build_object_url(
+            storage,
+            key,
+            expires_seconds=expires_seconds,
+            content_sha256=entity.content_sha256,
+        )
 
 
 def build_file_app_url(pod_id: UUID, path: str) -> str:

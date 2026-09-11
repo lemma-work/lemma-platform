@@ -65,6 +65,28 @@ class TestModeResolution:
         assert ctx.vision_mode is AgentVisionMode.UNAVAILABLE
 
 
+class _Session:
+    """The platform session `PodServices` really carries.
+
+    The stand-in here had no `uow` at all, so it could not have noticed the tool
+    holding a database connection across the vision model call -- which is what
+    it was doing, for 47 seconds at the worst measured hold.
+    """
+
+    def __init__(self) -> None:
+        self.new: list[object] = []
+        self.dirty: list[object] = []
+        self.deleted: list[object] = []
+        self.info: dict[str, object] = {}
+        self.commits = 0
+
+    def in_transaction(self) -> bool:
+        return self.commits == 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
 def _pdf_services(monkeypatch):
     from app.modules.datastore.services.files.renderer import RenderedPage
 
@@ -73,12 +95,14 @@ def _pdf_services(monkeypatch):
         RenderedPage(1, b"jpeg-1", False, "pods/x/report.pdf/page_0001.jpg"),
         RenderedPage(2, b"jpeg-2", True, "pods/x/report.pdf/page_0002.jpg"),
     ]
+    session = _Session()
     services = SimpleNamespace(
         file=SimpleNamespace(
             render_document_page_images=AsyncMock(return_value=(entity, pages)),
             storage=object(),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+        uow=SimpleNamespace(session=session),
     )
 
     class _Ctx:
@@ -94,6 +118,7 @@ def _pdf_services(monkeypatch):
         return f"https://signed/{key}", None
 
     monkeypatch.setattr(pod_files, "build_object_url", fake_url)
+    return session
 
 
 def _ctx(mode: AgentVisionMode) -> SimpleNamespace:
@@ -294,3 +319,50 @@ def test_a_vision_capable_run_is_detected_from_its_stored_snapshot() -> None:
 
     text_only = vision_mode_from_runtime_profile({"model_capabilities": ["TEXT"]})
     assert text_only is not AgentVisionMode.DIRECT
+
+
+class TestTheVisionCallDoesNotHoldADatabaseConnection:
+    """The delegated path calls a vision model. That must not pin a connection.
+
+    `pod_view_document_pages` runs inside `pod_services`, which holds a platform
+    connection in an open transaction for the whole tool call. The model round
+    trip sat inside it: the worst hold measured in a week of production was
+    47.2s, of which 47.1s was idle and 24ms was querying, for one statement.
+    """
+
+    @pytest.mark.asyncio
+    async def test_delegated_releases_the_connection_for_the_model_call(
+        self, monkeypatch
+    ) -> None:
+        session = _pdf_services(monkeypatch)
+        held: dict[str, bool] = {}
+
+        async def fake_describe(deps, **kwargs):
+            held["in_transaction"] = session.in_transaction()
+            return {"success": True, "words": "a description"}
+
+        monkeypatch.setattr(pod_files, "describe_document_pages", fake_describe)
+
+        await pod_files.pod_view_document_pages(
+            _ctx(AgentVisionMode.DELEGATED),
+            ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
+        )
+
+        assert session.commits == 1, "the connection was never handed back"
+        assert held["in_transaction"] is False, (
+            "the vision model ran while the platform transaction was still open"
+        )
+
+    @pytest.mark.asyncio
+    async def test_direct_needs_no_release_because_it_makes_no_call(
+        self, monkeypatch
+    ) -> None:
+        """DIRECT returns the bytes inline — there is no round trip to wait on."""
+        session = _pdf_services(monkeypatch)
+
+        await pod_files.pod_view_document_pages(
+            _ctx(AgentVisionMode.DIRECT),
+            ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
+        )
+
+        assert session.commits == 0

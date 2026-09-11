@@ -268,3 +268,74 @@ def factory():
     return build
 """
     assert _rules(source) == ["process-lifetime-construction"]
+
+
+# --- per-instance signature defaults -----------------------------------------
+
+
+@pytest.mark.parametrize("factory", ["list", "dict", "set"])
+def test_a_private_attr_empty_collection_factory_is_reported(factory: str) -> None:
+    """Each of these has an exact `default=<empty>` equivalent that costs nothing.
+
+    A *private* attribute's default is resolved per instance, not once at schema
+    build, and resolving it calls `inspect.signature` on the factory. This was
+    63us per domain entity and 75% of production loop-stall time.
+    """
+    source = (
+        f"class M(BaseModel):\n    _x: list = PrivateAttr(default_factory={factory})\n"
+    )
+    assert _rules(source) == ["per-instance-signature-default"]
+
+
+def test_a_qualified_private_attr_is_reported() -> None:
+    """`pydantic.PrivateAttr(...)` is the same call by a longer name."""
+    source = "class M(BaseModel):\n    _x: list = pydantic.PrivateAttr(default_factory=list)\n"
+    assert _rules(source) == ["per-instance-signature-default"]
+
+
+def test_the_constant_default_is_the_fix() -> None:
+    """`default=[]` is what the rule is steering towards, so it must stay quiet."""
+    source = "class M(BaseModel):\n    _x: list = PrivateAttr(default=[])\n"
+    assert _rules(source) == []
+
+
+@pytest.mark.parametrize(
+    "factory",
+    ["uuid7", "lambda: datetime.now()", "_build_state"],
+    ids=["uuid", "lambda", "named-function"],
+)
+def test_a_factory_that_computes_a_value_is_still_reported(factory: str) -> None:
+    """These pay the same per-instance `inspect.signature` as the constant ones.
+
+    The rule reports them without the ``(constant)`` marker, so the remedy can
+    say there is no cheaper form and the entry should be baselined. A Python
+    function is cheaper to introspect than a C builtin -- 8us against 63us --
+    but it is not free, and the gate is ratcheted, so reporting costs nothing.
+    """
+    source = f"class M(BaseModel):\n    _x: object = PrivateAttr(default_factory={factory})\n"
+    rules = _rules(source)
+    assert rules == ["per-instance-signature-default"]
+
+
+@pytest.mark.parametrize(
+    "factory", ["tuple", "OrderedDict", "Counter", "frozenset", "deque"]
+)
+def test_the_other_constant_factories_are_reported_too(factory: str) -> None:
+    """The first cut of this rule only knew `list`/`dict`/`set` and missed these.
+
+    Each has an exact `default=<constant>` equivalent and pays the identical
+    per-instance cost, so a narrower rule would have let the same defect back in
+    under a different spelling.
+    """
+    source = f"class M(BaseModel):\n    _x: object = PrivateAttr(default_factory={factory})\n"
+    assert _rules(source) == ["per-instance-signature-default"]
+
+
+def test_a_normal_field_factory_is_not_this_rule() -> None:
+    """`Field(default_factory=list)` is resolved once when the schema is built.
+
+    All 345 of them in this codebase are fine, and the measurement says so:
+    zero signature resolutions per instantiation. Only `PrivateAttr` pays.
+    """
+    source = "class M(BaseModel):\n    x: list = Field(default_factory=list)\n"
+    assert _rules(source) == []

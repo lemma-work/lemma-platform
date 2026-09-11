@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import re
 from datetime import datetime
 from typing import Any, Optional, Sequence
 from uuid import UUID
@@ -34,7 +33,10 @@ from app.modules.datastore.services.files.path_resolver import PathResolver
 from app.modules.datastore.services.files.projection import FileProjection
 from app.modules.datastore.services.files.file_url import build_file_url
 from app.modules.datastore.services.files.signed_links import SignedLinks
-from app.modules.datastore.infrastructure.storage_paths import is_child_page_artifact
+from app.modules.datastore.infrastructure.storage_paths import (
+    child_page_number,
+    is_child_page_artifact,
+)
 from app.modules.datastore.services.files.reader import FileReader
 from app.modules.datastore.services.files.renderer import FilePageRenderer, RenderedPage
 from app.modules.datastore.services.files.searcher import FileSearcher
@@ -45,14 +47,6 @@ from app.modules.datastore.services.files.transaction_facade import (
     FileTransactionFacade,
 )
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
-
-
-_CHILD_PAGE_RE = re.compile(r"page_(\d+)\.jpg$")
-
-
-def _child_page_number(artifact_rel: str) -> int | None:
-    match = _CHILD_PAGE_RE.search(artifact_rel)
-    return int(match.group(1)) if match else None
 
 
 class DatastoreFileService(FileTransactionFacade):
@@ -440,7 +434,7 @@ class DatastoreFileService(FileTransactionFacade):
         read from the manifest-backed child container. Touches only storage/CPU —
         **no DB session** — so it is safe to call after the resolving UoW closed."""
         if is_child_page_artifact(artifact_rel):
-            page_number = _child_page_number(artifact_rel)
+            page_number = child_page_number(artifact_rel)
             if page_number is None:
                 raise DatastoreValidationError("Invalid page artifact reference")
             pages = await self._renderer.render_pages_for_entity(
@@ -560,7 +554,10 @@ class DatastoreFileService(FileTransactionFacade):
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
         url, expires_at = await build_file_url(
-            self.storage, entity, expires_seconds=expires_seconds
+            self.storage,
+            entity,
+            expires_seconds=expires_seconds,
+            session=getattr(self.file_repository, "session", None),
         )
         return entity, url, expires_at
 

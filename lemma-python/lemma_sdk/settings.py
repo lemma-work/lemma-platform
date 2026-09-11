@@ -9,6 +9,7 @@ from .config import (
     ENV_SERVER_NAME,
     build_env_server_config,
     get_access_token_from_config,
+    get_refresh_token_from_config,
     get_server_config,
     load_config,
     normalize_server_config,
@@ -29,6 +30,10 @@ class LemmaSettings:
     verify_ssl: bool = True
     server: str | None = None
     config_path: Path = DEFAULT_CONFIG_PATH
+    #: Exchanged for a fresh access token when one expires mid-process; see
+    #: `LemmaTransport._refresh_session`. `None` when there is none to use, or
+    #: when the caller passed `token=` and therefore owns the credential.
+    refresh_token: str | None = None
 
 
 def load_settings(
@@ -52,6 +57,14 @@ def load_settings(
       whose endpoints are ``LEMMA_BASE_URL`` and ``LEMMA_AUTH_URL`` and otherwise
       the public defaults;
     * with neither, the config file's active server is used.
+
+    ``LEMMA_REFRESH_TOKEN``, or a refresh token in the chosen server's config,
+    is carried through so an access token that expires mid-process is replaced
+    rather than ending the process's work. Only when the access token came from
+    the same place: a caller that passed ``token=`` owns that credential, and
+    swapping it underneath them is not the SDK's decision. Nothing is written
+    back to ``~/.lemma/config.json`` -- the refreshed token lives for this
+    process, which is the scope the SDK actually has.
 
     ``base_url=`` and ``token=`` always win over whichever server was chosen.
     ``LEMMA_BASE_URL`` is read only for the ``env`` server -- a named server
@@ -102,4 +115,5 @@ def load_settings(
         verify_ssl=verify_ssl if verify_ssl is not None else resolve_verify_ssl(),
         server=selected_server,
         config_path=path,
+        refresh_token=None if token else get_refresh_token_from_config(config),
     )

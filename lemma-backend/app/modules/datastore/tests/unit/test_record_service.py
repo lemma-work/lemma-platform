@@ -18,6 +18,7 @@ from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
 )
+from app.modules.datastore.services.record_events import RecordEventCoordinator
 from app.modules.datastore.services.record_service import (
     RecordService as _RecordService,
 )
@@ -1175,3 +1176,42 @@ async def test_a_single_update_still_checks_permission_and_dispatches():
     assert (
         record_repository.update_record.await_args.kwargs["enforce_user_scope"] is True
     )
+
+
+class _PlatformSession:
+    """The platform session a record write does *not* need while it runs."""
+
+    def __init__(self) -> None:
+        self.released = 0
+        self.new: list = []
+        self.dirty: list = []
+        self.deleted: list = []
+        self.info: dict = {}
+
+    def in_transaction(self) -> bool:
+        return True
+
+    async def commit(self) -> None:
+        self.released += 1
+
+
+@pytest.mark.asyncio
+async def test_the_event_dispatch_hands_back_the_platform_connection():
+    """Records live in a different database from the request's unit of work.
+
+    A wired dispatcher is a Redis round trip, reached with the *platform*
+    connection checked out by the authorization reads -- the record write itself
+    went to the datastore pool. So the platform connection is handed back for
+    it. The common case has no dispatcher at all, and must pay nothing: a
+    release and a re-acquire for a callback that is not there is cost without
+    benefit.
+    """
+    session = _PlatformSession()
+
+    wired = RecordEventCoordinator(dispatcher=AsyncMock(), platform_session=session)
+    await wired.dispatch()
+    assert session.released == 1
+
+    absent = RecordEventCoordinator(dispatcher=None, platform_session=session)
+    await absent.dispatch()
+    assert session.released == 1, "a missing dispatcher must not cost a round trip"

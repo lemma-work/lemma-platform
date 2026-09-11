@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from uuid import UUID
 
 
@@ -129,3 +131,15 @@ def build_datastore_child_page_key(
         path,
         child_page_artifact_name(page_number),
     )
+
+
+#: A rendered page artifact is named `page_0001.jpg`; this reads the number back.
+#: It lives here with `is_child_page_artifact` rather than in the file service,
+#: which is a facade and had no other reason to know the naming convention.
+_CHILD_PAGE_RE = re.compile(r"page_(\d+)\.jpg$")
+
+
+def child_page_number(artifact_rel: str) -> int | None:
+    """The 1-based page number in a rendered page artifact's name, if it is one."""
+    match = _CHILD_PAGE_RE.search(artifact_rel)
+    return int(match.group(1)) if match else None
