@@ -985,12 +985,35 @@ class TestSignedUrlLiveLimit:
         # Nothing unexpected in between — every request either minted or was
         # told why it could not.
         assert len(created) + len(refused) == 20, [r.status_code for r in results]
-        # The point: 20 requests did not produce anything like 20 links.
-        assert len(refused) >= 10, len(created)
 
-        # And once the burst has drained, the limit holds outright.
+        # What actually persisted, which is the thing worth bounding: asserting
+        # only that some requests were refused would pass even if nineteen links
+        # had been created.
+        listed = await pod_api.request(
+            "GET", FILES.format(pod_id=pod_api.pod_id) + "/signed-urls"
+        )
+        live = len(listed.json()["links"])
+        assert live == len(created), (live, len(created))
+        # Not `== 3`. Two statements at the same instant can both see room, so a
+        # burst settles above the line by something that tracks how many mints
+        # were in flight — not how big the limit is. Twenty concurrent requests
+        # against a limit of three have been observed to land 4 and 7, which is
+        # why this is a range and not a number; against the shipped default of
+        # 500 the same twenty requests would be 0.8% over.
+        #
+        # The bound is deliberately loose. What it is here to catch is a
+        # regression back to one link per request, which is what the separate
+        # count-then-insert produced.
+        assert 3 <= live <= 12, live
+
+        # And once the burst has drained, the limit holds outright and the count
+        # stops moving.
         after = await self._sign(pod_api, uploaded["path"])
         assert after.status_code == status.HTTP_429_TOO_MANY_REQUESTS, after.text
+        settled = await pod_api.request(
+            "GET", FILES.format(pod_id=pod_api.pod_id) + "/signed-urls"
+        )
+        assert len(settled.json()["links"]) == live
 
     @pytest.mark.asyncio
     async def test_the_limit_is_per_person_not_per_pod(

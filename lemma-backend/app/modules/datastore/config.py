@@ -456,7 +456,15 @@ class DatastoreSettings(BaseSettings):
             "letting it expire, frees the slot immediately. Bounds a runaway "
             "minting loop, which is the only way this number is reached in "
             "practice: an agent emailing 50 attachments a day would sit at ~350 "
-            "against a 7-day lifetime."
+            "against a 7-day lifetime. "
+            "Exact for a caller minting one link at a time. A simultaneous "
+            "burst settles above it by roughly the number of mints in flight, "
+            "because the check and the insert are one statement rather than a "
+            "serialized allocation — so the overshoot tracks concurrency, not "
+            "this number, and at the default it is a fraction of a percent. It "
+            "is a bound on abuse, not a quota anything is billed against; "
+            "`SignedLinkRepository.create_within_allowance` says why it is not "
+            "enforced more strictly than that."
         ),
     )
     datastore_signed_url_row_retention_seconds: int = Field(

@@ -42,6 +42,10 @@ class DatastoreSignedLinkLimitError(DatastoreDomainError):
     and the condition clears on its own as links expire. The details say what the
     limit is and how many are live, because the caller — often an agent — has to
     decide between revoking one and waiting.
+
+    ``live`` can read slightly above ``limit`` after a simultaneous burst; the
+    limit is a bound on abuse rather than an exactly enforced quota, and
+    ``SignedLinkRepository.create_within_allowance`` says why.
     """
 
     def __init__(self, *, limit: int, live: int):
