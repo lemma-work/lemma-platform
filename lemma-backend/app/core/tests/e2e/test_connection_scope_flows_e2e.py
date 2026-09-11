@@ -233,3 +233,50 @@ async def test_a_decorator_dependency_hands_its_connection_back(
             files={"data": ("bundle.zip", buffer.getvalue(), "application/zip")},
         )
     assert response.status_code == 201, response.text
+
+
+async def test_listing_files_holds_no_connection_across_slow_work(
+    authenticated_client, fixed_test_org, scoped_connection_guard
+) -> None:
+    """The route that held a connection for 2.1s to do 35ms of querying.
+
+    It loaded every file row in the pod and normalised every path -- character
+    by character, two `unicodedata` calls each -- to answer a prefix test for
+    the `/skills` overlay. The work was Python, not SQL, and the pooled
+    connection was checked out for all of it.
+
+    Listed here because the flows in this file are the ones production caught
+    holding a connection, and this was the only route on the current release
+    doing it through an HTTP request.
+
+    What this does NOT catch: the scan coming back. A pod in this suite holds a
+    handful of files, so the per-row cost is microseconds and stays under the
+    idle-hold threshold -- reverting the fix leaves this test green, which was
+    checked rather than assumed. `test_the_skills_overlay_asks_for_the_subtree_
+    not_the_pod` is the guard for that, and it asserts on the call rather than
+    the clock. This one guards the other half: that nothing slow and
+    non-database moves back onto the route.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    async with scoped_connection_guard():
+        response = await authenticated_client.get(f"/pods/{pod_id}/datastore/files")
+    assert response.status_code == 200, response.text
+
+
+async def test_the_file_tree_holds_no_connection_across_slow_work(
+    authenticated_client, fixed_test_org, scoped_connection_guard
+) -> None:
+    """The tree fetched the whole pod whatever directory it was asked for.
+
+    The root request still does, because there the subtree genuinely is the
+    pod; this guards the shape rather than the row count, so it keeps holding
+    if someone scopes the root request later. Same limitation as the listing
+    test above: row count is a unit-test property, not something an idle-hold
+    threshold can see on a small pod.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    async with scoped_connection_guard():
+        response = await authenticated_client.get(
+            f"/pods/{pod_id}/datastore/files/tree"
+        )
+    assert response.status_code == 200, response.text
