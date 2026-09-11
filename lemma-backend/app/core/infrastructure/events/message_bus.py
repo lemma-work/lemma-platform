@@ -186,7 +186,7 @@ class FastStreamRedisMessageBus:
         hard = event_transport_settings.stream_hard_maxlen_for(stream)
         logger.warning(
             "redis.stream.trim_degraded.degraded",
-            stream=stream,
+            stream_name=stream,
             reason=reason,
             group=group,
             maxlen=event_transport_settings.stream_maxlen_for(stream),

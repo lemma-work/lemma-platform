@@ -193,3 +193,61 @@ def test_runtime_async_tasks_choose_inherited_or_clean_context_explicitly() -> N
     assert not failures, "raw create_task bypasses context policy:\n" + "\n".join(
         failures
     )
+
+
+# --- reserved field names -----------------------------------------------------
+
+#: Keys a log field must not use, because something downstream claims them first
+#: and the value is silently dropped rather than rejected.
+#:
+#: ``stack`` was the first one found: structlog's own ``format_exc_info`` owns it,
+#: so a field named ``stack`` vanished with no error anywhere. ``stream`` was the
+#: second, and cost more -- GKE's container-log agent consumes ``stream`` as its
+#: stdout/stderr indicator, so four ``redis.stream.*`` events declared it, emitted
+#: it, and **zero** of the ~100k warnings a day that carried it ever reached Cloud
+#: Logging with a stream in them. The one alarm that mattered -- a stream 3.4x
+#: over its memory budget -- could not be attributed to a stream at all.
+#:
+#: Only keys verified to be consumed are listed. ``message`` is deliberately
+#: absent: it survives in ``jsonPayload``, so banning it would be superstition.
+RESERVED_LOG_FIELD_NAMES = frozenset(
+    {
+        # structlog / stdlib logging own these on the event dict.
+        "stack",
+        "exception",
+        "event",
+        "level",
+        "logger",
+        "timestamp",
+        "exc_info",
+        "msg",
+        "args",
+        "asctime",
+        "taskName",
+        # The GKE container-log agent owns this one.
+        "stream",
+    }
+)
+
+
+def test_no_event_declares_a_reserved_field_name() -> None:
+    """A field whose name is taken downstream is a field that is not there.
+
+    The event catalog is generated from the literal logger calls in the tree, so
+    checking it here checks every call site. Neither the catalog nor the
+    contract gate noticed `stream`, which is why this test exists rather than a
+    note in a docstring.
+    """
+    from app.core.log.event_catalog import EVENT_CATALOG
+
+    offenders = {
+        event: sorted(set(spec.fields) & RESERVED_LOG_FIELD_NAMES)
+        for event, spec in EVENT_CATALOG.items()
+        if set(spec.fields) & RESERVED_LOG_FIELD_NAMES
+    }
+
+    assert not offenders, (
+        "these events declare a field name that something downstream consumes, "
+        f"so the value never arrives: {offenders}. Rename it (`stream` became "
+        "`stream_name`)."
+    )
