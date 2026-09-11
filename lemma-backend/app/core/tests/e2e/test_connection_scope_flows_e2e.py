@@ -123,6 +123,44 @@ async def test_creating_a_schedule_holds_no_connection_across_slow_work(
     assert response.status_code == 201, response.text
 
 
+async def test_updating_a_schedule_holds_no_connection_across_slow_work(
+    authenticated_client, fixed_test_org, scoped_connection_guard
+) -> None:
+    """The update path validates a cron the same way the create path does.
+
+    Policing the frequency floor walks up to 2,048 fire times through a
+    pure-Python cron library, off the loop on the `cpu_bound` limiter -- so the
+    hold is the thread hop *and* the wait for a slot, which under contention is
+    the longer of the two. Create was guarded here and update was not, which is
+    how this one survived: `validate_schedule_update_policies` reaches the same
+    validator by a different route.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    agent = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": f"scope-agent-{uuid4().hex[:8]}", "instruction": "hi"},
+    )
+    assert agent.status_code == 201, agent.text
+    created = await authenticated_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "name": f"scope-sched-{uuid4().hex[:8]}",
+            "schedule_type": "TIME",
+            "agent_name": agent.json()["name"],
+            "config": {"cron": "0 9 * * *"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    schedule_id = created.json()["id"]
+
+    async with scoped_connection_guard():
+        response = await authenticated_client.patch(
+            f"/pods/{pod_id}/schedules/{schedule_id}",
+            json={"config": {"cron": "0 */6 * * *"}},
+        )
+    assert response.status_code == 200, response.text
+
+
 async def test_listing_schedules_holds_no_connection_across_slow_work(
     authenticated_client, fixed_test_org, scoped_connection_guard
 ) -> None:
