@@ -33,6 +33,11 @@ _GLOBAL_PUBLIC_PREFIXES = (
     "/public/sdk/",
     "/public/datastore/",
     "/public/icons/",
+    # Short file links. Same reason as /public/datastore/ above — this is the
+    # other half of the same feature — and it was simply missed when it landed.
+    # Without it a `/s/{code}` fetched on an app host is rewritten to
+    # `/public/apps/s/{code}` and 404s as a missing asset of that app.
+    "/s/",
 )
 
 # The app's own door onto the API, served from the app's own origin.

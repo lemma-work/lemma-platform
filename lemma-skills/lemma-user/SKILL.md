@@ -198,7 +198,7 @@ lemma files share /reports/summary.pdf --ttl 3h --max-hits 50  # public, no-logi
 
 `url` returns an `app_url` deep-link for **pod members** (must be logged in) plus a
 short-lived raw download `url`. `share` mints a **public** link anyone can open
-without logging in — it expires (`--ttl` = `30m`/`3h`/`24h`; default 3h, max 24h)
+without logging in — it expires (`--ttl` = `30m`/`3h`/`7d`; default 24h, max 7d)
 and stops serving after `--max-hits` downloads (default 50, max 100), bounding
 egress if it leaks. Emailing/messaging someone outside the pod → `share`; pointing
 a member at a file in the app → `url`. (In a function or agent, the same via the

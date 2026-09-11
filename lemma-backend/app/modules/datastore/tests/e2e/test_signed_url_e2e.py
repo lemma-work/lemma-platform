@@ -101,9 +101,9 @@ class TestSignedUrlCreation:
         resp = await self._sign(pod_api, uploaded["path"], {})
         assert resp.status_code == status.HTTP_201_CREATED, resp.text
         body = resp.json()
-        assert body["max_hits"] == 50  # default
-        # default expiry 3h (10800s), allow generous slack for slow CI
-        assert 10800 - 120 <= _ttl_seconds(body["expires_at"]) <= 10800 + 120
+        assert body["max_hits"] == 200  # default
+        # default expiry 24h, allow generous slack for slow CI
+        assert 86400 - 120 <= _ttl_seconds(body["expires_at"]) <= 86400 + 120
 
     @pytest.mark.asyncio
     async def test_custom_values_respected(self, pod_api: DatastoreApi):
@@ -124,24 +124,30 @@ class TestSignedUrlCreation:
             pod_api, "/me/clamp", "c.txt", b"c", content_type="text/plain"
         )
         resp = await self._sign(
-            pod_api, uploaded["path"], {"expires_seconds": 10**9, "max_hits": 10**6}
+            pod_api, uploaded["path"], {"expires_seconds": 604800, "max_hits": 1000}
         )
         assert resp.status_code == status.HTTP_201_CREATED, resp.text
         body = resp.json()
-        assert body["max_hits"] == 100  # ceiling
-        # expiry clamped to 24h (86400s)
-        assert 86400 - 120 <= _ttl_seconds(body["expires_at"]) <= 86400 + 120
+        assert body["max_hits"] == 1000  # ceiling
+        # expiry clamped to 7d (604800s)
+        assert 604800 - 120 <= _ttl_seconds(body["expires_at"]) <= 604800 + 120
 
     @pytest.mark.asyncio
-    async def test_floors_non_positive_inputs_to_one(self, pod_api: DatastoreApi):
+    async def test_out_of_range_inputs_are_rejected_by_the_schema(
+        self, pod_api: DatastoreApi
+    ):
+        """The bounds are now in the OpenAPI document, not only in the clamp.
+
+        The service still clamps — internal callers pass values straight
+        through — but an API client gets told its input was wrong instead of
+        silently receiving a different link from the one it asked for.
+        """
         uploaded = await _upload(
             pod_api, "/me/floor", "d.txt", b"d", content_type="text/plain"
         )
-        resp = await self._sign(
-            pod_api, uploaded["path"], {"expires_seconds": 0, "max_hits": 0}
-        )
-        assert resp.status_code == status.HTTP_201_CREATED, resp.text
-        assert resp.json()["max_hits"] == 1
+        for body in ({"expires_seconds": 0}, {"max_hits": 0}, {"max_hits": 10**6}):
+            resp = await self._sign(pod_api, uploaded["path"], body)
+            assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, resp.text
 
     @pytest.mark.asyncio
     async def test_folder_cannot_be_signed(self, pod_api: DatastoreApi):
@@ -182,6 +188,10 @@ class TestSignedUrlServing:
         etag = f'"{uploaded["content_sha256"]}"'
         assert served.headers["etag"] == etag
         assert served.headers["cache-control"] == "private, no-cache"
+
+        assert served.headers["accept-ranges"] == "bytes"
+        assert served.headers["content-length"] == str(len(content))
+        assert served.headers["x-content-type-options"] == "nosniff"
 
         not_modified = await async_client.get(
             f"/s/{_code_of(body['signed_url'])}",
@@ -260,3 +270,258 @@ class TestSignedUrlAuthorization:
         served = await async_client.get(f"/s/{_code_of(resp.json()['signed_url'])}")
         assert served.status_code == status.HTTP_200_OK
         assert served.content == content
+
+
+class TestSignedUrlBrowserBehaviour:
+    """The parts that only matter because a browser, not an SDK, opens these."""
+
+    async def _sign(self, api: DatastoreApi, path: str, body: dict) -> dict:
+        resp = await api.request(
+            "POST",
+            FILES.format(pod_id=api.pod_id) + "/signed-url",
+            params={"path": path},
+            json=body,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.text
+        return resp.json()
+
+    @pytest.mark.asyncio
+    async def test_range_request_returns_partial_content(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """Without this Safari will not play a shared video at all."""
+        content = b"0123456789abcdef"
+        uploaded = await _upload(
+            pod_api, "/me/rng", "clip.bin", content, content_type="video/mp4"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+        code = _code_of(body["signed_url"])
+
+        resp = await async_client.get(f"/s/{code}", headers={"Range": "bytes=4-7"})
+        assert resp.status_code == status.HTTP_206_PARTIAL_CONTENT, resp.text
+        assert resp.content == b"4567"
+        assert resp.headers["content-range"] == f"bytes 4-7/{len(content)}"
+        assert resp.headers["content-length"] == "4"
+
+        tail = await async_client.get(f"/s/{code}", headers={"Range": "bytes=-3"})
+        assert tail.status_code == status.HTTP_206_PARTIAL_CONTENT
+        assert tail.content == b"def"
+
+    @pytest.mark.asyncio
+    async def test_unsatisfiable_range_is_416(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        content = b"tiny"
+        uploaded = await _upload(
+            pod_api, "/me/rng416", "t.bin", content, content_type="video/mp4"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+
+        resp = await async_client.get(
+            f"/s/{_code_of(body['signed_url'])}", headers={"Range": "bytes=99-"}
+        )
+        assert resp.status_code == status.HTTP_416_RANGE_NOT_SATISFIABLE
+        assert resp.headers["content-range"] == f"bytes */{len(content)}"
+
+    @pytest.mark.asyncio
+    async def test_html_is_downloaded_not_rendered(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """An inline `.html` here would be script on the session-cookie origin."""
+        uploaded = await _upload(
+            pod_api,
+            "/me/active",
+            "page.html",
+            b"<script>alert(1)</script>",
+            content_type="text/html",
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+
+        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        assert resp.headers["content-disposition"].startswith("attachment")
+        assert resp.headers["x-content-type-options"] == "nosniff"
+
+    @pytest.mark.asyncio
+    async def test_pdf_renders_in_place(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        uploaded = await _upload(
+            pod_api,
+            "/me/inline",
+            "report.pdf",
+            b"%PDF-1.4 ",
+            content_type="application/pdf",
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+
+        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        assert resp.headers["content-disposition"].startswith("inline")
+        assert resp.headers["content-type"].startswith("application/pdf")
+
+    @pytest.mark.asyncio
+    async def test_non_ascii_filename_serves_instead_of_500ing(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """Header values are encoded latin-1, so an unescaped CJK name 500'd."""
+        uploaded = await _upload(
+            pod_api, "/me/cjk", "报告.pdf", b"%PDF-1.4 ", content_type="application/pdf"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+
+        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        disposition = resp.headers["content-disposition"]
+        assert "filename*=UTF-8''" in disposition
+        assert 'filename="' in disposition  # ASCII fallback for old clients
+
+    @pytest.mark.asyncio
+    async def test_content_type_comes_from_the_record(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """The served type is the recorded one, not a fresh guess at the key.
+
+        `.wav` is where the two visibly disagree: the repo's own extension map
+        says `audio/wav`, while `mimetypes.guess_type` — what this route used to
+        call — says the legacy `audio/x-wav`. The record is authoritative
+        because it is the only thing that survives a file whose type was
+        sniffed, converted or set by something other than its name.
+        """
+        uploaded = await _upload(
+            pod_api, "/me/rec", "note.wav", b"RIFF....WAVE", content_type="audio/wav"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+
+        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        assert resp.headers["content-type"].startswith("audio/wav")
+        assert resp.headers["content-disposition"].startswith("inline")
+
+    @pytest.mark.asyncio
+    async def test_extensionless_file_is_offered_as_a_download(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """Nothing upstream can type a file called `README`, so it stays
+        `application/octet-stream` — and an unknown type is never inline."""
+        uploaded = await _upload(
+            pod_api, "/me/noext", "README", b"# hi", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+
+        resp = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        assert resp.headers["content-type"].startswith("application/octet-stream")
+        assert resp.headers["content-disposition"].startswith("attachment")
+
+    @pytest.mark.asyncio
+    async def test_browser_gets_a_page_and_an_sdk_gets_json(
+        self, async_client: AsyncClient
+    ):
+        html = await async_client.get(
+            "/s/no-such-code", headers={"Accept": "text/html,*/*;q=0.8"}
+        )
+        assert html.status_code == status.HTTP_404_NOT_FOUND
+        assert html.headers["content-type"].startswith("text/html")
+        assert "expired" in html.text.lower()
+
+        api = await async_client.get(
+            "/s/no-such-code", headers={"Accept": "application/json"}
+        )
+        assert api.status_code == status.HTTP_404_NOT_FOUND
+        assert api.headers["content-type"].startswith("application/json")
+
+    @pytest.mark.asyncio
+    async def test_bare_root_is_not_found_rather_than_unauthorized(
+        self, async_client: AsyncClient
+    ):
+        """`/s` is a missing code, not an authentication problem.
+
+        `TrailingSlashMiddleware` rewrites `/s/` to `/s`, which no longer
+        matches the `/s/` auth exclusion — so this used to answer 401.
+        """
+        for path in ("/s", "/s/"):
+            resp = await async_client.get(path)
+            assert resp.status_code == status.HTTP_404_NOT_FOUND, path
+
+
+class TestSignedUrlBudget:
+    """Only bytes actually sent are charged against the link."""
+
+    async def _sign(self, api: DatastoreApi, path: str, body: dict) -> dict:
+        resp = await api.request(
+            "POST",
+            FILES.format(pod_id=api.pod_id) + "/signed-url",
+            params={"path": path},
+            json=body,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.text
+        return resp.json()
+
+    @pytest.mark.asyncio
+    async def test_revalidation_and_head_are_free(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """`no-cache` makes a browser revalidate on every load, and unfurling
+        bots send HEAD. Charging either would let a link kill itself.
+        """
+        content = b"budget payload"
+        uploaded = await _upload(
+            pod_api, "/me/budget", "b.txt", content, content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {"max_hits": 1})
+        code = _code_of(body["signed_url"])
+        etag = f'"{uploaded["content_sha256"]}"'
+
+        for _ in range(5):
+            head = await async_client.head(f"/s/{code}")
+            assert head.status_code == status.HTTP_200_OK
+            revalidated = await async_client.get(
+                f"/s/{code}", headers={"If-None-Match": etag}
+            )
+            assert revalidated.status_code == status.HTTP_304_NOT_MODIFIED
+
+        # The one download the budget allows is still available.
+        served = await async_client.get(f"/s/{code}")
+        assert served.status_code == status.HTTP_200_OK
+        assert served.content == content
+
+        spent = await async_client.get(f"/s/{code}")
+        assert spent.status_code == status.HTTP_410_GONE
+
+    @pytest.mark.asyncio
+    async def test_ranged_reads_cost_only_the_bytes_they_move(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """A player seeking through a file must not spend a download per seek."""
+        content = bytes(range(200))
+        uploaded = await _upload(
+            pod_api, "/me/rngbudget", "seek.bin", content, content_type="video/mp4"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {"max_hits": 1})
+        code = _code_of(body["signed_url"])
+
+        # Twenty 5-byte reads is one file's worth of bytes, so all must succeed.
+        for start in range(0, 100, 5):
+            resp = await async_client.get(
+                f"/s/{code}", headers={"Range": f"bytes={start}-{start + 4}"}
+            )
+            assert resp.status_code == status.HTTP_206_PARTIAL_CONTENT, resp.text
+            assert resp.content == content[start : start + 5]
+
+    @pytest.mark.asyncio
+    async def test_a_missing_object_costs_nothing(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """The old ordering incremented before storage was consulted, so a
+        failure permanently spent a download."""
+        uploaded = await _upload(
+            pod_api, "/me/gone", "g.txt", b"here for now", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {"max_hits": 2})
+        code = _code_of(body["signed_url"])
+
+        await pod_api.delete_file(uploaded["path"])
+        for _ in range(5):
+            resp = await async_client.get(f"/s/{code}")
+            assert resp.status_code == status.HTTP_404_NOT_FOUND

@@ -413,31 +413,39 @@ class DatastoreSettings(BaseSettings):
 
     # Public (short) signed datastore URLs
     datastore_signed_url_default_expiry_seconds: int = Field(
-        default=10800,
+        default=86400,
         description=(
             "Default lifetime (seconds) of a public, hit-capped datastore signed "
-            "(short) URL. Used when a caller does not specify an expiry."
+            "(short) URL. Used when a caller does not specify an expiry. Defaults "
+            "to 24 hours: an outbound email attachment link takes this value (the "
+            "`sign_pod_file` contract deliberately does not let its caller pick "
+            "one), and anything shorter dies overnight before the recipient reads "
+            "the mail."
         ),
     )
     datastore_signed_url_max_expiry_seconds: int = Field(
-        default=86400,
+        default=604800,
         description=(
             "Hard ceiling (seconds) on a public datastore signed URL's lifetime. "
-            "Requests above this are clamped down. Defaults to 24 hours."
+            "Requests above this are clamped down. Defaults to 7 days. Note the "
+            "link record lives in Redis, so a link this long-lived can outlast a "
+            "Redis restart or failover and vanish before it expires."
         ),
     )
     datastore_signed_url_default_max_hits: int = Field(
-        default=50,
+        default=200,
         description=(
-            "Default maximum number of times a public datastore signed URL may be "
-            "fetched before it is rejected. Bounds egress from link misuse."
+            "Default download budget for a public datastore signed URL, counted in "
+            "whole copies of the file. Bounds egress from link misuse. Only bytes "
+            "actually sent are charged, so a revalidation (304) or a HEAD from a "
+            "link-unfurling bot costs nothing."
         ),
     )
     datastore_signed_url_max_hits: int = Field(
-        default=100,
+        default=1000,
         description=(
-            "Hard ceiling on the per-link hit cap for public datastore signed URLs. "
-            "Requests above this are clamped down."
+            "Hard ceiling on the per-link download budget for public datastore "
+            "signed URLs. Requests above this are clamped down."
         ),
     )
     datastore_signed_url_code_bytes: int = Field(

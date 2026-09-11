@@ -6778,6 +6778,8 @@
           "expires_seconds": {
             "anyOf": [
               {
+                "maximum": 604800.0,
+                "minimum": 1.0,
                 "type": "integer"
               },
               {
@@ -6789,6 +6791,8 @@
           "max_hits": {
             "anyOf": [
               {
+                "maximum": 1000.0,
+                "minimum": 1.0,
                 "type": "integer"
               },
               {

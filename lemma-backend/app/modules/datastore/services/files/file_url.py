@@ -146,11 +146,19 @@ async def build_object_url(
     content_sha256: str | None = None,
 ) -> tuple[str, datetime]:
     """Build a short-lived URL for an arbitrary datastore object key."""
-    expires_seconds = (
-        expires_seconds or datastore_settings.datastore_file_url_expiry_seconds
+    # Clamped, not just defaulted. The only bound on this used to be the
+    # Pydantic `le=` on the agent tool's argument, which every direct caller of
+    # `POST .../files/url` bypassed — so an API client could mint a URL with an
+    # arbitrarily distant expiry. The ceiling is shared with the short link.
+    expires_seconds = min(
+        max(1, expires_seconds or datastore_settings.datastore_file_url_expiry_seconds),
+        datastore_settings.datastore_signed_url_max_expiry_seconds,
     )
     cache = _get_url_cache()
-    cache_key = f"{object_key}:{content_sha256 or ''}"
+    # The lifetime is part of the identity of the thing being cached. Without it
+    # a caller asking for 30 seconds could be handed a cached one-hour URL that
+    # someone else had minted for the same object, and vice versa.
+    cache_key = f"{object_key}:{content_sha256 or ''}:{expires_seconds}"
 
     if cache is not None:
         with suppress(Exception):

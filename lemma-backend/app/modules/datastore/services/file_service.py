@@ -30,10 +30,7 @@ from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
 from app.modules.datastore.services.files.lookup import FileLookup
 from app.modules.datastore.services.files.path_resolver import PathResolver
-from app.modules.datastore.services.files.projection import (
-    FileProjection,
-    datastore_storage_key,
-)
+from app.modules.datastore.services.files.projection import FileProjection
 from app.modules.datastore.services.files.file_url import build_file_url
 from app.modules.datastore.services.files.signed_url import get_signed_url_store
 from app.modules.datastore.infrastructure.storage_paths import is_child_page_artifact
@@ -583,18 +580,12 @@ class DatastoreFileService(FileTransactionFacade):
         entity = await self._reader.get_file_by_path(pod_id, path, ctx.user_id, ctx=ctx)
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
-        object_key = datastore_storage_key(entity)
         (
             _code,
             signed_url,
             expires_at,
             effective_max_hits,
         ) = await get_signed_url_store().create(
-            object_key=object_key,
-            pod_id=entity.pod_id,
-            path=entity.path,
-            content_sha256=entity.content_sha256,
-            expires_seconds=expires_seconds,
-            max_hits=max_hits,
+            file=entity, expires_seconds=expires_seconds, max_hits=max_hits
         )
         return entity, signed_url, expires_at, effective_max_hits

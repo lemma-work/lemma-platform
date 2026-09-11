@@ -45,7 +45,7 @@ def _split_remote_target(local: Path, remote: str | None) -> tuple[str, str]:
 
 
 def _parse_duration_seconds(value: str) -> int:
-    """Parse a duration like ``30m``, ``3h``, ``24h``, ``90s`` or raw seconds."""
+    """Parse a duration like ``30m``, ``3h``, ``7d``, ``90s`` or raw seconds."""
     text = value.strip().lower()
     if not text:
         raise typer.BadParameter("duration cannot be empty")
@@ -57,7 +57,7 @@ def _parse_duration_seconds(value: str) -> int:
         return int(text)
     except ValueError as exc:
         raise typer.BadParameter(
-            f"invalid duration {value!r}; use e.g. 30m, 3h, 24h, or seconds"
+            f"invalid duration {value!r}; use e.g. 30m, 3h, 7d, or seconds"
         ) from exc
 
 
@@ -608,18 +608,18 @@ def share_file(
         None,
         "--ttl",
         "--expires",
-        help="Link lifetime, e.g. 30m, 3h, 24h (default 3h, max 24h).",
+        help="Link lifetime, e.g. 30m, 3h, 24h, 7d (default 24h, max 7d).",
     ),
     max_hits: int | None = typer.Option(
         None,
         "--max-hits",
-        help="Max downloads before the link is rejected (default 50, max 100).",
+        help="Max downloads before the link is rejected (default 200, max 1000).",
     ),
 ) -> None:
     """Mint a public, hit-capped signed URL (no login needed to open).
 
-    The link expires (default 3h, max 24h) and serves the file at most a set
-    number of times (default 50, max 100), bounding egress if it leaks.
+    The link expires (default 24h, max 7d) and serves the file at most a set
+    number of times (default 200, max 1000), bounding egress if it leaks.
     """
     state = state_from_ctx(ctx)
     expires_seconds = _parse_duration_seconds(ttl) if ttl is not None else None

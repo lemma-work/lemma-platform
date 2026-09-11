@@ -313,10 +313,10 @@ urls.expires_at   # when urls.url stops working
 #    so a leaked link to a big file can't run up egress.
 link = pod.files.create_signed_url("/reports/summary.pdf")                       # defaults: 3h, 50 downloads
 link = pod.files.create_signed_url("/reports/summary.pdf",
-                                   expires_seconds=86400, max_hits=5)            # 24h, 5 downloads
+                                   expires_seconds=604800, max_hits=5)           # 7d, 5 downloads
 link.signed_url   # https://<api>/s/<code>  — short, copy-pasteable
 link.expires_at
-link.max_hits     # effective cap, clamped server-side (max 24h / 100 hits)
+link.max_hits     # effective cap, clamped server-side (max 7d / 1000 hits)
 ```
 
 Rule of thumb: **pod member → `get_url().app_url`; external recipient →
@@ -340,7 +340,7 @@ sent = pod.connectors.execute(
     {
         "recipient_email": data.to,
         "subject": "Your report is ready",
-        "body": f"Download (link expires in 24h):\n{link.signed_url}",
+        "body": f"Download (link expires in 7 days):\n{link.signed_url}",
     },
 ).to_dict()["result"]
 

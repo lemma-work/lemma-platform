@@ -124,6 +124,13 @@ def test_content_update_defer_until_uses_next_debounce_boundary(monkeypatch):
 @pytest.mark.asyncio
 async def test_enqueue_file_processing_defers_content_updates(monkeypatch):
     enqueue_mock = AsyncMock(return_value=True)
+    # Pinned, not assumed: `_enqueue_file_processing` returns early when this is
+    # set, and the E2E lane turns it on process-wide (test_support/e2e_base) so
+    # the worker subprocess inherits it. That is deliberate there, but it leaves
+    # this test asserting nothing at all in any process where E2E ran first.
+    monkeypatch.setattr(
+        handlers.datastore_settings, "e2e_disable_worker_file_autoindex", False
+    )
     monkeypatch.setattr(
         handlers.datastore_settings, "document_processing_debounce_seconds", 300
     )

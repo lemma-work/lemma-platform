@@ -549,8 +549,8 @@ class FileUrlResponse(BaseModel):
 
 
 class FileSignedUrlRequest(BaseModel):
-    expires_seconds: Optional[int] = None
-    max_hits: Optional[int] = None
+    expires_seconds: Optional[int] = Field(default=None, ge=1, le=604800)
+    max_hits: Optional[int] = Field(default=None, ge=1, le=1000)
 
 
 class FileSignedUrlResponse(BaseModel):
