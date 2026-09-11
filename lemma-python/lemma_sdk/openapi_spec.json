@@ -3550,6 +3550,31 @@
         "title": "AvailableSurfacesResponse",
         "type": "object"
       },
+      "BrowserStatusResponse": {
+        "description": "What the pane can say without waking anything.\n\n`asleep` the computer is paused or was never started; `stopped` it is up but\nthe browser is not (the resting state after two idle minutes); `running` a\nbrowser is there now; `unavailable` the relay did not answer, which on an\nolder image is permanent until it is replaced; `unsupported` this fabric\ncannot reach a port at all.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "BrowserStatusResponse",
+        "type": "object"
+      },
       "BulkCreateRecordsRequest": {
         "description": "Schema for bulk creating records.",
         "properties": {
@@ -6980,6 +7005,18 @@
           "expires_at"
         ],
         "title": "FileUrlResponse",
+        "type": "object"
+      },
+      "FinishSignInRequest": {
+        "properties": {
+          "force": {
+            "default": false,
+            "description": "Save whatever the browser holds even though it does not look signed in. For sites the check reads wrongly.",
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "title": "FinishSignInRequest",
         "type": "object"
       },
       "ForeignKeySpec": {
@@ -13496,6 +13533,67 @@
         "title": "SetDefaultSurfaceRequest",
         "type": "object"
       },
+      "SignInRequestResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "saved": {
+            "default": false,
+            "description": "Whether the login was kept for next time.",
+            "title": "Saved",
+            "type": "boolean"
+          },
+          "saved_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it was not kept, in words, when it was not.",
+            "title": "Saved Detail"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SignInRequestStatus"
+          }
+        },
+        "required": [
+          "id",
+          "origin",
+          "reason",
+          "status",
+          "created_at"
+        ],
+        "title": "SignInRequestResponse",
+        "type": "object"
+      },
+      "SignInRequestStatus": {
+        "enum": [
+          "PENDING",
+          "SIGNED_IN",
+          "DECLINED"
+        ],
+        "title": "SignInRequestStatus",
+        "type": "string"
+      },
       "StepRecordResponse": {
         "properties": {
           "completed_at": {
@@ -17015,14 +17113,6 @@
         "title": "WebLoginAuditResponse",
         "type": "object"
       },
-      "WebLoginKind": {
-        "enum": [
-          "SESSION",
-          "CREDENTIAL"
-        ],
-        "title": "WebLoginKind",
-        "type": "string"
-      },
       "WebLoginListResponse": {
         "properties": {
           "items": {
@@ -17058,18 +17148,10 @@
             ],
             "title": "Expires Hint At"
           },
-          "has_password": {
-            "description": "Whether a password is stored as well as a session.",
-            "title": "Has Password",
-            "type": "boolean"
-          },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/WebLoginKind"
           },
           "label": {
             "title": "Label",
@@ -17091,25 +17173,42 @@
             "title": "Origin",
             "type": "string"
           },
+          "status": {
+            "$ref": "#/components/schemas/WebLoginStatus"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "working": {
+            "description": "Whether the stored session still signs you in. False means it stopped working and the next run will ask you again.",
+            "title": "Working",
+            "type": "boolean"
           }
         },
         "required": [
           "id",
           "origin",
           "label",
-          "kind",
+          "status",
           "created_at",
           "updated_at",
           "last_used_at",
           "expires_hint_at",
-          "has_password"
+          "working"
         ],
         "title": "WebLoginResponse",
         "type": "object"
+      },
+      "WebLoginStatus": {
+        "description": "Whether the stored session is believed to still work.\n\n`DEAD` is set when an injection produced a page that still wanted a login.\nIt exists so a person is asked to sign in again *before* a run fails on it,\nwhich is the promise `PS-CONN-022` makes for connector credentials.",
+        "enum": [
+          "ACTIVE",
+          "DEAD"
+        ],
+        "title": "WebLoginStatus",
+        "type": "string"
       },
       "WebSearchRequest": {
         "description": "Request model for standard web search",
@@ -36501,6 +36600,173 @@
         }
       }
     },
+    "/web-logins/sign-in-requests/{request_id}": {
+      "get": {
+        "operationId": "web_login.sign_in_request.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What a sign-in request is asking for",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "web_login.sign_in_request",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
+    "/web-logins/sign-in-requests/{request_id}:decline": {
+      "post": {
+        "operationId": "web_login.sign_in_request.decline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Say you cannot sign in right now",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "web_login.sign_in_request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "web_login.sign_in_request",
+          "result": "entity",
+          "verb": "decline"
+        }
+      }
+    },
+    "/web-logins/sign-in-requests/{request_id}:finish": {
+      "post": {
+        "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run \u2014 so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.",
+        "operationId": "web_login.sign_in_request.finish",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Say you have signed in",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "web_login.sign_in_request"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "web_login.sign_in_request",
+          "result": "entity",
+          "verb": "finish"
+        }
+      }
+    },
     "/workspace/apps/browser/access": {
       "post": {
         "operationId": "workspace.browser.access",
@@ -36549,6 +36815,34 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "access"
+        }
+      }
+    },
+    "/workspace/browser/status": {
+      "get": {
+        "operationId": "workspace.browser.status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whether the workspace browser can be watched",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "status"
         }
       }
     },

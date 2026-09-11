@@ -1,9 +1,9 @@
 from enum import Enum
 
 
-class WebLoginKind(str, Enum):
-    CREDENTIAL = "CREDENTIAL"
-    SESSION = "SESSION"
+class WebLoginStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    DEAD = "DEAD"
 
     def __str__(self) -> str:
         return str(self.value)

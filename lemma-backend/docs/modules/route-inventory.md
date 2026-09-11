@@ -302,6 +302,9 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/web-logins` | `web_login.delete` | Remove a saved site login |
 | GET | `/web-logins` | `web_login.list` | List saved site logins |
 | GET | `/web-logins/history` | `web_login.history` | What has been done with your saved logins |
+| GET | `/web-logins/sign-in-requests/{request_id}` | `web_login.sign_in_request.get` | What a sign-in request is asking for |
+| POST | `/web-logins/sign-in-requests/{request_id}:decline` | `web_login.sign_in_request.decline` | Say you cannot sign in right now |
+| POST | `/web-logins/sign-in-requests/{request_id}:finish` | `web_login.sign_in_request.finish` | Say you have signed in |
 
 ## workflow
 
@@ -328,6 +331,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| GET | `/workspace/browser/status` | `workspace.browser.status` | Whether the workspace browser can be watched |
 | GET | `/workspace/files` | `workspace.files.list` | List workspace files |
 | GET | `/workspace/files:content` | `workspace.files.content` | Read workspace file content |
 | GET | `/workspace/files:stat` | `workspace.files.stat` | Stat one workspace file |

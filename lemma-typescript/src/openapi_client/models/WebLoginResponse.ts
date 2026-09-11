@@ -2,18 +2,18 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { WebLoginKind } from './WebLoginKind.js';
+import type { WebLoginStatus } from './WebLoginStatus.js';
 export type WebLoginResponse = {
     created_at: string;
     expires_hint_at: (string | null);
-    /**
-     * Whether a password is stored as well as a session.
-     */
-    has_password: boolean;
     id: string;
-    kind: WebLoginKind;
     label: string;
     last_used_at: (string | null);
     origin: string;
+    status: WebLoginStatus;
     updated_at: string;
+    /**
+     * Whether the stored session still signs you in. False means it stopped working and the next run will ask you again.
+     */
+    working: boolean;
 };

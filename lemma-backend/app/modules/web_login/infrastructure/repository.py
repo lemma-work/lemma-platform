@@ -25,8 +25,8 @@ from app.core.crypto import get_secret_cipher
 from app.core.crypto.ports import SecretCipher
 from app.modules.web_login.domain.entities import (
     WebLogin,
-    WebLoginKind,
     WebLoginSecret,
+    WebLoginStatus,
 )
 from app.modules.web_login.infrastructure.models import (
     SecretEnvelope,
@@ -66,7 +66,6 @@ class WebLoginRepository:
         user_id: UUID,
         origin: str,
         label: str,
-        kind: WebLoginKind,
         secret: WebLoginSecret,
         expires_hint_at: datetime | None = None,
     ) -> WebLogin:
@@ -88,14 +87,16 @@ class WebLoginRepository:
                 user_id=user_id,
                 origin=origin,
                 label=label,
-                kind=kind.value,
+                status=WebLoginStatus.ACTIVE.value,
                 secret=encrypted,
                 expires_hint_at=expires_hint_at,
             )
             self._session.add(row)
         else:
             row.label = label
-            row.kind = kind.value
+            # A replacement is a working session by definition: somebody just
+            # signed in. Anything previously marked dead is alive again.
+            row.status = WebLoginStatus.ACTIVE.value
             row.secret = encrypted
             row.expires_hint_at = expires_hint_at
         await self._session.flush()
@@ -112,16 +113,26 @@ class WebLoginRepository:
             return None
         payload = await self._cipher.decrypt_json_async(row.secret)
         return WebLoginSecret(
-            state=payload.get("state"),
-            username=payload.get("username"),
-            password=payload.get("password"),
-            totp_seed=payload.get("totp_seed"),
+            cookies=list(payload.get("cookies") or []),
+            origins=list(payload.get("origins") or []),
         )
 
     async def mark_used(self, user_id: UUID, origin: str) -> None:
         row = await self._row_for_origin(user_id, origin)
         if row is not None:
             row.last_used_at = datetime.now(timezone.utc)
+            await self._session.flush()
+
+    async def mark_dead(self, user_id: UUID, origin: str) -> None:
+        """Record that a stored session no longer signs anybody in.
+
+        Set when an injection lands on a page that still wants a login. The row
+        stays: the person should see that the login is there and has stopped
+        working, rather than find it silently gone.
+        """
+        row = await self._row_for_origin(user_id, origin)
+        if row is not None:
+            row.status = WebLoginStatus.DEAD.value
             await self._session.flush()
 
     async def delete(self, user_id: UUID, origin: str) -> WebLogin:
@@ -189,13 +200,8 @@ class WebLoginRepository:
         ).scalar_one_or_none()
 
 
-def _secret_to_json(secret: WebLoginSecret) -> dict[str, str | None]:
-    return {
-        "state": secret.state,
-        "username": secret.username,
-        "password": secret.password,
-        "totp_seed": secret.totp_seed,
-    }
+def _secret_to_json(secret: WebLoginSecret) -> dict[str, list[dict]]:
+    return {"cookies": secret.cookies, "origins": secret.origins}
 
 
 def _to_entity(row: WebLoginModel) -> WebLogin:
@@ -204,7 +210,7 @@ def _to_entity(row: WebLoginModel) -> WebLogin:
         user_id=row.user_id,
         origin=row.origin,
         label=row.label,
-        kind=WebLoginKind(row.kind),
+        status=WebLoginStatus(row.status),
         created_at=row.created_at,
         updated_at=row.updated_at,
         last_used_at=row.last_used_at,

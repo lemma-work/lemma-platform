@@ -9,7 +9,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-from ..models.web_login_kind import WebLoginKind
+from ..models.web_login_status import WebLoginStatus
 
 T = TypeVar("T", bound="WebLoginResponse")
 
@@ -20,24 +20,29 @@ class WebLoginResponse:
     Attributes:
         created_at (datetime.datetime):
         expires_hint_at (datetime.datetime | None):
-        has_password (bool): Whether a password is stored as well as a session.
         id (UUID):
-        kind (WebLoginKind):
         label (str):
         last_used_at (datetime.datetime | None):
         origin (str):
+        status (WebLoginStatus): Whether the stored session is believed to still work.
+
+            `DEAD` is set when an injection produced a page that still wanted a login.
+            It exists so a person is asked to sign in again *before* a run fails on it,
+            which is the promise `PS-CONN-022` makes for connector credentials.
         updated_at (datetime.datetime):
+        working (bool): Whether the stored session still signs you in. False means it stopped working and the next run
+            will ask you again.
     """
 
     created_at: datetime.datetime
     expires_hint_at: datetime.datetime | None
-    has_password: bool
     id: UUID
-    kind: WebLoginKind
     label: str
     last_used_at: datetime.datetime | None
     origin: str
+    status: WebLoginStatus
     updated_at: datetime.datetime
+    working: bool
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -49,11 +54,7 @@ class WebLoginResponse:
         else:
             expires_hint_at = self.expires_hint_at
 
-        has_password = self.has_password
-
         id = str(self.id)
-
-        kind = self.kind.value
 
         label = self.label
 
@@ -65,7 +66,11 @@ class WebLoginResponse:
 
         origin = self.origin
 
+        status = self.status.value
+
         updated_at = self.updated_at.isoformat()
+
+        working = self.working
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -73,13 +78,13 @@ class WebLoginResponse:
             {
                 "created_at": created_at,
                 "expires_hint_at": expires_hint_at,
-                "has_password": has_password,
                 "id": id,
-                "kind": kind,
                 "label": label,
                 "last_used_at": last_used_at,
                 "origin": origin,
+                "status": status,
                 "updated_at": updated_at,
+                "working": working,
             }
         )
 
@@ -105,11 +110,7 @@ class WebLoginResponse:
 
         expires_hint_at = _parse_expires_hint_at(d.pop("expires_hint_at"))
 
-        has_password = d.pop("has_password")
-
         id = UUID(d.pop("id"))
-
-        kind = WebLoginKind(d.pop("kind"))
 
         label = d.pop("label")
 
@@ -130,18 +131,22 @@ class WebLoginResponse:
 
         origin = d.pop("origin")
 
+        status = WebLoginStatus(d.pop("status"))
+
         updated_at = isoparse(d.pop("updated_at"))
+
+        working = d.pop("working")
 
         web_login_response = cls(
             created_at=created_at,
             expires_hint_at=expires_hint_at,
-            has_password=has_password,
             id=id,
-            kind=kind,
             label=label,
             last_used_at=last_used_at,
             origin=origin,
+            status=status,
             updated_at=updated_at,
+            working=working,
         )
 
         web_login_response.additional_properties = d

@@ -8,6 +8,7 @@ chances to pick the wrong one.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 
@@ -35,9 +36,25 @@ def normalize_origin(value: str) -> str:
         raise InvalidOrigin("An origin needs a host")
 
     host = parsed.hostname.lower()
+    if not _is_plausible_host(host):
+        raise InvalidOrigin(f"Not a host: {host!r}")
     if parsed.port and not _is_default_port(parsed.scheme, parsed.port):
         host = f"{host}:{parsed.port}"
     return f"{parsed.scheme}://{host}"
+
+
+#: Deliberately stricter than a URL parser. This host is written into a browser
+#: session name and interpolated into a URL, and `urlparse` will happily hand
+#: back "not a url at all" as a hostname -- so what a *site* can be called is
+#: checked here rather than assumed from the fact that parsing succeeded.
+_HOST = re.compile(
+    r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?"
+    r"(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"
+)
+
+
+def _is_plausible_host(host: str) -> bool:
+    return bool(_HOST.match(host))
 
 
 def _is_default_port(scheme: str, port: int) -> bool:

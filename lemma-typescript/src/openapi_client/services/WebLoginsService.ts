@@ -2,6 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { FinishSignInRequest } from '../models/FinishSignInRequest.js';
+import type { SignInRequestResponse } from '../models/SignInRequestResponse.js';
 import type { WebLoginAuditResponse } from '../models/WebLoginAuditResponse.js';
 import type { WebLoginListResponse } from '../models/WebLoginListResponse.js';
 import type { WebLoginResponse } from '../models/WebLoginResponse.js';
@@ -61,6 +63,75 @@ export class WebLoginsService {
             query: {
                 'limit': limit,
             },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * What a sign-in request is asking for
+     * @param requestId
+     * @returns SignInRequestResponse Successful Response
+     * @throws ApiError
+     */
+    public static webLoginSignInRequestGet(
+        requestId: string,
+    ): CancelablePromise<SignInRequestResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/web-logins/sign-in-requests/{request_id}',
+            path: {
+                'request_id': requestId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Say you cannot sign in right now
+     * @param requestId
+     * @returns SignInRequestResponse Successful Response
+     * @throws ApiError
+     */
+    public static webLoginSignInRequestDecline(
+        requestId: string,
+    ): CancelablePromise<SignInRequestResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/web-logins/sign-in-requests/{request_id}:decline',
+            path: {
+                'request_id': requestId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Say you have signed in
+     * Capture what the browser now holds, and let the waiting run carry on.
+     *
+     * The capture happens here, while the person is still present, rather than
+     * later in the resumed run — so that "it did not work" is something they can
+     * be told at the moment they can still fix it.
+     * @param requestId
+     * @param requestBody
+     * @returns SignInRequestResponse Successful Response
+     * @throws ApiError
+     */
+    public static webLoginSignInRequestFinish(
+        requestId: string,
+        requestBody: FinishSignInRequest,
+    ): CancelablePromise<SignInRequestResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/web-logins/sign-in-requests/{request_id}:finish',
+            path: {
+                'request_id': requestId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

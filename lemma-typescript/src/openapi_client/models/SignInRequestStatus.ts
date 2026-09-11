@@ -2,7 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export enum WebLoginKind {
-    SESSION = 'SESSION',
-    CREDENTIAL = 'CREDENTIAL',
+export enum SignInRequestStatus {
+    PENDING = 'PENDING',
+    SIGNED_IN = 'SIGNED_IN',
+    DECLINED = 'DECLINED',
 }

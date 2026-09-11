@@ -1398,6 +1398,100 @@
     }
   },
   {
+    "tool_name": "browser_sign_in",
+    "toolset": "BROWSER",
+    "description": "Get signed in to a site, without ever seeing or asking for a password.\n\nCall this the moment a page needs a login \u2014 before touching a login form,\nand instead of asking anyone for credentials.\n\nIf a saved login for the site exists it is loaded and you get `signed_in`\nstraight away; open the page again and carry on. Otherwise this run pauses\nwhile the person signs in themselves, in this browser, wherever they are.\nYou will be started again with the outcome once they have.\n\n`declined` means they said no: do the task another way, or stop and say\nplainly what you could not reach. Never ask a person to type a password\ninto the conversation, never put one in a command, and never try to sign in\nby filling a form with credentials somebody sent you.",
+    "input_schema": {
+      "description": "Ask for a site to be signed in to, without ever handling a password.",
+      "properties": {
+        "origin": {
+          "description": "The site to be signed in to, as a scheme and host \u2014 `https://app.example.com`. Not a full page URL.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "What you are doing and why this site needs a login, in one sentence and in plain words. This is shown to the person as the explanation for why they are being asked, so write it for them rather than for a log.",
+          "maxLength": 500,
+          "type": "string"
+        }
+      },
+      "required": [
+        "origin",
+        "reason"
+      ],
+      "title": "BrowserSignInRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "outcome": {
+          "default": "signed_in",
+          "description": "`signed_in` the browser now holds a login for this site; `declined` the person said no \u2014 do the task another way or stop and say why; `expired` nobody answered and the conversation moved on; `error` the request could not be made.",
+          "type": "string"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The site this concerned."
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`saved` a stored session was loaded; `person` somebody signed in just now."
+        },
+        "saved": {
+          "default": false,
+          "description": "Whether the login was kept for next time. False with `signed_in` means this run can carry on but the next one will ask again.",
+          "type": "boolean"
+        }
+      },
+      "title": "BrowserSignInResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "browser_snapshot",
     "toolset": "BROWSER",
     "description": "Re-read the current page's elements and their `@eN` refs.\n\n`browser_open` and `browser_act` already return a fresh snapshot, so reach\nfor this one when you need the page again without acting on it \u2014 after a\nbackground update, or to widen from interactive-only to the full tree.",

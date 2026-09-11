@@ -4,7 +4,7 @@ from pydantic_ai import ToolReturn
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.browser import browser
+from app.modules.agent.tools.browser import browser, sign_in
 from app.modules.agent.tools.browser.models import (
     BrowserActRequest,
     BrowserOpenRequest,
@@ -12,6 +12,8 @@ from app.modules.agent.tools.browser.models import (
     BrowserResult,
     BrowserScreenshotRequest,
     BrowserScreenshotResponse,
+    BrowserSignInRequest,
+    BrowserSignInResponse,
     BrowserSnapshotRequest,
 )
 from app.modules.agent.tools.context import BaseAgentContext
@@ -107,12 +109,38 @@ async def browser_screenshot(
     return await browser.screenshot_internal(ctx.deps, request)
 
 
+async def browser_sign_in(
+    ctx: RunContext[BaseAgentContext],
+    request: BrowserSignInRequest,
+) -> BrowserSignInResponse:
+    """
+    Get signed in to a site, without ever seeing or asking for a password.
+
+    Call this the moment a page needs a login — before touching a login form,
+    and instead of asking anyone for credentials.
+
+    If a saved login for the site exists it is loaded and you get `signed_in`
+    straight away; open the page again and carry on. Otherwise this run pauses
+    while the person signs in themselves, in this browser, wherever they are.
+    You will be started again with the outcome once they have.
+
+    `declined` means they said no: do the task another way, or stop and say
+    plainly what you could not reach. Never ask a person to type a password
+    into the conversation, never put one in a command, and never try to sign in
+    by filling a form with credentials somebody sent you.
+    """
+    return await sign_in.sign_in_internal(
+        ctx.deps, request, tool_call_id=ctx.tool_call_id
+    )
+
+
 BROWSER_TOOLS = [
     browser_open,
     browser_snapshot,
     browser_act,
     browser_read,
     browser_screenshot,
+    browser_sign_in,
 ]
 
 # Its own toolset rather than more entries in WORKSPACE_CLI, because the

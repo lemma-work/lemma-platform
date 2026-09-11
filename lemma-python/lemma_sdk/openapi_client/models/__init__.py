@@ -126,6 +126,7 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'BrowserStatusResponse': 'browser_status_response',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -231,6 +232,7 @@ _NAME_TO_MODULE = {
     'FileSignedUrlResponse': 'file_signed_url_response',
     'FileSummaryResponse': 'file_summary_response',
     'FileUrlResponse': 'file_url_response',
+    'FinishSignInRequest': 'finish_sign_in_request',
     'ForeignKeySpec': 'foreign_key_spec',
     'FormNode': 'form_node',
     'FormNodeConfig': 'form_node_config',
@@ -420,6 +422,8 @@ _NAME_TO_MODULE = {
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
+    'SignInRequestResponse': 'sign_in_request_response',
+    'SignInRequestStatus': 'sign_in_request_status',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -517,9 +521,9 @@ _NAME_TO_MODULE = {
     'WaitUntilNodeResponsePositionType0': 'wait_until_node_response_position_type_0',
     'WebLoginAuditEntry': 'web_login_audit_entry',
     'WebLoginAuditResponse': 'web_login_audit_response',
-    'WebLoginKind': 'web_login_kind',
     'WebLoginListResponse': 'web_login_list_response',
     'WebLoginResponse': 'web_login_response',
+    'WebLoginStatus': 'web_login_status',
     'WebSearchRequest': 'web_search_request',
     'WebSearchResponse': 'web_search_response',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
@@ -669,6 +673,7 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .browser_status_response import BrowserStatusResponse
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -774,6 +779,7 @@ if TYPE_CHECKING:
     from .file_signed_url_response import FileSignedUrlResponse
     from .file_summary_response import FileSummaryResponse
     from .file_url_response import FileUrlResponse
+    from .finish_sign_in_request import FinishSignInRequest
     from .foreign_key_spec import ForeignKeySpec
     from .form_node import FormNode
     from .form_node_config import FormNodeConfig
@@ -963,6 +969,8 @@ if TYPE_CHECKING:
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
+    from .sign_in_request_response import SignInRequestResponse
+    from .sign_in_request_status import SignInRequestStatus
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1060,9 +1068,9 @@ if TYPE_CHECKING:
     from .wait_until_node_response_position_type_0 import WaitUntilNodeResponsePositionType0
     from .web_login_audit_entry import WebLoginAuditEntry
     from .web_login_audit_response import WebLoginAuditResponse
-    from .web_login_kind import WebLoginKind
     from .web_login_list_response import WebLoginListResponse
     from .web_login_response import WebLoginResponse
+    from .web_login_status import WebLoginStatus
     from .web_search_request import WebSearchRequest
     from .web_search_response import WebSearchResponse
     from .widget_embed_url_response import WidgetEmbedUrlResponse
@@ -1225,6 +1233,7 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'BrowserStatusResponse',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -1330,6 +1339,7 @@ __all__ = [
     'FileSignedUrlResponse',
     'FileSummaryResponse',
     'FileUrlResponse',
+    'FinishSignInRequest',
     'ForeignKeySpec',
     'FormNode',
     'FormNodeConfig',
@@ -1519,6 +1529,8 @@ __all__ = [
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',
+    'SignInRequestResponse',
+    'SignInRequestStatus',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',
@@ -1616,9 +1628,9 @@ __all__ = [
     'WaitUntilNodeResponsePositionType0',
     'WebLoginAuditEntry',
     'WebLoginAuditResponse',
-    'WebLoginKind',
     'WebLoginListResponse',
     'WebLoginResponse',
+    'WebLoginStatus',
     'WebSearchRequest',
     'WebSearchResponse',
     'WidgetEmbedUrlResponse',

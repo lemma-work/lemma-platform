@@ -8,8 +8,8 @@ import pytest
 from app.core.crypto import get_secret_cipher
 from app.modules.web_login.domain.entities import (
     WebLogin,
-    WebLoginKind,
     WebLoginSecret,
+    WebLoginStatus,
 )
 from app.modules.web_login.infrastructure.repository import (
     WebLoginNotFound,
@@ -52,13 +52,19 @@ class _FakeSession:
         return _Result()
 
 
-PASSWORD = "correct-horse-battery-staple"
-STATE = '{"cookies":[{"name":"sid","value":"s3cr3t-session-value"}]}'
+SESSION_VALUE = "s3cr3t-session-value"
+COOKIES = [{"name": "sid", "value": SESSION_VALUE, "domain": "app.example.com"}]
+ORIGINS = [
+    {
+        "origin": "https://app.example.com",
+        "localStorage": [{"name": "tok", "value": SESSION_VALUE}],
+    }
+]
 
 
 @pytest.mark.asyncio
 async def test_the_secret_is_encrypted_before_it_reaches_the_database() -> None:
-    """The canary: neither the password nor the session may appear in the row."""
+    """The canary: the session value must not appear in the row in the clear."""
     session = _FakeSession()
     repository = WebLoginRepository(session, get_secret_cipher())
 
@@ -66,14 +72,11 @@ async def test_the_secret_is_encrypted_before_it_reaches_the_database() -> None:
         user_id=uuid4(),
         origin="https://app.example.com",
         label="Example",
-        kind=WebLoginKind.CREDENTIAL,
-        secret=WebLoginSecret(
-            state=STATE, username="a@b.test", password=PASSWORD, totp_seed="JBSWY3DP"
-        ),
+        secret=WebLoginSecret(cookies=COOKIES, origins=ORIGINS),
     )
 
     stored = repr(session.added[0].secret)
-    assert PASSWORD not in stored
+    assert SESSION_VALUE not in stored
     assert "s3cr3t-session-value" not in stored
     assert "JBSWY3DP" not in stored
     # And it is the platform's envelope, so it rotates with everything else.
@@ -83,19 +86,18 @@ async def test_the_secret_is_encrypted_before_it_reaches_the_database() -> None:
 @pytest.mark.asyncio
 async def test_what_was_encrypted_can_be_read_back() -> None:
     cipher = get_secret_cipher()
-    payload = _secret_to_json(
-        WebLoginSecret(state=STATE, username="a@b.test", password=PASSWORD)
-    )
+    payload = _secret_to_json(WebLoginSecret(cookies=COOKIES, origins=ORIGINS))
     round_tripped = await cipher.decrypt_json_async(
         await cipher.encrypt_json_async(payload)
     )
-    assert round_tripped["password"] == PASSWORD
-    assert round_tripped["state"] == STATE
+    assert round_tripped["cookies"] == COOKIES
+    assert round_tripped["origins"] == ORIGINS
 
 
 def test_the_listed_shape_has_nowhere_to_put_a_secret() -> None:
     """A type that cannot carry the secret cannot leak it by accident."""
     assert "secret" not in WebLogin.__annotations__
+    assert "cookies" not in WebLogin.__annotations__
     assert "password" not in WebLogin.__annotations__
     assert "state" not in WebLogin.__annotations__
 
@@ -106,15 +108,15 @@ def test_an_entity_carries_only_what_is_safe_to_show() -> None:
         user_id = uuid4()
         origin = "https://app.example.com"
         label = "Example"
-        kind = "SESSION"
+        status = "ACTIVE"
         created_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
         updated_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
         last_used_at = None
         expires_hint_at = None
 
     entity = _to_entity(_Row())
-    assert entity.kind is WebLoginKind.SESSION
-    assert entity.has_password is False
+    assert entity.status is WebLoginStatus.ACTIVE
+    assert entity.is_usable is True
     assert "secret" not in repr(entity)
 
 
@@ -142,8 +144,7 @@ async def test_saving_the_same_origin_twice_replaces_rather_than_adds() -> None:
         user_id=row.user_id,
         origin=row.origin,
         label="new",
-        kind=WebLoginKind.SESSION,
-        secret=WebLoginSecret(state=STATE),
+        secret=WebLoginSecret(cookies=COOKIES, origins=[]),
     )
 
     assert session.added == []
@@ -188,24 +189,19 @@ async def test_the_stored_secret_is_what_comes_back() -> None:
     """The one method that returns a secret has to actually round-trip it."""
     cipher = get_secret_cipher()
     encrypted = await cipher.encrypt_json_async(
-        {
-            "state": STATE,
-            "username": "a@b.test",
-            "password": PASSWORD,
-            "totp_seed": "JBSWY3DP",
-        }
+        {"cookies": COOKIES, "origins": ORIGINS}
     )
 
     class _Row:
         secret = encrypted
+        status = "ACTIVE"
 
     repository = WebLoginRepository(_FakeSession(existing=_Row()), cipher)
     revealed = await repository.reveal_secret(uuid4(), "https://app.example.com")
 
     assert revealed is not None
-    assert revealed.password == PASSWORD
-    assert revealed.totp_seed == "JBSWY3DP"
-    assert revealed.state == STATE
+    assert revealed.cookies == COOKIES
+    assert revealed.origins == ORIGINS
 
 
 @pytest.mark.asyncio
