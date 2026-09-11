@@ -80,9 +80,13 @@ export function SavedLogins() {
                             <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
                                 {hostOf(login.origin)}
                             </span>
-                            {login.has_password ? (
-                                <span className="shrink-0 text-xs text-[var(--text-tertiary)]">
-                                    password saved
+                            {!login.working ? (
+                                // Said here rather than left to a failed run:
+                                // a session that has stopped working is what
+                                // makes the next run ask again, and knowing
+                                // that now is what makes the asking sensible.
+                                <span className="shrink-0 text-xs text-[var(--state-warning)]">
+                                    stopped working
                                 </span>
                             ) : null}
                             <span className="shrink-0 text-xs text-[var(--text-tertiary)]">

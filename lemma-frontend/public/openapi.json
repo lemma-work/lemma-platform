@@ -616,22 +616,22 @@
         "properties": {
           "active_runs": {
             "default": 0,
-            "maximum": 128.0,
-            "minimum": 0.0,
+            "maximum": 128,
+            "minimum": 0,
             "title": "Active Runs",
             "type": "integer"
           },
           "available_runs": {
             "default": 1,
-            "maximum": 128.0,
-            "minimum": 0.0,
+            "maximum": 128,
+            "minimum": 0,
             "title": "Available Runs",
             "type": "integer"
           },
           "max_runs": {
             "default": 1,
-            "maximum": 128.0,
-            "minimum": 0.0,
+            "maximum": 128,
+            "minimum": 0,
             "title": "Max Runs",
             "type": "integer"
           }
@@ -662,7 +662,7 @@
           "lease_epoch": {
             "anyOf": [
               {
-                "minimum": 1.0,
+                "minimum": 1,
                 "type": "integer"
               },
               {
@@ -731,7 +731,7 @@
             "title": "Detail"
           },
           "lease_epoch": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Lease Epoch",
             "type": "integer"
           },
@@ -815,7 +815,7 @@
         "description": "One run event on its way to the run's Redis Stream.\n\nThere is no event id: events are deduplicated by ``sequence`` against the\nstream's watermark, which is what a resend after a Redis flush relies on.\nThere is no host timestamp either -- a Redis stream id already embeds the\nmillisecond it was appended.",
         "properties": {
           "lease_epoch": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Lease Epoch",
             "type": "integer"
           },
@@ -842,7 +842,7 @@
             "type": "string"
           },
           "sequence": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Sequence",
             "type": "integer"
           },
@@ -862,7 +862,7 @@
       "AgentHostEventAck": {
         "properties": {
           "acked_through": {
-            "minimum": 0.0,
+            "minimum": 0,
             "title": "Acked Through",
             "type": "integer"
           },
@@ -1329,8 +1329,8 @@
           },
           "poll_after_ms": {
             "default": 0,
-            "maximum": 60000.0,
-            "minimum": 0.0,
+            "maximum": 60000,
+            "minimum": 0,
             "title": "Poll After Ms",
             "type": "integer"
           },
@@ -1462,7 +1462,7 @@
             "type": "object"
           },
           "lease_epoch": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Lease Epoch",
             "type": "integer"
           },
@@ -1512,7 +1512,7 @@
         "type": "string"
       },
       "AgentKind": {
-        "description": "Whether somebody made this agent, or the pod came with it.\n\nThe pod's default assistant used to be the absence of an agent: a\nconversation naming nobody, synthesised at runtime against one sentinel id\nshared by every pod. That absence could not be pointed at by a foreign key,\nso anything wanting to name it grew its own way of saying so \u2014 a boolean on\nthe schedule, a second boolean on a channel route, a magic string in a map\nof who answers whose DMs.\n\nA kind is one way of saying it, in the row itself. ``POD_DEFAULT`` is\npinned by check constraints to exactly one row per pod, whose id is the\npod's own \u2014 so \"is this the default assistant?\" stays a comparison rather\nthan a query, which matters on paths that answer it per request.",
+        "description": "Whether somebody made this agent, or the pod came with it.\n\nThe pod's default assistant used to be the absence of an agent: a\nconversation naming nobody, synthesised at runtime against one sentinel id\nshared by every pod. That absence could not be pointed at by a foreign key,\nso anything wanting to name it grew its own way of saying so — a boolean on\nthe schedule, a second boolean on a channel route, a magic string in a map\nof who answers whose DMs.\n\nA kind is one way of saying it, in the row itself. ``POD_DEFAULT`` is\npinned by check constraints to exactly one row per pod, whose id is the\npod's own — so \"is this the default assistant?\" stays a comparison rather\nthan a query, which matters on paths that answer it per request.",
         "enum": [
           "USER",
           "POD_DEFAULT"
@@ -2174,7 +2174,7 @@
         "type": "object"
       },
       "AgentSummaryResponse": {
-        "description": "Lean agent shape for list responses.\n\nOmits the heavy single-resource fields (`instruction`, `input_schema`,\n`output_schema`, `agent_runtime`) \u2014 fetch those from `agent.get`. Keeps\n`toolsets` so list cards can show a connection count.",
+        "description": "Lean agent shape for list responses.\n\nOmits the heavy single-resource fields (`instruction`, `input_schema`,\n`output_schema`, `agent_runtime`) — fetch those from `agent.get`. Keeps\n`toolsets` so list cards can show a connection count.",
         "properties": {
           "allowed_actions": {
             "items": {
@@ -2975,7 +2975,7 @@
         "type": "object"
       },
       "AppTriggerSummaryResponseSchema": {
-        "description": "Lean trigger shape for list responses.\n\nOmits the heavy `config_schema` / `payload_schema` / `payload_example` JSON\nblobs \u2014 fetch those from `connector.trigger.get`.",
+        "description": "Lean trigger shape for list responses.\n\nOmits the heavy `config_schema` / `payload_schema` / `payload_example` JSON\nblobs — fetch those from `connector.trigger.get`.",
         "properties": {
           "connector_id": {
             "anyOf": [
@@ -3652,7 +3652,7 @@
         "type": "object"
       },
       "BundleSourceKind": {
-        "description": "Where an imported bundle comes from \u2014 a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path.",
+        "description": "Where an imported bundle comes from — a CAPS wire enum.\n\n``URL`` covers any lemma-origin signed download URL (an export or an\nuploaded ``.zip`` staged into our object storage); ``GITHUB`` is a public\nrepo fetched via the connector path.",
         "enum": [
           "URL",
           "GITHUB"
@@ -4596,7 +4596,7 @@
           "host_wait_timeout_seconds": {
             "anyOf": [
               {
-                "minimum": 1.0,
+                "minimum": 1,
                 "type": "integer"
               },
               {
@@ -4720,7 +4720,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional resource grants to apply to the new agent in the same request. Equivalent to calling the permissions-replace endpoint right after create \u2014 grants are keyed by resource_name."
+            "description": "Optional resource grants to apply to the new agent in the same request. Equivalent to calling the permissions-replace endpoint right after create — grants are keyed by resource_name."
           },
           "toolsets": {
             "description": "Toolsets the agent declares. Omit the field to start with web search and memory; pass an explicit empty list for none.",
@@ -5133,7 +5133,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional resource grants to REPLACE on this function, in the same request. Equivalent to calling the permissions-replace endpoint right after this call \u2014 grants are keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes them."
+            "description": "Optional resource grants to REPLACE on this function, in the same request. Equivalent to calling the permissions-replace endpoint right after this call — grants are keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes them."
           },
           "type": {
             "$ref": "#/components/schemas/FunctionType",
@@ -5410,7 +5410,7 @@
             "type": "boolean"
           },
           "name": {
-            "description": "Table name. Use alphanumeric and underscore only, at most 63 bytes \u2014 PostgreSQL truncates longer names and two that share that prefix would become one table. Names prefixed with `reserved_` are system-managed and should not be user-created.",
+            "description": "Table name. Use alphanumeric and underscore only, at most 63 bytes — PostgreSQL truncates longer names and two that share that prefix would become one table. Names prefixed with `reserved_` are system-managed and should not be user-created.",
             "maxLength": 63,
             "minLength": 1,
             "title": "Name",
@@ -5625,7 +5625,7 @@
         "description": "Schema for executing read-only SQL within a datastore.",
         "properties": {
           "query": {
-            "description": "Read-only SQL query executed inside this datastore schema. A single SELECT statement only; mutating statements (INSERT, UPDATE, DELETE, ALTER, DROP, CREATE, TRUNCATE, ...) and cross-schema references are rejected. Joins, aggregates, and subqueries across tables are allowed, including RLS-enabled tables \u2014 rows of an RLS table are scoped to the caller unless they administer it. Example: `SELECT id, amount FROM expenses WHERE amount > 100 ORDER BY created_at DESC LIMIT 20`.",
+            "description": "Read-only SQL query executed inside this datastore schema. A single SELECT statement only; mutating statements (INSERT, UPDATE, DELETE, ALTER, DROP, CREATE, TRUNCATE, ...) and cross-schema references are rejected. Joins, aggregates, and subqueries across tables are allowed, including RLS-enabled tables — rows of an RLS table are scoped to the caller unless they administer it. Example: `SELECT id, amount FROM expenses WHERE amount > 100 ORDER BY created_at DESC LIMIT 20`.",
             "minLength": 1,
             "title": "Query",
             "type": "string"
@@ -6366,7 +6366,7 @@
         "type": "string"
       },
       "FileChildSchema": {
-        "description": "A derived child artifact of a processed document (converted markdown,\nan extracted figure, or a renderable page). Fetch its bytes from\n``GET \u2026/files/children/content?path=<child path>``.",
+        "description": "A derived child artifact of a processed document (converted markdown,\nan extracted figure, or a renderable page). Fetch its bytes from\n``GET …/files/children/content?path=<child path>``.",
         "properties": {
           "content_type": {
             "anyOf": [
@@ -6649,8 +6649,8 @@
         "properties": {
           "limit": {
             "default": 10,
-            "maximum": 100.0,
-            "minimum": 1.0,
+            "maximum": 100,
+            "minimum": 1,
             "title": "Limit",
             "type": "integer"
           },
@@ -6709,7 +6709,7 @@
           },
           "truncated": {
             "default": false,
-            "description": "True when the result filled the requested `limit`, so there are likely further matches this response does not show. Narrow the query or raise `limit` to see more. Reported because a capped result is otherwise indistinguishable from a complete one \u2014 an agent reading `total` as the number of matching documents states it to a person as fact.",
+            "description": "True when the result filled the requested `limit`, so there are likely further matches this response does not show. Narrow the query or raise `limit` to see more. Reported because a capped result is otherwise indistinguishable from a complete one — an agent reading `total` as the number of matching documents states it to a person as fact.",
             "title": "Truncated",
             "type": "boolean"
           }
@@ -6857,7 +6857,7 @@
         "type": "object"
       },
       "FileSummaryResponse": {
-        "description": "Lean file/folder shape for list responses.\n\nOmits the heavy `metadata` (JSONB) and `last_processing_error` (can be\nmulti-KB) \u2014 fetch those from `file.get`. Keeps `description` (small, may be\nshown in list views).",
+        "description": "Lean file/folder shape for list responses.\n\nOmits the heavy `metadata` (JSONB) and `last_processing_error` (can be\nmulti-KB) — fetch those from `file.get`. Keeps `description` (small, may be\nshown in list views).",
         "properties": {
           "allowed_actions": {
             "items": {
@@ -8230,7 +8230,7 @@
         "type": "string"
       },
       "FunctionSummaryResponse": {
-        "description": "Lean function shape for list responses.\n\nOmits the heavy `input_schema` / `output_schema` / `config_schema` (full JSON\nschemas derived from the function code) and `code` \u2014 fetch those from\n`function.get`.",
+        "description": "Lean function shape for list responses.\n\nOmits the heavy `input_schema` / `output_schema` / `config_schema` (full JSON\nschemas derived from the function code) and `code` — fetch those from\n`function.get`.",
         "properties": {
           "allowed_actions": {
             "items": {
@@ -8385,7 +8385,7 @@
         "type": "string"
       },
       "HarnessKind": {
-        "description": "Runtime framework used to execute an agent.\n\nTwo kinds, not one per coding tool: ``LEMMA`` runs in-process, ``HARNESS``\ndispatches through Agent Host. Which tool Agent Host runs is identified by\n``harness_id`` on the runtime profile, so the retired per-tool values\n(``CODEX``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``, ``ANTIGRAVITY``) went\naway with the local daemon that needed them.\n\nNo stored row is read back through this enum \u2014 a persisted runtime profile\nnames a ``RuntimeProfileProtocol``, and the kind is derived from that \u2014 so\ndropping those values cannot fail a history read. Back-compat for retired\n*protocols* is handled where it belongs, in the profile repository.",
+        "description": "Runtime framework used to execute an agent.\n\nTwo kinds, not one per coding tool: ``LEMMA`` runs in-process, ``HARNESS``\ndispatches through Agent Host. Which tool Agent Host runs is identified by\n``harness_id`` on the runtime profile, so the retired per-tool values\n(``CODEX``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``, ``ANTIGRAVITY``) went\naway with the local daemon that needed them.\n\nNo stored row is read back through this enum — a persisted runtime profile\nnames a ``RuntimeProfileProtocol``, and the kind is derived from that — so\ndropping those values cannot fail a history read. Back-compat for retired\n*protocols* is handled where it belongs, in the profile repository.",
         "enum": [
           "LEMMA",
           "HARNESS"
@@ -8561,7 +8561,7 @@
             "type": "string"
           },
           "protocol_version": {
-            "minimum": 1.0,
+            "minimum": 1,
             "title": "Protocol Version",
             "type": "integer"
           }
@@ -9513,7 +9513,7 @@
         "type": "object"
       },
       "NavigationPodResponse": {
-        "description": "A pod as a listing entry \u2014 enough to draw it, label it, and link to it.\n\nThe line this payload holds is scalars yes, collections no. A pod's own\ncolumns cost nothing to return: they ride along in the query that found the\npod, so the response grows with the number of pods and not with what is\ninside them. Apps, agents and roles are the other side of that line, and\nlive on ``/organizations/{organization_id}/home``.",
+        "description": "A pod as a listing entry — enough to draw it, label it, and link to it.\n\nThe line this payload holds is scalars yes, collections no. A pod's own\ncolumns cost nothing to return: they ride along in the query that found the\npod, so the response grows with the number of pods and not with what is\ninside them. Apps, agents and roles are the other side of that line, and\nlive on ``/organizations/{organization_id}/home``.",
         "properties": {
           "description": {
             "anyOf": [
@@ -9578,7 +9578,7 @@
         "type": "object"
       },
       "NotificationDeliveryStatus": {
-        "description": "Where the *channel* is: did the message physically get to them?\n\nDeliberately a second column rather than more members on\n:class:`NotificationStatus`. The two axes are independent \u2014 a notification\ncan be DELIVERED and still OPEN (they haven't answered), or UNDELIVERABLE\nand still RESPONDED (they saw it in the app and replied there). Smearing\nthem into one enum is how you end up unable to answer \"who did we fail to\nreach?\", which is the only question this column exists for.",
+        "description": "Where the *channel* is: did the message physically get to them?\n\nDeliberately a second column rather than more members on\n:class:`NotificationStatus`. The two axes are independent — a notification\ncan be DELIVERED and still OPEN (they haven't answered), or UNDELIVERABLE\nand still RESPONDED (they saw it in the app and replied there). Smearing\nthem into one enum is how you end up unable to answer \"who did we fail to\nreach?\", which is the only question this column exists for.",
         "enum": [
           "PENDING",
           "DELIVERED",
@@ -9942,7 +9942,7 @@
           "expires_in_seconds": {
             "anyOf": [
               {
-                "exclusiveMinimum": 0.0,
+                "exclusiveMinimum": 0,
                 "type": "integer"
               },
               {
@@ -10088,8 +10088,8 @@
           "limit": {
             "default": 100,
             "description": "How many to return when `operation_names` is omitted. Ignored when names are given.",
-            "maximum": 1000.0,
-            "minimum": 1.0,
+            "maximum": 1000,
+            "minimum": 1,
             "title": "Limit",
             "type": "integer"
           },
@@ -10320,8 +10320,8 @@
           "relevance_score": {
             "anyOf": [
               {
-                "maximum": 1.0,
-                "minimum": 0.0,
+                "maximum": 1,
+                "minimum": 0,
                 "type": "number"
               },
               {
@@ -12247,7 +12247,7 @@
         "type": "object"
       },
       "RecordAccessMode": {
-        "description": "Row-visibility mode for record reads/writes on RLS-enabled tables.\n\n``USER`` (the default when the ``mode`` param is omitted) scopes rows to the\ncaller's own ``user_id`` so app apps keep their per-user semantics \u2014 pod\nadmins included. ``ADMIN`` returns and operates on every member's rows and\nrequires the caller to administer the table (otherwise the request is\nrejected). The mode is a no-op for non-RLS tables, whose rows are shared by\nevery member regardless.\n\nEndpoints expose this as an *optional* query param (default ``None`` ==\n``USER``) rather than one defaulting to ``RecordAccessMode.USER``: a named\nenum query param carrying a literal default makes the TypeScript generator\nemit ``mode: RecordAccessMode = 'USER'``, which fails strict typecheck (a raw\nstring is not assignable to the enum). An optional param generates the valid\n``mode?: RecordAccessMode`` while keeping one shared, CAPS-valued enum type.",
+        "description": "Row-visibility mode for record reads/writes on RLS-enabled tables.\n\n``USER`` (the default when the ``mode`` param is omitted) scopes rows to the\ncaller's own ``user_id`` so app apps keep their per-user semantics — pod\nadmins included. ``ADMIN`` returns and operates on every member's rows and\nrequires the caller to administer the table (otherwise the request is\nrejected). The mode is a no-op for non-RLS tables, whose rows are shared by\nevery member regardless.\n\nEndpoints expose this as an *optional* query param (default ``None`` ==\n``USER``) rather than one defaulting to ``RecordAccessMode.USER``: a named\nenum query param carrying a literal default makes the TypeScript generator\nemit ``mode: RecordAccessMode = 'USER'``, which fails strict typecheck (a raw\nstring is not assignable to the enum). An optional param generates the valid\n``mode?: RecordAccessMode`` while keeping one shared, CAPS-valued enum type.",
         "enum": [
           "USER",
           "ADMIN"
@@ -13737,7 +13737,7 @@
       },
       "SurfaceChannelRouteInput": {
         "additionalProperties": false,
-        "description": "One channel this surface's agent may be spoken to in.\n\nAn allow-list entry. A surface belongs to exactly one agent, so a channel\nsays *where*, never *who* \u2014 it used to name an agent, back when one bot\ncould serve several.",
+        "description": "One channel this surface's agent may be spoken to in.\n\nAn allow-list entry. A surface belongs to exactly one agent, so a channel\nsays *where*, never *who* — it used to name an agent, back when one bot\ncould serve several.",
         "properties": {
           "channel_id": {
             "anyOf": [
@@ -13825,7 +13825,7 @@
         "type": "object"
       },
       "SurfaceConnectDescriptor": {
-        "description": "What the frontend needs to render the \"connect an account\" (CUSTOM) flow\nfor a surface's connector \u2014 a slim projection of the connector's LEMMA\ncapability. ``system_oauth_available`` means the platform supplies the OAuth\napp so the user connects without registering their own (distinct from whether\na fully-managed SYSTEM bot exists \u2014 that's ``supported_credential_modes``).",
+        "description": "What the frontend needs to render the \"connect an account\" (CUSTOM) flow\nfor a surface's connector — a slim projection of the connector's LEMMA\ncapability. ``system_oauth_available`` means the platform supplies the OAuth\napp so the user connects without registering their own (distinct from whether\na fully-managed SYSTEM bot exists — that's ``supported_credential_modes``).",
         "properties": {
           "auth_config_schema": {
             "anyOf": [
@@ -13872,7 +13872,7 @@
         "type": "object"
       },
       "SurfaceConnection": {
-        "description": "Which account a surface runs on, and who connected it.\n\nAccounts are personal (``accounts.user_id``) while surfaces belong to the\npod, so ``account_id`` alone answers nothing for a teammate \u2014 they cannot\nresolve an id they don't own. This block is the pod-visible *identity* of\nthat account: enough for any editor to see who to ask, never the credential.",
+        "description": "Which account a surface runs on, and who connected it.\n\nAccounts are personal (``accounts.user_id``) while surfaces belong to the\npod, so ``account_id`` alone answers nothing for a teammate — they cannot\nresolve an id they don't own. This block is the pod-visible *identity* of\nthat account: enough for any editor to see who to ask, never the credential.",
         "properties": {
           "account_id": {
             "format": "uuid",
@@ -14035,7 +14035,7 @@
       },
       "SurfaceCreateRequest": {
         "additionalProperties": false,
-        "description": "Body for `POST /pods/{pod_id}/surfaces` \u2014 creates one surface.\n\nA pod may have several surfaces of the same ``platform`` \u2014 one bot per\nagent is the model, not the exception; ``name`` is the stable,\npod-unique identifier used to address it afterward. When omitted, it\ndefaults to the lowercased platform (so the common single-surface-per-\nplatform case needs no name at all) \u2014 pick an explicit name to create a\nsecond surface of the same platform.",
+        "description": "Body for `POST /pods/{pod_id}/surfaces` — creates one surface.\n\nA pod may have several surfaces of the same ``platform`` — one bot per\nagent is the model, not the exception; ``name`` is the stable,\npod-unique identifier used to address it afterward. When omitted, it\ndefaults to the lowercased platform (so the common single-surface-per-\nplatform case needs no name at all) — pick an explicit name to create a\nsecond surface of the same platform.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -14430,7 +14430,7 @@
         "type": "string"
       },
       "SurfaceSetupResponse": {
-        "description": "Everything a caller needs to finish setting up a surface, in one read.\n\nMerges the former setup-status, admin-consent, and platform-checklist\nendpoints. Works both before a surface exists (`exists=False`, guide only)\nand after.\n\n``ready`` is True when the user has nothing left to do (system credentials,\nor an already-granted consent). ``actions`` is populated *only* when the\nuser must act \u2014 e.g. point their own Slack/Teams/WhatsApp app at Lemma \u2014\nso the UI can show a clean \"Ready\" state otherwise.",
+        "description": "Everything a caller needs to finish setting up a surface, in one read.\n\nMerges the former setup-status, admin-consent, and platform-checklist\nendpoints. Works both before a surface exists (`exists=False`, guide only)\nand after.\n\n``ready`` is True when the user has nothing left to do (system credentials,\nor an already-granted consent). ``actions`` is populated *only* when the\nuser must act — e.g. point their own Slack/Teams/WhatsApp app at Lemma —\nso the UI can show a clean \"Ready\" state otherwise.",
         "properties": {
           "actions": {
             "items": {
@@ -14548,7 +14548,7 @@
         "type": "object"
       },
       "SurfaceSystemClaim": {
-        "description": "Whether this org can still put the platform's Lemma-managed bot/number\nbehind a surface.\n\nThe shared identity is claimable exactly once per organization, so the setup\nUI can render the option as unavailable *before* the user commits instead of\ndiscovering it as a failed save. ``claimed_by_pod_id`` is the pod holding the\nclaim \u2014 always a pod in the caller's own org, so linking to it leaks nothing\nthey can't already see.",
+        "description": "Whether this org can still put the platform's Lemma-managed bot/number\nbehind a surface.\n\nThe shared identity is claimable exactly once per organization, so the setup\nUI can render the option as unavailable *before* the user commits instead of\ndiscovering it as a failed save. ``claimed_by_pod_id`` is the pod holding the\nclaim — always a pod in the caller's own org, so linking to it leaks nothing\nthey can't already see.",
         "properties": {
           "available": {
             "title": "Available",
@@ -14605,7 +14605,7 @@
       },
       "SurfaceUpdateRequest": {
         "additionalProperties": false,
-        "description": "Body for `PATCH /pods/{pod_id}/surfaces/{surface_name}`.\n\nPartial update (merge semantics): only fields present in the request are\napplied. The surface's ``platform`` and ``name`` are immutable \u2014 delete and\nrecreate to change either.",
+        "description": "Body for `PATCH /pods/{pod_id}/surfaces/{surface_name}`.\n\nPartial update (merge semantics): only fields present in the request are\napplied. The surface's ``platform`` and ``name`` are immutable — delete and\nrecreate to change either.",
         "properties": {
           "account_id": {
             "anyOf": [
@@ -14784,7 +14784,7 @@
         "type": "object"
       },
       "TableSummaryResponse": {
-        "description": "Lean table shape for list responses.\n\nOmits the full `columns` definitions and `config` \u2014 fetch those from\n`table.get`. Exposes a cheap `column_count` for list views.",
+        "description": "Lean table shape for list responses.\n\nOmits the full `columns` definitions and `config` — fetch those from\n`table.get`. Exposes a cheap `column_count` for list views.",
         "properties": {
           "allowed_actions": {
             "items": {
@@ -15016,7 +15016,7 @@
           "host_wait_timeout_seconds": {
             "anyOf": [
               {
-                "minimum": 1.0,
+                "minimum": 1,
                 "type": "integer"
               },
               {
@@ -15140,7 +15140,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional resource grants to REPLACE on this agent, in the same request. Equivalent to calling the permissions-replace endpoint right after update \u2014 grants are keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes them."
+            "description": "Optional resource grants to REPLACE on this agent, in the same request. Equivalent to calling the permissions-replace endpoint right after update — grants are keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes them."
           },
           "toolsets": {
             "anyOf": [
@@ -15432,7 +15432,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional resource grants to REPLACE on this function, in the same request. Equivalent to calling the permissions-replace endpoint right after this call \u2014 grants are keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes them."
+            "description": "Optional resource grants to REPLACE on this function, in the same request. Equivalent to calling the permissions-replace endpoint right after this call — grants are keyed by resource_name. Omit the key to leave existing grants alone; an empty grant list revokes them."
           },
           "type": {
             "anyOf": [
@@ -15595,7 +15595,7 @@
                 "type": "null"
               }
             ],
-            "description": "Optional optimistic-concurrency guard: the `updated_at` value the caller last read. The patch applies only while the row still carries it, and answers 409 when it does not \u2014 so two clients editing the same field cannot silently keep the later one. Omit it for last-writer-wins.",
+            "description": "Optional optimistic-concurrency guard: the `updated_at` value the caller last read. The patch applies only while the row still carries it, and answers 409 when it does not — so two clients editing the same field cannot silently keep the later one. Omit it for last-writer-wins.",
             "title": "Expected Updated At"
           }
         },
@@ -17237,7 +17237,7 @@
                 "type": "null"
               }
             ],
-            "description": "Only results from the past `day`, `week`, `month`, or `year`. Use it for anything time-sensitive \u2014 search engines happily return five-year-old pages for current questions."
+            "description": "Only results from the past `day`, `week`, `month`, or `year`. Use it for anything time-sensitive — search engines happily return five-year-old pages for current questions."
           },
           "include_domains": {
             "anyOf": [
@@ -17313,7 +17313,7 @@
                 "type": "null"
               }
             ],
-            "description": "Set when the search could not be run exactly as asked \u2014 for example a vertical this provider does not serve.",
+            "description": "Set when the search could not be run exactly as asked — for example a vertical this provider does not serve.",
             "title": "Note"
           },
           "results": {
@@ -17859,7 +17859,7 @@
       },
       "WorkflowRunFormSubmitRequest": {
         "additionalProperties": false,
-        "description": "Canonical form submission payload \u2014 identical across web, SDKs, CLI.",
+        "description": "Canonical form submission payload — identical across web, SDKs, CLI.",
         "properties": {
           "inputs": {
             "additionalProperties": true,
@@ -18379,7 +18379,7 @@
         "type": "string"
       },
       "WorkflowSummaryResponse": {
-        "description": "Lean workflow shape for list responses.\n\nOmits the full graph (`nodes`/`edges`/`start`) \u2014 fetch those from\n`workflow.get`. Carries cheap derived `node_count`/`node_types` so list\nviews can show step counts and participant badges without the graph.",
+        "description": "Lean workflow shape for list responses.\n\nOmits the full graph (`nodes`/`edges`/`start`) — fetch those from\n`workflow.get`. Carries cheap derived `node_count`/`node_types` so list\nviews can show step counts and participant badges without the graph.",
         "properties": {
           "allowed_actions": {
             "items": {
@@ -18579,8 +18579,8 @@
         "properties": {
           "ttl_seconds": {
             "default": 1800,
-            "maximum": 3600.0,
-            "minimum": 60.0,
+            "maximum": 3600,
+            "minimum": 60,
             "title": "Ttl Seconds",
             "type": "integer"
           }
@@ -20027,7 +20027,7 @@
     },
     "/organizations/slug-availability": {
       "get": {
-        "description": "Check whether an organization slug \u2014 the handle, and the only unique one of the two \u2014 is available. `name_available` is deprecated and always true: display names are labels, and two organizations may share one.",
+        "description": "Check whether an organization slug — the handle, and the only unique one of the two — is available. `name_available` is deprecated and always true: display names are labels, and two organizations may share one.",
         "operationId": "org.slug_availability",
         "parameters": [
           {
@@ -20676,7 +20676,7 @@
     },
     "/organizations/{organization_id}/connector-operations": {
       "get": {
-        "description": "Search operations across every connector installed in the org. Each hit carries the `auth_config` to execute it against, so a caller that knows what it wants to do \u2014 but not which connector provides it \u2014 needs one request instead of one per install.",
+        "description": "Search operations across every connector installed in the org. Each hit carries the `auth_config` to execute it against, so a caller that knows what it wants to do — but not which connector provides it — needs one request instead of one per install.",
         "operationId": "connector.operation.search",
         "parameters": [
           {
@@ -23120,12 +23120,12 @@
             }
           },
           {
-            "description": "Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-agent permissions endpoint once per row.",
+            "description": "Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-agent permissions endpoint once per row.",
             "in": "query",
             "name": "include",
             "required": false,
             "schema": {
-              "description": "Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-agent permissions endpoint once per row.",
+              "description": "Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-agent permissions endpoint once per row.",
               "items": {
                 "type": "string"
               },
@@ -24394,7 +24394,7 @@
     },
     "/pods/{pod_id}/available-surfaces": {
       "get": {
-        "description": "The connectable-surface catalog: every surface platform with its connector,\nsupported credential modes, the schema to connect an account, and whether this\npod's org can still claim the platform's Lemma-managed bot/number. Otherwise\nplatform-level \u2014 no surface need exist.",
+        "description": "The connectable-surface catalog: every surface platform with its connector,\nsupported credential modes, the schema to connect an account, and whether this\npod's org can still claim the platform's Lemma-managed bot/number. Otherwise\nplatform-level — no surface need exist.",
         "operationId": "agent.surface.available",
         "parameters": [
           {
@@ -24570,7 +24570,7 @@
     },
     "/pods/{pod_id}/bundle/imports": {
       "post": {
-        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST \u2026/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
+        "description": "Import a pod bundle from a URL. kind=URL takes a lemma signed download URL (from an export, or from POST …/bundle/uploads); kind=GITHUB takes a public repo (repo_url or owner+repo, with account_id for private repos). Returns 202 with an import_id; poll status until AWAITING_CONFIRMATION, review the plan, then apply.",
         "operationId": "pod.bundle.import.start",
         "parameters": [
           {
@@ -25128,7 +25128,7 @@
     },
     "/pods/{pod_id}/bundle/uploads": {
       "post": {
-        "description": "Upload a local .zip bundle and receive a signed lemma download URL to pass to POST \u2026/bundle/imports as kind=URL. The only multipart endpoint; it stages bytes and mints a URL, nothing more.",
+        "description": "Upload a local .zip bundle and receive a signed lemma download URL to pass to POST …/bundle/imports as kind=URL. The only multipart endpoint; it stages bytes and mints a URL, nothing more.",
         "operationId": "pod.bundle.upload",
         "parameters": [
           {
@@ -27195,7 +27195,7 @@
     },
     "/pods/{pod_id}/datastore/files/{file_id}": {
       "get": {
-        "description": "Read one file by its id.\n\nFiles were addressable only by path, which forced share links to carry one \u2014\nand a personal path is the alias ``/me``, resolved against *whoever is\nasking*. A link to ``/me/notes.md`` therefore pointed at the recipient's own\nfile: a 404 that reads as \"deleted\", or, on a name collision, silently the\nwrong document. An id means the same file for everyone, and survives renames\nand moves besides.",
+        "description": "Read one file by its id.\n\nFiles were addressable only by path, which forced share links to carry one —\nand a personal path is the alias ``/me``, resolved against *whoever is\nasking*. A link to ``/me/notes.md`` therefore pointed at the recipient's own\nfile: a 404 that reads as \"deleted\", or, on a name collision, silently the\nwrong document. An id means the same file for everyone, and survives renames\nand moves besides.",
         "operationId": "file.get_by_id",
         "parameters": [
           {
@@ -27256,7 +27256,7 @@
     },
     "/pods/{pod_id}/datastore/query": {
       "post": {
-        "description": "Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables \u2014 rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.",
+        "description": "Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables — rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected. Results are capped at the deployment's row limit: `total` is how many rows came back, and `truncated` says whether more matched.",
         "operationId": "query.execute",
         "parameters": [
           {
@@ -27270,7 +27270,7 @@
             }
           },
           {
-            "description": "Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user \u2014 the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.",
+            "description": "Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user — the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.",
             "in": "query",
             "name": "mode",
             "required": false,
@@ -27283,7 +27283,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user \u2014 the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.",
+              "description": "Row-visibility mode for RLS-enabled tables referenced by the query. Omitted/`USER` (default) scopes their rows to the signed-in user — the per-user data apps and functions expect. `ADMIN` returns every member's rows and requires permission to administer every RLS table the query touches; a caller without it gets a 403. Non-RLS tables are unaffected.",
               "title": "Mode"
             }
           }
@@ -27856,7 +27856,7 @@
             }
           },
           {
-            "description": "Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{\"field\":\"<column_name>\",\"op\":\"<operator>\",\"value\":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an array `value` and matches any of its members; an empty array matches nothing. `like` and `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches exactly one \u2014 to match either literally, escape it with a backslash (`price\\_usd`). Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={\"field\":\"amount\",\"op\":\"gt\",\"value\":100}`, `filter={\"field\":\"status\",\"op\":\"in\",\"value\":[\"OPEN\",\"PENDING\"]}`.",
+            "description": "Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{\"field\":\"<column_name>\",\"op\":\"<operator>\",\"value\":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an array `value` and matches any of its members; an empty array matches nothing. `like` and `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches exactly one — to match either literally, escape it with a backslash (`price\\_usd`). Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={\"field\":\"amount\",\"op\":\"gt\",\"value\":100}`, `filter={\"field\":\"status\",\"op\":\"in\",\"value\":[\"OPEN\",\"PENDING\"]}`.",
             "in": "query",
             "name": "filter",
             "required": false,
@@ -27872,7 +27872,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{\"field\":\"<column_name>\",\"op\":\"<operator>\",\"value\":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an array `value` and matches any of its members; an empty array matches nothing. `like` and `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches exactly one \u2014 to match either literally, escape it with a backslash (`price\\_usd`). Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={\"field\":\"amount\",\"op\":\"gt\",\"value\":100}`, `filter={\"field\":\"status\",\"op\":\"in\",\"value\":[\"OPEN\",\"PENDING\"]}`.",
+              "description": "Optional repeated JSON filters for advanced comparisons. Each `filter` value must be a JSON object with shape `{\"field\":\"<column_name>\",\"op\":\"<operator>\",\"value\":<comparison_value>}`. Allowed operators are: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `like`, `ilike`, `in`. `in` takes an array `value` and matches any of its members; an empty array matches nothing. `like` and `ilike` take a SQL pattern, where `%` matches any run of characters and `_` matches exactly one — to match either literally, escape it with a backslash (`price\\_usd`). Repeat the query parameter to combine multiple filters with AND semantics. Examples: `filter={\"field\":\"amount\",\"op\":\"gt\",\"value\":100}`, `filter={\"field\":\"status\",\"op\":\"in\",\"value\":[\"OPEN\",\"PENDING\"]}`.",
               "title": "Filter"
             }
           },
@@ -27916,7 +27916,7 @@
             }
           },
           {
-            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
             "in": "query",
             "name": "mode",
             "required": false,
@@ -27929,7 +27929,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
               "title": "Mode"
             }
           }
@@ -28140,7 +28140,7 @@
             }
           },
           {
-            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
             "in": "query",
             "name": "mode",
             "required": false,
@@ -28153,7 +28153,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
               "title": "Mode"
             }
           }
@@ -28231,7 +28231,7 @@
             }
           },
           {
-            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
             "in": "query",
             "name": "mode",
             "required": false,
@@ -28244,7 +28244,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
               "title": "Mode"
             }
           }
@@ -28331,7 +28331,7 @@
             }
           },
           {
-            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
             "in": "query",
             "name": "mode",
             "required": false,
@@ -28344,7 +28344,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
               "title": "Mode"
             }
           }
@@ -28412,7 +28412,7 @@
             }
           },
           {
-            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
             "in": "query",
             "name": "mode",
             "required": false,
@@ -28425,7 +28425,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
               "title": "Mode"
             }
           }
@@ -28499,7 +28499,7 @@
             }
           },
           {
-            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+            "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
             "in": "query",
             "name": "mode",
             "required": false,
@@ -28512,7 +28512,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records \u2014 the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
+              "description": "Row-visibility mode for RLS-enabled tables. Omitted/`USER` (default) scopes rows to the signed-in user's own records — the per-user semantics an app app expects. `ADMIN` returns/operates on every member's rows and requires permission to administer the table; a caller without it gets a 403. Ignored for non-RLS tables, whose rows are shared by all members.",
               "title": "Mode"
             }
           }
@@ -28611,12 +28611,12 @@
             }
           },
           {
-            "description": "Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-function permissions endpoint once per row.",
+            "description": "Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-function permissions endpoint once per row.",
             "in": "query",
             "name": "include",
             "required": false,
             "schema": {
-              "description": "Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-function permissions endpoint once per row.",
+              "description": "Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-function permissions endpoint once per row.",
               "items": {
                 "type": "string"
               },
@@ -30357,7 +30357,7 @@
         }
       },
       "post": {
-        "description": "Reach a pod member on whichever surface they actually use, leaving a copy in their Lemma inbox either way.\n\nGated on `conversation.write` rather than an editor permission: this opens a conversation and writes a message into it, which is exactly that grant. Requiring `agent.update` is what left the older `surface.send` endpoint with no caller in the product.\n\nA 201 with `delivery_status` of `UNDELIVERABLE` is a success, not a failure \u2014 the notification exists and the inbox has it. Read `undeliverable_reason` to tell the user what to do about it.",
+        "description": "Reach a pod member on whichever surface they actually use, leaving a copy in their Lemma inbox either way.\n\nGated on `conversation.write` rather than an editor permission: this opens a conversation and writes a message into it, which is exactly that grant. Requiring `agent.update` is what left the older `surface.send` endpoint with no caller in the product.\n\nA 201 with `delivery_status` of `UNDELIVERABLE` is a success, not a failure — the notification exists and the inbox has it. Read `undeliverable_reason` to tell the user what to do about it.",
         "operationId": "notification.send",
         "parameters": [
           {
@@ -30526,7 +30526,7 @@
     },
     "/pods/{pod_id}/notifications/{notification_id}/acknowledge": {
       "post": {
-        "description": "Dismiss a notification that asked for nothing. Returns 409 when a response is owed \u2014 dismissing a question is not answering it.",
+        "description": "Dismiss a notification that asked for nothing. Returns 409 when a response is owed — dismissing a question is not answering it.",
         "operationId": "notification.acknowledge",
         "parameters": [
           {
@@ -30653,7 +30653,7 @@
     },
     "/pods/{pod_id}/notifications/{notification_id}/respond": {
       "post": {
-        "description": "Answer a notification from the app. Produces the same `RESPONDED` an agent-mediated reply on a chat surface produces, so the asking run sees it either way.\n\nReturns 409 when the notification is answered by completing its `action` instead \u2014 a workflow form is submitted through the workflow run endpoint, where it is validated against the node's schema. It also returns 409 if somebody already answered it, rather than overwriting an answer that may already have been acted on.",
+        "description": "Answer a notification from the app. Produces the same `RESPONDED` an agent-mediated reply on a chat surface produces, so the asking run sees it either way.\n\nReturns 409 when the notification is answered by completing its `action` instead — a workflow form is submitted through the workflow run endpoint, where it is validated against the node's schema. It also returns 409 if somebody already answered it, rather than overwriting an answer that may already have been acted on.",
         "operationId": "notification.respond",
         "parameters": [
           {
@@ -30827,7 +30827,7 @@
     },
     "/pods/{pod_id}/resources/{resource_type}/preview": {
       "get": {
-        "description": "Describe a shared resource, addressed by id or by name.\n\nBoth, because the two live in different worlds: agents, apps and tables are\nlinked by name, while a document's \"name\" is its stored path \u2014 which a\nrecipient does not have, since the link they were sent carries an id\nprecisely so it does not depend on a path.",
+        "description": "Describe a shared resource, addressed by id or by name.\n\nBoth, because the two live in different worlds: agents, apps and tables are\nlinked by name, while a document's \"name\" is its stored path — which a\nrecipient does not have, since the link they were sent carries an id\nprecisely so it does not depend on a path.",
         "operationId": "pod.resource.preview",
         "parameters": [
           {
@@ -32087,7 +32087,7 @@
     },
     "/pods/{pod_id}/surface-setup/{platform}": {
       "get": {
-        "description": "The static pre-creation checklist for a platform (env/OAuth\nprerequisites) \u2014 works before any surface of this platform exists.",
+        "description": "The static pre-creation checklist for a platform (env/OAuth\nprerequisites) — works before any surface of this platform exists.",
         "operationId": "agent.surface.setup_guide",
         "parameters": [
           {
@@ -32254,7 +32254,7 @@
         }
       },
       "post": {
-        "description": "Create a surface. ``name`` defaults to the lowercased platform \u2014 pass an\nexplicit name to create a second surface of the same platform (e.g. a\nsecond bot routed to a different agent).",
+        "description": "Create a surface. ``name`` defaults to the lowercased platform — pass an\nexplicit name to create a second surface of the same platform (e.g. a\nsecond bot routed to a different agent).",
         "operationId": "agent.surface.create",
         "parameters": [
           {
@@ -32428,7 +32428,7 @@
         }
       },
       "patch": {
-        "description": "Partially update a surface. Only fields present in the request are\napplied; the surface's platform and name are immutable.\n\nPassing ``account_id`` rebinds the surface to a different connected account\n\u2014 the repair when the account it runs on expires, or its owner leaves the\npod. It must be an account the caller owns.",
+        "description": "Partially update a surface. Only fields present in the request are\napplied; the surface's platform and name are immutable.\n\nPassing ``account_id`` rebinds the surface to a different connected account\n— the repair when the account it runs on expires, or its owner leaves the\npod. It must be an account the caller owns.",
         "operationId": "agent.surface.update",
         "parameters": [
           {
@@ -34033,7 +34033,7 @@
     },
     "/surface-setup/slack/manifest": {
       "get": {
-        "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public \u2014 this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod: the\nagent name is supplied by the caller and echoed back, never read from one.",
+        "description": "The Slack app manifest to paste when running your own Slack app.\n\nServed rather than copied out of the repo so the URLs always match the\ndeployment answering this request, and the scopes always match the code\nthat will consume the events.\n\nSigned-in access is the only gate, and that is enough: every value in here\nis already public — this deployment's URLs and the scopes its own code\nasks for. It carries no credential and reveals nothing about a pod: the\nagent name is supplied by the caller and echoed back, never read from one.",
         "operationId": "agent.surface.slack_manifest",
         "parameters": [
           {
@@ -36469,7 +36469,7 @@
     },
     "/web-logins": {
       "delete": {
-        "description": "Forget a site.\n\nRemoving the row is the whole revocation from Lemma's side. It does **not**\nsign the person out at the site, and the response says so \u2014 a saved session\nthat has been deleted here is still a valid session there until they log out\nor it expires, and implying otherwise would be the more dangerous lie.",
+        "description": "Forget a site.\n\nRemoving the row is the whole revocation from Lemma's side. It does **not**\nsign the person out at the site, and the response says so — a saved session\nthat has been deleted here is still a valid session there until they log out\nor it expires, and implying otherwise would be the more dangerous lie.",
         "operationId": "web_login.delete",
         "parameters": [
           {
@@ -36705,7 +36705,7 @@
     },
     "/web-logins/sign-in-requests/{request_id}:finish": {
       "post": {
-        "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run \u2014 so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.",
+        "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run — so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.",
         "operationId": "web_login.sign_in_request.finish",
         "parameters": [
           {
@@ -37039,5 +37039,11 @@
         }
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "https://api.lemma.work",
+      "description": "Lemma Cloud API"
+    }
+  ]
 }

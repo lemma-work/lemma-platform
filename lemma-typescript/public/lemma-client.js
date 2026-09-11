@@ -17194,6 +17194,34 @@ var LemmaClient = (() => {
         { params: { limit } }
       );
     }
+    /** What an agent is asking you to sign in to, and why. */
+    signInRequest(requestId) {
+      return this.http.request(
+        "GET",
+        `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}`
+      );
+    }
+    /**
+     * Say you have signed in, so the waiting run can carry on.
+     *
+     * Refused with a 409 when the browser holds nothing for the site — which
+     * usually means the sign-in did not finish. `force` is for sites the check
+     * reads wrongly.
+     */
+    finishSignIn(requestId, options = {}) {
+      return this.http.request(
+        "POST",
+        `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:finish`,
+        { body: { force: Boolean(options.force) } }
+      );
+    }
+    /** Say you cannot sign in, so the agent stops waiting and says so. */
+    declineSignIn(requestId) {
+      return this.http.request(
+        "POST",
+        `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:decline`
+      );
+    }
   };
   var WorkspaceNamespace = class {
     constructor(http) {
@@ -17222,6 +17250,17 @@ var LemmaClient = (() => {
       return this.http.request("POST", "/workspace/apps/browser/access", {
         body: { ttl_seconds: ttlSeconds }
       });
+    }
+    /**
+     * Whether the browser can be watched, without starting anything.
+     *
+     * `asleep` the computer is paused; `stopped` it is up but the browser is not
+     * (its resting state after two idle minutes); `running` there is one now;
+     * `unavailable` the relay did not answer, which on an older image stays true
+     * until it is replaced; `unsupported` this kind of computer cannot do it.
+     */
+    browserStatus() {
+      return this.http.request("GET", "/workspace/browser/status");
     }
     /**
      * Raw bytes of one file, from `offset`, at most `length` bytes.

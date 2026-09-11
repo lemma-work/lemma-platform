@@ -33,12 +33,27 @@ export interface WebLogin {
   id: string;
   origin: string;
   label: string;
-  kind: 'SESSION' | 'CREDENTIAL';
+  /** Whether the stored session still signs you in. */
+  working: boolean;
   created_at: string;
   updated_at: string;
   last_used_at: string | null;
   expires_hint_at: string | null;
   has_password: boolean;
+}
+
+/** An agent waiting for somebody to sign a site in. */
+export interface SignInRequest {
+  id: string;
+  origin: string;
+  /** What the agent is doing, in its own words, to show the person. */
+  reason: string;
+  status: "PENDING" | "SIGNED_IN" | "DECLINED";
+  created_at: string;
+  /** Whether the login was kept for next time. */
+  saved: boolean;
+  /** Why it was not kept, when it was not. */
+  saved_detail: string | null;
 }
 
 export interface WebLoginAuditEntry {
@@ -82,6 +97,37 @@ export class WebLoginsNamespace {
       { params: { limit } },
     );
   }
+
+  /** What an agent is asking you to sign in to, and why. */
+  signInRequest(requestId: string): Promise<SignInRequest> {
+    return this.http.request<SignInRequest>(
+      "GET",
+      `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}`,
+    );
+  }
+
+  /**
+   * Say you have signed in, so the waiting run can carry on.
+   *
+   * Refused with a 409 when the browser holds nothing for the site — which
+   * usually means the sign-in did not finish. `force` is for sites the check
+   * reads wrongly.
+   */
+  finishSignIn(requestId: string, options: { force?: boolean } = {}): Promise<SignInRequest> {
+    return this.http.request<SignInRequest>(
+      "POST",
+      `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:finish`,
+      { body: { force: Boolean(options.force) } },
+    );
+  }
+
+  /** Say you cannot sign in, so the agent stops waiting and says so. */
+  declineSignIn(requestId: string): Promise<SignInRequest> {
+    return this.http.request<SignInRequest>(
+      "POST",
+      `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:decline`,
+    );
+  }
 }
 
 export class WorkspaceNamespace {
@@ -118,6 +164,18 @@ export class WorkspaceNamespace {
     return this.http.request("POST", "/workspace/apps/browser/access", {
       body: { ttl_seconds: ttlSeconds },
     });
+  }
+
+  /**
+   * Whether the browser can be watched, without starting anything.
+   *
+   * `asleep` the computer is paused; `stopped` it is up but the browser is not
+   * (its resting state after two idle minutes); `running` there is one now;
+   * `unavailable` the relay did not answer, which on an older image stays true
+   * until it is replaced; `unsupported` this kind of computer cannot do it.
+   */
+  browserStatus(): Promise<{ state: string; detail: string | null }> {
+    return this.http.request("GET", "/workspace/browser/status");
   }
 
   /**

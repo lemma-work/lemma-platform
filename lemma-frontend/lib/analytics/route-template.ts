@@ -82,6 +82,7 @@ export const ROUTE_TEMPLATES: readonly string[] = [
     "/profile/usage",
     "/remix",
     "/s/[kind]/[...path]",
+    "/sign-in-to-site/[requestId]",
     "/signup",
     "/templates",
     "/templates/[slug]",
