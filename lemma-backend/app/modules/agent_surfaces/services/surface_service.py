@@ -191,8 +191,31 @@ class AgentSurfaceService(
                 webhook_url=self._build_public_surface_webhook_url(created.id),
                 webhook_secret=created.webhook_secret or "",
             )
-        await notify_surface_receiver_config_changed(created.id)
+        await self._notify_receivers_after_commit(created.id)
         return created
+
+    async def _notify_receivers_after_commit(self, surface_id: UUID | None) -> None:
+        """Wake the receiver coordinators once the change has actually committed.
+
+        Not inline, for the same two reasons the authorization service gives for
+        its snapshot invalidation: publishing inside the transaction holds a
+        pooled connection across a Redis round trip, and it is the wrong order
+        besides -- a coordinator woken before the commit reads the surface
+        configuration this change is about to replace.
+
+        Falls back to publishing immediately when there is no unit of work to
+        defer to, which is also when there is no pooled connection to keep.
+        """
+        info = getattr(getattr(self.surface_repository, "session", None), "info", None)
+        uow = info.get("lemma_uow") if isinstance(info, dict) else None
+
+        async def _run() -> None:
+            await notify_surface_receiver_config_changed(surface_id)
+
+        if uow is None:
+            await _run()
+            return
+        uow.after_commit(_run)
 
     async def create_surface_minting_address(
         self,
@@ -365,7 +388,7 @@ class AgentSurfaceService(
                 webhook_url=self._build_public_surface_webhook_url(updated.id),
                 webhook_secret=updated.webhook_secret or "",
             )
-        await notify_surface_receiver_config_changed(updated.id)
+        await self._notify_receivers_after_commit(updated.id)
         return updated
 
     async def _apply_binding_update(
@@ -429,7 +452,7 @@ class AgentSurfaceService(
             if telegram_requires_webhook_setup(surface):
                 await self._delete_telegram_webhook(surface)
         await self.surface_repository.delete(surface_id)
-        await notify_surface_receiver_config_changed(surface_id)
+        await self._notify_receivers_after_commit(surface_id)
 
     async def delete_all_surfaces_for_pod(self, pod_id: UUID) -> int:
         """Remove every surface in a pod so its accounts become free again."""
