@@ -34,6 +34,7 @@ from app.modules.agent.tools.pod.models import (
     SearchFilesRequest,
     ViewDocumentPagesRequest,
 )
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.agent.tools.pod.pod_common import (
     file_summary,
     resolve_pod_path,
@@ -281,13 +282,22 @@ async def pod_view_document_pages(
         # reason; this one was not, so a text-only model asked for a PDF page
         # and the provider rejected the entire request.
         if getattr(ctx.deps, "vision_mode", None) is not AgentVisionMode.DIRECT:
-            return await describe_document_pages(
-                ctx.deps,
-                path=entity.path,
-                pages=pages,
-                page_refs=page_refs,
-                instructions=request.instructions,
-            )
+            # A vision model reads the pages, which is a model round trip on a
+            # document -- seconds, and the slowest thing this tool does. Every
+            # platform read is finished by now and nothing below touches that
+            # database, so the connection goes back before the call rather than
+            # sitting idle in an open transaction for the length of it.
+            #
+            # This was the worst single hold in a week of production: 47.2s
+            # held, 47.1s of it idle, 24ms of querying, one statement.
+            async with connection_released(services.uow.session):
+                return await describe_document_pages(
+                    ctx.deps,
+                    path=entity.path,
+                    pages=pages,
+                    page_refs=page_refs,
+                    instructions=request.instructions,
+                )
 
         return ToolReturn(
             return_value={

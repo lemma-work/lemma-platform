@@ -119,6 +119,7 @@ class DatastoreFileService(FileTransactionFacade):
             authorizer,
             path_resolver,
             lookup,
+            platform_session=getattr(file_repository, "session", None),
         )
         tree = DirectoryTreeBuilder(
             file_repository,
