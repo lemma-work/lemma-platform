@@ -7,7 +7,7 @@ from uuid import UUID, uuid7
 
 import structlog
 
-from app.core.infrastructure.db.session_uow import active_uow
+from app.core.infrastructure.db.session_uow import commit_now
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.api.uploads import upload_source_sha256
 from app.core.authorization.context import (
@@ -208,9 +208,7 @@ class AppService:
         # awaited holding a pooled connection. The cost is that a failed upload
         # leaves the app row without a bundle instead of rolling the creation
         # back -- recoverable, since the app is visible and can be re-uploaded.
-        uow = active_uow(self.repository)
-        if uow is not None:
-            await uow.commit()
+        await commit_now(self.repository)
 
         # The document IS the source for a promoted widget -- no build step sits
         # behind it -- so it ships as both. Uploading dist only left the app

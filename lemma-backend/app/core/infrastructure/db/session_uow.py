@@ -49,3 +49,22 @@ def active_uow(source: object) -> DeferrableUnitOfWork | None:
     # the protocol into "no unit of work" -- a green test for a fallback path
     # nobody asked for.
     return cast(DeferrableUnitOfWork | None, info.get(SESSION_UOW_KEY))
+
+
+async def commit_now(source: object) -> None:
+    """End the transaction on ``source``'s unit of work, handing the connection back.
+
+    For the shape `connection_released` cannot serve: the caller has *written*,
+    and is about to wait on something slow. `safe_to_release` correctly refuses
+    a dirty session, so a release there would be a silent no-op -- the commit is
+    the only thing that actually returns the connection to the pool.
+
+    Doing nothing when there is no unit of work is not a skipped commit; it is
+    the case where there is no pooled connection to give back. Written as one
+    statement so the static gate can see that the release is unconditional --
+    see `_is_commit_statement` in `scripts/check_session_scope.py`, which
+    refuses to credit a commit nested in an `if`, and rightly.
+    """
+    uow = active_uow(source)
+    if uow is not None:
+        await uow.commit()

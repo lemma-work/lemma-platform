@@ -49,10 +49,10 @@ async def handle_identity_event(
 ):
     """Dispatch identity events to email adapter."""
 
-    async def dispatch() -> None:
+    async def send_identity_email() -> None:
         await _dispatch_identity_event(event, fs_logger, email_port)
 
-    await inbox.process("identity-email-events", event, dispatch)
+    await inbox.process("identity-email-events", event, send_identity_email)
 
 
 async def _dispatch_identity_event(
@@ -108,7 +108,7 @@ async def handle_mobile_verification_event(
     ):
         return
 
-    async def dispatch() -> None:
+    async def consume_mobile_verification() -> None:
         parsed = WhatsAppMobileVerificationReceivedEvent.model_validate(event)
         await get_whatsapp_mobile_verification_service().consume_message(
             code=parsed.code,
@@ -117,4 +117,6 @@ async def handle_mobile_verification_event(
             whatsapp_message_id=parsed.whatsapp_message_id,
         )
 
-    await inbox.process("identity-mobile-verification-events", event, dispatch)
+    await inbox.process(
+        "identity-mobile-verification-events", event, consume_mobile_verification
+    )
