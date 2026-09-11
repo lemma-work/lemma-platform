@@ -131,8 +131,14 @@ Uses the **real model** (`LEMMA_OPENAI_API_KEY`) + the **real Docker sandbox**, 
 
 ```bash
 make test-e2e-real      # all e2e against the real model + Docker sandbox
-make test-e2e-runtime   # only the slow/worker/workspace/provider/local_cli subset
+make test-e2e-runtime   # exactly what backend-protected-e2e.yml runs
 ```
+
+`test-e2e-runtime` is byte-identical to the protected workflow, asserted by
+`test_the_protected_lane_can_be_reproduced_from_the_makefile`. It selects the
+slow/workspace/indexing subset and deliberately not `local_cli` (needs a
+cargo-built Agent Host; `make desktop-agent-host-e2e` supplies it) or
+`benchmark` (wall-clock budgets; `make benchmark-functions-docker` owns them).
 
 ### Markers & modes
 
