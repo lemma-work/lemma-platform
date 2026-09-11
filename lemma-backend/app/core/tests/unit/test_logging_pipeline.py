@@ -905,3 +905,58 @@ def test_rendered_json_puts_the_event_first(capsys) -> None:
 
     line = stream.getvalue().strip().splitlines()[-1]
     assert list(json.loads(line))[:3] == ["timestamp", "level", "event"]
+
+
+def test_an_exception_instance_carries_the_same_diagnostics_as_exc_info_true(
+    captured_stdout,
+) -> None:
+    """`exc_info=exc` must produce what `exc_info=True` produces.
+
+    structlog accepts the exception object itself, and nine non-test call sites
+    pass it that way. Every one of them used to fall through the tuple check in
+    `_exception_info` and lose the message, the traceback, the frames and the
+    stack hash -- an ERROR line saying a thing failed and nothing about why.
+
+    `background_task.failed` is the event this actually reached production on,
+    which is why the test uses it: a worker lane dying with
+    `error_type=ExceptionGroup` and an empty traceback.
+    """
+    try:
+        raise ValueError("the real cause")
+    except ValueError as exc:
+        get_logger("app.demo").error(
+            "background_task.failed", task_name="worker-lane-bulk", exc_info=exc
+        )
+
+    record = captured_stdout()[0]
+
+    # Asserted first: an uncatalogued event is rewritten to
+    # `logging.contract.violation`, and that record carries `error_*` fields of
+    # its own -- so without this line the assertions below pass on the wrong
+    # record and prove nothing.
+    assert record["event"] == "background_task.failed"
+    assert record["error_type"] == "ValueError"
+    assert "the real cause" in record["error_message"]
+    assert record["error_traceback"]
+    assert record["error_stack_hash"]
+
+
+def test_the_instance_and_the_flag_agree_field_for_field(captured_stdout) -> None:
+    """Whichever spelling a call site used, the record must carry the same keys.
+
+    A set comparison rather than a list, so a future diagnostic field cannot be
+    added for one spelling and silently missed for the other.
+    """
+    logger = get_logger("app.demo")
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError as exc:
+        logger.error("background_task.failed", task_name="via-instance", exc_info=exc)
+        logger.error("background_task.failed", task_name="via-flag", exc_info=True)
+
+    by_task = {record["task_name"]: record for record in captured_stdout()}
+    diagnostic_keys = {"error_type", "error_message", "error_traceback", "error_frames"}
+
+    assert diagnostic_keys <= by_task["via-instance"].keys()
+    assert by_task["via-instance"].keys() == by_task["via-flag"].keys()
+    assert by_task["via-instance"]["error_type"] == by_task["via-flag"]["error_type"]

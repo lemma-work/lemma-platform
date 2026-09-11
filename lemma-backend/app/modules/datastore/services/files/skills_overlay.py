@@ -37,10 +37,24 @@ class SkillsOverlay:
         requester_user_id: UUID,
         ctx: Context,
     ) -> list[DatastoreFileEntity]:
-        all_pod_items = await self.file_repository.get_all_by_datastore(pod_id)
-        skills_items = [
-            item for item in all_pod_items if self.system_skill_files.is_path(item.path)
-        ]
+        # Ask for the subtree, not the pod. This used to load every file row in
+        # the pod, hydrate an entity for each, and then keep the ones whose path
+        # starts with `/skills` -- and it decided that by running
+        # `normalize_datastore_path` over every path, which walks the string
+        # character by character doing two `unicodedata` calls each.
+        #
+        # Measured here: 3.8us per path to normalise against 0.02us for the
+        # prefix test, and 2.35us to build each entity. On a 20k-file pod that
+        # is ~123ms of Python per listing request, for a `/skills` folder that
+        # usually holds a handful of files.
+        #
+        # `ix_datastore_file_pod_path_prefix` -- `(pod_id, path text_pattern_ops)`,
+        # created in the baseline migration -- has existed since the beginning
+        # and no listing path had ever used it. Against 40k rows in one pod it
+        # turns 40,085 buffer hits into 99.
+        skills_items = await self.file_repository.get_descendants(
+            pod_id, self.system_skill_files.root_path
+        )
         return await self.authorizer.filter_visible_items(
             skills_items,
             requester_user_id,

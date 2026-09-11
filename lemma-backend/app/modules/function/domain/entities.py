@@ -249,7 +249,11 @@ class RunAsWorkload(BaseModel):
 class FunctionRunEntity(BaseModel):
     """Function run entity representing an execution."""
 
-    _domain_events: list[DomainEvent] = PrivateAttr(default_factory=list)
+    # `default=[]`, not `default_factory=list` -- pydantic copies the default
+    # into each instance, so the list is still per-run, and the factory form
+    # costs an uncached `inspect.signature(list)` on every instantiation. See
+    # `app/core/domain/aggregate.py` for the measurement.
+    _domain_events: list[DomainEvent] = PrivateAttr(default=[])
 
     id: UUID | None = None
     function_id: UUID

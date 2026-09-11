@@ -26,10 +26,18 @@ async def validate_schedule_update_policies(
     *,
     ctx: Context | None,
     require_datastore_update: DatastoreUpdateCheck,
+    session: object | None = None,
 ) -> None:
+    """Refuse an update the schedule's type does not allow.
+
+    ``session`` is forwarded so the TIME branch can hand the pooled connection
+    back across its cron walk; see `validated_time_schedule_config`.
+    """
     if existing.schedule_type == ScheduleType.TIME and (
         "config" in update_data or update_data.get("is_active") is True
     ):
-        await validated_time_schedule_config(update_data.get("config", existing.config))
+        await validated_time_schedule_config(
+            update_data.get("config", existing.config), session=session
+        )
     if existing.schedule_type == ScheduleType.DATASTORE:
         await require_datastore_update(existing.model_copy(update=update_data), ctx)

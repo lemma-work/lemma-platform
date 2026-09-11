@@ -89,7 +89,11 @@ SESSION_OPENERS = re.compile(
         | get_session_maker
         | get_datastore_session_maker
         | _?session_factory
-        | uow_factory
+        # `_?`: a service that keeps its factory as `self._uow_factory` was
+        # invisible here, which left 39 `async with self._uow_factory()` sites
+        # across 12 files unchecked. Costs nothing today -- widening it reports
+        # no new violations -- so this closes the shape, not a backlog.
+        | _?uow_factory
         | create_uow_from_session_maker
         # `async with SessionUnitOfWorkFactory(async_session_maker)() as uow:`
         # constructs the factory inline and calls it. Without this the whole
@@ -303,8 +307,11 @@ class DependencyIndex:
         # `_hands_the_connection_back`. Excluded from propagation only: their
         # own bodies are still checked.
         self.releasing: set[str] = set()
+        # Every definition by `path:lineno`, so a call can be judged with
+        # the definition it sits inside taken out of the running.
+        self.definition_at: dict[str, dict] = {}
 
-    def ingest(self, tree: ast.Module) -> None:
+    def ingest(self, tree: ast.Module, path: str) -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 self._ingest_alias(node)
@@ -321,9 +328,10 @@ class DependencyIndex:
                     if _yields_inside_session(node, allow_context_manager=True):
                         self.session_cms.add(node.name)
                 awaited, direct = _awaited_calls(node)
-                self.definitions.setdefault(node.name, []).append(
-                    {"awaits": awaited, "reason": direct}
-                )
+                site = f"{path}:{node.lineno}"
+                definition = {"awaits": awaited, "reason": direct, "site": site}
+                self.definitions.setdefault(node.name, []).append(definition)
+                self.definition_at[site] = definition
                 self._ingest_returns(node)
 
     def _ingest_returns(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -392,24 +400,71 @@ class DependencyIndex:
     #: edit anywhere in the tree could de-fang propagation for a name nobody was
     #: thinking about.
     #:
-    #: Measured across the tree: 1.0, 0.9 and 0.75 all report exactly the same
-    #: 33 violations today, so this is a robustness change rather than a
-    #: behaviour change -- adding one fast `download_attachment_bytes` to the
-    #: six slow ones no longer turns the rule off. 0.6 adds four more, which is
-    #: a judgement call for its own change with its own evidence.
-    SLOW_DEFINITION_RATIO = 0.75
+    #: Measured across the tree. 1.0, 0.9 and 0.75 all reported exactly the same
+    #: 33 violations, so moving between them was robustness rather than
+    #: behaviour -- adding one fast `download_attachment_bytes` to the six slow
+    #: ones no longer turns the rule off.
+    #:
+    #: 0.5 is where it sits now, and getting there was the work rather than the
+    #: setting: it surfaced sixty sites, and they were fixed rather than
+    #: baselined. The three rules that made that bearable -- a definition is not
+    #: judged against itself, a bare call to a local `def` reads that `def`, and
+    #: a commit at the top of a loop body releases -- each removed a class of
+    #: guess rather than an exemption, so the dial and the precision moved in
+    #: the same direction.
+    #:
+    #: Below that it stops paying: 0.4 reports twenty more, and 0.34 reports the
+    #: same twenty, so the next step down is a cliff into ambiguity rather than
+    #: a gradient. Lowering it further is a change of its own, with its own
+    #: evidence, and the twenty have to be read one at a time.
+    SLOW_DEFINITION_RATIO = 0.5
 
-    def _name_is_slow(self, name: str) -> bool:
+    def _name_is_slow(self, name: str, inside: tuple[str, ...] | None = None) -> bool:
         if name in self.remote_names:
             return True
-        definitions = self.definitions.get(name)
+        definitions = self._candidates(name, inside)
         if not definitions:
             return False
         slow = sum(1 for d in definitions if d["reason"] is not None)
         return slow / len(definitions) >= self.SLOW_DEFINITION_RATIO
 
-    def why_slow(self, callee: str) -> str | None:
-        """Reason `callee` is non-database work, if it is."""
+    def _candidates(self, name: str, inside: tuple[str, ...] | None) -> list[dict]:
+        """Definitions of `name`, minus any the call is written inside.
+
+        A facade delegating to the service method of the same name is the house
+        style -- `FunctionRevisionUseCases.get_revision` awaits
+        `FunctionRevisionService.get_revision`, and `DatastoreFileService`
+        forwards a dozen more. Without this, the facade's own slowness (it reads
+        storage after closing the scope, which is the correct shape) counts
+        towards the ratio for the call it makes, and the method reports itself.
+        The whole enclosing chain, not just the innermost function: the
+        datastore consumer's `handle_datastore_event` wraps a closure that calls
+        `handler.handle_datastore_event`, and the subscriber is slow only because
+        it awaits `inbox.process` at the bottom of its own body.
+
+        `resolve_slow` already refuses self-reference by name for the same
+        reason; this is the reporting half of that rule.
+        """
+        definitions = self.definitions.get(name) or []
+        if not inside:
+            return definitions
+        enclosing = {
+            id(found)
+            for site in inside
+            if (found := self.definition_at.get(site)) is not None
+        }
+        if not enclosing:
+            return definitions
+        return [d for d in definitions if id(d) not in enclosing]
+
+    def why_slow(
+        self, callee: str, inside: tuple[str, ...] | None = None
+    ) -> str | None:
+        """Reason `callee` is non-database work, if it is.
+
+        `inside` is the `path:lineno` of every definition enclosing the call, so
+        a method that delegates to its own name is not judged against itself.
+        """
         direct = _classify_non_db(callee)
         if direct is not None:
             return direct
@@ -422,13 +477,13 @@ class DependencyIndex:
         name = parts[-1]
         if name in self.remote_names:
             return "remote SDK"
-        if not self._name_is_slow(name):
+        if not self._name_is_slow(name, inside):
             return None
         # `None` is filtered before sorting. With the old all-or-nothing rule a
         # mixed name could never reach here, so mixing `str` and `None` in this
         # set was a latent `TypeError` waiting for the first loosening of
         # `_name_is_slow` -- which is exactly the change above.
-        reasons = {d["reason"] for d in self.definitions.get(name, []) if d["reason"]}
+        reasons = {d["reason"] for d in self._candidates(name, inside) if d["reason"]}
         return sorted(reasons)[0] if reasons else None
 
     def _ingest_alias(self, node: ast.Assign) -> None:
@@ -584,12 +639,136 @@ def _is_zero_sleep(call: ast.Call) -> bool:
 SLEEP_CALLS = re.compile(r"(^|\.)sleep$")
 
 
+def _deferred_to_after_commit(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    """Nested functions this one hands to ``uow.after_commit`` rather than awaits.
+
+    The pattern, from `AuthorizationDataService._invalidate_snapshots_after_commit`:
+
+        async def _run() -> None:
+            await invalidate_role_snapshot_cache(...)
+
+        if uow is None:
+            await _run()      # &lt;-- the only inline await
+            return
+        uow.after_commit(_run)
+
+    Read literally, that function awaits a Redis round trip, so every caller of
+    every role mutation inherits it -- 29 sites, all of them code that is
+    already correct.
+
+    The inline branch cannot be a hold, and provably so: it runs only when there
+    is no unit of work, which is exactly when there is no pooled connection to
+    keep. The deferred branch runs after the commit, when the connection is
+    already back. Neither path holds one, so the name must not be marked slow.
+
+    Deliberately narrow, because the failure mode of guessing here is a blind
+    gate: only a *nested* function defined in this body, and only when this body
+    also registers that same name with ``after_commit``.
+    """
+    nested = {
+        child.name
+        for child in ast.iter_child_nodes(node)
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    if not nested:
+        return set()
+    registered: set[str] = set()
+    for child in ast.walk(node):
+        if not (
+            isinstance(child, ast.Call) and _dotted(child.func).endswith("after_commit")
+        ):
+            continue
+        for argument in child.args:
+            if isinstance(argument, ast.Name) and argument.id in nested:
+                registered.add(argument.id)
+    return registered
+
+
+def _released_spans(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[int, int]]:
+    """Line spans in which this function is not holding a pooled connection.
+
+    Several places commit on purpose before a slow call, and say so:
+    `create_auth_config` -- "Nothing is written yet, so this only hands the
+    pooled connection back -- which is the point" -- plus `update_install`,
+    `notification_service.deliver` and `skill_loader._download_text_file`.
+    Without reading statement order every one of those looks like a hold, and so
+    does every caller of them, two frames up.
+
+    Spans rather than a single line, because the real shape is commit, call out,
+    then write: `create_auth_config` commits, negotiates with a tenant-named MCP
+    server, and only then inserts. The network work is genuinely released and
+    the insert genuinely re-acquires, so one boundary cannot describe it.
+
+    Narrow in two ways, both because the failure mode of guessing is a blind gate:
+
+    * Only a top-level statement counts as the commit. One inside `if` or `try`
+      may not run, and a function that sometimes keeps its connection keeps it.
+    * Only an await on a repository / session / uow / outbox receiver counts as
+      re-acquiring -- the same `DB_RECEIVERS` the index already uses to decide
+      what is a query. Treating every non-slow await as a query closed the span
+      immediately and cleared nothing.
+    """
+    spans: list[tuple[int, int]] = []
+    _spans_in_block(node.body, node.end_lineno or node.lineno, spans)
+    return spans
+
+
+def _spans_in_block(
+    statements: list[ast.stmt], block_end: int, spans: list[tuple[int, int]]
+) -> None:
+    """Accumulate released spans for one block, and for any loop body inside it.
+
+    A loop body is descended into and `if`/`try` are not, which is the same
+    distinction stated above rather than a new one: a commit at the top of a
+    loop body runs on **every** iteration, and if the loop does not run then
+    neither does the slow call it was protecting. `DatastoreEventHandler` is the
+    shape -- it commits per schedule, before an LLM call, because one release
+    before the loop would be undone by the first fire row it writes.
+
+    A commit before a loop still spans into it, unchanged: the loop is one
+    statement, and the walk below closes the span if anything in it queries.
+    """
+    open_at: int | None = None
+    for statement in statements:
+        if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+            _spans_in_block(
+                statement.body, statement.end_lineno or statement.lineno, spans
+            )
+        if _is_commit_statement(statement):
+            if open_at is None:
+                open_at = statement.lineno
+            continue
+        if open_at is None:
+            continue
+        if any(
+            isinstance(child, ast.Await)
+            and isinstance(child.value, ast.Call)
+            and _dotted(child.value.func).split(".")[-1] not in COMMIT_CALLS
+            and DB_RECEIVERS.search(_dotted(child.value.func).lower())
+            for child in ast.walk(statement)
+        ):
+            spans.append((open_at, statement.lineno))
+            open_at = None
+    if open_at is not None:
+        spans.append((open_at, block_end))
+
+
+def _inside(line: int, spans: list[tuple[int, int]]) -> bool:
+    return any(start < line < end for start, end in spans)
+
+
 def _awaited_calls(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[set[str], str | None]:
     """Bare names this function awaits, and why it is directly non-DB (if it is).
 
-    Nested function definitions are skipped: their awaits belong to them.
+    Nested function definitions are skipped: their awaits belong to them. A
+    nested function handed to ``after_commit`` is skipped even where the body
+    also awaits it directly -- see `_deferred_to_after_commit`.
 
     Awaits inside a ``connection_released`` block are skipped too, and for the
     same reason propagation exists at all: this index answers "does calling this
@@ -599,6 +778,8 @@ def _awaited_calls(
     """
     awaited: set[str] = set()
     direct: str | None = None
+    deferred = _deferred_to_after_commit(node)
+    released_spans = _released_spans(node)
     stack: list[ast.AST] = list(ast.iter_child_nodes(node))
     while stack:
         current = stack.pop()
@@ -610,10 +791,19 @@ def _awaited_calls(
         ):
             continue
         if isinstance(current, ast.Await) and isinstance(current.value, ast.Call):
+            if _dotted(current.value.func) in deferred:
+                # Registered with `after_commit`; see `_deferred_to_after_commit`.
+                continue
             if _is_zero_sleep(current.value):
                 # A yield to the loop, not a wait -- and the index has to agree
                 # with the visitor about that, or the name stays slow for every
                 # caller while the site itself reports clean.
+                stack.extend(ast.iter_child_nodes(current))
+                continue
+            if _inside(current.lineno, released_spans):
+                # After a top-level commit: the connection is back, so what this
+                # function does next does not hold one and must not mark the name
+                # slow for every caller. See `_commit_release_line`.
                 stack.extend(ast.iter_child_nodes(current))
                 continue
             callee = _dotted(current.value.func)
@@ -685,6 +875,7 @@ def _hands_the_connection_back(
         if isinstance(call, ast.Call) and _dotted(call.func).split(".")[-1] in (
             "_release_after_authorization",
             "release_after_authorization",
+            "commit_now",
         ):
             return True
         if isinstance(statement, ast.AsyncWith) and any(
@@ -694,6 +885,34 @@ def _hands_the_connection_back(
         ):
             return True
     return False
+
+
+#: Calls that unconditionally end the transaction. `commit_now` wraps the
+#: `session.info` lookup a service has to do to reach its unit of work; see
+#: `app/core/infrastructure/db/session_uow.py`.
+COMMIT_CALLS = frozenset({"commit", "commit_now"})
+
+
+def _is_commit_statement(statement: ast.stmt) -> bool:
+    """A bare ``await <something>.commit()`` at statement level.
+
+    Only a bare statement: a commit inside an `if` or a `try` may not run, and a
+    block that sometimes keeps its connection keeps it as far as this checker is
+    concerned. Same rule `_hands_the_connection_back` applies for the same reason.
+
+    `commit_now` counts as well. A service built from a session has to ask the
+    session for its unit of work, so the commit is unavoidably written as "if
+    there is one" -- and the only case it skips is the one where there is no
+    pooled connection to hand back. Naming the helper is how that is asserted in
+    one place instead of being re-derived at every call site; the same device
+    `_hands_the_connection_back` uses for `_release_after_authorization`.
+    """
+    if not isinstance(statement, ast.Expr):
+        return False
+    value = statement.value
+    if not isinstance(value, ast.Await) or not isinstance(value.value, ast.Call):
+        return False
+    return _dotted(value.value.func).split(".")[-1] in COMMIT_CALLS
 
 
 @dataclass(frozen=True)
@@ -765,6 +984,22 @@ def _is_context_manager(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     )
 
 
+def _nested_definitions(path: str, node: ast.AST) -> dict[str, str]:
+    """Bare names bound by a `def` anywhere inside `node`, mapped to their site.
+
+    Walked rather than taken from `node.body` so a closure defined inside an
+    `if` or a `with` is found too; nothing here cares where it was written, only
+    that the name is unambiguous within this function.
+    """
+    found: dict[str, str] = {}
+    for child in ast.walk(node):
+        if child is node:
+            continue
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found[child.name] = f"{path}:{child.lineno}"
+    return found
+
+
 class SessionScopeChecker(ast.NodeVisitor):
     def __init__(self, path: str, index: DependencyIndex) -> None:
         self.path = path
@@ -772,6 +1007,13 @@ class SessionScopeChecker(ast.NodeVisitor):
         self._openers = frozenset(index.session_cms)
         self.violations: list[Violation] = []
         self._scope: list[str] = []
+        # `path:lineno` of every enclosing def, so `why_slow` can leave them
+        # out of their own verdict.
+        self._definition_sites: tuple[str, ...] = ()
+        # Bare names defined as nested `def`s in scope, mapped to their site. A
+        # call to one of these is not ambiguous and must not be judged by the
+        # whole-tree ratio for its name.
+        self._local_definitions: dict[str, str] = {}
         self._session_depth = 0
         self._in_context_manager = False
         self._request_scoped = False
@@ -788,9 +1030,18 @@ class SessionScopeChecker(ast.NodeVisitor):
         self._request_scoped = request_scoped
         outer_cm = self._in_context_manager
         self._in_context_manager = _is_context_manager(node)
+        outer_sites = self._definition_sites
+        self._definition_sites = (*outer_sites, f"{self.path}:{node.lineno}")
+        outer_locals = self._local_definitions
+        self._local_definitions = {
+            **outer_locals,
+            **_nested_definitions(self.path, node),
+        }
         self._scope.append(node.name)
         self.generic_visit(node)
         self._scope.pop()
+        self._local_definitions = outer_locals
+        self._definition_sites = outer_sites
         self._in_context_manager = outer_cm
         self._request_scoped = outer_request
         self._session_depth = outer_depth
@@ -802,6 +1053,67 @@ class SessionScopeChecker(ast.NodeVisitor):
         self._scope.append(node.name)
         self.generic_visit(node)
         self._scope.pop()
+
+    def _visit_block(self, statements: list[ast.stmt]) -> None:
+        """Walk statements in order, honouring a commit that hands the connection back.
+
+        `await uow.commit()` ends the transaction and returns the connection to
+        the pool, and several places here do exactly that on purpose before a
+        slow call. `create_auth_config` and `update_install` both commit with a
+        comment saying the network work must not be waited on holding one, and
+        `notification_service` commits immediately before it sends. Read without
+        statement order those are indistinguishable from a hold, and reporting
+        them would mean either baselining correct code or "fixing" it into
+        something worse.
+
+        The release lasts only until something queries again. Any await the
+        index does not consider slow is treated as re-acquiring, because in this
+        tree a non-slow await inside a session block is a query. Without that,
+        the gate would go blind after the first commit in every function -- which
+        is a far more expensive mistake than the one it is fixing.
+        """
+        outer = self._session_depth
+        released = False
+        for statement in statements:
+            if self._session_depth and _is_commit_statement(statement):
+                self._session_depth = 0
+                released = True
+            elif released and self._reacquires(statement):
+                self._session_depth = outer
+                released = False
+            self.visit(statement)
+        self._session_depth = outer
+
+    def _reacquires(self, statement: ast.stmt) -> bool:
+        """Whether this statement awaits something that is not slow -- i.e. a query."""
+        for child in ast.walk(statement):
+            if not (isinstance(child, ast.Await) and isinstance(child.value, ast.Call)):
+                continue
+            callee = _dotted(child.value.func)
+            if callee.split(".")[-1] in COMMIT_CALLS:
+                continue
+            if DB_RECEIVERS.search(callee.lower()):
+                return True
+        return False
+
+    def _visit_loop(self, node: ast.For | ast.AsyncFor | ast.While) -> None:
+        """A loop body is a block, so a commit at the top of it releases.
+
+        Without this the visitor went blind at exactly the shape that needs a
+        per-iteration release: a single commit before the loop is undone by the
+        first row the loop writes, so the commit has to be inside -- and it then
+        runs on every iteration, which is a stronger guarantee than the
+        top-level case, not a weaker one. `if`/`try` are still not descended
+        into; those genuinely may not run.
+        """
+        self.visit(
+            node.iter if isinstance(node, (ast.For, ast.AsyncFor)) else node.test
+        )
+        self._visit_block(node.body)
+        self._visit_block(node.orelse)
+
+    visit_For = _visit_loop
+    visit_While = _visit_loop
 
     def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
         if any(
@@ -824,13 +1136,28 @@ class SessionScopeChecker(ast.NodeVisitor):
                 node.lineno, "nested-session", _dotted(node.items[0].context_expr)
             )
         self._session_depth += 1
-        for child in node.body:
-            self.visit(child)
+        self._visit_block(node.body)
         self._session_depth -= 1
         # The context managers themselves are evaluated outside the block.
         for item in node.items:
             if item.optional_vars is not None:
                 self.visit(item.optional_vars)
+
+    def _label_for(self, callee: str) -> str | None:
+        """Why `callee` is slow, preferring a definition that is right here.
+
+        `await run(scoped_uow)` in `_retry_failed_conversation` calls the
+        closure three lines above it. The name `run` has 21 definitions in this
+        tree and 11 of them are slow, so the ratio said "job enqueue" and the
+        gate reported a function whose only callee is local and fast. A nested
+        `def` in scope is not an ambiguous name -- there is exactly one thing it
+        can mean -- so it is read directly instead of being voted on.
+        """
+        site = self._local_definitions.get(callee)
+        if site is not None:
+            definition = self.index.definition_at.get(site)
+            return definition["reason"] if definition else None
+        return self.index.why_slow(callee, self._definition_sites)
 
     def visit_Await(self, node: ast.Await) -> None:
         if (
@@ -839,7 +1166,7 @@ class SessionScopeChecker(ast.NodeVisitor):
             and not _is_zero_sleep(node.value)
         ):
             callee = _dotted(node.value.func)
-            label = self.index.why_slow(callee)
+            label = self._label_for(callee)
             if label is not None:
                 self._record(node.lineno, "non-db-await", f"{label}: {callee}")
         self.generic_visit(node)
@@ -861,10 +1188,12 @@ class SessionScopeChecker(ast.NodeVisitor):
             callee = _dotted(
                 node.iter.func if isinstance(node.iter, ast.Call) else node.iter
             )
-            label = self.index.why_slow(callee)
+            label = self.index.why_slow(callee, self._definition_sites)
             if label is not None:
                 self._record(node.lineno, "async-for-non-db", f"{label}: {callee}")
-        self.generic_visit(node)
+        # The body is a block, exactly as in `_visit_loop`: an `async for` that
+        # commits per iteration releases per iteration.
+        self._visit_loop(node)
 
     def visit_Yield(self, node: ast.Yield) -> None:
         self._check_yield(node)
@@ -900,8 +1229,8 @@ def collect(paths: list[Path]) -> list[Violation]:
     # `Depends` graphs cross files, so the index is built over the whole tree
     # before anything is judged.
     index = DependencyIndex()
-    for _, tree in parsed:
-        index.ingest(tree)
+    for path, tree in parsed:
+        index.ingest(tree, str(path.relative_to(ROOT)))
     index.expand_session_context_managers()
     index.resolve()
     index.resolve_slow()
