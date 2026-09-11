@@ -573,6 +573,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.mobile_verification.whatsapp.rejected': EventSpec('info', frozenset({'reason'})),
     'identity.mobile_verification.whatsapp.started': EventSpec('info', frozenset({'user_id'})),
     'identity.mobile_verification.whatsapp.succeeded': EventSpec('info', frozenset({'user_id'})),
+    'identity.querier_client.install_failed.degraded': EventSpec('warning', frozenset()),
     'identity.session.access_token_expiry_implausible.degraded': EventSpec('warning', frozenset({'expired_by_seconds'})),
     'infrastructure.admin.outbox_event_replay_requested.observed': EventSpec('debug', frozenset({'event_id'})),
     'infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic': EventSpec('debug', frozenset()),

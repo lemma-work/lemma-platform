@@ -256,6 +256,9 @@ async def lifespan(app: FastAPI):
             # does not leak sockets into the next process.
             from app.core.net.http_client import close_shared_http_client
             from app.core.net.impersonating_client import close_impersonating_client
+            from app.modules.identity.infrastructure.supertokens_auth.querier_client import (
+                close_shared_querier_client,
+            )
             from app.modules.agent.services.runtime_model_factory import (
                 close_agent_provider_clients,
             )
@@ -264,6 +267,8 @@ async def lifespan(app: FastAPI):
             )
 
             await close_shared_http_client()
+            # The client every SuperTokens verification goes through.
+            await close_shared_querier_client()
             # The separate libcurl session `web_fetch` reads pages through.
             await close_impersonating_client()
             # Per-endpoint LLM provider pools, kept alive across runs for
