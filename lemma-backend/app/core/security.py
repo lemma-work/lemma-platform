@@ -188,9 +188,11 @@ EXCLUDED_PATHS = (
     # it. This URL is handed to a browser that has no Lemma session and never
     # will -- requiring one 401s the only caller the route has.
     "/workspace-ports/",
-    # The browser stream websocket authenticates its own handshake (cookie or
-    # bearer), because the global dependency cannot see an upgrade.
-    "/workspace/apps/browser/stream",
+    # The browser view websocket authenticates its own handshake (cookie,
+    # bearer, or the access_token query parameter a browser must use because it
+    # cannot set headers on an upgrade), because the global dependency cannot
+    # see an upgrade at all.
+    "/workspace/browser/view",
     "/billing/payment",  # payment result pages (success/cancel) — no session needed post-redirect
     "/billing/webhooks",  # payment-provider webhooks (Dodo) — handler verifies the HMAC signature itself; delivered server-to-server with no session
     "/connectors/connect-requests/oauth/callback",  # OAuth callback - secured by state parameter

@@ -9,6 +9,9 @@ def _routers():
     from app.modules.workspace.api.controllers.browser_controller import (
         router as browser,
     )
+    from app.modules.workspace.api.controllers.browser_view_controller import (
+        router as browser_view,
+    )
     from app.modules.workspace.api.controllers.files_controller import (
         router as files,
     )
@@ -16,7 +19,7 @@ def _routers():
         router as port_proxy,
     )
 
-    return [browser, files, port_proxy]
+    return [browser, browser_view, files, port_proxy]
 
 
 def _register_streaq() -> None:

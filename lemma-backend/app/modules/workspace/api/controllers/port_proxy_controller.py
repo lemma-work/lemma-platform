@@ -28,10 +28,8 @@ import httpx
 import websockets
 from fastapi import APIRouter, Request, Response, WebSocket, status
 from fastapi.responses import StreamingResponse
-from starlette.websockets import WebSocketDisconnect
 
 from app.core.log.log import get_logger
-from app.core.request_context import create_inherited_task
 
 from app.core.config import settings
 from app.modules.workspace.config import workspace_settings
@@ -39,9 +37,11 @@ from app.modules.workspace.providers.base import (
     ProviderCapability,
     ProviderGone,
     ProviderInstance,
+    SandboxEndpoint,
     require_capability,
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
+from app.modules.workspace.services.ws_bridge import bridge, connect_upstream
 from app.modules.workspace.services.port_access import (
     PortAccessInvalid,
     PortAccessSigner,
@@ -95,8 +95,12 @@ def _frame_ancestors() -> str:
     return " ".join(sorted(origin for origin in origins if origin))
 
 
-async def _resolve_target(token: str) -> str | None:
-    """The sandbox's base URL for a signed grant, or None when it does not hold.
+async def _resolve_target(token: str) -> SandboxEndpoint | None:
+    """Where a signed grant points, or None when it does not hold.
+
+    Returns the endpoint rather than a bare URL because a fabric's door may need
+    a header -- an E2B traffic token, a preview proxy's own -- and a caller that
+    only got a string had nowhere to put it.
 
     Returns rather than raises because the two halves report a refusal
     differently — an HTTP status on one side, a close code on the other — and
@@ -141,8 +145,8 @@ async def proxy_sandbox_websocket(
     forwarded — which here means the handshake is opened with headers of our
     own rather than the caller's.
     """
-    target = await _resolve_target(token)
-    if target is None:
+    endpoint = await _resolve_target(token)
+    if endpoint is None:
         # Refused before accepting, so a caller without a valid grant never gets
         # an open socket. Expired and forged are indistinguishable, as on the
         # request half.
@@ -150,9 +154,9 @@ async def proxy_sandbox_websocket(
         return
 
     upstream_url = (
-        httpx.URL(target)
+        httpx.URL(endpoint.url)
         .copy_with(path="/" + quote(path.lstrip("/"), safe="/"))
-        .copy_with(scheme="wss" if httpx.URL(target).scheme == "https" else "ws")
+        .copy_with(scheme="wss" if httpx.URL(endpoint.url).scheme == "https" else "ws")
     )
     query = websocket.url.query
     upstream_target = f"{upstream_url}{'?' + query if query else ''}"
@@ -161,72 +165,20 @@ async def proxy_sandbox_websocket(
         subprotocol=websocket.headers.get("sec-websocket-protocol") or None
     )
     try:
-        async with websockets.connect(
-            upstream_target,
-            open_timeout=15,
-            # The sandbox is on the other side of a proxy that may idle it out;
-            # a keepalive is what tells us the far end went away rather than
-            # waiting forever on a socket nobody will write to again.
-            ping_interval=20,
-            ping_timeout=20,
-            max_size=None,
+        # Bounded frames, a keepalive, and whatever the fabric's door needs --
+        # all decided once in `ws_bridge` so this path and the browser view
+        # cannot drift. `max_size=None` here previously meant one frame from a
+        # process the agent controls was buffered whole in the API's memory.
+        async with await connect_upstream(
+            upstream_target, headers=endpoint.headers
         ) as upstream:
-            await _pump(websocket, upstream)
+            await bridge(websocket, upstream, name="workspace.port_proxy")
     except OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError:
         logger.warning(
             "workspace.port_proxy.upstream_websocket.degraded", exc_info=True
         )
         with contextlib.suppress(RuntimeError):
             await websocket.close(code=1011)
-
-
-async def _pump(client: WebSocket, upstream) -> None:
-    """Copy frames both ways until either end stops.
-
-    Two tasks rather than one loop, because a stream that is only read when the
-    other side speaks is not a stream: a browser view sends frames continuously
-    while the viewer sends nothing at all, and interleaving the two reads would
-    stall it behind an input that never comes.
-    """
-
-    async def to_upstream() -> None:
-        while True:
-            message = await client.receive()
-            if message["type"] == "websocket.disconnect":
-                return
-            if (text := message.get("text")) is not None:
-                await upstream.send(text)
-            elif (data := message.get("bytes")) is not None:
-                await upstream.send(data)
-
-    async def to_client() -> None:
-        async for frame in upstream:
-            if isinstance(frame, str):
-                await client.send_text(frame)
-            else:
-                await client.send_bytes(frame)
-
-    # Inherited, not detached: these two carry frames for the connection that
-    # spawned them and die with it, so they belong to its operation.
-    tasks = [
-        create_inherited_task(to_upstream(), name="workspace.port_proxy.to_upstream"),
-        create_inherited_task(to_client(), name="workspace.port_proxy.to_client"),
-    ]
-    try:
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        for task in done:
-            with contextlib.suppress(
-                WebSocketDisconnect,
-                websockets.exceptions.ConnectionClosed,
-                asyncio.CancelledError,
-            ):
-                task.result()
-    finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # Two paths, one handler. The grant's own URL ends at the token with a trailing

@@ -157,6 +157,22 @@ class SandboxService(SandboxVolumeMixin):
             storage_generation=sandbox.storage_generation,
         )
 
+    def reach(self, handle: SandboxHandle) -> tuple[object, ProviderInstance]:
+        """The provider and the instance to address, for reaching into a sandbox.
+
+        A seam rather than a private: `reach_port` and `deliver_secret` are the
+        two provider calls a feature outside this file legitimately needs -- the
+        browser relay is reached that way on every fabric -- and the alternative
+        was each of them reading `service._provider` and building the instance
+        by hand, which is how the provider's shape leaks into five places at
+        once.
+        """
+        return self._provider, ProviderInstance(
+            provider_id=handle.provider_id,
+            name=handle.provider_id,
+            running=True,
+        )
+
     # ------------------------------------------------------------------
     # Ensure
     # ------------------------------------------------------------------
