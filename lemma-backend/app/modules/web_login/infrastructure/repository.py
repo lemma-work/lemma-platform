@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import get_secret_cipher
 from app.core.crypto.ports import SecretCipher
+from app.modules.web_login.services.scope import BrowserState
 from app.modules.web_login.domain.entities import (
     WebLogin,
     WebLoginSecret,
@@ -200,7 +201,7 @@ class WebLoginRepository:
         ).scalar_one_or_none()
 
 
-def _secret_to_json(secret: WebLoginSecret) -> dict[str, list[dict]]:
+def _secret_to_json(secret: WebLoginSecret) -> BrowserState:
     return {"cookies": secret.cookies, "origins": secret.origins}
 
 

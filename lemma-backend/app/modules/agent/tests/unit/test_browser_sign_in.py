@@ -74,8 +74,10 @@ def patched(monkeypatch):
             "sign_in_internal",
             module.sign_in_internal,
         )
+        # Patched where the tool looks it up -- through the published
+        # contract, which is the only way another module may reach it.
         monkeypatch.setattr(
-            "app.modules.web_login.services.sign_in.SignInService",
+            "app.modules.web_login.contracts.SignInService",
             lambda *a, **k: service,
         )
         monkeypatch.setattr(

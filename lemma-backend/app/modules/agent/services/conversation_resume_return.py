@@ -205,9 +205,7 @@ class ResumeToolReturnBuilder:
         kept, and the agent is told exactly that.
         """
         from app.modules.agent.tools.browser.models import BrowserSignInResponse
-        from app.modules.web_login.infrastructure.sign_in_repository import (
-            SignInRequestRepository,
-        )
+        from app.modules.web_login.contracts import SignInRequestRepository
 
         origin = str(tool_args.get("origin") or "")
 

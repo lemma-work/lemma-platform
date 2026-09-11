@@ -435,10 +435,17 @@ class DockerOpsMixin:
         )
         if inspected is None:
             raise ProviderGone(f"sandbox container {instance.provider_id} is gone")
+        # The archive carries the directory as well as the file, and is
+        # unpacked one level up. `put_archive` refuses a destination that does
+        # not exist -- and the directories credentials go into are made by the
+        # processes that read them, which have not necessarily run yet. Letting
+        # tar create it is what makes delivery work on a container that has
+        # only just started.
+        parent, _, leaf = directory.rpartition("/")
         await self._engine.put_archive(
             inspected.container_id,
-            directory or "/",
-            _one_file_archive(name, value),
+            parent or "/",
+            _one_file_archive(name, value, directory=leaf or None),
             deadline_at=deadline_at,
         )
 
@@ -447,7 +454,9 @@ def _token_archive(token: str) -> bytes:
     return _one_file_archive("token", token.encode())
 
 
-def _one_file_archive(name: str, payload: bytes) -> bytes:
+def _one_file_archive(
+    name: str, payload: bytes, *, directory: str | None = None
+) -> bytes:
     """A tar holding one 0600 file owned by the sandbox user.
 
     `put_archive` is the only way to place a file in a container without
@@ -457,7 +466,17 @@ def _one_file_archive(name: str, payload: bytes) -> bytes:
     """
     buffer = BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        info = tarfile.TarInfo(name=name)
+        if directory:
+            # 0700: the directory a credential sits in is no more readable
+            # than the credential.
+            folder = tarfile.TarInfo(name=directory)
+            folder.type = tarfile.DIRTYPE
+            folder.mode = 0o700
+            folder.mtime = 0
+            folder.uid = 10001
+            folder.gid = 10001
+            archive.addfile(folder)
+        info = tarfile.TarInfo(name=f"{directory}/{name}" if directory else name)
         info.size = len(payload)
         info.mode = 0o600
         info.mtime = 0

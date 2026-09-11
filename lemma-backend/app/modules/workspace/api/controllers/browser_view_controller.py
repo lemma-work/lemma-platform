@@ -17,6 +17,8 @@ session decides whose browser this is.
 
 from __future__ import annotations
 
+import httpx
+import websockets
 from fastapi import APIRouter, Query, WebSocket, status
 from pydantic import BaseModel
 from supertokens_python.recipe.session.asyncio import (
@@ -26,6 +28,7 @@ from supertokens_python.recipe.session.asyncio import (
 from app.core.api.dependencies import CurrentUser
 from app.core.config import settings
 from app.core.log.log import get_logger
+from app.modules.workspace.providers.docker_engine import DockerEngineError
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
 )
@@ -152,6 +155,14 @@ async def browser_view(
     try:
         user_id = await _resolve_user_id(websocket)
     except Exception:
+        # Broad because the session library raises several unrelated types for
+        # the same fact -- expired, malformed, revoked -- and the answer to all
+        # of them is the same close code. Logged with the traceback so a
+        # genuine failure in that library is not read as somebody's token
+        # having expired.
+        logger.warning(
+            "workspace.browser_view.session_unreadable.degraded", exc_info=True
+        )
         await websocket.close(code=CLOSE_UNAUTHENTICATED)
         return
 
@@ -176,8 +187,15 @@ async def browser_view(
         await websocket.close(code=CLOSE_NO_BROWSER)
         await service.close()
         return
-    except Exception:
-        logger.warning("workspace.browser_view.relay_absent.degraded", exc_info=True)
+    except (OSError, httpx.HTTPError, DockerEngineError) as exc:
+        # An image built before the relay existed, or a sandbox that went away
+        # between resolving it and reaching it. Named rather than broad: the
+        # remedy is "restart this computer", and anything else reaching here is
+        # a bug that should surface as one.
+        logger.warning(
+            "workspace.browser_view.relay_absent.degraded",
+            error_type=type(exc).__name__,
+        )
         await websocket.close(code=CLOSE_RELAY_ABSENT)
         await service.close()
         return
@@ -186,8 +204,13 @@ async def browser_view(
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
             await bridge(websocket, upstream, name="workspace.browser_view")
-    except Exception:
-        logger.warning("workspace.browser_view.upstream.degraded", exc_info=True)
+    except (OSError, websockets.exceptions.WebSocketException) as exc:
+        # The sandbox side dropped. Not a bug on this side, and the person is
+        # told the connection dropped rather than that something failed.
+        logger.warning(
+            "workspace.browser_view.upstream.degraded", error_type=type(exc).__name__
+        )
+        del exc
         try:
             await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
         except RuntimeError:

@@ -24,8 +24,16 @@ fi
 mkdir -p /tmp/lemma-relay
 chmod 700 /tmp/lemma-relay
 
+# `setsid`, not just `nohup`. The relay is usually started by an exec the
+# backend makes, and an exec's process group is torn down when the operation
+# that owns it finishes -- so a merely-backgrounded relay is killed moments
+# after it starts, which shows up as a live view that drops with "service
+# restart" the instant it begins working. A new session detaches it from
+# whatever started it.
+#
 # PYTHONPATH, not the interpreter's own path: /app is where the image puts the
 # runtime package and it is not on sys.path for an arbitrary interpreter.
 LEMMA_BROWSER_RELAY_PORT="$PORT" PYTHONPATH="/app${PYTHONPATH:+:$PYTHONPATH}" \
-  nohup "$PYTHON" -m sandbox_runtime.browser_relay.server \
-  >/tmp/lemma-browser-relay.log 2>&1 &
+  setsid nohup "$PYTHON" -m sandbox_runtime.browser_relay.server \
+  >/tmp/lemma-browser-relay.log 2>&1 < /dev/null &
+disown 2>/dev/null || true

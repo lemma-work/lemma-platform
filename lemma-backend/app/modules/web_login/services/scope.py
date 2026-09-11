@@ -30,16 +30,18 @@ from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from app.modules.workspace.contracts.browser import (
+    BrowserCookie,
+    BrowserOrigin,
+    BrowserState,
+    host_of,
+)
+
 #: Cookie and storage entries are bounded so one site cannot make a saved login
-#: into a row nothing can read back.
+#: into a row nothing can read back. A policy number, which is why it lives
+#: here rather than with the shape.
 MAX_COOKIES = 200
 MAX_ORIGINS = 20
-
-
-def host_of(origin: str) -> str:
-    """The bare host of a normalized origin, without any port."""
-    parsed = urlparse(origin if "://" in origin else f"https://{origin}")
-    return (parsed.hostname or "").lower()
 
 
 def domain_matches(cookie_domain: str, host: str) -> bool:
@@ -65,7 +67,9 @@ def domain_matches(cookie_domain: str, host: str) -> bool:
     return subject.endswith(f".{candidate}")
 
 
-def scope_state(state: dict, *, origin: str) -> dict:
+def scope_state(
+    state: BrowserState | dict[str, object], *, origin: str
+) -> BrowserState:
     """A captured browser state, narrowed to one site.
 
     Returns the same shape the browser gave, so it can be handed straight back
@@ -97,7 +101,7 @@ def scope_state(state: dict, *, origin: str) -> dict:
     return {"cookies": cookies, "origins": origins}
 
 
-def looks_signed_in(state: dict, *, origin: str) -> bool:
+def looks_signed_in(state: BrowserState | dict[str, object], *, origin: str) -> bool:
     """Whether a scoped capture actually carries anything for this site.
 
     A person who pressed "I'm signed in" on a page they had not signed in to
@@ -120,12 +124,15 @@ def _storage_key(origin: str) -> str:
     return f"{scheme}://{host}{port}"
 
 
-def _as_list(value: object) -> list:
+def _as_list(value: object) -> list[object]:
     return value if isinstance(value, list) else []
 
 
 __all__ = [
     "MAX_COOKIES",
+    "BrowserCookie",
+    "BrowserOrigin",
+    "BrowserState",
     "MAX_ORIGINS",
     "domain_matches",
     "host_of",

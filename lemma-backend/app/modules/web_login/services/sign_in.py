@@ -34,7 +34,12 @@ from app.modules.web_login.infrastructure.sign_in_repository import (
 )
 from app.modules.web_login.services.origin import normalize_origin
 from app.modules.web_login.services.resolution import resolve_owner
-from app.modules.web_login.services.scope import host_of, looks_signed_in, scope_state
+from app.modules.web_login.services.scope import (
+    BrowserState,
+    host_of,
+    looks_signed_in,
+    scope_state,
+)
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
 )
@@ -192,7 +197,9 @@ class SignInService:
         detail: str | None = None
 
         try:
-            state = await self._browser.save_login_state(user_id, domain=domain)
+            state: (
+                BrowserState | dict[str, object]
+            ) = await self._browser.save_login_state(user_id, domain=domain)
         except (BrowserRelayUnavailable, SandboxCapabilityUnsupported) as exc:
             state = {}
             detail = f"the browser could not be read: {exc}"

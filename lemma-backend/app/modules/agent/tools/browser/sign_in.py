@@ -25,7 +25,7 @@ from app.modules.agent.tools.browser.models import (
 )
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_errors import AgentInputRequired
-from app.modules.web_login.services.origin import InvalidOrigin, normalize_origin
+from app.modules.web_login.contracts import InvalidOrigin, normalize_origin
 
 logger = get_logger(__name__)
 
@@ -40,7 +40,7 @@ async def sign_in_internal(
 ) -> BrowserSignInResponse:
     """Try a saved login; ask the person only if there is not a working one."""
     from app.core.api.dependencies import get_uow_factory
-    from app.modules.web_login.services.sign_in import SignInService
+    from app.modules.web_login.contracts import SignInService
 
     try:
         site = normalize_origin(request.origin)

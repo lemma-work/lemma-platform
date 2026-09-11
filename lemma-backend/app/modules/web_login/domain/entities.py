@@ -22,6 +22,8 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
+from app.modules.web_login.services.scope import BrowserCookie, BrowserOrigin
+
 
 class WebLoginStatus(StrEnum):
     """Whether the stored session is believed to still work.
@@ -52,8 +54,8 @@ class WebLoginSecret:
 
     #: Cookies the site would receive, and local storage for exactly its origin.
     #: Narrowed by `services/scope.py` before it ever reaches this shape.
-    cookies: list[dict]
-    origins: list[dict]
+    cookies: list[BrowserCookie]
+    origins: list[BrowserOrigin]
 
     def is_empty(self) -> bool:
         return not self.cookies and not self.origins

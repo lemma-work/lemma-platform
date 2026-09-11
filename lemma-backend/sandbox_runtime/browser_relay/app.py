@@ -79,6 +79,9 @@ CLOSE_UPSTREAM_GONE = 1011
 
 class EnsureRequest(BaseModel):
     session: str | None = None
+    #: The site this is for. Decides which browser session is used, so that a
+    #: sign-in happens in the session its capture will later be read from.
+    domain: str | None = None
     #: Where the person is meant to end up. Given when a browser is being
     #: started for somebody's arrival: a fresh browser opens blank, and a blank
     #: page under a heading naming a site is how the first version of this
@@ -186,10 +189,10 @@ def create_app() -> FastAPI:
         somebody is about to be shown this browser, and both "is it up" and "is
         it on the site we told them about" have to be true before they arrive.
         """
-        session = _session_name(request.session, None)
+        session = _session_name(request.session, request.domain)
         started = False
         try:
-            await live_port()
+            await live_port(session)
         except BrowserNotRunning:
             started = True
 
@@ -251,7 +254,7 @@ def create_app() -> FastAPI:
 
         session_name = session or DEFAULT_SESSION
         try:
-            port = await live_port()
+            port = await live_port(session_name)
             target_id = target or _first_target_id(await page_targets(port=port))
         except BrowserNotRunning:
             await websocket.close(code=CLOSE_NO_BROWSER)

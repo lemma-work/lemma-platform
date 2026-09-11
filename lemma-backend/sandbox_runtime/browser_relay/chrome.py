@@ -34,6 +34,7 @@ import asyncio
 from contextlib import suppress
 import json
 import logging
+import os
 from pathlib import Path
 import re
 
@@ -42,6 +43,41 @@ import httpx
 #: Chrome writes the port here on launch; the second line is the browser's own
 #: WebSocket path, which is not what a page-level client wants.
 _ACTIVE_PORT_FILE = Path("/tmp/lemma-browser/profile/DevToolsActivePort")
+
+#: Where the image points every browser by default. One directory, so two
+#: browsers cannot both use it.
+_DEFAULT_PROFILE = "/tmp/lemma-browser/profile"
+
+#: The session the image's own tooling uses, and the one that owns the default
+#: profile directory.
+DEFAULT_SESSION = os.environ.get("AGENT_BROWSER_SESSION", "workspace")
+
+
+def profile_for_session(session: str | None) -> str | None:
+    """The profile directory a session's browser should use, if not the default.
+
+    A session is a whole separate browser, and a browser needs a profile
+    directory of its own -- Chrome locks the one it opens. The image points
+    `AGENT_BROWSER_PROFILE` at a single path for every session, so a second
+    session started without this exits immediately, before writing a port, and
+    reports only "Chrome exited early". Which is exactly what a sign-in looked
+    like the first time the whole flow was run for real.
+    """
+    if not session or session == DEFAULT_SESSION:
+        return None
+    return f"{_DEFAULT_PROFILE}-{session}"
+
+
+def active_port_file(session: str | None = None) -> Path:
+    """Where a session's browser records its port.
+
+    Inside the profile, so it moves with it. A session-aware profile and a
+    fixed port file would mean reading the *default* browser's port and
+    attaching a viewer to the wrong browser entirely.
+    """
+    profile = profile_for_session(session)
+    return Path(profile) / "DevToolsActivePort" if profile else _ACTIVE_PORT_FILE
+
 
 #: What `agent-browser get cdp-url` prints. Only the port is wanted: the rest of
 #: that URL addresses the *browser* target, and a viewer wants a page.
@@ -95,18 +131,24 @@ def agent_browser_argv(*args: str, session: str | None = None) -> list[str]:
     case in a unit test with a stub on PATH and never in the shipped image.
     """
     executable = _AGENT_BROWSER if Path(_AGENT_BROWSER).exists() else "agent-browser"
-    prefix = ["--session", session] if session else []
+    prefix: list[str] = []
+    if session:
+        prefix += ["--session", session]
+        profile = profile_for_session(session)
+        if profile:
+            # Without its own profile the second browser cannot start at all.
+            prefix += ["--profile", profile]
     return [executable, *prefix, *args]
 
 
-def recorded_port() -> int:
+def recorded_port(session: str | None = None) -> int:
     """The port Chrome last recorded, which it may well have left behind.
 
     Never use this without probing it -- see the module docstring. It is public
     only because "what does the file claim" is worth being able to ask.
     """
     try:
-        first_line = _ACTIVE_PORT_FILE.read_text().splitlines()[0].strip()
+        first_line = active_port_file(session).read_text().splitlines()[0].strip()
         return int(first_line)
     except (OSError, IndexError, ValueError) as exc:
         raise BrowserNotRunning("the browser is not running") from exc
@@ -129,14 +171,14 @@ async def _answers_on(port: int) -> bool:
     return True
 
 
-async def live_port() -> int:
+async def live_port(session: str | None = None) -> int:
     """Where Chrome is listening *now*, without starting it.
 
     This is the ambient answer: a workspace whose browser has been shed for
     idleness or memory is the ordinary resting state, and asking to look at it
     should not conjure one.
     """
-    port = recorded_port()
+    port = recorded_port(session)
     if not await _answers_on(port):
         raise BrowserNotRunning("the browser is not running")
     return port

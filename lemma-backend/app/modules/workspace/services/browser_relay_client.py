@@ -12,6 +12,8 @@ idempotent and there is no per-sandbox secret to keep in a table and rotate.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
@@ -104,7 +106,7 @@ class BrowserRelayClient:
         method: str,
         path: str,
         *,
-        json_body: dict | None = None,
+        json_body: dict[str, object] | None = None,
         timeout: float = _QUICK_TIMEOUT_SECONDS,
     ) -> httpx.Response:
         endpoint = await self._endpoint(deadline_seconds=timeout)
@@ -125,18 +127,73 @@ class BrowserRelayClient:
                 f"the browser relay did not answer: {type(exc).__name__}"
             ) from exc
 
-    async def health(self) -> str:
-        """`running`, `stopped`, or raises if the relay itself is not there."""
-        response = await self._request("GET", "/health")
+    async def health(self, *, start: bool = False) -> str:
+        """`running`, `stopped`, or raises if the relay itself is not there.
+
+        `start` runs the relay's own start script first if nothing answers.
+        Through `start_process`, which every provider implements -- so the
+        same one call brings the relay up on Docker's runtime, on E2B's SDK
+        and in the desktop guest, with no per-fabric branch and no start
+        command baked into an image that has none.
+        """
+        try:
+            response = await self._request("GET", "/health")
+        except BrowserRelayUnavailable:
+            if not start:
+                raise
+            await self.ensure_running()
+            response = await self._request("GET", "/health")
         if response.status_code != 200:
             raise BrowserRelayUnavailable(
                 f"the browser relay answered {response.status_code}"
             )
         return str(response.json().get("chrome", "stopped"))
 
+    async def ensure_running(self) -> None:
+        """Start the relay process, and wait for it to answer.
+
+        Started on demand rather than with the sandbox because it is only
+        wanted by somebody looking at a browser, and a workspace that never
+        opens a page should not carry the process.
+        """
+        from uuid import uuid4
+
+        from sandbox_runtime.protocol import StartProcessRequest
+
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=60)
+        await self._provider.start_process(
+            self._instance,
+            StartProcessRequest(
+                operation_id=uuid4(),
+                shell_command="start-browser-relay",
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=4096,
+                deadline_at=deadline,
+            ),
+            deadline_at=deadline,
+        )
+
+        # uvicorn binds in well under a second; this bound is for a container
+        # still finding its feet, not for a healthy start.
+        for _ in range(40):
+            await asyncio.sleep(0.25)
+            with suppress(BrowserRelayUnavailable):
+                response = await self._request("GET", "/health")
+                if response.status_code == 200:
+                    return
+        raise BrowserRelayUnavailable("the browser relay did not start")
+
     async def ensure_browser(
-        self, *, origin: str | None = None, session: str | None = None
-    ) -> dict:
+        self,
+        *,
+        origin: str | None = None,
+        session: str | None = None,
+        domain: str | None = None,
+    ) -> dict[str, object]:
+        await self.health(start=True)
         """Start the browser if needed, put it on `origin`, and say which page.
 
         The origin is what makes a person arriving at a link land on the site
@@ -146,7 +203,7 @@ class BrowserRelayClient:
         response = await self._request(
             "POST",
             "/browser:ensure",
-            json_body={"origin": origin, "session": session},
+            json_body={"origin": origin, "session": session, "domain": domain},
             timeout=_ENSURE_TIMEOUT_SECONDS,
         )
         if response.status_code == 409:
@@ -157,7 +214,7 @@ class BrowserRelayClient:
             )
         return response.json()
 
-    async def save_state(self, *, domain: str) -> dict:
+    async def save_state(self, *, domain: str) -> dict[str, object]:
         """Whatever the login session for this site is signed in to."""
         response = await self._request(
             "POST", "/state:save", json_body={"domain": domain}, timeout=120.0
@@ -167,7 +224,7 @@ class BrowserRelayClient:
         state = response.json().get("state")
         return state if isinstance(state, dict) else {}
 
-    async def load_state(self, state: dict, *, domain: str) -> None:
+    async def load_state(self, state: dict[str, object], *, domain: str) -> None:
         response = await self._request(
             "POST",
             "/state:load",

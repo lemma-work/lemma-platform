@@ -13,22 +13,35 @@ question with a short answer.
 from __future__ import annotations
 
 from app.modules.web_login.domain.entities import (
+    SignInRequest,
+    SignInRequestStatus,
     WebLogin,
-    WebLoginKind,
     WebLoginSecret,
+    WebLoginStatus,
 )
 from app.modules.web_login.infrastructure.repository import (
     WebLoginNotFound,
     WebLoginRepository,
 )
+from app.modules.web_login.infrastructure.sign_in_repository import (
+    SignInRequestNotFound,
+    SignInRequestRepository,
+)
 from app.modules.web_login.services.origin import InvalidOrigin, normalize_origin
+from app.modules.web_login.services.sign_in import NotSignedInYet, SignInService
 
 __all__ = [
     "InvalidOrigin",
+    "NotSignedInYet",
+    "SignInRequest",
+    "SignInRequestNotFound",
+    "SignInRequestRepository",
+    "SignInRequestStatus",
+    "SignInService",
     "WebLogin",
-    "WebLoginKind",
     "WebLoginNotFound",
     "WebLoginRepository",
     "WebLoginSecret",
+    "WebLoginStatus",
     "normalize_origin",
 ]

@@ -219,9 +219,28 @@ async def test_docker_delivers_a_secret_as_an_archive(docker_provider) -> None:
         # Docker delivery runs no commands at all; the archive is the mechanism.
         commands_run=list,
     )
-    assert ("/tmp/lemma-conformance" in [path for _, path in engine.archives]) or any(
-        path.startswith("/tmp/lemma-conformance") for _, path in engine.archives
-    ), engine.archives
+    # Unpacked one level up, with the directory inside the archive. Docker's
+    # archive API refuses a destination that does not exist, and the
+    # directories credentials go into are created by the processes that read
+    # them -- which have not necessarily run. Letting tar create it is what
+    # makes delivery work on a container that has only just started, and
+    # nothing but a real sandbox caught that.
+    destinations = [path for _, path in engine.archives]
+    assert "/tmp" in destinations, destinations
+
+    import tarfile
+    from io import BytesIO
+
+    payload = next(blob for path, blob in engine.archive_payloads if path == "/tmp")
+    with tarfile.open(fileobj=BytesIO(payload)) as archive:
+        names = archive.getnames()
+        folder = archive.getmember("lemma-conformance")
+        secret = archive.getmember("lemma-conformance/token")
+    assert names == ["lemma-conformance", "lemma-conformance/token"], names
+    assert folder.isdir() and folder.mode == 0o700, (
+        "the directory is no more readable than the secret"
+    )
+    assert secret.mode == 0o600, "the secret is readable only by its owner"
 
 
 async def test_a_capability_a_fabric_lacks_is_refused_in_words() -> None:
