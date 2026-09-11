@@ -7,6 +7,7 @@ from uuid import UUID, uuid7
 
 import structlog
 
+from app.core.infrastructure.db.session_uow import active_uow
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.api.uploads import upload_source_sha256
 from app.core.authorization.context import (
@@ -21,6 +22,10 @@ from app.core.ports.widget_content import WidgetArtifact
 from app.core.widget_html_validation import lint_app_html
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_public_slug, normalize_resource_name
+from app.modules.apps.services.app_visibility import (
+    app_visibility_value,
+    normalize_app_visibility,
+)
 from app.modules.apps.domain.events import AppPublishedEvent
 from app.modules.apps.domain.entities import (
     AppAssetDocument,
@@ -154,7 +159,7 @@ class AppService:
         await self._validate_unique_public_slug(public_slug=entity.public_slug)
 
         entity.user_id = user_id
-        self._normalize_app_visibility(entity)
+        normalize_app_visibility(entity)
         created = await self.repository.create(entity)
         if ctx is not None:
             refreshed = await self.repository.get_by_name(
@@ -198,6 +203,15 @@ class AppService:
         app = await self.create_app_with_context(
             AppEntity(**entity_data), user_id, ctx=ctx
         )
+        # End the transaction before zipping and uploading: below is CPU on a
+        # worker thread and then an object-store upload, neither of which may be
+        # awaited holding a pooled connection. The cost is that a failed upload
+        # leaves the app row without a bundle instead of rolling the creation
+        # back -- recoverable, since the app is visible and can be re-uploaded.
+        uow = active_uow(self.repository)
+        if uow is not None:
+            await uow.commit()
+
         # The document IS the source for a promoted widget -- no build step sits
         # behind it -- so it ships as both. Uploading dist only left the app
         # source-less, and a pod bundle then exported its build without its code.
@@ -297,9 +311,7 @@ class AppService:
             )
             app.public_slug = public_slug
         if update_entity.visibility is not None:
-            app.visibility = self._normalize_visibility_value(
-                update_entity.visibility
-            ).value
+            app.visibility = app_visibility_value(update_entity.visibility).value
 
         updated = await self.repository.update(app)
         if ctx is not None:
@@ -613,15 +625,3 @@ class AppService:
         """Read an archive's bytes — delegated to the repo-free ``AppStoragePhase``
         (holds no DB connection). Safe after the resolving UoW closed."""
         return await self._storage_phase.read_archive(app_id, archive_path)
-
-    def _normalize_app_visibility(self, entity: AppEntity) -> None:
-        entity.visibility = self._normalize_visibility_value(entity.visibility).value
-
-    @staticmethod
-    def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
-        # Apps reject an unrecognized value rather than defaulting, so a typo in
-        # a bundle surfaces at import instead of silently publishing narrower.
-        visibility = normalize_resource_visibility(value)
-        if visibility is None:
-            raise AppValidationError("Unsupported app visibility")
-        return visibility

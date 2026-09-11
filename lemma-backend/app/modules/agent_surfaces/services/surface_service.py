@@ -54,6 +54,7 @@ from app.modules.agent_surfaces.services.surface_telegram_webhook import (
 from app.modules.agent_surfaces.services.surface_consent import (
     SurfaceConsentMixin,
 )
+from app.core.infrastructure.db.session_uow import active_uow
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -206,8 +207,7 @@ class AgentSurfaceService(
         Falls back to publishing immediately when there is no unit of work to
         defer to, which is also when there is no pooled connection to keep.
         """
-        info = getattr(getattr(self.surface_repository, "session", None), "info", None)
-        uow = info.get("lemma_uow") if isinstance(info, dict) else None
+        uow = active_uow(self.surface_repository)
 
         async def _run() -> None:
             await notify_surface_receiver_config_changed(surface_id)

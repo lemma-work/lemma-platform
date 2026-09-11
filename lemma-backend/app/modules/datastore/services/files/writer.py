@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable, Optional
 from uuid import UUID
 
-from app.core.api.uploads import upload_source_sha256, upload_source_size
+from app.core.api.uploads import upload_source_size
 from app.core.authorization.context import Context
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.errors import (
@@ -21,7 +21,6 @@ from app.modules.datastore.domain.ports import (
     DatastoreStoragePort,
 )
 from app.modules.datastore.infrastructure.storage_paths import (
-    build_datastore_file_storage_key,
     build_datastore_folder_storage_prefix,
 )
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
@@ -32,7 +31,7 @@ from app.modules.datastore.services.files.reader import FileReader
 from app.modules.datastore.services.files.storage_phase import (
     FileStoragePhase,
     _PathDeletionCleanup,
-    _StorageMove,
+    plan_storage_moves,
     _UpdatePlan,
 )
 from app.modules.datastore.services.files.transaction_writer import (
@@ -41,7 +40,6 @@ from app.modules.datastore.services.files.transaction_writer import (
     _MARKDOWN_SOURCE_KEY,
 )
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
-from app.core.concurrency.offload import run_blocking
 
 logger = get_logger(__name__)
 
@@ -283,7 +281,8 @@ class FileWriter(FileTransactionWriter):
         new_storage_key = (
             self.projection.storage_key(file_entity) if file_entity.is_file else None
         )
-        storage_moves = self._storage_moves(
+        storage_moves = plan_storage_moves(
+            projection=self.projection,
             file_entity=file_entity,
             descendants=descendants,
             previous_path=previous_path,
@@ -363,7 +362,13 @@ class FileWriter(FileTransactionWriter):
         if content is None:
             return False
         file_entity.size_bytes = upload_source_size(content)
-        file_entity.content_sha256 = await run_blocking(upload_source_sha256, content)
+        # The content digest is deliberately NOT computed here. It is CPU work
+        # on a worker thread proportional to the file, and this runs inside the
+        # caller's unit of work -- its docstring says "DB only", and hashing was
+        # the one line that made that untrue, pinning a pooled connection for
+        # the length of every large upload. `FileStoragePhase.write_update`
+        # hashes exactly the bytes it stores, and `persist_update_file` writes
+        # the row after that phase, so the digest still reaches the database.
         return True
 
     @staticmethod
@@ -400,37 +405,6 @@ class FileWriter(FileTransactionWriter):
                 file_entity.pod_id, previous_path
             )
         )
-
-    def _storage_moves(
-        self,
-        *,
-        file_entity: DatastoreFileEntity,
-        descendants: list[DatastoreFileEntity],
-        previous_path: str,
-        previous_storage_key: str | None,
-        new_storage_key: str | None,
-        has_content: bool,
-    ) -> list[_StorageMove]:
-        moves: list[_StorageMove] = []
-        if not has_content and previous_storage_key and new_storage_key:
-            if previous_storage_key != new_storage_key:
-                moves.append(_StorageMove(previous_storage_key, new_storage_key))
-        if previous_path == file_entity.path or not file_entity.is_folder:
-            return moves
-        for descendant in descendants:
-            if not descendant.is_file:
-                continue
-            suffix = descendant.path.removeprefix(previous_path)
-            destination_path = f"{file_entity.path}{suffix}"
-            moves.append(
-                _StorageMove(
-                    self.projection.storage_key(descendant),
-                    build_datastore_file_storage_key(
-                        descendant.pod_id, destination_path
-                    ),
-                )
-            )
-        return moves
 
     async def write_update_storage(
         self, plan: _UpdatePlan, update_entity: DatastoreFileUpdateEntity

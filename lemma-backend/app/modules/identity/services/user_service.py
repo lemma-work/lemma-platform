@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
+from app.core.infrastructure.db.session_uow import active_uow
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.helpers.identifiers import normalize_mobile_digits, normalize_telegram
 from app.modules.identity.domain.email import normalize_identity_email
@@ -68,8 +69,7 @@ class UserService:
         """
         if self.user_cache is None:
             return
-        info = getattr(getattr(self.user_repository, "session", None), "info", None)
-        uow = info.get("lemma_uow") if isinstance(info, dict) else None
+        uow = active_uow(self.user_repository)
 
         async def _run() -> None:
             await self.user_cache.set(user)

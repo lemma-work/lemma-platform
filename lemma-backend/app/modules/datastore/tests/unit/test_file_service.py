@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -367,6 +368,46 @@ async def test_content_update_overwrites_canonical_path_and_updates_hash(
         "ae907ab9a383483e5c37beee966723544b9e6f12148a7dcd56ceea7ad44c5a7b"
     )
     assert updated.status == FileStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_resolve_update_leaves_the_hash_to_the_storage_phase(
+    file_service: DatastoreFileService,
+    file_repository_mock: AsyncMock,
+):
+    """Where the digest is computed, not just that it arrives.
+
+    Hashing an upload is CPU proportional to the file, and ``resolve_update_file``
+    runs inside the caller's unit of work -- computing it there pinned a pooled
+    connection for the length of every large upload. The stale digest below must
+    survive the DB phase untouched and be replaced by the storage phase, so this
+    fails both if hashing moves back and if it stops happening at all.
+    """
+    user_id = uuid4()
+    pod_id = uuid4()
+    stale = "a" * 64
+    existing = _make_file(
+        pod_id=pod_id,
+        name="guide.txt",
+        owner_user_id=user_id,
+        visibility="PERSONAL",
+    )
+    existing.content_sha256 = stale
+    file_repository_mock.get_by_path.return_value = existing
+
+    update_entity = DatastoreFileUpdateEntity(path=existing.path, content=b"new body")
+    plan = await file_service.resolve_update_file(
+        pod_id, update_entity, ctx=_ctx(user_id)
+    )
+
+    assert plan.file_entity.content_sha256 == stale
+    # Size is len(), not a digest -- it stays in the DB phase, and its presence
+    # here is what shows the content branch ran at all.
+    assert plan.file_entity.size_bytes == len(b"new body")
+
+    await file_service.write_update_storage(plan, update_entity)
+
+    assert plan.file_entity.content_sha256 == sha256(b"new body").hexdigest()
 
 
 @pytest.mark.asyncio

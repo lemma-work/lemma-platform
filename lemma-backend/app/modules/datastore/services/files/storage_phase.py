@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from typing import Callable
 from uuid import UUID
 
+from app.core.api.uploads import upload_source_sha256
+from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.datastore.domain.errors import (
     DatastoreDomainError,
@@ -31,6 +33,9 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileUpdateEntity,
 )
 from app.modules.datastore.domain.indexing_policy import is_indexable_mime_type
+from app.modules.datastore.infrastructure.storage_paths import (
+    build_datastore_file_storage_key,
+)
 from app.modules.datastore.domain.ports import (
     DatastoreSearchFactoryPort,
     DatastoreStoragePort,
@@ -58,6 +63,45 @@ class _PathDeletionCleanup:
 class _StorageMove:
     source_key: str
     destination_key: str
+
+
+def plan_storage_moves(
+    *,
+    projection: FileProjection,
+    file_entity: DatastoreFileEntity,
+    descendants: list[DatastoreFileEntity],
+    previous_path: str,
+    previous_storage_key: str | None,
+    new_storage_key: str | None,
+    has_content: bool,
+) -> list[_StorageMove]:
+    """Which blobs a rename has to copy, decided before any DB row is written.
+
+    Pure key arithmetic over already-loaded entities -- it lives here, beside
+    the phase that executes the moves, because it needs no repository and the
+    writer that calls it is the one place that must not grow another one.
+
+    A content update writes a fresh key and needs no move; a rename of a file
+    moves its own blob, and a rename of a folder moves every file beneath it.
+    """
+    moves: list[_StorageMove] = []
+    if not has_content and previous_storage_key and new_storage_key:
+        if previous_storage_key != new_storage_key:
+            moves.append(_StorageMove(previous_storage_key, new_storage_key))
+    if previous_path == file_entity.path or not file_entity.is_folder:
+        return moves
+    for descendant in descendants:
+        if not descendant.is_file:
+            continue
+        suffix = descendant.path.removeprefix(previous_path)
+        destination_path = f"{file_entity.path}{suffix}"
+        moves.append(
+            _StorageMove(
+                projection.storage_key(descendant),
+                build_datastore_file_storage_key(descendant.pod_id, destination_path),
+            )
+        )
+    return moves
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +149,14 @@ class FileStoragePhase:
                 raise DatastoreInfrastructureError(
                     "Content update is missing its immutable storage target"
                 )
+            # Hash the bytes here rather than during the resolve phase: it is
+            # CPU on a worker thread, proportional to the file, and the resolve
+            # phase runs inside the caller's unit of work -- this one line was
+            # what made its "DB only" docstring untrue. `persist_update_file`
+            # runs after this phase, so the row still carries the digest.
+            plan.file_entity.content_sha256 = await run_blocking(
+                upload_source_sha256, update_entity.content
+            )
             try:
                 await self.storage.upload_file(
                     plan.new_storage_key, update_entity.content

@@ -20,6 +20,7 @@ from uuid import uuid7
 
 import pytest
 
+from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
 from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.services.user_service import UserService
 
@@ -38,7 +39,7 @@ def _service(uow: _Uow | None) -> tuple[UserService, AsyncMock]:
     cache = AsyncMock()
     repository = AsyncMock()
     repository.session = SimpleNamespace(
-        info={"lemma_uow": uow} if uow is not None else {}
+        info={SESSION_UOW_KEY: uow} if uow is not None else {}
     )
     service = UserService(
         user_repository=repository,
