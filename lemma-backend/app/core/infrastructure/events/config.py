@@ -1,6 +1,6 @@
 """Configuration owned by the durable event transport."""
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
@@ -208,6 +208,30 @@ class EventTransportSettings(BaseSettings):
             "behaviour. Keep it well under the cron period."
         ),
     )
+
+    @model_validator(mode="after")
+    def _reap_window_outlives_a_claim(self) -> "EventTransportSettings":
+        """A reap window shorter than the renewal interval reaps live groups.
+
+        The reaper's only evidence that a group is still wanted is a claim
+        renewed every ``consumer_group_reconcile_interval_seconds``. If the
+        window is shorter than that, every claim looks stale in the gap between
+        one renewal and the next -- so a perfectly healthy group with an empty
+        backlog becomes a candidate, and with destruction enabled it loses its
+        pending-entries list. The default is 24h against 30s, but these are two
+        independent environment variables and nothing otherwise relates them.
+
+        Zero still disables the reaper; that is not a short window, it is none.
+        """
+        window = self.redis_stream_group_reap_after_seconds
+        interval = self.consumer_group_reconcile_interval_seconds
+        if window and window < interval:
+            raise ValueError(
+                "redis_stream_group_reap_after_seconds must be 0 (disabled) or "
+                f"at least consumer_group_reconcile_interval_seconds ({interval}); "
+                f"got {window}. A shorter window reaps groups that are alive."
+            )
+        return self
 
     def stream_maxlen_for(self, stream: str) -> int | None:
         default = self.redis_stream_maxlen

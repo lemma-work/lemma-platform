@@ -1,6 +1,7 @@
 """Worker tasks owned by the durable event transport."""
 
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.events.config import event_transport_settings
 from app.core.infrastructure.events.retention import prune_event_delivery_records
 from app.core.infrastructure.events.stream_budget import trim_streams_to_budget
 from app.core.infrastructure.jobs.streaq_runtime import streaq_cron
@@ -37,9 +38,14 @@ async def trim_streams_to_budget_task() -> None:
     # bytes rather than give up and log that it could not.
     abandoned = await reap_abandoned_consumer_groups(client)
     if abandoned:
+        # "detected", not "reaped": destruction is off by default, so the usual
+        # reading of this line is "these are candidates", and a line that says
+        # they were reaped when nothing was would be read once and trusted
+        # afterwards. `destroyed` carries which it was.
         logger.info(
-            "redis.stream.abandoned_consumer_groups_reaped.observed",
+            "redis.stream.abandoned_consumer_groups_detected.observed",
             group_count=len(abandoned),
+            destroyed=event_transport_settings.redis_stream_group_destroy_enabled,
         )
     reclaimed = await trim_streams_to_budget(client)
     if total := sum(reclaimed.values()):

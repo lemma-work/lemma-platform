@@ -42,6 +42,8 @@ def _client(*, groups, epoch_age_seconds=WINDOW * 2, claims=None, consumers=()):
     client.xinfo_consumers.return_value = list(consumers)
     client.hgetall.return_value = claims or {}
     client.get.return_value = str(now_ms - epoch_age_seconds * _MS)
+    # The pre-destroy re-read: no claim appeared while the scan was running.
+    client.hget.return_value = None
     return client
 
 
@@ -215,3 +217,39 @@ async def test_a_group_that_never_delivered_but_is_claimed_survives() -> None:
     )
 
     assert await group_reaper.reap_abandoned_consumer_groups(client) == []
+
+
+async def test_a_group_that_comes_back_between_the_check_and_the_destroy_survives(
+    destroy_enabled,
+) -> None:
+    """The scan reads every stream before any destroy, so the gap is the pass.
+
+    A deployment returning in that window re-creates its group and reads from
+    it. Destroying it then would take the pending-entries list of a group that
+    is alive again. The re-read catches it by the position having moved.
+
+    This narrows the race to one round trip rather than closing it -- Redis has
+    no compare-and-destroy for a consumer group -- which is why destruction is
+    off by default.
+    """
+    client = _client(groups=[_group("came-back")])
+    moved = int(time.time() * _MS)
+    client.xinfo_groups.side_effect = [
+        [_group("came-back")],  # the scan
+        [{"name": "came-back", "pending": 3, "last-delivered-id": f"{moved}-0"}],
+    ]
+
+    found = await group_reaper.reap_abandoned_consumer_groups(client)
+
+    assert [g.group for g in found] == ["came-back"]
+    client.xgroup_destroy.assert_not_awaited()
+
+
+async def test_a_claim_appearing_mid_pass_stops_the_destroy(destroy_enabled) -> None:
+    """Somebody declared it after the ledger snapshot was taken."""
+    client = _client(groups=[_group("reclaimed")])
+    client.hget.return_value = str(int(time.time() * _MS))
+
+    await group_reaper.reap_abandoned_consumer_groups(client)
+
+    client.xgroup_destroy.assert_not_awaited()

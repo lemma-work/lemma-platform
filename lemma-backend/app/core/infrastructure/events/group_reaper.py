@@ -64,6 +64,9 @@ class AbandonedGroup:
     stream: str
     group: str
     last_delivered_age_seconds: int
+    #: The position it was sitting at when it was judged. Re-read immediately
+    #: before the destroy so a group that moved in between is left alone.
+    last_delivered_id: str
 
 
 def _value(mapping: object, name: str, default: object = 0) -> object:
@@ -279,6 +282,7 @@ async def reap_abandoned_consumer_groups(
                 stream=stream,
                 group=_text(_value(group, "name", "")),
                 last_delivered_age_seconds=age_seconds,
+                last_delivered_id=_text(_value(group, "last-delivered-id", "")),
             )
             found.append(candidate)
             logger.warning(
@@ -293,9 +297,53 @@ async def reap_abandoned_consumer_groups(
     return found
 
 
+async def _unchanged_since_judged(client: "Redis", candidate: AbandonedGroup) -> bool:
+    """Re-read the group and confirm nothing about it moved since it was judged.
+
+    The scan reads every stream before any destroy happens, so without this the
+    gap between deciding and acting is the whole pass. A deployment coming back
+    in that gap re-creates its group, reads from it, and would lose the
+    pending-entries list to a destroy decided before it woke up.
+
+    This narrows that gap to a single round trip; it does not close it. Redis
+    has no compare-and-destroy for a consumer group -- WATCH guards keys, not
+    group state -- so an atomic version would need a lease that every consumer
+    also took, which is a protocol imposed on every subscriber to save a case
+    that a 24-hour window already makes remote. The honest summary is: narrowed,
+    not eliminated, and destruction is off by default.
+    """
+    try:
+        groups = await client.xinfo_groups(candidate.stream)
+        claimed = await client.hget(
+            _CLAIMS_KEY, _field(candidate.stream, candidate.group)
+        )
+    except RedisError, TypeError, ValueError:
+        return False
+    if claimed is not None:
+        return False  # somebody claimed it while the scan was still running
+    if not isinstance(groups, list):
+        return False
+    for group in groups:
+        if _text(_value(group, "name", "")) != candidate.group:
+            continue
+        return (
+            _int(_value(group, "pending", 0)) == 0
+            and _text(_value(group, "last-delivered-id", ""))
+            == candidate.last_delivered_id
+        )
+    return False  # already gone
+
+
 async def _destroy(client: "Redis", groups: list[AbandonedGroup]) -> None:
     for candidate in groups:
         try:
+            if not await _unchanged_since_judged(client, candidate):
+                logger.warning(
+                    "redis.stream.abandoned_consumer_group_revived.degraded",
+                    stream_name=candidate.stream,
+                    group=candidate.group,
+                )
+                continue
             await client.xgroup_destroy(
                 name=candidate.stream, groupname=candidate.group
             )
