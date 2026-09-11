@@ -89,12 +89,19 @@ logger = get_logger(__name__)
 
 _KEY_PREFIX = "datastore:signedurl"
 
+# How long a revocation tombstone blocks the cache from being rewritten. Only
+# has to outlive a rehydrate that is already in flight — a row read and a cache
+# write — so this is generous by orders of magnitude.
+_REVOKED_TOMBSTONE_SECONDS = 300
+
 # Atomically charge ARGV[1] bytes against the link's budget and return its
 # claims. Running it server-side keeps the existence check, the budget test and
 # the charge a single atomic step.
 #
-# Returns {-1} when the key is missing or expired, {-2} when the budget is
-# already spent, and otherwise a fixed-arity
+# Returns {-1} when the key is missing or expired, {-2} when the budget is spent
+# or this request would not fit inside what is left of it — testing the whole
+# request rather than only the running total is what makes the budget a ceiling
+# instead of a line one response is always allowed to cross, and otherwise a fixed-arity
 # {spent, budget, object_key, content_sha256, content_type, filename}.
 # Fixed arity matters: Redis truncates a returned Lua table at its first nil, so
 # a hash missing one field used to hand Python a short list and raise IndexError
@@ -106,7 +113,7 @@ end
 local wanted = tonumber(ARGV[1]) or 0
 local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_bytes')) or 0
 local spent = tonumber(redis.call('HGET', KEYS[1], 'spent_bytes')) or 0
-if budget > 0 and spent >= budget then
+if budget > 0 and (spent >= budget or spent + wanted > budget) then
   return {-2}
 end
 if wanted > 0 then
@@ -164,6 +171,10 @@ class SignedUrlStore:
     @staticmethod
     def _key(code: str) -> str:
         return f"{_KEY_PREFIX}:{code}"
+
+    @staticmethod
+    def _tombstone_key(code: str) -> str:
+        return f"{_KEY_PREFIX}:revoked:{code}"
 
     async def create(
         self,
@@ -240,6 +251,10 @@ class SignedUrlStore:
         if ttl <= 0:
             return
         redis = await self._get_redis()
+        if await redis.exists(self._tombstone_key(link.code)):
+            # Revoked while this caller was mid-rehydrate. Writing now would
+            # undo the revocation for the rest of the link's lifetime.
+            return
         key = self._key(link.code)
         async with redis.pipeline(transaction=True) as pipe:
             pipe.hset(
@@ -338,9 +353,12 @@ class SignedUrlStore:
         if link is None or not link.is_live:
             return False
         await self._cache(link)
+        # Deliberately no `code`: it is the whole capability, so a log line
+        # carrying one hands a link to anyone who can read logs. The pod is
+        # enough to tell whether rehydration is happening and for whom.
         logger.debug(
             "datastore.signed_url.rehydrated_link_from_record.observed",
-            code=code,
+            pod_id=str(link.pod_id),
         )
         return True
 
@@ -352,12 +370,23 @@ class SignedUrlStore:
         what makes revocation take effect immediately. A failure between the two
         leaves the link dead in Redis and revocable again from the record.
         """
-        redis = await self._get_redis()
-        with suppress(Exception):
-            await redis.delete(self._key(code))
+        # The record first. Deleting the cache first left a window where a
+        # concurrent fetch rehydrated from a row that was still live and put the
+        # entry straight back, so the link kept working until its TTL.
         async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
             revoked = await SignedLinkRepository(uow).revoke(pod_id, code)
             await uow.commit()
+
+        # Committing first shrinks that window but does not close it: a
+        # rehydrate that had already read the live row can still write the cache
+        # after the delete below. The tombstone closes it — `_cache` refuses to
+        # write while one exists, and it outlives any in-flight rehydrate.
+        redis = await self._get_redis()
+        with suppress(Exception):
+            async with redis.pipeline(transaction=True) as pipe:
+                pipe.setex(self._tombstone_key(code), _REVOKED_TOMBSTONE_SECONDS, 1)
+                pipe.delete(self._key(code))
+                await pipe.execute()
         return revoked
 
     async def consume(self, code: str) -> str:

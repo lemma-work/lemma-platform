@@ -48,10 +48,27 @@ class SignedLinkRepository(DatastoreRepositoryBase):
         )
         return row.to_entity() if row else None
 
-    async def list_for_pod(
-        self, pod_id: UUID, *, include_dead: bool = False, limit: int = 100
+    async def list_for_user(
+        self,
+        pod_id: UUID,
+        user_id: UUID | None,
+        *,
+        include_dead: bool = False,
+        limit: int = 100,
     ) -> list[DatastoreSignedLinkEntity]:
-        stmt = select(DatastoreSignedLink).where(DatastoreSignedLink.pod_id == pod_id)
+        """This person's links in this pod, newest first.
+
+        Scoped to the caller, not the pod, because each row carries the ``code``
+        — which is the entire capability. A pod-wide listing would therefore let
+        any member open any other member's links, including the ones pointing at
+        files only their owner can read: personal (``/me/...``) files are an
+        authorization rule at the file layer, and a listing that leaked their
+        codes would route straight around it.
+        """
+        stmt = select(DatastoreSignedLink).where(
+            DatastoreSignedLink.pod_id == pod_id,
+            DatastoreSignedLink.created_by_user_id == user_id,
+        )
         if not include_dead:
             stmt = stmt.where(
                 DatastoreSignedLink.revoked_at.is_(None),
@@ -101,7 +118,14 @@ class SignedLinkRepository(DatastoreRepositoryBase):
             .where(
                 DatastoreSignedLink.code == code,
                 DatastoreSignedLink.pod_id == pod_id,
+                # All three, not just `revoked_at`. The endpoint documents
+                # `revoked: false` for a link that was already dead, and an
+                # expired or exhausted one is dead — reporting True for those
+                # would tell the caller they had just stopped something that had
+                # stopped on its own.
                 DatastoreSignedLink.revoked_at.is_(None),
+                DatastoreSignedLink.exhausted_at.is_(None),
+                DatastoreSignedLink.expires_at > datetime.now(timezone.utc),
             )
             .values(revoked_at=datetime.now(timezone.utc))
         )

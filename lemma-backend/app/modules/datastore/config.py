@@ -461,6 +461,10 @@ class DatastoreSettings(BaseSettings):
     )
     datastore_signed_url_row_retention_seconds: int = Field(
         default=604800,
+        # Not negative: the purge subtracts this from `now` to get its cutoff,
+        # so a negative value puts the cutoff in the future and deletes rows
+        # whose links have not expired.
+        ge=0,
         description=(
             "How long a public signed URL's row is kept after the link expires. "
             "The link stops resolving at expiry regardless; this is only so a "

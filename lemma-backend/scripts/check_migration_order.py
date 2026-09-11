@@ -59,10 +59,21 @@ def main() -> int:
             problems.append(f'{path.name}: no `revision = "..."` assignment')
             continue
         down_match = _DOWN_REVISION.search(text)
-        by_revision[revision.group(1)] = (
-            path,
-            down_match.group(1) if down_match else None,
-        )
+        revision_id = revision.group(1)
+        if revision_id in by_revision:
+            # Recorded rather than overwritten: replacing the first file would
+            # hide it from every check below, so the gate could walk a shortened
+            # chain and report success on a directory alembic refuses to load.
+            previous, _ = by_revision[revision_id]
+            problems.append(
+                f"{path.name}: duplicate revision id {revision_id!r}, "
+                f"already declared by {previous.name}"
+            )
+        else:
+            by_revision[revision_id] = (
+                path,
+                down_match.group(1) if down_match else None,
+            )
 
         number = _FILE_NUMBER.search(path.name)
         if number is None:

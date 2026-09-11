@@ -59,6 +59,11 @@ class TestByteRange:
     def test_zero_length_suffix_is_unsatisfiable(self):
         assert parse_byte_range("bytes=-0", 10) == UNSATISFIABLE
 
+    def test_a_backwards_range_is_unsatisfiable(self):
+        """`bytes=500-400` would otherwise yield a negative Content-Length."""
+        assert parse_byte_range("bytes=5-4", 10) == UNSATISFIABLE
+        assert parse_byte_range("bytes=5-5", 10) == (5, 6)  # one byte, not zero
+
     @pytest.mark.parametrize(
         "header",
         [

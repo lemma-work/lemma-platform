@@ -115,8 +115,9 @@ export class FilesNamespace {
   /**
    * Mint a public, hit-capped short signed URL (no login needed to open).
    * Expires after `expiresSeconds` (default 24h, max 7d) and serves the file
-   * at most `maxHits` times (default 200, max 1000); both bounds are clamped
-   * server-side. Use it to share a file outside the pod without unbounded egress.
+   * at most `maxHits` times (default 200, max 1000); a value outside either
+   * range is rejected with a 422. Use it to share a file outside the pod
+   * without unbounded egress.
    */
   createSignedUrl(
     path: string,

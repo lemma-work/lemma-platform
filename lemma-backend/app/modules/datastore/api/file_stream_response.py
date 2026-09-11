@@ -98,6 +98,11 @@ def parse_byte_range(
 
     if start < 0 or start >= size:
         return UNSATISFIABLE
+    if end <= start:
+        # `bytes=500-400`. Left alone this returns a half-open range that runs
+        # backwards, which becomes a negative Content-Length and a storage read
+        # nobody can satisfy.
+        return UNSATISFIABLE
     return start, min(end, size)
 
 

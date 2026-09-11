@@ -93,16 +93,17 @@ class SignedLinks:
             raise DatastoreSignedLinkLimitError(limit=limit, live=live)
 
     async def list(
-        self, pod_id: UUID, *, include_dead: bool = False
+        self, pod_id: UUID, user_id: UUID | None, *, include_dead: bool = False
     ) -> list[DatastoreSignedLinkEntity]:
-        """Every public link minted for this pod, newest first.
+        """The links this person has handed out in this pod, newest first.
 
-        Pod-scoped rather than per-file: the question this answers is "what have
-        we handed out", which nobody can ask one file at a time.
+        Not per-file — that question cannot be asked one file at a time — and
+        not pod-wide either; see ``SignedLinkRepository.list_for_user`` for why
+        the caller's own links are the only safe scope.
         """
         async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
-            return await SignedLinkRepository(uow).list_for_pod(
-                pod_id, include_dead=include_dead
+            return await SignedLinkRepository(uow).list_for_user(
+                pod_id, user_id, include_dead=include_dead
             )
 
     async def revoke(self, pod_id: UUID, code: str) -> bool:

@@ -115,8 +115,9 @@ class PodFiles(BoundResource):
 
         The returned ``signed_url`` needs no login to open, expires after
         ``expires_seconds`` (default 24h, max 7d), and serves the file at most
-        ``max_hits`` times (default 200, max 1000). Both bounds are clamped
-        server-side, so you can pass user input directly. Use it to share a file
+        ``max_hits`` times (default 200, max 1000). A value outside either range
+        is rejected with a 422, so validate user input before passing it. Use it
+        to share a file
         with someone outside the pod, or to hand an agent a short link to pass
         around — the cap keeps a leaked link from running up egress. Only bytes
         actually sent are counted, so a browser revalidating costs nothing.

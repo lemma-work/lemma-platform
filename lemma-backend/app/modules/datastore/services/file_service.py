@@ -576,7 +576,9 @@ class DatastoreFileService(FileTransactionFacade):
     async def list_signed_urls(
         self, pod_id: UUID, ctx: Context, *, include_dead: bool = False
     ) -> list[DatastoreSignedLinkEntity]:
-        return await self.signed_links.list(pod_id, include_dead=include_dead)
+        return await self.signed_links.list(
+            pod_id, ctx.user_id, include_dead=include_dead
+        )
 
     async def revoke_signed_url(self, pod_id: UUID, code: str, ctx: Context) -> bool:
         return await self.signed_links.revoke(pod_id, code)

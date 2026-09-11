@@ -663,6 +663,115 @@ class TestSignedUrlDurability:
         assert revoked["revoked_at"] is not None
 
     @pytest.mark.asyncio
+    async def test_the_listing_does_not_hand_over_another_members_codes(
+        self, pod_api: DatastoreApi, async_client: AsyncClient, member_users
+    ):
+        """Each row carries the `code`, which is the whole capability.
+
+        A pod-wide listing would therefore let any member open any other
+        member's links — including ones pointing at files only their owner can
+        read, since personal paths are an authorization rule at the file layer.
+        """
+        uploaded = await _upload(
+            pod_api, "/me/private", "mine.txt", b"mine", content_type="text/plain"
+        )
+        mine = await self._sign(pod_api, uploaded["path"], {})
+        my_code = _code_of(mine["signed_url"])
+
+        viewer = DatastoreApi(async_client, pod_api.pod_id, member_users["viewer"])
+        theirs = await viewer.request(
+            "GET",
+            FILES.format(pod_id=pod_api.pod_id) + "/signed-urls",
+            params={"include_dead": "true"},
+        )
+        assert theirs.status_code == status.HTTP_200_OK, theirs.text
+        assert all(link["code"] != my_code for link in theirs.json()["links"])
+
+    @pytest.mark.asyncio
+    async def test_revoking_an_already_dead_link_reports_false(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """Exhausted counts as dead, the same as revoked or expired."""
+        uploaded = await _upload(
+            pod_api, "/me/deadrevoke", "d.txt", b"spent", content_type="text/plain"
+        )
+        minted = await pod_api.request(
+            "POST",
+            FILES.format(pod_id=pod_api.pod_id) + "/signed-url",
+            params={"path": uploaded["path"]},
+            json={"max_hits": 1},
+        )
+        code = _code_of(minted.json()["signed_url"])
+        await async_client.get(f"/s/{code}")
+        assert (
+            await async_client.get(f"/s/{code}")
+        ).status_code == status.HTTP_410_GONE
+
+        resp = await pod_api.request(
+            "DELETE", FILES.format(pod_id=pod_api.pod_id) + f"/signed-urls/{code}"
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        assert resp.json()["revoked"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_revoked_link_cannot_be_rehydrated_back_to_life(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """The tombstone, from the other side.
+
+        Revoking drops the cache entry; the next fetch is a cache miss, which is
+        exactly the path that rebuilds an entry from the record. It must not.
+        """
+        from app.modules.datastore.services.files.signed_url import (
+            get_signed_url_store,
+        )
+
+        uploaded = await _upload(
+            pod_api, "/me/tomb", "t.txt", b"tombstoned", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+        code = _code_of(body["signed_url"])
+
+        await pod_api.request(
+            "DELETE", FILES.format(pod_id=pod_api.pod_id) + f"/signed-urls/{code}"
+        )
+
+        store = get_signed_url_store()
+        redis = await store._get_redis()
+        assert await redis.exists(store._key(code)) == 0
+        assert (
+            await async_client.get(f"/s/{code}")
+        ).status_code == status.HTTP_404_NOT_FOUND
+        assert await redis.exists(store._key(code)) == 0
+
+    @pytest.mark.asyncio
+    async def test_a_request_larger_than_the_remaining_budget_is_refused(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """The budget is a ceiling, not a line one response may cross.
+
+        With one download's worth of budget, a ranged read that would take the
+        total past it must be refused rather than allowed to overshoot.
+        """
+        content = bytes(range(100))
+        uploaded = await _upload(
+            pod_api, "/me/ceiling", "c.bin", content, content_type="video/mp4"
+        )
+        minted = await pod_api.request(
+            "POST",
+            FILES.format(pod_id=pod_api.pod_id) + "/signed-url",
+            params={"path": uploaded["path"]},
+            json={"max_hits": 1},
+        )
+        code = _code_of(minted.json()["signed_url"])
+
+        # 60 of 100 bytes spent; a further 60 would overshoot.
+        first = await async_client.get(f"/s/{code}", headers={"Range": "bytes=0-59"})
+        assert first.status_code == status.HTTP_206_PARTIAL_CONTENT, first.text
+        second = await async_client.get(f"/s/{code}", headers={"Range": "bytes=0-59"})
+        assert second.status_code == status.HTTP_410_GONE, second.text
+
+    @pytest.mark.asyncio
     async def test_another_pod_cannot_revoke_this_pods_link(
         self, pod_api: DatastoreApi, async_client: AsyncClient, member_users
     ):
