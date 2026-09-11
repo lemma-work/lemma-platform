@@ -68,6 +68,7 @@ class Pod:
                 token=settings.token,
                 timeout=settings.timeout,
                 verify_ssl=settings.verify_ssl,
+                refresh_token=settings.refresh_token,
             )
 
     # Each pod-scoped resource is a cached property: a command only imports and

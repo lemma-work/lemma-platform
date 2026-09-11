@@ -151,6 +151,7 @@ async def lifespan(app: FastAPI):
         )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
         from app.core.observability.memory_sampler import memory_sampler
+        from app.warm_imports import warm_lazy_imports
 
         configure_thread_pool()
         start_connection_scope_monitor_from_settings(service_name="lemma-api")
@@ -199,6 +200,18 @@ async def lifespan(app: FastAPI):
         # The composed list, not OSS: lemma-cloud installs more modules, and a
         # cloud-only task missing here would be enqueued to the wrong lane.
         ensure_task_lanes_registered(getattr(app.state, "lemma_modules", OSS_MODULES))
+        # Same trade as the line above, for the libraries a request reaches
+        # rather than the handlers a job reaches. Backgrounded rather than
+        # awaited: none of it is needed to serve, and a tokenizer that has to
+        # fetch its vocabulary should not hold the port closed. Skipped in local
+        # mode, where a cold start is a person waiting and the first request is
+        # usually theirs anyway, and under an embedded worker, which shares this
+        # process and would warm the same modules twice.
+        warm_task = (
+            None
+            if embedded_worker or settings.is_local_mode()
+            else create_background_task(warm_lazy_imports(), name="api-warm-imports")
+        )
         await channel_service.connect()
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()
@@ -222,7 +235,7 @@ async def lifespan(app: FastAPI):
             # Core closers — explicit and last so they tear down after modules.
             if started:
                 logger.info("service.stopped")
-            for lifecycle_task in (watchdog_task, memory_task):
+            for lifecycle_task in (watchdog_task, memory_task, warm_task):
                 if lifecycle_task is not None and not lifecycle_task.done():
                     lifecycle_task.cancel()
                     try:

@@ -400,11 +400,23 @@ class DependencyIndex:
     #: edit anywhere in the tree could de-fang propagation for a name nobody was
     #: thinking about.
     #:
-    #: Measured across the tree: 1.0, 0.9 and 0.75 all report exactly the same
-    #: 33 violations today, so this is a robustness change rather than a
-    #: behaviour change -- adding one fast `download_attachment_bytes` to the
-    #: six slow ones no longer turns the rule off. 0.6 adds four more, which is
-    #: a judgement call for its own change with its own evidence.
+    #: Measured across the tree. 1.0, 0.9 and 0.75 all reported exactly the same
+    #: 33 violations, so moving between them was robustness rather than
+    #: behaviour -- adding one fast `download_attachment_bytes` to the six slow
+    #: ones no longer turns the rule off.
+    #:
+    #: 0.5 is where it sits now, and getting there was the work rather than the
+    #: setting: it surfaced sixty sites, and they were fixed rather than
+    #: baselined. The three rules that made that bearable -- a definition is not
+    #: judged against itself, a bare call to a local `def` reads that `def`, and
+    #: a commit at the top of a loop body releases -- each removed a class of
+    #: guess rather than an exemption, so the dial and the precision moved in
+    #: the same direction.
+    #:
+    #: Below that it stops paying: 0.4 reports twenty more, and 0.34 reports the
+    #: same twenty, so the next step down is a cliff into ambiguity rather than
+    #: a gradient. Lowering it further is a change of its own, with its own
+    #: evidence, and the twenty have to be read one at a time.
     SLOW_DEFINITION_RATIO = 0.5
 
     def _name_is_slow(self, name: str, inside: tuple[str, ...] | None = None) -> bool:

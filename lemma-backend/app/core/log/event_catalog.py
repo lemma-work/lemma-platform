@@ -364,6 +364,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'analytics.flush.failed': EventSpec('warning', frozenset({'error_type'})),
     'analytics.pod_delivered.cache_unavailable': EventSpec('debug', frozenset()),
     'analytics.shutdown.drain_timed_out': EventSpec('warning', frozenset({'count'})),
+    'api.warm_import.failed': EventSpec('warning', frozenset({'target'})),
+    'api.warm_import.ready': EventSpec('debug', frozenset({'target'})),
     'app.health_ready.probe_failed.failed': EventSpec('error', frozenset()),
     'apps.app_asset_resolver.branding_entitlement.diagnostic': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'apps.app_release_retention.releases_pruned': EventSpec('info', frozenset({'app_id', 'pruned_count'})),
