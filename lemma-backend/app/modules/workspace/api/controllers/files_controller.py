@@ -125,12 +125,24 @@ def _workspace_path(path: str | None) -> str:
     return normalized
 
 
+#: What the runtime can report an entry as. Narrowed here rather than trusted,
+#: because the response says it is one of three things and a fourth arriving
+#: from a future runtime should be reported as a plain file rather than
+#: rejected by the response model after the read has already happened.
+_KINDS: tuple[str, ...] = ("file", "directory", "symlink")
+
+
+def _kind_of(stat: object) -> Literal["file", "directory", "symlink"]:
+    kind = str(getattr(stat, "kind", "file"))
+    return kind if kind in _KINDS else "file"  # type: ignore[return-value]
+
+
 def _entry(stat: object) -> WorkspaceFileEntry:
     path = str(getattr(stat, "path", ""))
     return WorkspaceFileEntry(
         path=path,
         name=posixpath.basename(path) or path,
-        kind=str(getattr(stat, "kind", "file")),
+        kind=_kind_of(stat),
         size_bytes=int(getattr(stat, "size_bytes", 0) or 0),
         modified_at=getattr(stat, "modified_at"),
     )

@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import httpx
 import websockets
-from fastapi import APIRouter, Query, WebSocket, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query, WebSocket, status
 from pydantic import BaseModel
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
@@ -77,19 +79,43 @@ class BrowserStatusResponse(BaseModel):
     detail: str | None = None
 
 
+def allowed_origins() -> tuple[str, ...]:
+    """Where a browser may legitimately open this socket from.
+
+    A dependency rather than a module function so a test can supply its own,
+    which is injection rather than reaching into the module under test and
+    replacing part of it.
+    """
+    candidates = (
+        settings.frontend_url,
+        settings.api_url,
+        getattr(settings, "auth_frontend_url", None),
+    )
+    return tuple(str(c) for c in candidates if c)
+
+
+def browser_view_service() -> BrowserViewService:
+    """The service this controller drives. Injected for the same reason."""
+    return BrowserViewService()
+
+
 @router.get(
     "/status",
     response_model=BrowserStatusResponse,
     operation_id="workspace.browser.status",
     summary="Whether the workspace browser can be watched",
 )
-async def browser_status(user: CurrentUser) -> BrowserStatusResponse:
-    service = BrowserViewService()
+async def browser_status(
+    user: CurrentUser,
+    service: Annotated[BrowserViewService, Depends(browser_view_service)],
+) -> BrowserStatusResponse:
     try:
         found = await service.status(user.id)
     finally:
         await service.close()
-    return BrowserStatusResponse(state=found["state"], detail=found.get("detail"))
+    return BrowserStatusResponse(
+        state=found.get("state", "unavailable"), detail=found.get("detail")
+    )
 
 
 async def _resolve_user_id(websocket: WebSocket):
@@ -117,22 +143,19 @@ async def _resolve_user_id(websocket: WebSocket):
     session = await get_session_without_request_response(
         token, anti_csrf_check=False, session_required=True
     )
+    if session is None:
+        # `session_required=True` is documented to raise rather than return
+        # None, but the signature says otherwise and this is the one place a
+        # wrong answer would be an unauthenticated socket that got accepted.
+        raise PermissionError("the session could not be read")
     return session.get_user_id()
-
-
-def _allowed_origins() -> tuple[str, ...]:
-    """Where a browser may legitimately open this socket from."""
-    candidates = (
-        settings.frontend_url,
-        settings.api_url,
-        getattr(settings, "auth_frontend_url", None),
-    )
-    return tuple(str(c) for c in candidates if c)
 
 
 @router.websocket("/view")
 async def browser_view(
     websocket: WebSocket,
+    service: Annotated[BrowserViewService, Depends(browser_view_service)],
+    origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
 ) -> None:
@@ -142,9 +165,7 @@ async def browser_view(
     then closed looks to a browser like a connection that dropped, so the person
     is told the wrong thing about why.
     """
-    if not origin_is_allowed(
-        websocket.headers.get("origin"), allowed=_allowed_origins()
-    ):
+    if not origin_is_allowed(websocket.headers.get("origin"), allowed=origins):
         # Browsers do not apply same-origin to WebSockets but do send cookies,
         # so without this any page could open this socket as the signed-in
         # person and both watch their screen and type into it.
@@ -172,7 +193,6 @@ async def browser_view(
 
     from uuid import UUID
 
-    service = BrowserViewService()
     try:
         upstream_url, headers = await service.open_session(
             UUID(user_id), mode=mode, origin=origin

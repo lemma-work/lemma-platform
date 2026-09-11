@@ -99,7 +99,6 @@ def upgrade() -> None:
         unique=False,
     )
 
-
     op.create_table(
         "web_login_sign_in_requests",
         sa.Column("id", sa.Uuid(), nullable=False),

@@ -74,6 +74,4 @@ class WebLogins(Resource):
 
     def decline_sign_in(self, request_id: str | UUID) -> SignInRequestResponse:
         """Say you cannot sign in, so the agent stops waiting and says so."""
-        return self._call(
-            web_login_sign_in_request_decline, UUID(str(request_id))
-        )
+        return self._call(web_login_sign_in_request_decline, UUID(str(request_id)))

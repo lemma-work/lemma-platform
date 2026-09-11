@@ -79,22 +79,26 @@ class _FakeService:
         self.closed = True
 
 
-def _client(monkeypatch, service: _FakeService):
+def _client(service: _FakeService):
+    """The real router, with its collaborators supplied rather than patched.
+
+    Overriding a dependency is injection; reaching into the module and
+    replacing `BrowserViewService` would be putting a double *inside* the
+    subject, which survives a rename that should have failed the test.
+    """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(view, "BrowserViewService", lambda: service)
-    monkeypatch.setattr(view, "_allowed_origins", lambda: ("https://app.lemma.test",))
     app = FastAPI()
     app.include_router(view.router)
+    app.dependency_overrides[view.browser_view_service] = lambda: service
+    app.dependency_overrides[view.allowed_origins] = lambda: ("https://app.lemma.test",)
     return TestClient(app)
 
 
-def test_a_socket_from_a_foreign_origin_is_closed_before_it_is_accepted(
-    monkeypatch,
-) -> None:
+def test_a_socket_from_a_foreign_origin_is_closed_before_it_is_accepted() -> None:
     service = _FakeService()
-    client = _client(monkeypatch, service)
+    client = _client(service)
     with pytest.raises(Exception):  # noqa: B017 - any refusal, no accepted socket
         with client.websocket_connect(
             "/workspace/browser/view", headers={"Origin": "https://evil.test"}
@@ -103,16 +107,16 @@ def test_a_socket_from_a_foreign_origin_is_closed_before_it_is_accepted(
     assert service.opened == [], "nothing was reached for on a refused origin"
 
 
-def test_a_socket_with_no_session_is_closed_unauthenticated(monkeypatch) -> None:
+def test_a_socket_with_no_session_is_closed_unauthenticated() -> None:
     service = _FakeService()
-    client = _client(monkeypatch, service)
+    client = _client(service)
     with pytest.raises(Exception):
         with client.websocket_connect("/workspace/browser/view"):
             pass
     assert service.opened == [], "no sandbox was touched for an unauthenticated caller"
 
 
-def test_the_close_codes_are_distinct(monkeypatch) -> None:
+def test_the_close_codes_are_distinct() -> None:
     """Each maps to a different sentence and a different remedy: sign in again,
     wake the computer, replace the image, use another kind of computer."""
     codes = {
