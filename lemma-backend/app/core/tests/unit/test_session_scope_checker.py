@@ -610,3 +610,63 @@ async def stream_events(ctx: PodContextDep, client):
 """
 
     assert "non-db-await/request-scoped" in _rules(source)
+
+
+# --- work deferred to after the commit ----------------------------------------
+
+
+def test_work_registered_with_after_commit_is_not_a_hold():
+    """The shape `_invalidate_snapshots_after_commit` uses, and 29 callers inherit.
+
+    Read literally the helper awaits a Redis round trip, so every role mutation
+    in the tree inherited it. Neither branch can hold a connection: the deferred
+    one runs after the commit, and the inline one runs only when there is no
+    unit of work -- which is exactly when there is no pooled connection to keep.
+    """
+    source = """
+async def invalidate(session, uow):
+    async def _run():
+        await run_blocking(purge_snapshots)
+
+    if uow is None:
+        await _run()
+        return
+    uow.after_commit(_run)
+
+
+async def mutate(uow_factory):
+    async with uow_factory() as uow:
+        await uow.session.execute("update roles set x = 1")
+        await invalidate(uow.session, uow)
+"""
+    assert _rules(source) == set()
+
+
+def test_a_nested_function_not_registered_is_still_a_hold():
+    """The narrowness is the point: only a name handed to `after_commit` is safe."""
+    source = """
+async def invalidate(session, uow):
+    async def _run():
+        await run_blocking(purge_snapshots)
+
+    await _run()
+
+
+async def mutate(uow_factory):
+    async with uow_factory() as uow:
+        await uow.session.execute("update roles set x = 1")
+        await invalidate(uow.session, uow)
+"""
+    assert "non-db-await" in _rules(source)
+
+
+def test_a_session_opened_from_a_private_factory_attribute_is_seen():
+    """`self._uow_factory()` was invisible: 39 sites across 12 files unchecked."""
+    source = """
+class Service:
+    async def run(self):
+        async with self._uow_factory() as uow:
+            await uow.session.execute("select 1")
+            await run_blocking(extract, document)
+"""
+    assert "non-db-await" in _rules(source)

@@ -89,7 +89,11 @@ SESSION_OPENERS = re.compile(
         | get_session_maker
         | get_datastore_session_maker
         | _?session_factory
-        | uow_factory
+        # `_?`: a service that keeps its factory as `self._uow_factory` was
+        # invisible here, which left 39 `async with self._uow_factory()` sites
+        # across 12 files unchecked. Costs nothing today -- widening it reports
+        # no new violations -- so this closes the shape, not a backlog.
+        | _?uow_factory
         | create_uow_from_session_maker
         # `async with SessionUnitOfWorkFactory(async_session_maker)() as uow:`
         # constructs the factory inline and calls it. Without this the whole
@@ -584,12 +588,61 @@ def _is_zero_sleep(call: ast.Call) -> bool:
 SLEEP_CALLS = re.compile(r"(^|\.)sleep$")
 
 
+def _deferred_to_after_commit(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    """Nested functions this one hands to ``uow.after_commit`` rather than awaits.
+
+    The pattern, from `AuthorizationDataService._invalidate_snapshots_after_commit`:
+
+        async def _run() -> None:
+            await invalidate_role_snapshot_cache(...)
+
+        if uow is None:
+            await _run()      # &lt;-- the only inline await
+            return
+        uow.after_commit(_run)
+
+    Read literally, that function awaits a Redis round trip, so every caller of
+    every role mutation inherits it -- 29 sites, all of them code that is
+    already correct.
+
+    The inline branch cannot be a hold, and provably so: it runs only when there
+    is no unit of work, which is exactly when there is no pooled connection to
+    keep. The deferred branch runs after the commit, when the connection is
+    already back. Neither path holds one, so the name must not be marked slow.
+
+    Deliberately narrow, because the failure mode of guessing here is a blind
+    gate: only a *nested* function defined in this body, and only when this body
+    also registers that same name with ``after_commit``.
+    """
+    nested = {
+        child.name
+        for child in ast.iter_child_nodes(node)
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    if not nested:
+        return set()
+    registered: set[str] = set()
+    for child in ast.walk(node):
+        if not (
+            isinstance(child, ast.Call) and _dotted(child.func).endswith("after_commit")
+        ):
+            continue
+        for argument in child.args:
+            if isinstance(argument, ast.Name) and argument.id in nested:
+                registered.add(argument.id)
+    return registered
+
+
 def _awaited_calls(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[set[str], str | None]:
     """Bare names this function awaits, and why it is directly non-DB (if it is).
 
-    Nested function definitions are skipped: their awaits belong to them.
+    Nested function definitions are skipped: their awaits belong to them. A
+    nested function handed to ``after_commit`` is skipped even where the body
+    also awaits it directly -- see `_deferred_to_after_commit`.
 
     Awaits inside a ``connection_released`` block are skipped too, and for the
     same reason propagation exists at all: this index answers "does calling this
@@ -599,6 +652,7 @@ def _awaited_calls(
     """
     awaited: set[str] = set()
     direct: str | None = None
+    deferred = _deferred_to_after_commit(node)
     stack: list[ast.AST] = list(ast.iter_child_nodes(node))
     while stack:
         current = stack.pop()
@@ -610,6 +664,9 @@ def _awaited_calls(
         ):
             continue
         if isinstance(current, ast.Await) and isinstance(current.value, ast.Call):
+            if _dotted(current.value.func) in deferred:
+                # Registered with `after_commit`; see `_deferred_to_after_commit`.
+                continue
             if _is_zero_sleep(current.value):
                 # A yield to the loop, not a wait -- and the index has to agree
                 # with the visitor about that, or the name stays slow for every
