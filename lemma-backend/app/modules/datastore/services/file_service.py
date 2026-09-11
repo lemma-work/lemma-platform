@@ -139,7 +139,7 @@ class DatastoreFileService(FileTransactionFacade):
         self._projection = projection
         self._lookup = lookup
         self._reader = reader
-        self.signed_links = SignedLinks(reader)
+        self.signed_links = SignedLinks(reader, file_repository)
         self._searcher = searcher
         self._tree = tree
         self._writer = writer

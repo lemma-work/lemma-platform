@@ -898,6 +898,50 @@ class TestSignedUrlLiveLimit:
         assert after.status_code == status.HTTP_201_CREATED, after.text
 
     @pytest.mark.asyncio
+    async def test_a_concurrent_burst_cannot_run_away_past_the_limit(
+        self, pod_api: DatastoreApi, monkeypatch
+    ):
+        """What the limit guarantees under concurrency, stated honestly.
+
+        The check and the insert are one statement, so a burst cannot mint one
+        link per request the way a separate count-then-insert did. It is not a
+        hard serialization either: two statements executing at the same instant
+        can both see room under READ COMMITTED, so a burst may end a little over
+        the line. What it may not do is run away — and the limit is in force
+        again as soon as the burst drains, which is what bounds abuse.
+
+        Serializing properly was tried and rejected: a per-user
+        `pg_advisory_xact_lock` makes every waiter hold its pooled connection,
+        and a burst exhausted the pool and 500ed unrelated requests.
+        """
+        from app.modules.datastore.config import datastore_settings
+
+        monkeypatch.setattr(
+            datastore_settings, "datastore_signed_url_max_active_per_user", 3
+        )
+        uploaded = await _upload(
+            pod_api, "/me/race", "r.txt", b"racing", content_type="text/plain"
+        )
+
+        results = await asyncio.gather(
+            *(self._sign(pod_api, uploaded["path"]) for _ in range(20))
+        )
+        created = [r for r in results if r.status_code == status.HTTP_201_CREATED]
+        refused = [
+            r for r in results if r.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        ]
+        assert created, [r.status_code for r in results]
+        # Nothing unexpected in between — every request either minted or was
+        # told why it could not.
+        assert len(created) + len(refused) == 20, [r.status_code for r in results]
+        # The point: 20 requests did not produce anything like 20 links.
+        assert len(refused) >= 10, len(created)
+
+        # And once the burst has drained, the limit holds outright.
+        after = await self._sign(pod_api, uploaded["path"])
+        assert after.status_code == status.HTTP_429_TOO_MANY_REQUESTS, after.text
+
+    @pytest.mark.asyncio
     async def test_the_limit_is_per_person_not_per_pod(
         self, pod_api: DatastoreApi, async_client: AsyncClient, member_users
     ):

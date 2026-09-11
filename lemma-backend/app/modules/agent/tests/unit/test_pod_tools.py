@@ -553,6 +553,10 @@ async def test_pod_view_document_pages_returns_images_and_url_refs(monkeypatch):
             storage=object(),
         ),
         ctx=SimpleNamespace(pod_id=uuid4(), user_id=uuid4()),
+        # The real `PodServices` always carries one, and the tool now releases
+        # its connection around the per-page URL signing. A `None` session is
+        # what `connection_released` treats as "nothing to release".
+        uow=SimpleNamespace(session=None),
     )
     _patch_services(monkeypatch, services)
 

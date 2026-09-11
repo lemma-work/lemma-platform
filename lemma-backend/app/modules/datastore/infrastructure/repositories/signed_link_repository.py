@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, insert, literal, select, update
 
 from app.modules.datastore.domain.file_entities import DatastoreSignedLinkEntity
 from app.modules.datastore.infrastructure.models.datastore_models import (
@@ -17,22 +17,85 @@ from app.modules.datastore.infrastructure.repositories._base import (
 
 
 class SignedLinkRepository(DatastoreRepositoryBase):
-    async def create(self, entity: DatastoreSignedLinkEntity) -> None:
-        self.session.add(
-            DatastoreSignedLink(
-                id=entity.id,
-                code=entity.code,
-                pod_id=entity.pod_id,
-                created_by_user_id=entity.created_by_user_id,
-                path=entity.path,
-                object_key=entity.object_key,
-                content_type=entity.content_type,
-                filename=entity.filename,
-                content_sha256=entity.content_sha256,
-                size_bytes=entity.size_bytes,
-                max_hits=entity.max_hits,
-                expires_at=entity.expires_at,
+    async def create_within_allowance(
+        self, entity: DatastoreSignedLinkEntity, *, max_active: int
+    ) -> bool:
+        """Insert the link unless this person is already at their limit.
+
+        Returns whether it was inserted. One statement, so the count and the
+        insert cannot be separated: `INSERT ... SELECT ... WHERE (count) < n`.
+
+        Counting first and inserting second — even in the same transaction —
+        lets every concurrent mint read the same below-limit total and proceed,
+        so the ceiling could be passed by as many links as there were requests
+        in flight. Serializing them instead, on a per-user
+        `pg_advisory_xact_lock`, fixes that and introduces something worse: each
+        waiter holds its pooled connection for the whole wait, and a burst of
+        ten concurrent mints exhausted the pool (`QueuePool limit of size 10
+        reached`) and 500ed requests that had nothing to do with signed links.
+
+        This keeps the check and the write in one statement without anything
+        blocking. Two statements executing at literally the same instant can
+        still both see room under READ COMMITTED, so the bound is not a hard
+        serialization — but the window is one statement rather than two
+        transactions and a round trip, and nothing queues.
+        """
+        source = select(
+            literal(entity.id).label("id"),
+            literal(entity.code).label("code"),
+            literal(entity.pod_id).label("pod_id"),
+            literal(entity.created_by_user_id).label("created_by_user_id"),
+            literal(entity.path).label("path"),
+            literal(entity.object_key).label("object_key"),
+            literal(entity.content_type).label("content_type"),
+            literal(entity.filename).label("filename"),
+            literal(entity.content_sha256).label("content_sha256"),
+            literal(entity.size_bytes).label("size_bytes"),
+            literal(entity.max_hits).label("max_hits"),
+            literal(entity.expires_at).label("expires_at"),
+            literal(datetime.now(timezone.utc)).label("created_at"),
+            literal(datetime.now(timezone.utc)).label("updated_at"),
+        ).where(
+            self._live_for_user_count(entity.pod_id, entity.created_by_user_id)
+            < max_active
+        )
+        result = await self.session.execute(
+            insert(DatastoreSignedLink).from_select(
+                [
+                    "id",
+                    "code",
+                    "pod_id",
+                    "created_by_user_id",
+                    "path",
+                    "object_key",
+                    "content_type",
+                    "filename",
+                    "content_sha256",
+                    "size_bytes",
+                    "max_hits",
+                    "expires_at",
+                    "created_at",
+                    "updated_at",
+                ],
+                source,
             )
+        )
+        return bool(result.rowcount)
+
+    @staticmethod
+    def _live_for_user_count(pod_id: UUID, user_id: UUID | None):
+        """Scalar subquery: this person's live links in this pod."""
+        return (
+            select(func.count())
+            .select_from(DatastoreSignedLink)
+            .where(
+                DatastoreSignedLink.pod_id == pod_id,
+                DatastoreSignedLink.created_by_user_id == user_id,
+                DatastoreSignedLink.revoked_at.is_(None),
+                DatastoreSignedLink.exhausted_at.is_(None),
+                DatastoreSignedLink.expires_at > datetime.now(timezone.utc),
+            )
+            .scalar_subquery()
         )
 
     async def get_by_code(self, code: str) -> DatastoreSignedLinkEntity | None:
@@ -92,15 +155,7 @@ class SignedLinkRepository(DatastoreRepositoryBase):
         """
         return int(
             await self.session.scalar(
-                select(func.count())
-                .select_from(DatastoreSignedLink)
-                .where(
-                    DatastoreSignedLink.pod_id == pod_id,
-                    DatastoreSignedLink.created_by_user_id == user_id,
-                    DatastoreSignedLink.revoked_at.is_(None),
-                    DatastoreSignedLink.exhausted_at.is_(None),
-                    DatastoreSignedLink.expires_at > datetime.now(timezone.utc),
-                )
+                select(self._live_for_user_count(pod_id, user_id))
             )
             or 0
         )

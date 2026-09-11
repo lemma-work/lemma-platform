@@ -70,11 +70,13 @@ from uuid import UUID, uuid7
 from redis.asyncio import Redis
 
 from app.core.infrastructure.db.session import get_session_maker
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
 from app.modules.datastore.config import datastore_settings
+from app.modules.datastore.domain.errors import DatastoreSignedLinkLimitError
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreSignedLinkEntity,
@@ -180,6 +182,7 @@ class SignedUrlStore:
         self,
         *,
         file: DatastoreFileEntity,
+        links: SignedLinkRepository,
         created_by_user_id: UUID | None = None,
         expires_seconds: int | None = None,
         max_hits: int | None = None,
@@ -209,6 +212,7 @@ class SignedUrlStore:
             default=datastore_settings.datastore_signed_url_default_max_hits,
             ceiling=datastore_settings.datastore_signed_url_max_hits,
         )
+        max_active = datastore_settings.datastore_signed_url_max_active_per_user
 
         code = secrets.token_urlsafe(datastore_settings.datastore_signed_url_code_bytes)
         expires_at = datetime.fromtimestamp(
@@ -233,12 +237,31 @@ class SignedUrlStore:
             max_hits=max_hits,
             expires_at=expires_at,
         )
-        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
-            await SignedLinkRepository(uow).create(link)
-            await uow.commit()
+        # The caller's own unit of work, not a second one. Opening a session
+        # here while the request already held one meant every concurrent mint
+        # needed two pooled connections, and ten of them exhausted a pool of ten
+        # and 500ed unrelated requests.
+        #
+        # One statement decides and writes; see `create_within_allowance` for
+        # why neither a separate count nor a lock is used. Committed here rather
+        # than at the end of the request, because the Redis entry written below
+        # must not exist before the row it describes.
+        inserted = await links.create_within_allowance(link, max_active=max_active)
+        if not inserted:
+            live = await links.count_live_for_user(file.pod_id, created_by_user_id)
+            raise DatastoreSignedLinkLimitError(
+                limit=max_active, live=max(live, max_active)
+            )
+        await links.commit()
 
-        await self._cache(link)
-        signed_url = f"{settings.api_url.rstrip('/')}/s/{code}"
+        # Everything past the commit is Redis and string building, so the
+        # pooled connection goes back before any of it. Holding one across
+        # non-database work is what #717 spent twelve fixes removing, and a
+        # burst of mints is exactly the shape that turns it into pool
+        # exhaustion.
+        async with connection_released(links.session):
+            await self._cache(link)
+            signed_url = f"{settings.api_url.rstrip('/')}/s/{code}"
         return code, signed_url, expires_at, max_hits
 
     async def _cache(self, link: DatastoreSignedLinkEntity) -> None:
@@ -362,7 +385,9 @@ class SignedUrlStore:
         )
         return True
 
-    async def revoke(self, pod_id: UUID, code: str) -> bool:
+    async def revoke(
+        self, pod_id: UUID, code: str, *, links: SignedLinkRepository
+    ) -> bool:
         """Kill a link now, before it expires. Returns whether it was live.
 
         Both halves, and the cache first: while the row is what makes the link
@@ -373,20 +398,21 @@ class SignedUrlStore:
         # The record first. Deleting the cache first left a window where a
         # concurrent fetch rehydrated from a row that was still live and put the
         # entry straight back, so the link kept working until its TTL.
-        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
-            revoked = await SignedLinkRepository(uow).revoke(pod_id, code)
-            await uow.commit()
+        revoked = await links.revoke(pod_id, code)
+        await links.commit()
 
         # Committing first shrinks that window but does not close it: a
         # rehydrate that had already read the live row can still write the cache
         # after the delete below. The tombstone closes it — `_cache` refuses to
         # write while one exists, and it outlives any in-flight rehydrate.
-        redis = await self._get_redis()
-        with suppress(Exception):
-            async with redis.pipeline(transaction=True) as pipe:
-                pipe.setex(self._tombstone_key(code), _REVOKED_TOMBSTONE_SECONDS, 1)
-                pipe.delete(self._key(code))
-                await pipe.execute()
+        # Redis only from here, so the connection goes back first.
+        async with connection_released(links.session):
+            redis = await self._get_redis()
+            with suppress(Exception):
+                async with redis.pipeline(transaction=True) as pipe:
+                    pipe.setex(self._tombstone_key(code), _REVOKED_TOMBSTONE_SECONDS, 1)
+                    pipe.delete(self._key(code))
+                    await pipe.execute()
         return revoked
 
     async def consume(self, code: str) -> str:
