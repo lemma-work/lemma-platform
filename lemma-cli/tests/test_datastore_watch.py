@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+import typer
+
 from lemma_cli.cli_core.state import CliState
 from lemma_cli.cli_core.watch import (
     _changes_ws_url,
@@ -83,84 +86,103 @@ def test_compact_payload_and_short_time():
 # --- reconnect loop -----------------------------------------------------------
 
 
-def _drive_run(monkeypatch, *, refresh_returns: bool):
-    """Run the watch loop against a server that answers 401 forever.
+def _rotated_session_state(tmp_path):
+    """A state whose on-disk tokens have already been rotated by someone else.
 
-    Returns (refresh_calls, sleeps). The loop's `websockets`/`asyncio` imports are
-    function-local, so the stubs go on `sys.modules` and on `asyncio` itself.
+    This is the real branch that made the loop spin: `refresh_auth_session`
+    finds a newer pair on disk, adopts it and returns True -- without this
+    process ever proving the new access token is accepted. No patching, no
+    network; the concurrent-rotation path is reached exactly as it is in
+    production.
     """
-    import asyncio
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "servers": {"default": {}},
+                "auth": {"access_token": "NEW", "refresh_token": "NEW-REFRESH"},
+            }
+        )
+    )
+    return CliState(
+        config_path=config_path,
+        config={"auth": {"access_token": "OLD", "refresh_token": "OLD-REFRESH"}},
+        base_url="https://api.example.test",
+        auth_url=None,
+        token=None,  # a LEMMA_TOKEN would disable refresh entirely
+        timeout=5.0,
+        no_verify_ssl=False,
+        output="json",
+    )
+
+
+def _refusing_server(monkeypatch, *, give_up_after: int):
+    """Stub `websockets` so every connection is refused with a 401.
+
+    Third-party, in front of the subject -- the watch loop's own collaborators
+    are left alone so the real refresh logic runs.
+    """
     import sys
     import types
 
     from websockets.exceptions import InvalidStatus
 
-    from lemma_cli.cli_core import watch as watch_module
-
     class _Response:
         status_code = 401
 
+    attempts = {"n": 0}
+
     def _connect(*_args, **_kwargs):
+        attempts["n"] += 1
+        # The spin this test exists to catch reaches no sleep at all, so the
+        # bound has to live here or a regression hangs instead of failing.
+        if attempts["n"] > give_up_after:
+            raise KeyboardInterrupt
         raise InvalidStatus(_Response())
 
     stub = types.ModuleType("websockets")
-    stub.connect = _connect  # type: ignore[attr-defined]
+    stub.connect = _connect
     monkeypatch.setitem(sys.modules, "websockets", stub)
-
-    counters = {"refresh": 0, "sleep": 0}
-
-    def _refresh(_state):
-        counters["refresh"] += 1
-        # Bounded so the spin this test exists to catch fails the assertion
-        # rather than hanging: without the fix `asyncio.sleep` is never reached
-        # at all, so a sleep-based cap alone would loop here forever.
-        if counters["refresh"] > 5:
-            raise KeyboardInterrupt
-        return refresh_returns
-
-    async def _sleep(_delay):
-        counters["sleep"] += 1
-        # The loop only exits via fail(); stop it once we have seen enough to
-        # tell a backoff from a spin.
-        if counters["sleep"] > 3:
-            raise KeyboardInterrupt
-
-    class _Stop(Exception):
-        pass
-
-    def _fail(_message, **_kwargs):
-        raise _Stop
-
-    monkeypatch.setattr(watch_module, "refresh_auth_session", _refresh)
-    monkeypatch.setattr(watch_module, "fail", _fail)
-    monkeypatch.setattr(asyncio, "sleep", _sleep)
-
-    state = _state()
-    try:
-        asyncio.run(watch_module._run(state, "POD", None, None))
-    except (_Stop, KeyboardInterrupt):
-        pass
-    return counters
+    return attempts
 
 
-def test_a_refresh_that_does_not_help_falls_through_to_the_backoff(monkeypatch):
-    """A successful refresh used to `continue` past the sleep and the increment.
+def test_a_refresh_that_does_not_help_stops_instead_of_spinning(
+    monkeypatch, tmp_path
+) -> None:
+    """One immediate reconnect, then the ordinary failure path.
 
-    `refresh_auth_session` returns True when *another process* already rotated
-    the tokens -- without this one ever proving the new token is accepted. If it
-    is not, the old code reconnected immediately, was refused again, refreshed
-    again, and span at zero delay against the server.
+    The old code treated a successful refresh as licence to `continue`, past
+    both the sleep and the backoff increment. When the refreshed token is
+    refused as well -- which is the whole point of the concurrent-rotation
+    branch, since it never checked -- that is an unbounded loop at zero delay.
     """
-    counters = _drive_run(monkeypatch, refresh_returns=True)
+    import asyncio
 
-    assert counters["refresh"] == 1, (
-        f"refreshed {counters['refresh']} times: the loop is spinning on refresh"
+    from lemma_cli.cli_core import watch as watch_module
+
+    attempts = _refusing_server(monkeypatch, give_up_after=5)
+    state = _rotated_session_state(tmp_path)
+
+    with pytest.raises((typer.Exit, KeyboardInterrupt)):
+        asyncio.run(watch_module._run(state, "POD", None, None))
+
+    assert attempts["n"] == 2, (
+        f"connected {attempts['n']} times; expected one refusal, one retry after "
+        "the refresh, then a clean stop"
     )
-    assert counters["sleep"] == 0 or counters["sleep"] >= 1
 
 
-def test_a_refusal_with_no_refresh_available_still_stops(monkeypatch):
-    """The unauthenticated path must terminate, not retry forever."""
-    counters = _drive_run(monkeypatch, refresh_returns=False)
+def test_a_token_from_the_environment_never_refreshes(monkeypatch, tmp_path) -> None:
+    """`LEMMA_TOKEN` disables refresh, so the first refusal is terminal."""
+    import asyncio
 
-    assert counters["refresh"] == 1
+    from lemma_cli.cli_core import watch as watch_module
+
+    attempts = _refusing_server(monkeypatch, give_up_after=5)
+    state = _rotated_session_state(tmp_path)
+    state.token = "tok"
+
+    with pytest.raises((typer.Exit, KeyboardInterrupt)):
+        asyncio.run(watch_module._run(state, "POD", None, None))
+
+    assert attempts["n"] == 1

@@ -147,8 +147,19 @@ MEMOIZING_DECORATORS = {"lru_cache", "cache", "cached", "cached_property"}
 # exact and far cheaper equivalent. Named rather than inferred so the remedy the
 # gate prints is always actionable.
 CONSTANT_FACTORIES = {
-    "list", "dict", "set", "tuple", "frozenset", "str", "int", "float", "bytes",
-    "OrderedDict", "Counter", "defaultdict", "deque",
+    "list",
+    "dict",
+    "set",
+    "tuple",
+    "frozenset",
+    "str",
+    "int",
+    "float",
+    "bytes",
+    "OrderedDict",
+    "Counter",
+    "defaultdict",
+    "deque",
 }
 
 # Dotted callees that hand work to a thread pool this process does not bound.

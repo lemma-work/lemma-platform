@@ -24,19 +24,21 @@ class FileSearcher:
         authorizer: FileAuthorizer,
         path_resolver: PathResolver,
         lookup: FileLookup,
-        platform_session: object | None = None,
     ):
         self._search_factory_provider = search_factory_provider
         self.authz = authz
         self.authorizer = authorizer
         self.paths = path_resolver
         self.lookup = lookup
-        # The *platform* session, so the search can hand its connection back
+        # The *platform* session, taken from the repository the authorizer
+        # already reads through, so the search can hand its connection back
         # while it waits on the embedding provider. Not the datastore session:
-        # the two are different databases, and it is the platform connection
-        # that the agent tool path holds open. Optional, and `None` is a no-op,
-        # because a test double need not supply one.
-        self._platform_session = platform_session
+        # those are two different databases, and it is the platform connection
+        # the agent tool path holds open. `None` is a no-op, so a double that
+        # supplies neither still works.
+        self._platform_session = getattr(
+            getattr(authorizer, "file_repository", None), "session", None
+        )
 
     async def search_files(
         self,

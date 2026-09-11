@@ -41,9 +41,12 @@ the name is replaced where it is looked up rather than where it is defined.
 from __future__ import annotations
 
 import ssl
-from typing import Any
+from typing import TYPE_CHECKING
 
 from app.core.log.log import get_logger
+
+if TYPE_CHECKING:  # `httpx` stays a runtime-lazy import; this is types only.
+    from httpx import AsyncClient
 
 logger = get_logger(__name__)
 
@@ -52,7 +55,7 @@ _installed = False
 #: Built once, on first use, and shared by every request thereafter. Not built
 #: at install time: ``initialize_supertokens()`` runs before the event loop, and
 #: an ``AsyncClient`` binds its connection pool to the loop that first uses it.
-_shared_client: Any = None
+_shared_client: "AsyncClient | None" = None
 _shared_context: ssl.SSLContext | None = None
 
 
@@ -73,10 +76,10 @@ class _SharedClientHandle:
     property of the auth path, not a detail to drop.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: object, **kwargs: object) -> None:
         self._kwargs = kwargs
 
-    async def __aenter__(self) -> Any:
+    async def __aenter__(self) -> "AsyncClient":
         global _shared_client
         if _shared_client is None or _shared_client.is_closed:
             from httpx import AsyncClient
@@ -84,7 +87,7 @@ class _SharedClientHandle:
             _shared_client = AsyncClient(verify=_verify_context(), **self._kwargs)
         return _shared_client
 
-    async def __aexit__(self, *exc_info: Any) -> bool:
+    async def __aexit__(self, *exc_info: object) -> bool:
         # Emphatically not closing it: outliving the request is the point.
         return False
 
@@ -102,7 +105,7 @@ def install_shared_querier_client() -> None:
         logger.warning("identity.querier_client.install_failed.degraded")
         return
 
-    querier.AsyncClient = _SharedClientHandle  # type: ignore[attr-defined]
+    querier.AsyncClient = _SharedClientHandle  # type: ignore[misc]
     _installed = True
 
 

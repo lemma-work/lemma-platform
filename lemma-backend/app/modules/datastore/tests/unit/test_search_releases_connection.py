@@ -51,6 +51,17 @@ class _Visibility:
 
 
 class _Authorizer:
+    """Carries the repository the searcher takes its platform session from.
+
+    Production wires it the same way: `FileAuthorizer` is built with the
+    `DatastoreFileRepository`, whose `session` is the platform session.
+    """
+
+    def __init__(self, session: "_Session | None" = None) -> None:
+        self.file_repository = (
+            None if session is None else type("_Repo", (), {"session": session})()
+        )
+
     async def visibility_filter(self, *, pod_id: object, ctx: object) -> _Visibility:
         return _Visibility()
 
@@ -67,14 +78,13 @@ class _SearchService:
         return []
 
 
-def _searcher(session: _Session, service: _SearchService) -> FileSearcher:
+def _searcher(session: "_Session | None", service: _SearchService) -> FileSearcher:
     return FileSearcher(
         lambda: lambda _pod_id: service,
         authz=None,
-        authorizer=_Authorizer(),
+        authorizer=_Authorizer(session),
         path_resolver=None,
         lookup=None,
-        platform_session=session,
     )
 
 
@@ -128,13 +138,7 @@ async def test_no_session_is_a_no_op() -> None:
     session = _Session()
     service = _SearchService(session)
 
-    searcher = FileSearcher(
-        lambda: lambda _pod_id: service,
-        authz=None,
-        authorizer=_Authorizer(),
-        path_resolver=None,
-        lookup=None,
-    )
+    searcher = _searcher(None, service)
     await searcher.search_files(
         pod_id=uuid7(),
         requester_user_id=uuid7(),
