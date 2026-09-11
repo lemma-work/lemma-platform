@@ -253,3 +253,43 @@ async def test_a_claim_appearing_mid_pass_stops_the_destroy(destroy_enabled) -> 
     await group_reaper.reap_abandoned_consumer_groups(client)
 
     client.xgroup_destroy.assert_not_awaited()
+
+
+async def test_an_expired_claim_still_sitting_there_does_not_block_the_destroy(
+    destroy_enabled,
+) -> None:
+    """The lifecycle the reaper exists for: declared, claimed, then deleted.
+
+    A claim is only removed when a destroy succeeds, so a group whose code was
+    deleted keeps its last claim in the ledger forever. `_is_abandoned` reads an
+    *expired* claim as evidence for abandonment -- but revalidation used to
+    reject any claim at all, so this group was detected on every pass and
+    destroyed on none of them. The two halves have to agree on what a claim
+    means, which is why revalidation compares against what the scan saw rather
+    than testing for existence.
+    """
+    stale = int(time.time() * _MS) - (WINDOW * 2 * _MS)
+    field = group_reaper._field("schedule_events", "was-declared-once")
+    client = _client(groups=[_group("was-declared-once")], claims={field: str(stale)})
+    client.hget.return_value = str(stale)  # unchanged since the scan read it
+
+    found = await group_reaper.reap_abandoned_consumer_groups(client)
+
+    assert [g.group for g in found] == ["was-declared-once"]
+    client.xgroup_destroy.assert_awaited_once_with(
+        name="schedule_events", groupname="was-declared-once"
+    )
+
+
+async def test_a_claim_renewed_since_the_scan_still_blocks_the_destroy(
+    destroy_enabled,
+) -> None:
+    """The case the comparison must keep catching: renewed, not merely present."""
+    stale = int(time.time() * _MS) - (WINDOW * 2 * _MS)
+    field = group_reaper._field("schedule_events", "came-back")
+    client = _client(groups=[_group("came-back")], claims={field: str(stale)})
+    client.hget.return_value = str(int(time.time() * _MS))  # renewed mid-pass
+
+    await group_reaper.reap_abandoned_consumer_groups(client)
+
+    client.xgroup_destroy.assert_not_awaited()

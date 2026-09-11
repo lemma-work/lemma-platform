@@ -67,6 +67,10 @@ class AbandonedGroup:
     #: The position it was sitting at when it was judged. Re-read immediately
     #: before the destroy so a group that moved in between is left alone.
     last_delivered_id: str
+    #: The claim seen during the scan, or None. Carried so revalidation can tell
+    #: an expired claim that is still sitting there -- which is evidence *for*
+    #: abandonment -- from a new one written since.
+    observed_claim: int | None
 
 
 def _value(mapping: object, name: str, default: object = 0) -> object:
@@ -278,11 +282,13 @@ async def reap_abandoned_consumer_groups(
             )
             if not abandoned:
                 continue
+            name = _text(_value(group, "name", ""))
             candidate = AbandonedGroup(
                 stream=stream,
-                group=_text(_value(group, "name", "")),
+                group=name,
                 last_delivered_age_seconds=age_seconds,
                 last_delivered_id=_text(_value(group, "last-delivered-id", "")),
+                observed_claim=claims.get(_field(stream, name)),
             )
             found.append(candidate)
             logger.warning(
@@ -319,8 +325,15 @@ async def _unchanged_since_judged(client: "Redis", candidate: AbandonedGroup) ->
         )
     except RedisError, TypeError, ValueError:
         return False
-    if claimed is not None:
-        return False  # somebody claimed it while the scan was still running
+    # Compared against what the scan saw, not merely tested for existence. A
+    # claim only disappears when a destroy succeeds, so a group that was once
+    # declared and then deleted from the code keeps its stale claim forever --
+    # and `_is_abandoned` deliberately treats an *expired* claim as evidence
+    # for abandonment. Rejecting any claim here contradicted that: such a group
+    # was detected on every pass and destroyed on none of them.
+    reread = _int(claimed) if claimed is not None else None
+    if reread != candidate.observed_claim:
+        return False  # written or renewed while the scan was still running
     if not isinstance(groups, list):
         return False
     for group in groups:
