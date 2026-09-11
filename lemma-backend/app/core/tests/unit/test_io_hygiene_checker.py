@@ -268,3 +268,57 @@ def factory():
     return build
 """
     assert _rules(source) == ["process-lifetime-construction"]
+
+
+# --- per-instance signature defaults -----------------------------------------
+
+
+@pytest.mark.parametrize("factory", ["list", "dict", "set"])
+def test_a_private_attr_empty_collection_factory_is_reported(factory: str) -> None:
+    """Each of these has an exact `default=<empty>` equivalent that costs nothing.
+
+    A *private* attribute's default is resolved per instance, not once at schema
+    build, and resolving it calls `inspect.signature` on the factory. This was
+    63us per domain entity and 75% of production loop-stall time.
+    """
+    source = (
+        f"class M(BaseModel):\n    _x: list = PrivateAttr(default_factory={factory})\n"
+    )
+    assert _rules(source) == ["per-instance-signature-default"]
+
+
+def test_a_qualified_private_attr_is_reported() -> None:
+    """`pydantic.PrivateAttr(...)` is the same call by a longer name."""
+    source = "class M(BaseModel):\n    _x: list = pydantic.PrivateAttr(default_factory=list)\n"
+    assert _rules(source) == ["per-instance-signature-default"]
+
+
+def test_the_constant_default_is_the_fix() -> None:
+    """`default=[]` is what the rule is steering towards, so it must stay quiet."""
+    source = "class M(BaseModel):\n    _x: list = PrivateAttr(default=[])\n"
+    assert _rules(source) == []
+
+
+@pytest.mark.parametrize(
+    "factory",
+    ["uuid7", "lambda: datetime.now()", "_build_state"],
+    ids=["uuid", "lambda", "named-function"],
+)
+def test_a_factory_that_computes_a_value_is_left_alone(factory: str) -> None:
+    """These have no constant form, so flagging them would be noise.
+
+    The gate's own history is the argument: a rule that cries wolf gets
+    baselined into irrelevance, which is worse than no rule at all.
+    """
+    source = f"class M(BaseModel):\n    _x: object = PrivateAttr(default_factory={factory})\n"
+    assert _rules(source) == []
+
+
+def test_a_normal_field_factory_is_not_this_rule() -> None:
+    """`Field(default_factory=list)` is resolved once when the schema is built.
+
+    All 345 of them in this codebase are fine, and the measurement says so:
+    zero signature resolutions per instantiation. Only `PrivateAttr` pays.
+    """
+    source = "class M(BaseModel):\n    x: list = Field(default_factory=list)\n"
+    assert _rules(source) == []
