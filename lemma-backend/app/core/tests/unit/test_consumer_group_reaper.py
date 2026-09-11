@@ -185,3 +185,33 @@ async def test_a_reap_window_of_zero_disables_the_reaper(monkeypatch) -> None:
 
     assert await group_reaper.reap_abandoned_consumer_groups(client) == []
     client.xinfo_groups.assert_not_awaited()
+
+
+async def test_a_group_that_never_delivered_is_still_reapable(destroy_enabled) -> None:
+    """`last-delivered-id` is `0-0` for a group created and never read from.
+
+    Reading that as "just delivered" made such a group unreapable forever --
+    a subscriber deleted before it ever ran would leave one behind permanently.
+    It is not evidence either way, so it falls through to the ledger and the
+    consumer check, which can tell a brand-new group from an abandoned one.
+
+    Real Redis found this; the mocks here had agreed with the bug.
+    """
+    client = _client(
+        groups=[{"name": "never-read", "pending": 0, "last-delivered-id": "0-0"}]
+    )
+
+    found = await group_reaper.reap_abandoned_consumer_groups(client)
+
+    assert [g.group for g in found] == ["never-read"]
+
+
+async def test_a_group_that_never_delivered_but_is_claimed_survives() -> None:
+    """The brand-new-group case: created seconds ago, already on the ledger."""
+    now_ms = int(time.time() * _MS)
+    client = _client(
+        groups=[{"name": "brand-new", "pending": 0, "last-delivered-id": "0-0"}],
+        claims={group_reaper._field("schedule_events", "brand-new"): str(now_ms)},
+    )
+
+    assert await group_reaper.reap_abandoned_consumer_groups(client) == []

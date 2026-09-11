@@ -113,12 +113,14 @@ def owned_streams() -> set[str]:
 
 
 def _delivered_age_ms(group: object, now_ms: int) -> int:
-    """Age of the group's last-delivered-id, from the millisecond it encodes.
+    """Age of the group's last-delivered-id, or 0 if it has never delivered.
 
-    A Redis stream id is ``<ms>-<seq>``. ``0-0`` means the group has never
-    delivered anything, which is reported as age 0 -- indistinguishable from
-    "just delivered", and deliberately so: it is the caller's job to treat an
-    unparseable position as a reason not to act.
+    A Redis stream id is ``<ms>-<seq>``. A group created at ``0`` and never read
+    from sits at ``0-0``, and 0 is returned for it -- *not* an enormous age. The
+    caller has to decide what that means, because on its own it cannot: a group
+    that has never read is either one created seconds ago by a rolling deploy or
+    one whose subscriber was deleted before it ever ran, and nothing in the id
+    tells them apart. The claim ledger is what does.
     """
     raw = _text(_value(group, "last-delivered-id", "")).split("-")[0]
     delivered = _int(raw)
@@ -161,8 +163,15 @@ async def _is_abandoned(
         return False, 0  # someone in the fleet declares it
     if _int(_value(group, "pending", 0)) != 0:
         return False, 0  # work in flight; never destroy a PEL
-    if age_ms < window_ms:
-        return False, 0  # it read something recently, or has never read at all
+    # `age_ms == 0` means it has never delivered, which is not evidence either
+    # way -- a group created seconds ago looks identical to one whose subscriber
+    # was deleted before it ever ran. Only a *recent* delivery saves it here;
+    # the never-delivered case falls through to the ledger and the consumer
+    # check, which is what can actually tell those two apart. Reading 0 as
+    # "just delivered" made a group that never read unreapable forever, which
+    # real Redis caught and the mocks did not.
+    if age_ms and age_ms < window_ms:
+        return False, 0  # it delivered something recently
     if not await _every_consumer_idle(client, stream, name, window_ms):
         return False, 0
     return True, age_ms // 1000
@@ -210,9 +219,23 @@ async def claim_registered_groups(client: "Redis") -> None:
 
 async def reap_abandoned_consumer_groups(
     client: "Redis",
+    *,
+    window_seconds: int | None = None,
+    destroy: bool | None = None,
 ) -> list[AbandonedGroup]:
-    """Report -- and, when enabled, destroy -- every abandoned consumer group."""
-    window = event_transport_settings.redis_stream_group_reap_after_seconds
+    """Report -- and, when enabled, destroy -- every abandoned consumer group.
+
+    The two knobs fall back to settings, which is how the cron calls it. They
+    are arguments so a test can say what it means instead of reaching into the
+    settings object: patching ambient configuration to arrange a test is the
+    habit `scripts/check_test_doubles.py` exists to discourage, and it reads
+    worse besides.
+    """
+    window = (
+        event_transport_settings.redis_stream_group_reap_after_seconds
+        if window_seconds is None
+        else window_seconds
+    )
     if window <= 0:
         return []
     window_ms = window * 1000
@@ -228,7 +251,11 @@ async def reap_abandoned_consumer_groups(
         # safety of a first deploy, and of a Redis that has been flushed.
         return []
 
-    destroy = event_transport_settings.redis_stream_group_destroy_enabled
+    destroy_enabled = (
+        event_transport_settings.redis_stream_group_destroy_enabled
+        if destroy is None
+        else destroy
+    )
     found: list[AbandonedGroup] = []
     for stream in sorted(owned_streams()):
         try:
@@ -259,9 +286,9 @@ async def reap_abandoned_consumer_groups(
                 stream_name=candidate.stream,
                 group=candidate.group,
                 last_delivered_age_seconds=candidate.last_delivered_age_seconds,
-                destroyed=destroy,
+                destroyed=destroy_enabled,
             )
-    if destroy:
+    if destroy_enabled:
         await _destroy(client, found)
     return found
 
