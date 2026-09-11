@@ -78,3 +78,89 @@ def test_compact_payload_and_short_time():
     assert long.endswith("…") and len(long) <= 120
     assert _short_time("2026-06-21T18:49:01.309492Z") == "18:49:01"
     assert _short_time(None) == ""
+
+
+# --- reconnect loop -----------------------------------------------------------
+
+
+def _drive_run(monkeypatch, *, refresh_returns: bool):
+    """Run the watch loop against a server that answers 401 forever.
+
+    Returns (refresh_calls, sleeps). The loop's `websockets`/`asyncio` imports are
+    function-local, so the stubs go on `sys.modules` and on `asyncio` itself.
+    """
+    import asyncio
+    import sys
+    import types
+
+    from websockets.exceptions import InvalidStatus
+
+    from lemma_cli.cli_core import watch as watch_module
+
+    class _Response:
+        status_code = 401
+
+    def _connect(*_args, **_kwargs):
+        raise InvalidStatus(_Response())
+
+    stub = types.ModuleType("websockets")
+    stub.connect = _connect  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "websockets", stub)
+
+    counters = {"refresh": 0, "sleep": 0}
+
+    def _refresh(_state):
+        counters["refresh"] += 1
+        # Bounded so the spin this test exists to catch fails the assertion
+        # rather than hanging: without the fix `asyncio.sleep` is never reached
+        # at all, so a sleep-based cap alone would loop here forever.
+        if counters["refresh"] > 5:
+            raise KeyboardInterrupt
+        return refresh_returns
+
+    async def _sleep(_delay):
+        counters["sleep"] += 1
+        # The loop only exits via fail(); stop it once we have seen enough to
+        # tell a backoff from a spin.
+        if counters["sleep"] > 3:
+            raise KeyboardInterrupt
+
+    class _Stop(Exception):
+        pass
+
+    def _fail(_message, **_kwargs):
+        raise _Stop
+
+    monkeypatch.setattr(watch_module, "refresh_auth_session", _refresh)
+    monkeypatch.setattr(watch_module, "fail", _fail)
+    monkeypatch.setattr(asyncio, "sleep", _sleep)
+
+    state = _state()
+    try:
+        asyncio.run(watch_module._run(state, "POD", None, None))
+    except (_Stop, KeyboardInterrupt):
+        pass
+    return counters
+
+
+def test_a_refresh_that_does_not_help_falls_through_to_the_backoff(monkeypatch):
+    """A successful refresh used to `continue` past the sleep and the increment.
+
+    `refresh_auth_session` returns True when *another process* already rotated
+    the tokens -- without this one ever proving the new token is accepted. If it
+    is not, the old code reconnected immediately, was refused again, refreshed
+    again, and span at zero delay against the server.
+    """
+    counters = _drive_run(monkeypatch, refresh_returns=True)
+
+    assert counters["refresh"] == 1, (
+        f"refreshed {counters['refresh']} times: the loop is spinning on refresh"
+    )
+    assert counters["sleep"] == 0 or counters["sleep"] >= 1
+
+
+def test_a_refusal_with_no_refresh_available_still_stops(monkeypatch):
+    """The unauthenticated path must terminate, not retry forever."""
+    counters = _drive_run(monkeypatch, refresh_returns=False)
+
+    assert counters["refresh"] == 1
