@@ -745,6 +745,57 @@ class TestSignedUrlDurability:
         assert await redis.exists(store._key(code)) == 0
 
     @pytest.mark.asyncio
+    async def test_another_pod_cannot_knock_out_this_pods_cached_link(
+        self,
+        pod_api: DatastoreApi,
+        authenticated_client: AsyncClient,
+        async_client: AsyncClient,
+        fixed_test_org,
+    ):
+        """Revoking is pod-scoped in the row; the Redis keys are not.
+
+        Invalidating regardless of whether the row update matched let a caller
+        authorized for one pod delete another pod's cached entry and hold a
+        tombstone over it — a link they have no rights to, unusable for as long
+        as the tombstone lives, and repeatably so.
+        """
+        from app.modules.datastore.services.files.signed_url import (
+            get_signed_url_store,
+        )
+        from app.modules.datastore.tests.e2e.harness import pod_payload
+
+        uploaded = await _upload(
+            pod_api, "/me/victim", "theirs.txt", b"theirs", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"], {})
+        code = _code_of(body["signed_url"])
+
+        store = get_signed_url_store()
+        redis = await store._get_redis()
+        assert await redis.exists(store._key(code)) == 1
+
+        # A second pod the same user owns, so the membership check passes and
+        # the request reaches the store — which is the only thing left to scope
+        # it. The code belongs to the first pod.
+        created = await authenticated_client.post(
+            "/pods", json=pod_payload(fixed_test_org["id"])
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.text
+        other = DatastoreApi(authenticated_client, created.json()["id"])
+
+        resp = await other.request(
+            "DELETE", FILES.format(pod_id=other.pod_id) + f"/signed-urls/{code}"
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.text
+        assert resp.json()["revoked"] is False
+
+        # Untouched: still cached, no tombstone, and still serving.
+        assert await redis.exists(store._key(code)) == 1
+        assert await redis.exists(store._tombstone_key(code)) == 0
+        served = await async_client.get(f"/s/{code}")
+        assert served.status_code == status.HTTP_200_OK, served.text
+
+    @pytest.mark.asyncio
     async def test_a_request_larger_than_the_remaining_budget_is_refused(
         self, pod_api: DatastoreApi, async_client: AsyncClient
     ):

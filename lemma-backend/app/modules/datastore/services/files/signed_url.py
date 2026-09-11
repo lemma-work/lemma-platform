@@ -132,6 +132,30 @@ return {
 """
 
 
+# Write a link's claims, unless it has been revoked. KEYS[1] is the entry and
+# KEYS[2] the revocation tombstone; both are examined and written in one step so
+# a revoke cannot land between the check and the write.
+_CACHE_LUA = """
+if redis.call('EXISTS', KEYS[2]) == 1 then
+  return 0
+end
+redis.call('HSET', KEYS[1],
+  'object_key', ARGV[1],
+  'pod_id', ARGV[2],
+  'path', ARGV[3],
+  'content_sha256', ARGV[4],
+  'content_type', ARGV[5],
+  'filename', ARGV[6],
+  'size_bytes', ARGV[7],
+  'max_hits', ARGV[8],
+  'budget_bytes', ARGV[9],
+  'spent_bytes', 0
+)
+redis.call('EXPIRE', KEYS[1], ARGV[10])
+return 1
+"""
+
+
 class SignedUrlNotFound(Exception):
     """The short code is unknown or has expired."""
 
@@ -274,33 +298,30 @@ class SignedUrlStore:
         if ttl <= 0:
             return
         redis = await self._get_redis()
-        if await redis.exists(self._tombstone_key(link.code)):
-            # Revoked while this caller was mid-rehydrate. Writing now would
-            # undo the revocation for the rest of the link's lifetime.
-            return
-        key = self._key(link.code)
-        async with redis.pipeline(transaction=True) as pipe:
-            pipe.hset(
-                key,
-                mapping={
-                    "object_key": link.object_key,
-                    "pod_id": str(link.pod_id),
-                    "path": link.path,
-                    "content_sha256": link.content_sha256 or "",
-                    "content_type": link.content_type,
-                    "filename": link.filename,
-                    "size_bytes": link.size_bytes,
-                    "max_hits": link.max_hits,
-                    # A budget of 0 means "uncounted", which is what an unknown
-                    # or zero size has to fall back to: multiplying it out would
-                    # otherwise mint a link that is exhausted before its first
-                    # fetch. Expiry still bounds such a link.
-                    "budget_bytes": link.size_bytes * link.max_hits,
-                    "spent_bytes": 0,
-                },
-            )
-            pipe.expire(key, ttl)
-            await pipe.execute()
+        # One script, because checking the tombstone and then writing in a
+        # separate pipeline is the same check-then-act this tombstone exists to
+        # close: a revoke landing between the two would set the tombstone,
+        # delete the entry, and then have it written straight back.
+        await redis.eval(
+            _CACHE_LUA,
+            2,
+            self._key(link.code),
+            self._tombstone_key(link.code),
+            link.object_key,
+            str(link.pod_id),
+            link.path,
+            link.content_sha256 or "",
+            link.content_type,
+            link.filename,
+            link.size_bytes,
+            link.max_hits,
+            # A budget of 0 means "uncounted", which is what an unknown or zero
+            # size has to fall back to: multiplying it out would otherwise mint
+            # a link that is exhausted before its first fetch. Expiry still
+            # bounds such a link.
+            link.size_bytes * link.max_hits,
+            ttl,
+        )
 
     async def peek_claims(self, code: str) -> SignedUrlClaims:
         """The link's claims, charging nothing.
@@ -400,11 +421,19 @@ class SignedUrlStore:
         # entry straight back, so the link kept working until its TTL.
         revoked = await links.revoke(pod_id, code)
         await links.commit()
+        if not revoked:
+            # Nothing of this pod's was revoked, so there is nothing of this
+            # pod's to invalidate. The row update is scoped by `pod_id`; the
+            # Redis keys below are keyed on the code alone, so doing them anyway
+            # let a member of one pod knock out another pod's cached entry and
+            # hold a tombstone over it — a link they have no rights to, made
+            # unusable for the tombstone's lifetime and repeatably so.
+            return False
 
         # Committing first shrinks that window but does not close it: a
         # rehydrate that had already read the live row can still write the cache
-        # after the delete below. The tombstone closes it — `_cache` refuses to
-        # write while one exists, and it outlives any in-flight rehydrate.
+        # after the delete below. The tombstone closes it — `_cache` writes only
+        # when none exists, in the same step as the check.
         # Redis only from here, so the connection goes back first.
         async with connection_released(links.session):
             redis = await self._get_redis()
