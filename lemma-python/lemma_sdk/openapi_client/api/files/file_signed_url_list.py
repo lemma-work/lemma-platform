@@ -16,11 +16,22 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     include_dead: bool | Unset = False,
+    limit: int | Unset = 100,
+    cursor: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
     params["include_dead"] = include_dead
+
+    params["limit"] = limit
+
+    json_cursor: None | str | Unset
+    if isinstance(cursor, Unset):
+        json_cursor = UNSET
+    else:
+        json_cursor = cursor
+    params["cursor"] = json_cursor
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -70,6 +81,8 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
+    limit: int | Unset = 100,
+    cursor: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | SignedUrlListResponse]:
     """List this pod's public signed URLs
 
@@ -77,6 +90,8 @@ def sync_detailed(
         pod_id (UUID):
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
+        limit (int | Unset): Links per page. Default: 100.
+        cursor (None | str | Unset): `next_cursor` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -89,6 +104,8 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         include_dead=include_dead,
+        limit=limit,
+        cursor=cursor,
     )
 
     response = client.get_httpx_client().request(
@@ -103,6 +120,8 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
+    limit: int | Unset = 100,
+    cursor: None | str | Unset = UNSET,
 ) -> ErrorResponse | SignedUrlListResponse | None:
     """List this pod's public signed URLs
 
@@ -110,6 +129,8 @@ def sync(
         pod_id (UUID):
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
+        limit (int | Unset): Links per page. Default: 100.
+        cursor (None | str | Unset): `next_cursor` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -123,6 +144,8 @@ def sync(
         pod_id=pod_id,
         client=client,
         include_dead=include_dead,
+        limit=limit,
+        cursor=cursor,
     ).parsed
 
 
@@ -131,6 +154,8 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
+    limit: int | Unset = 100,
+    cursor: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | SignedUrlListResponse]:
     """List this pod's public signed URLs
 
@@ -138,6 +163,8 @@ async def asyncio_detailed(
         pod_id (UUID):
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
+        limit (int | Unset): Links per page. Default: 100.
+        cursor (None | str | Unset): `next_cursor` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -150,6 +177,8 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         include_dead=include_dead,
+        limit=limit,
+        cursor=cursor,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -162,6 +191,8 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
+    limit: int | Unset = 100,
+    cursor: None | str | Unset = UNSET,
 ) -> ErrorResponse | SignedUrlListResponse | None:
     """List this pod's public signed URLs
 
@@ -169,6 +200,8 @@ async def asyncio(
         pod_id (UUID):
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
+        limit (int | Unset): Links per page. Default: 100.
+        cursor (None | str | Unset): `next_cursor` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -183,5 +216,7 @@ async def asyncio(
             pod_id=pod_id,
             client=client,
             include_dead=include_dead,
+            limit=limit,
+            cursor=cursor,
         )
     ).parsed

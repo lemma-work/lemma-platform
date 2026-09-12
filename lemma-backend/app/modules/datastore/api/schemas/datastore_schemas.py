@@ -582,6 +582,10 @@ class SignedUrlSummary(BaseModel):
 
 class SignedUrlListResponse(BaseModel):
     links: List[SignedUrlSummary]
+    #: Pass back as ``cursor`` to continue. ``None`` means this is the last
+    #: page — a full page is not itself proof that more exist, so the cursor is
+    #: the only signal, and callers cleaning up links must follow it.
+    next_cursor: Optional[str] = None
 
 
 class SignedUrlRevokeResponse(BaseModel):

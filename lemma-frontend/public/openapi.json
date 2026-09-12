@@ -13506,6 +13506,17 @@
             },
             "title": "Links",
             "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           }
         },
         "required": [
@@ -26863,6 +26874,38 @@
               "title": "Include Dead",
               "type": "boolean"
             }
+          },
+          {
+            "description": "Links per page.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Links per page.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_cursor` from the previous page.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_cursor` from the previous page.",
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -26893,7 +26936,7 @@
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": false,
+          "paginates": true,
           "resource": "file.signed_url",
           "result": "collection",
           "verb": "list"

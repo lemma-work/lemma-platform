@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from types import SimpleNamespace
+
 import typer
 
 from ..confirm import confirm_destructive
@@ -643,14 +645,29 @@ def list_shares(
         False, "--all", help="Also show links that have expired or been revoked."
     ),
 ) -> None:
-    """List the public links this pod has handed out, newest first."""
+    """List the public links you have handed out, newest first.
+
+    Yours, not the pod's: the code in each row is the whole capability. Follows
+    `next_cursor` to the end, because a link you cannot see is one you cannot
+    revoke.
+    """
     state = state_from_ctx(ctx)
-    result = run_with_client(
-        ctx,
-        lambda client, s: pod_client(client, s, pod).files.list_signed_urls(
-            include_dead=include_dead
-        ),
-    )
+
+    def _all_pages(client, s):
+        pod_files = pod_client(client, s, pod).files
+        links: list = []
+        cursor = None
+        while True:
+            page = pod_files.list_signed_urls(include_dead=include_dead, cursor=cursor)
+            links.extend(page.links)
+            cursor = getattr(page, "next_cursor", None)
+            # Same guard as `PodFiles.list_all`: a cursor is a non-empty string
+            # or it is the end. Testing it for truthiness alone loops forever on
+            # anything else the attribute might hold.
+            if not isinstance(cursor, str) or not cursor:
+                return SimpleNamespace(links=links, next_cursor=None)
+
+    result = run_with_client(ctx, _all_pages)
     if result is not None:
         emit(state, result)
 

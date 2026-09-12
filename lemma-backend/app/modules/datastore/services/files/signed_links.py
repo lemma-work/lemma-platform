@@ -15,7 +15,10 @@ from datetime import datetime
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.modules.datastore.domain.errors import DatastoreValidationError
+from app.modules.datastore.domain.errors import (
+    DatastoreRevocationIncompleteError,
+    DatastoreValidationError,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreSignedLinkEntity,
@@ -23,7 +26,10 @@ from app.modules.datastore.domain.file_entities import (
 from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
     SignedLinkRepository,
 )
-from app.modules.datastore.services.files.signed_url import get_signed_url_store
+from app.modules.datastore.services.files.signed_url import (
+    SignedUrlRevocationIncomplete,
+    get_signed_url_store,
+)
 
 
 class SignedLinks:
@@ -74,23 +80,47 @@ class SignedLinks:
         return entity, signed_url, expires_at, effective_max_hits
 
     async def list(
-        self, pod_id: UUID, user_id: UUID | None, *, include_dead: bool = False
+        self,
+        pod_id: UUID,
+        ctx: Context,
+        *,
+        include_dead: bool = False,
+        limit: int = 100,
+        before: datetime | None = None,
+        before_id: UUID | None = None,
     ) -> list[DatastoreSignedLinkEntity]:
-        """The links this person has handed out in this pod, newest first.
+        """The links this caller handed out and may still read, newest first.
 
         Not per-file — that question cannot be asked one file at a time — and
-        not pod-wide either; see ``SignedLinkRepository.list_for_user`` for why
-        the caller's own links are the only safe scope.
+        not pod-wide either; see ``SignedLinkRepository.list_visible`` for why
+        the scope is minted-by *and* readable-by, and why the second half is not
+        the same question as the first for a delegated agent.
         """
-        return await self._links().list_for_user(
-            pod_id, user_id, include_dead=include_dead
+        return await self._links().list_visible(
+            pod_id,
+            ctx,
+            include_dead=include_dead,
+            limit=limit,
+            before=before,
+            before_id=before_id,
         )
 
-    async def revoke(self, pod_id: UUID, code: str) -> bool:
+    async def revoke(self, pod_id: UUID, code: str, ctx: Context) -> bool:
         """Kill a public link. Returns whether it was live until now.
 
         There was previously no way to do this at all: a link shared by mistake
         ran its full lifetime, which mattered rather more once that became seven
         days instead of three hours.
+
+        Authorized the same way the listing is, and for the same reason: taking
+        only the pod let a delegated agent retire its principal's link to a file
+        the agent may not read — a capability removed by something that could
+        not have been given it.
         """
-        return await get_signed_url_store().revoke(pod_id, code, links=self._links())
+        links = self._links()
+        if not await links.is_visible(pod_id, code, ctx):
+            return False
+        try:
+            return await get_signed_url_store().revoke(pod_id, code, links=links)
+        except SignedUrlRevocationIncomplete as exc:
+            raise DatastoreRevocationIncompleteError() from exc

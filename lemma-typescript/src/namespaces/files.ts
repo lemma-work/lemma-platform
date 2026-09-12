@@ -131,13 +131,25 @@ export class FilesNamespace {
   }
 
   /**
-   * Every public signed URL this pod has minted, newest first. Pass
-   * `includeDead` to also see links that have expired or been revoked, which
-   * are kept for a grace period.
+   * The public signed URLs *you* minted and may still read, newest first —
+   * scoped to the caller rather than the pod, because each row carries the
+   * `code`, which is the whole capability.
+   *
+   * Paged: a response with `next_cursor` set has more, so pass it back as
+   * `cursor` and keep going until it is null. A link you do not list is one you
+   * cannot revoke. `includeDead` also returns expired, revoked and spent links,
+   * which are kept for a grace period.
    */
-  listSignedUrls(options: { includeDead?: boolean } = {}) {
+  listSignedUrls(
+    options: { includeDead?: boolean; limit?: number; cursor?: string } = {},
+  ) {
     return this.client.request(() =>
-      FilesService.fileSignedUrlList(this.podId(), options.includeDead ?? false),
+      FilesService.fileSignedUrlList(
+        this.podId(),
+        options.includeDead ?? false,
+        options.limit ?? 100,
+        options.cursor ?? null,
+      ),
     );
   }
 

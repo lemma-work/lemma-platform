@@ -365,12 +365,16 @@ export class FilesService {
      * List this pod's public signed URLs
      * @param podId
      * @param includeDead Also list links that have expired or been revoked.
+     * @param limit Links per page.
+     * @param cursor `next_cursor` from the previous page.
      * @returns SignedUrlListResponse Successful Response
      * @throws ApiError
      */
     public static fileSignedUrlList(
         podId: string,
         includeDead: boolean = false,
+        limit: number = 100,
+        cursor?: (string | null),
     ): CancelablePromise<SignedUrlListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -380,6 +384,8 @@ export class FilesService {
             },
             query: {
                 'include_dead': includeDead,
+                'limit': limit,
+                'cursor': cursor,
             },
             errors: {
                 422: `Validation Error`,

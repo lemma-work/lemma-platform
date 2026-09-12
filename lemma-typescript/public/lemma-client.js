@@ -12269,10 +12269,12 @@ var LemmaClient = (() => {
      * List this pod's public signed URLs
      * @param podId
      * @param includeDead Also list links that have expired or been revoked.
+     * @param limit Links per page.
+     * @param cursor `next_cursor` from the previous page.
      * @returns SignedUrlListResponse Successful Response
      * @throws ApiError
      */
-    static fileSignedUrlList(podId, includeDead = false) {
+    static fileSignedUrlList(podId, includeDead = false, limit = 100, cursor) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/datastore/files/signed-urls",
@@ -12280,7 +12282,9 @@ var LemmaClient = (() => {
           "pod_id": podId
         },
         query: {
-          "include_dead": includeDead
+          "include_dead": includeDead,
+          "limit": limit,
+          "cursor": cursor
         },
         errors: {
           422: `Validation Error`
@@ -12531,15 +12535,25 @@ var LemmaClient = (() => {
       return this.client.request(() => FilesService.fileSignedUrl(this.podId(), path, body));
     }
     /**
-     * Every public signed URL this pod has minted, newest first. Pass
-     * `includeDead` to also see links that have expired or been revoked, which
-     * are kept for a grace period.
+     * The public signed URLs *you* minted and may still read, newest first —
+     * scoped to the caller rather than the pod, because each row carries the
+     * `code`, which is the whole capability.
+     *
+     * Paged: a response with `next_cursor` set has more, so pass it back as
+     * `cursor` and keep going until it is null. A link you do not list is one you
+     * cannot revoke. `includeDead` also returns expired, revoked and spent links,
+     * which are kept for a grace period.
      */
     listSignedUrls(options = {}) {
       return this.client.request(
         () => {
-          var _a;
-          return FilesService.fileSignedUrlList(this.podId(), (_a = options.includeDead) != null ? _a : false);
+          var _a, _b, _c;
+          return FilesService.fileSignedUrlList(
+            this.podId(),
+            (_a = options.includeDead) != null ? _a : false,
+            (_b = options.limit) != null ? _b : 100,
+            (_c = options.cursor) != null ? _c : null
+          );
         }
       );
     }

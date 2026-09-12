@@ -10,6 +10,7 @@ The link these mint is served — unauthenticated — by ``signed_file_controlle
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
@@ -17,6 +18,7 @@ from fastapi import APIRouter, Query, status
 from app.core.api.dependencies import CurrentUser
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.modules.datastore.api.dependencies import FileServiceDep
+from app.modules.datastore.domain.errors import DatastoreValidationError
 from app.modules.datastore.api.file_response_mapping import (
     ensure_file_in_pod,
     to_file_response,
@@ -75,6 +77,26 @@ async def create_file_signed_url(
     )
 
 
+def _encode_cursor(link) -> str:
+    """Where the next page starts: the last row's `(created_at, id)`.
+
+    Both halves, because `created_at` is not unique — a burst of mints shares a
+    timestamp — so a cursor on the timestamp alone would skip or repeat rows at
+    a page boundary.
+    """
+    return f"{link.created_at.isoformat()}|{link.id}"
+
+
+def _decode_cursor(cursor: str | None) -> tuple[datetime | None, UUID | None]:
+    if not cursor:
+        return None, None
+    stamp, _, raw_id = cursor.partition("|")
+    try:
+        return datetime.fromisoformat(stamp), UUID(raw_id)
+    except ValueError:
+        raise DatastoreValidationError("Malformed cursor")
+
+
 @router.get(
     "/signed-urls",
     response_model=SignedUrlListResponse,
@@ -93,11 +115,22 @@ async def list_file_signed_urls(
     include_dead: bool = Query(
         False, description="Also list links that have expired or been revoked."
     ),
+    limit: int = Query(100, ge=1, le=200, description="Links per page."),
+    cursor: str | None = Query(
+        None, description="`next_cursor` from the previous page."
+    ),
 ) -> SignedUrlListResponse:
+    before, before_id = _decode_cursor(cursor)
     links = await file_service.list_signed_urls(
-        pod_id, ctx=ctx, include_dead=include_dead
+        pod_id,
+        ctx=ctx,
+        include_dead=include_dead,
+        limit=limit,
+        before=before,
+        before_id=before_id,
     )
     return SignedUrlListResponse(
+        next_cursor=_encode_cursor(links[-1]) if len(links) == limit else None,
         links=[
             SignedUrlSummary(
                 code=link.code,
@@ -118,7 +151,7 @@ async def list_file_signed_urls(
                 created_at=link.created_at,
             )
             for link in links
-        ]
+        ],
     )
 
 

@@ -5,9 +5,19 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import delete, func, insert, literal, select, update
+from sqlalchemy import delete, func, insert, literal, select, tuple_, update
 
+from app.core.authorization.context import Context, ResourceType
+from app.core.authorization.permissions import Permissions
+from app.core.authorization.sql_actions import (
+    allowed_actions_contains,
+    allowed_actions_expr,
+)
 from app.modules.datastore.domain.file_entities import DatastoreSignedLinkEntity
+from app.modules.datastore.infrastructure.models import DatastoreFile
+from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
+    has_unreadable_ancestor,
+)
 from app.modules.datastore.infrastructure.models.datastore_models import (
     DatastoreSignedLink,
 )
@@ -111,26 +121,72 @@ class SignedLinkRepository(DatastoreRepositoryBase):
         )
         return row.to_entity() if row else None
 
-    async def list_for_user(
+    @staticmethod
+    def _readable_file_exists(ctx: Context, pod_id: UUID):
+        """EXISTS: the file this link points at, readable by *this* caller.
+
+        Two different questions hide behind "whose link is this". Who minted it
+        is `created_by_user_id`; who may open what it points at is the file's
+        own authorization, and for a delegated agent those are not the same
+        person. `ctx.user_id` on a delegated context is the *invoking* person,
+        while the agent's own grants may be narrower — so filtering on the user
+        id alone let an agent list a share its principal had minted for a file
+        the agent itself may not read, and the `code` in that row is the whole
+        capability. The intersection is the rule (PS-ACCESS-020: a workload gets
+        the person's access ∩ its own grants), and `allowed_actions_expr` is
+        what already computes it everywhere else files are listed.
+        """
+        # `DatastoreFile` itself, not an alias: `has_unreadable_ancestor`
+        # correlates against the un-aliased table, so aliasing here silently
+        # decoupled the ancestor walk from the row being checked and the whole
+        # EXISTS came back empty. There is no ambiguity to avoid — the outer
+        # query selects from `DatastoreSignedLink`.
+        actions = allowed_actions_expr(
+            ctx=ctx,
+            resource_type=ResourceType.DOCUMENT,
+            resource_id_col=DatastoreFile.id,
+            pod_id_col=DatastoreFile.pod_id,
+            owner_user_id_col=DatastoreFile.owner_user_id,
+            visibility_col=DatastoreFile.visibility,
+            resource_path_col=DatastoreFile.path,
+        )
+        return (
+            select(literal(1))
+            .select_from(DatastoreFile)
+            .where(
+                DatastoreFile.pod_id == DatastoreSignedLink.pod_id,
+                DatastoreFile.path == DatastoreSignedLink.path,
+                allowed_actions_contains(actions, Permissions.FOLDER_READ),
+                ~has_unreadable_ancestor(ctx, pod_id),
+            )
+            .exists()
+        )
+
+    async def list_visible(
         self,
         pod_id: UUID,
-        user_id: UUID | None,
+        ctx: Context,
         *,
         include_dead: bool = False,
         limit: int = 100,
+        before: datetime | None = None,
+        before_id: UUID | None = None,
     ) -> list[DatastoreSignedLinkEntity]:
-        """This person's links in this pod, newest first.
+        """Links this caller minted *and* may still read, newest first.
 
-        Scoped to the caller, not the pod, because each row carries the ``code``
-        — which is the entire capability. A pod-wide listing would therefore let
-        any member open any other member's links, including the ones pointing at
-        files only their owner can read: personal (``/me/...``) files are an
-        authorization rule at the file layer, and a listing that leaked their
-        codes would route straight around it.
+        Both halves are needed. Minted-by keeps one member out of another's
+        shares; readable-by keeps a delegated agent out of the files its
+        principal can reach and it cannot.
+
+        Paginated by `(created_at, id)` rather than an offset: `created_at`
+        alone is not unique — a burst of mints shares a timestamp — so an offset
+        or a bare timestamp cursor can skip or repeat rows across pages. The id
+        is the tie-breaker, and `uuid7` makes it agree with creation order.
         """
         stmt = select(DatastoreSignedLink).where(
             DatastoreSignedLink.pod_id == pod_id,
-            DatastoreSignedLink.created_by_user_id == user_id,
+            DatastoreSignedLink.created_by_user_id == ctx.user_id,
+            self._readable_file_exists(ctx, pod_id),
         )
         if not include_dead:
             stmt = stmt.where(
@@ -138,9 +194,37 @@ class SignedLinkRepository(DatastoreRepositoryBase):
                 DatastoreSignedLink.exhausted_at.is_(None),
                 DatastoreSignedLink.expires_at > datetime.now(timezone.utc),
             )
-        stmt = stmt.order_by(DatastoreSignedLink.created_at.desc()).limit(limit)
+        if before is not None:
+            stmt = stmt.where(
+                tuple_(DatastoreSignedLink.created_at, DatastoreSignedLink.id)
+                < tuple_(before, before_id or UUID(int=0))
+            )
+        stmt = stmt.order_by(
+            DatastoreSignedLink.created_at.desc(), DatastoreSignedLink.id.desc()
+        ).limit(limit)
         rows = await self.session.scalars(stmt)
         return [row.to_entity() for row in rows]
+
+    async def is_visible(self, pod_id: UUID, code: str, ctx: Context) -> bool:
+        """Whether this caller may act on this link at all.
+
+        Revocation used to take only `pod_id`, which let a delegated agent kill
+        its principal's link to a file the agent may not read — a capability
+        taken away by something that could not have been given it.
+        """
+        return bool(
+            await self.session.scalar(
+                select(literal(1))
+                .select_from(DatastoreSignedLink)
+                .where(
+                    DatastoreSignedLink.code == code,
+                    DatastoreSignedLink.pod_id == pod_id,
+                    DatastoreSignedLink.created_by_user_id == ctx.user_id,
+                    self._readable_file_exists(ctx, pod_id),
+                )
+                .limit(1)
+            )
+        )
 
     async def count_live_for_user(self, pod_id: UUID, user_id: UUID | None) -> int:
         """How many of this person's links in this pod still resolve.
@@ -185,6 +269,27 @@ class SignedLinkRepository(DatastoreRepositoryBase):
             .values(revoked_at=datetime.now(timezone.utc))
         )
         return bool(result.rowcount)
+
+    async def owns_revoked(self, pod_id: UUID, code: str) -> bool:
+        """Whether this pod holds an already-revoked row for this code.
+
+        Lets a retry finish a revocation whose cache invalidation failed: the
+        `UPDATE` reports nothing changed the second time, but the invalidation
+        still has to happen. Pod-scoped like the update itself, so it grants a
+        caller nothing it did not already have.
+        """
+        return bool(
+            await self.session.scalar(
+                select(literal(1))
+                .select_from(DatastoreSignedLink)
+                .where(
+                    DatastoreSignedLink.code == code,
+                    DatastoreSignedLink.pod_id == pod_id,
+                    DatastoreSignedLink.revoked_at.is_not(None),
+                )
+                .limit(1)
+            )
+        )
 
     async def mark_exhausted(self, code: str) -> None:
         """Record that a link spent its budget, so it stays spent.

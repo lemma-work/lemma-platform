@@ -117,10 +117,10 @@ class PodFiles(BoundResource):
         ``expires_seconds`` (default 24h, max 7d), and serves the file at most
         ``max_hits`` times (default 200, max 1000). A value outside either range
         is rejected with a 422, so validate user input before passing it. Use it
-        to share a file
-        with someone outside the pod, or to hand an agent a short link to pass
-        around — the cap keeps a leaked link from running up egress. Only bytes
-        actually sent are counted, so a browser revalidating costs nothing.
+        to share a file with someone outside the pod, or to hand an agent a
+        short link to pass around — the cap keeps a leaked link from running up
+        egress. Only bytes actually sent are counted, so a browser revalidating
+        costs nothing.
         """
         body: dict[str, int] = {}
         if expires_seconds is not None:
@@ -135,25 +135,44 @@ class PodFiles(BoundResource):
             path=path,
         )
 
-    def list_signed_urls(self, *, include_dead: bool = False) -> SignedUrlListResponse:
-        """Every public signed URL this pod has minted, newest first.
+    def list_signed_urls(
+        self,
+        *,
+        include_dead: bool = False,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> SignedUrlListResponse:
+        """The public signed URLs *you* minted and may still read, newest first.
 
-        ``include_dead`` also returns links that have expired or been revoked,
-        which are kept for a grace period so you can see what was recently
-        handed out.
+        Scoped to the caller, not the pod: each row carries the ``code``, which
+        is the whole capability, and a delegated agent sees only links to files
+        it has access to in its own right.
+
+        Paged. A response whose ``next_cursor`` is set has more — pass it back
+        as ``cursor`` and keep going until it is ``None``. A full page is not
+        itself proof that more exist, so the cursor is the signal; a link you do
+        not list is one you cannot revoke.
+
+        ``include_dead`` also returns links that have expired, been revoked, or
+        run out of downloads, which are kept for a grace period.
         """
         return self._call(
             file_signed_url_list,
             self._pod_uuid(),
             include_dead=include_dead,
+            limit=limit,
+            cursor=cursor,
         )
 
     def revoke_signed_url(self, code: str) -> SignedUrlRevokeResponse:
         """Kill a public signed URL now rather than waiting out its expiry.
 
-        ``revoked`` is False when the code was already dead or was never this
-        pod's — reported rather than raised, so a cleanup pass cannot use this
-        to discover which codes exist.
+        ``revoked`` is False when the code was already dead, was never this
+        pod's, or is not one you may act on — reported rather than raised, so a
+        cleanup pass cannot use this to discover which codes exist.
+
+        Raises on a 503: the link is revoked in the record but its cached copy
+        could not be dropped, so it may still open. Repeat the call to finish.
         """
         return self._call(file_signed_url_revoke, self._pod_uuid(), code=code)
 

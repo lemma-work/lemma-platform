@@ -427,9 +427,10 @@ class DatastoreSettings(BaseSettings):
         default=604800,
         description=(
             "Hard ceiling (seconds) on a public datastore signed URL's lifetime. "
-            "Requests above this are clamped down. Defaults to 7 days. Note the "
-            "link record lives in Redis, so a link this long-lived can outlast a "
-            "Redis restart or failover and vanish before it expires."
+            "Requests above this are clamped down. Defaults to 7 days. The link "
+            "record is a Postgres row, so it survives a Redis restart; Redis "
+            "holds a cached copy and the spend counter, and a fetch that finds "
+            "nothing cached rebuilds it from the row."
         ),
     )
     datastore_signed_url_default_max_hits: int = Field(

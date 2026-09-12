@@ -60,6 +60,7 @@ from __future__ import annotations
 
 from contextlib import suppress
 import asyncio
+import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -68,6 +69,7 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid7
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from app.core.infrastructure.db.session import get_session_maker
 from app.core.infrastructure.db.transaction_locks import connection_released
@@ -118,11 +120,15 @@ local spent = tonumber(redis.call('HGET', KEYS[1], 'spent_bytes')) or 0
 if budget > 0 and (spent >= budget or spent + wanted > budget) then
   return {-2}
 end
+local exhausted = 0
 if wanted > 0 then
   spent = redis.call('HINCRBY', KEYS[1], 'spent_bytes', wanted)
 end
+if budget > 0 and spent >= budget then
+  exhausted = 1
+end
 return {
-  spent,
+  exhausted,
   budget,
   redis.call('HGET', KEYS[1], 'object_key') or '',
   redis.call('HGET', KEYS[1], 'content_sha256') or '',
@@ -158,6 +164,15 @@ return 1
 
 class SignedUrlNotFound(Exception):
     """The short code is unknown or has expired."""
+
+
+class SignedUrlRevocationIncomplete(Exception):
+    """The record says revoked, but the cached copy could not be dropped.
+
+    Raised rather than swallowed because the link is still openable until the
+    cache entry expires, so the caller has not got what it asked for. The
+    revocation itself is durable; repeating the call finishes it.
+    """
 
 
 class SignedUrlExhausted(Exception):
@@ -284,7 +299,25 @@ class SignedUrlStore:
         # burst of mints is exactly the shape that turns it into pool
         # exhaustion.
         async with connection_released(links.session):
-            await self._cache(link)
+            try:
+                await self._cache(link)
+            except RedisError as exc:
+                # Narrow on purpose. A cache that is unreachable is a dependency
+                # failing and the link survives it; a `TypeError` in here would
+                # be this module being wrong, and should not be swallowed as if
+                # Redis were down.
+                # Best-effort, because the row is already committed and the
+                # allowance slot already spent. Letting this propagate lost the
+                # caller a link it had been charged for and could not name, and
+                # a retry just spent another slot — an agent retrying a failed
+                # mint could quietly accumulate shares it never received. The
+                # link works regardless: the first fetch finds nothing cached
+                # and rehydrates from the record.
+                logger.warning(
+                    "datastore.signed_url.cache_population_failed.observed",
+                    pod_id=str(file.pod_id),
+                    error_type=type(exc).__name__,
+                )
             signed_url = f"{settings.api_url.rstrip('/')}/s/{code}"
         return code, signed_url, expires_at, max_hits
 
@@ -294,9 +327,16 @@ class SignedUrlStore:
         Called on mint and again whenever a fetch finds nothing cached, which is
         what makes a lost Redis a slow first request rather than a dead link.
         """
-        ttl = int((link.expires_at - datetime.now(timezone.utc)).total_seconds())
-        if ttl <= 0:
+        # Rounded up, not truncated. `expires_at` is whole seconds while `now`
+        # is not, so a link with under a second left floored to a TTL of 0 and
+        # was dropped rather than cached — and with `expires_seconds=1` that
+        # happened on the mint itself, which answered 201 with a URL that was
+        # already 404. Expiry is still enforced by the row and by this key's own
+        # TTL; what this avoids is discarding a link that has not expired yet.
+        remaining = (link.expires_at - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
             return
+        ttl = max(1, math.ceil(remaining))
         redis = await self._get_redis()
         # One script, because checking the tombstone and then writing in a
         # separate pipeline is the same check-then-act this tombstone exists to
@@ -365,17 +405,22 @@ class SignedUrlStore:
         if head == -1:
             raise SignedUrlNotFound(code)
         if head == -2:
-            # Durably first, then burn the cached copy. The other order — which
-            # is what this was before the record existed — drops the key and
-            # leaves a live row behind, so the very next fetch rehydrates, mints
-            # a fresh budget and serves the file again. The cap has to be spent
-            # somewhere that survives losing the counter.
-            async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
-                await SignedLinkRepository(uow).mark_exhausted(code)
-                await uow.commit()
-            with suppress(Exception):
-                await redis.delete(key)
+            await self._retire(code, drop_cache=key)
             raise SignedUrlExhausted(code)
+
+        if head == 1:
+            # This charge finished the budget. Retire the row now and still
+            # serve the response it paid for: waiting for a *later* request to
+            # bounce off the spent budget left the row counted as live, so the
+            # last download of a link never gave its allowance slot back and a
+            # caller at their limit stayed there until expiry.
+            #
+            # The cached entry stays. It holds `spent >= budget`, which is what
+            # answers the next fetch `410 Gone` — "you have used this up" rather
+            # than the `404` a missing entry would produce. Dropping it here
+            # also made the fetch after that rehydrate, and the row now says
+            # exhausted, so the distinction would have been lost for good.
+            await self._retire(code)
 
         return SignedUrlClaims(
             object_key=result[2],
@@ -383,6 +428,21 @@ class SignedUrlStore:
             content_type=result[4] or "application/octet-stream",
             filename=result[5] or result[2].rsplit("/", 1)[-1] or "file",
         )
+
+    async def _retire(self, code: str, *, drop_cache: str | None = None) -> None:
+        """Record that a link's budget is spent, and optionally drop its cache.
+
+        Durably first. The other order drops the key and leaves a live row
+        behind, so the very next fetch rehydrates, mints a fresh budget and
+        serves the file again — the cap has to be spent somewhere that survives
+        losing the counter.
+        """
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            await SignedLinkRepository(uow).mark_exhausted(code)
+            await uow.commit()
+        if drop_cache is not None:
+            with suppress(Exception):
+                await (await self._get_redis()).delete(drop_cache)
 
     async def _rehydrate(self, code: str) -> bool:
         """Reload a link's claims into Redis from the durable record.
@@ -421,13 +481,19 @@ class SignedUrlStore:
         # entry straight back, so the link kept working until its TTL.
         revoked = await links.revoke(pod_id, code)
         await links.commit()
-        if not revoked:
-            # Nothing of this pod's was revoked, so there is nothing of this
-            # pod's to invalidate. The row update is scoped by `pod_id`; the
-            # Redis keys below are keyed on the code alone, so doing them anyway
-            # let a member of one pod knock out another pod's cached entry and
-            # hold a tombstone over it — a link they have no rights to, made
-            # unusable for the tombstone's lifetime and repeatably so.
+        if not revoked and not await links.owns_revoked(pod_id, code):
+            # Nothing of this pod's was revoked and this pod holds no revoked
+            # row for the code either, so there is nothing of this pod's to
+            # invalidate. The row update is scoped by `pod_id`; the Redis keys
+            # below are keyed on the code alone, so doing them anyway let a
+            # member of one pod knock out another pod's cached entry and hold a
+            # tombstone over it — a link they have no rights to, made unusable
+            # for the tombstone's lifetime and repeatably so.
+            #
+            # The `owns_revoked` half is what makes a retry able to finish the
+            # job: an already-revoked row returns False from the update, so a
+            # first attempt whose Redis half failed could never be completed by
+            # a second. It is still pod-scoped, so it reopens nothing.
             return False
 
         # Committing first shrinks that window but does not close it: a
@@ -437,11 +503,24 @@ class SignedUrlStore:
         # Redis only from here, so the connection goes back first.
         async with connection_released(links.session):
             redis = await self._get_redis()
-            with suppress(Exception):
+            try:
                 async with redis.pipeline(transaction=True) as pipe:
                     pipe.setex(self._tombstone_key(code), _REVOKED_TOMBSTONE_SECONDS, 1)
                     pipe.delete(self._key(code))
                     await pipe.execute()
+            except RedisError as exc:
+                # Not suppressed. The row says revoked while the cached entry can
+                # still be served, so reporting plain success here told the
+                # caller the link was dead when it was not. Raising says the
+                # revocation is incomplete and the call should be repeated —
+                # which now works, because `owns_revoked` lets a retry past the
+                # early return above.
+                logger.warning(
+                    "datastore.signed_url.revocation_cache_invalidation_failed.observed",
+                    pod_id=str(pod_id),
+                    error_type=type(exc).__name__,
+                )
+                raise SignedUrlRevocationIncomplete(code) from exc
         return revoked
 
     async def consume(self, code: str) -> str:

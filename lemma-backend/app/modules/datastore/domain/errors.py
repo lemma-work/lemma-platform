@@ -61,6 +61,24 @@ class DatastoreSignedLinkLimitError(DatastoreDomainError):
         )
 
 
+class DatastoreRevocationIncompleteError(DatastoreDomainError):
+    """The link is revoked in the record but still cached, so still openable.
+
+    503 rather than 500: the durable half succeeded and nothing is corrupt —
+    the cache simply could not be reached — and repeating the call finishes the
+    job. Reporting plain success instead told the caller a link was dead while
+    it was still serving bytes.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The link is revoked but its cached copy could not be dropped; "
+            "retry to finish revoking it.",
+            code="DATASTORE_REVOCATION_INCOMPLETE",
+            status_code=503,
+        )
+
+
 class DatastoreNotFoundError(DatastoreDomainError):
     def __init__(self, message: str = "Datastore not found"):
         super().__init__(message, code="DATASTORE_NOT_FOUND", status_code=404)

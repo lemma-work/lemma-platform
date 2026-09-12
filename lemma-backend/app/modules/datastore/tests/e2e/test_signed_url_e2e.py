@@ -1044,3 +1044,221 @@ class TestSignedUrlLiveLimit:
             assert theirs.status_code == status.HTTP_201_CREATED, theirs.text
         finally:
             datastore_settings.datastore_signed_url_max_active_per_user = original
+
+
+class TestSignedUrlRecoveryAndPaging:
+    """The failure modes a reviewer reproduced by hand."""
+
+    async def _sign(self, api: DatastoreApi, path: str, body: dict | None = None):
+        return await api.request(
+            "POST",
+            FILES.format(pod_id=api.pod_id) + "/signed-url",
+            params={"path": path},
+            json=body or {},
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_failed_cache_invalidation_is_reported_and_a_retry_finishes_it(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """Revocation used to swallow the Redis failure and report success.
+
+        The row said revoked while the cached entry still served the file, and
+        retrying returned early — the row was already revoked, so the second
+        attempt did nothing and the link stayed openable for its whole life.
+
+        The broken Redis is a real `SignedUrlStore` built on an unreachable
+        url, not a patched method: the point is what the store does when its
+        dependency fails, and a double in front of its own internals would
+        assert that only against itself.
+        """
+        from app.core.infrastructure.db.session import get_session_maker
+        from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+        from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
+            SignedLinkRepository,
+        )
+        from app.modules.datastore.services.files.signed_url import (
+            SignedUrlRevocationIncomplete,
+            SignedUrlStore,
+            get_signed_url_store,
+        )
+
+        uploaded = await _upload(
+            pod_api, "/me/failrevoke", "f.txt", b"still here", content_type="text/plain"
+        )
+        body = await self._sign(pod_api, uploaded["path"])
+        code = _code_of(body.json()["signed_url"])
+
+        unreachable = SignedUrlStore(redis_url="redis://127.0.0.1:1/0")
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            with pytest.raises(SignedUrlRevocationIncomplete):
+                await unreachable.revoke(
+                    pod_api.pod_id, code, links=SignedLinkRepository(uow)
+                )
+
+        # The row is revoked, but the cached copy is still there and serving —
+        # which is exactly why reporting success would have been a lie.
+        store = get_signed_url_store()
+        redis = await store._get_redis()
+        assert await redis.exists(store._key(code)) == 1
+
+        # Redis is reachable again. The retry has to be able to finish, even
+        # though the row has been revoked since the first attempt.
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            await store.revoke(pod_api.pod_id, code, links=SignedLinkRepository(uow))
+        assert await redis.exists(store._key(code)) == 0
+        assert (
+            await async_client.get(f"/s/{code}")
+        ).status_code == status.HTTP_404_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_a_failed_cache_write_still_returns_a_committed_link(
+        self, pod_api: DatastoreApi
+    ):
+        """Minting used to lose the link and keep the allowance slot.
+
+        The row commits before the cache is populated, so a cache failure threw
+        after the charge had landed: the caller got no URL for a share that
+        existed, and retrying spent another slot. An agent retrying a failed
+        mint could accumulate shares it never received.
+        """
+        from app.core.infrastructure.db.session import get_session_maker
+        from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+        from app.modules.datastore.domain.file_entities import DatastoreFileEntity
+        from app.modules.datastore.infrastructure.repositories.signed_link_repository import (
+            SignedLinkRepository,
+        )
+        from app.modules.datastore.services.files.signed_url import SignedUrlStore
+
+        uploaded = await _upload(
+            pod_api, "/me/failcache", "c.txt", b"committed", content_type="text/plain"
+        )
+        entity = DatastoreFileEntity(
+            pod_id=pod_api.pod_id,
+            path=uploaded["path"],
+            name="c.txt",
+            mime_type="text/plain",
+            size_bytes=len(b"committed"),
+            content_sha256=uploaded["content_sha256"],
+        )
+
+        unreachable = SignedUrlStore(redis_url="redis://127.0.0.1:1/0")
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            links = SignedLinkRepository(uow)
+            code, signed_url, _expires, _hits = await unreachable.create(
+                file=entity, links=links
+            )
+        assert signed_url.endswith(code)
+
+        # The caller got the URL, and the record backing it is there — so the
+        # first fetch can rehydrate. Losing the URL while keeping the row was
+        # the bug.
+        async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
+            stored = await SignedLinkRepository(uow).get_by_code(code)
+        assert stored is not None and stored.is_live
+
+    @pytest.mark.asyncio
+    async def test_the_shortest_accepted_lifetime_produces_a_usable_link(
+        self, pod_api: DatastoreApi, async_client: AsyncClient
+    ):
+        """`expires_seconds=1` answered 201 with a URL that was already 404.
+
+        `expires_at` is whole seconds while `now` is not, so the sub-second
+        remainder floored to a TTL of zero and the cache write was skipped — on
+        the mint itself.
+        """
+        uploaded = await _upload(
+            pod_api, "/me/onesec", "s.txt", b"brief", content_type="text/plain"
+        )
+        minted = await self._sign(pod_api, uploaded["path"], {"expires_seconds": 1})
+        assert minted.status_code == status.HTTP_201_CREATED, minted.text
+        code = _code_of(minted.json()["signed_url"])
+
+        served = await async_client.get(f"/s/{code}")
+        assert served.status_code == status.HTTP_200_OK, served.text
+        assert served.content == b"brief"
+
+    @pytest.mark.asyncio
+    async def test_the_final_download_frees_the_allowance_slot(
+        self, pod_api: DatastoreApi, async_client: AsyncClient, monkeypatch
+    ):
+        """Exhaustion used to be recorded only when a *later* request bounced.
+
+        So the last download of a link left its row counted as live, and a
+        caller at their limit stayed there until the link expired — with no
+        second request to trigger the bookkeeping.
+        """
+        from app.modules.datastore.config import datastore_settings
+
+        monkeypatch.setattr(
+            datastore_settings, "datastore_signed_url_max_active_per_user", 1
+        )
+        uploaded = await _upload(
+            pod_api, "/me/lastslot", "l.txt", b"one and done", content_type="text/plain"
+        )
+        minted = await self._sign(pod_api, uploaded["path"], {"max_hits": 1})
+        assert minted.status_code == status.HTTP_201_CREATED, minted.text
+        code = _code_of(minted.json()["signed_url"])
+
+        # Exactly one download — no extra rejected request to do the work.
+        served = await async_client.get(f"/s/{code}")
+        assert served.status_code == status.HTTP_200_OK, served.text
+
+        again = await self._sign(pod_api, uploaded["path"])
+        assert again.status_code == status.HTTP_201_CREATED, again.text
+
+        # The spent link still says *why* it is gone rather than pretending it
+        # never existed.
+        assert (
+            await async_client.get(f"/s/{code}")
+        ).status_code == status.HTTP_410_GONE
+
+    @pytest.mark.asyncio
+    async def test_the_listing_pages_rather_than_truncating(
+        self, pod_api: DatastoreApi
+    ):
+        """A fixed limit of 100 hid active links with no way to ask for them.
+
+        Each person may hold hundreds, and a link you cannot list is a link you
+        cannot revoke.
+        """
+        uploaded = await _upload(
+            pod_api, "/me/paging", "p.txt", b"paged", content_type="text/plain"
+        )
+        for _ in range(5):
+            assert (
+                await self._sign(pod_api, uploaded["path"])
+            ).status_code == status.HTTP_201_CREATED
+
+        seen: list[str] = []
+        cursor = None
+        for _ in range(10):  # bounded, so a broken cursor cannot spin
+            params = {"limit": 2}
+            if cursor:
+                params["cursor"] = cursor
+            page = await pod_api.request(
+                "GET",
+                FILES.format(pod_id=pod_api.pod_id) + "/signed-urls",
+                params=params,
+            )
+            assert page.status_code == status.HTTP_200_OK, page.text
+            body = page.json()
+            seen.extend(link["code"] for link in body["links"])
+            cursor = body["next_cursor"]
+            if not cursor:
+                break
+
+        assert cursor is None, "pagination did not terminate"
+        assert len(seen) >= 5, seen
+        assert len(seen) == len(set(seen)), "a page repeated a row"
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_cursor_is_rejected_rather_than_ignored(
+        self, pod_api: DatastoreApi
+    ):
+        resp = await pod_api.request(
+            "GET",
+            FILES.format(pod_id=pod_api.pod_id) + "/signed-urls",
+            params={"cursor": "not-a-cursor"},
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.text
