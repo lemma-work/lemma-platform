@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Optional, Protocol, Sequence, Tuple, runtime_checkable
 from uuid import UUID
 
@@ -20,6 +21,8 @@ class UserRepositoryPort(Protocol):
     async def create(self, entity: UserEntity) -> UserEntity: ...
 
     async def get(self, id: UUID) -> Optional[UserEntity]: ...
+
+    async def existing_ids(self, user_ids: Collection[UUID]) -> set[UUID]: ...
 
     async def get_by_email(self, email: str) -> Optional[UserEntity]: ...
 

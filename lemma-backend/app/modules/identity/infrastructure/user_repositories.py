@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Optional
 from uuid import UUID
 
@@ -68,6 +69,25 @@ class UserRepository(UserRepositoryPort):
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
+
+    async def existing_ids(self, user_ids: Collection[UUID]) -> set[UUID]:
+        """Which of these ids name a real user.
+
+        The batch spelling of ``get``, and deliberately as permissive: no
+        ``is_active`` or ``is_deleted`` filter, because the caller is checking
+        that a stored reference points at somebody, not that they can sign in.
+        Its two callers validate USER-typed record columns, where someone
+        leaving must not make the rows naming them unwritable.
+
+        Projected to ids -- the answer is membership, so hydrating a user row
+        per id would be reading a person's whole record to learn they exist.
+        """
+        if not user_ids:
+            return set()
+        rows = await self.session.execute(
+            select(User.id).where(User.id.in_(set(user_ids)))
+        )
+        return set(rows.scalars().all())
 
     async def get_by_email(self, email: str) -> Optional[UserEntity]:
         normalized = normalize_identity_email(email)
