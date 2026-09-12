@@ -27,6 +27,10 @@ from app.modules.datastore.api.file_upload_openapi import (
 )
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.modules.datastore.api.dependencies import FileServiceDep, FileUseCasesDep
+from app.modules.datastore.api.file_response_mapping import (
+    ensure_file_in_pod,
+    to_file_response,
+)
 from app.modules.datastore.api.schemas.datastore_schemas import (
     CreateFolderRequest,
     DirectoryTreeResponse,
@@ -34,12 +38,9 @@ from app.modules.datastore.api.schemas.datastore_schemas import (
     FileChildSchema,
     FileDetailResponse,
     FileListResponse,
-    FileResponse,
     FileSummaryResponse,
     FileSearchRequest,
     FileSearchResponse,
-    FileSignedUrlRequest,
-    FileSignedUrlResponse,
     FileUrlResponse,
 )
 from app.modules.datastore.domain.errors import DatastoreValidationError
@@ -58,45 +59,15 @@ router = APIRouter(
 )
 
 
-def _ensure_file_in_pod(file_entity: FileResponse, pod_id: UUID) -> None:
-    if file_entity.pod_id != pod_id:
-        raise DatastoreValidationError("File does not belong to this pod")
-
-
-def _to_file_response(file_entity, current_user_id: UUID) -> FileResponse:
-    response = FileResponse.model_validate(file_entity)
-    response.path = _to_public_file_path(
-        file_entity.path,
-        current_user_id=current_user_id,
-        owner_user_id=file_entity.owner_user_id,
-    )
-    return response
-
-
 async def _file_detail_response(
     file_entity,
     current_user_id: UUID,
 ) -> FileDetailResponse:
-    file_response = _to_file_response(file_entity, current_user_id)
+    file_response = to_file_response(file_entity, current_user_id)
     return FileDetailResponse(
         **file_response.model_dump(),
         allowed_actions=file_entity.allowed_actions,
     )
-
-
-def _to_public_file_path(
-    path: str,
-    *,
-    current_user_id: UUID,
-    owner_user_id: UUID | None,
-) -> str:
-    if owner_user_id == current_user_id:
-        personal_root = f"/{current_user_id}"
-        if path == personal_root:
-            return "/me"
-        if path.startswith(f"{personal_root}/"):
-            return f"/me{path.removeprefix(personal_root)}"
-    return path
 
 
 def _to_public_tree_paths(node: dict, *, current_user_id: UUID) -> dict:
@@ -232,7 +203,7 @@ async def list_files(
     return FileListResponse(
         items=[
             FileSummaryResponse(
-                **_to_file_response(item, user.id).model_dump(include=summary_fields),
+                **to_file_response(item, user.id).model_dump(include=summary_fields),
                 allowed_actions=item.allowed_actions,
             )
             for item in items
@@ -262,7 +233,7 @@ async def get_file(
         ctx=ctx,
     )
     response = await _file_detail_response(file_entity, user.id)
-    _ensure_file_in_pod(response, pod_id)
+    ensure_file_in_pod(response, pod_id)
     return response
 
 
@@ -319,7 +290,7 @@ async def update_file(
             user_id=user.id,
         )
     response = await _file_detail_response(file_entity, user.id)
-    _ensure_file_in_pod(response, pod_id)
+    ensure_file_in_pod(response, pod_id)
     return response
 
 
@@ -435,8 +406,8 @@ async def download_file(
         if_none_match=request.headers.get("if-none-match"),
     )
     file_entity = download.entity
-    response = _to_file_response(file_entity, user.id)
-    _ensure_file_in_pod(response, pod_id)
+    response = to_file_response(file_entity, user.id)
+    ensure_file_in_pod(response, pod_id)
 
     return build_original_download_response(file_entity, download)
 
@@ -458,8 +429,8 @@ async def list_file_children(
     result = await use_cases.list_children(
         pod_id=pod_id, path=path, request=request, user_id=user.id
     )
-    response = _to_file_response(result.entity, user.id)
-    _ensure_file_in_pod(response, pod_id)
+    response = to_file_response(result.entity, user.id)
+    ensure_file_in_pod(response, pod_id)
     return FileChildrenResponse(
         path=response.path,
         items=[FileChildSchema.model_validate(child) for child in result.children],
@@ -485,51 +456,13 @@ async def get_file_url(
         path,
         ctx=ctx,
     )
-    public = _to_file_response(file_entity, user.id)
-    _ensure_file_in_pod(public, pod_id)
+    public = to_file_response(file_entity, user.id)
+    ensure_file_in_pod(public, pod_id)
     return FileUrlResponse(
         path=public.path,
         url=url,
         app_url=build_file_app_url(pod_id, public.path),
         expires_at=expires_at,
-    )
-
-
-@router.post(
-    "/signed-url",
-    response_model=FileSignedUrlResponse,
-    status_code=status.HTTP_201_CREATED,
-    operation_id="file.signed_url",
-    summary="Create a public, hit-capped signed URL for a file",
-)
-async def create_file_signed_url(
-    pod_id: UUID,
-    file_service: FileServiceDep,
-    user: CurrentUser,
-    ctx: PodContextDep,
-    path: str = Query(...),
-    body: FileSignedUrlRequest | None = None,
-) -> FileSignedUrlResponse:
-    body = body or FileSignedUrlRequest()
-    (
-        file_entity,
-        signed_url,
-        expires_at,
-        max_hits,
-    ) = await file_service.create_signed_url(
-        pod_id,
-        path,
-        ctx=ctx,
-        expires_seconds=body.expires_seconds,
-        max_hits=body.max_hits,
-    )
-    public = _to_file_response(file_entity, user.id)
-    _ensure_file_in_pod(public, pod_id)
-    return FileSignedUrlResponse(
-        path=public.path,
-        signed_url=signed_url,
-        expires_at=expires_at,
-        max_hits=max_hits,
     )
 
 
@@ -565,8 +498,8 @@ async def download_file_child(
     artifact_name = result.artifact_name
     content = result.content
     content_type = result.content_type
-    response = _to_file_response(file_entity, user.id)
-    _ensure_file_in_pod(response, pod_id)
+    response = to_file_response(file_entity, user.id)
+    ensure_file_in_pod(response, pod_id)
 
     return build_child_download_response(
         request_if_none_match=request.headers.get("if-none-match"),
@@ -664,5 +597,5 @@ async def get_file_by_id(
     """
     file_entity = await file_service.get_file(file_id, ctx=ctx)
     response = await _file_detail_response(file_entity, user.id)
-    _ensure_file_in_pod(response, pod_id)
+    ensure_file_in_pod(response, pod_id)
     return response

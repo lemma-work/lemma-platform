@@ -12266,6 +12266,57 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List this pod's public signed URLs
+     * @param podId
+     * @param includeDead Also list links that have expired or been revoked.
+     * @param limit Links per page.
+     * @param cursor `next_cursor` from the previous page.
+     * @returns SignedUrlListResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlList(podId, includeDead = false, limit = 100, cursor) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/files/signed-urls",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "include_dead": includeDead,
+          "limit": limit,
+          "cursor": cursor
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Revoke a public signed URL
+     * Kill a link now rather than waiting out its expiry.
+     *
+     * Answers 200 either way: a code that is already dead, or was never this
+     * pod's, is reported as ``revoked: false`` rather than 404, so that a caller
+     * cleaning up cannot use this endpoint to discover which codes exist.
+     * @param podId
+     * @param code
+     * @returns SignedUrlRevokeResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlRevoke(podId, code) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/files/signed-urls/{code}",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Directory Tree
      * @param podId
      * @param rootPath
@@ -12471,9 +12522,10 @@ var LemmaClient = (() => {
     }
     /**
      * Mint a public, hit-capped short signed URL (no login needed to open).
-     * Expires after `expiresSeconds` (default 3h, max 24h) and serves the file
-     * at most `maxHits` times (default 50, max 100); both bounds are clamped
-     * server-side. Use it to share a file outside the pod without unbounded egress.
+     * Expires after `expiresSeconds` (default 24h, max 7d) and serves the file
+     * at most `maxHits` times (default 200, max 1000); a value outside either
+     * range is rejected with a 422. Use it to share a file outside the pod
+     * without unbounded egress.
      */
     createSignedUrl(path, options = {}) {
       const body = {
@@ -12481,6 +12533,37 @@ var LemmaClient = (() => {
         max_hits: options.maxHits
       };
       return this.client.request(() => FilesService.fileSignedUrl(this.podId(), path, body));
+    }
+    /**
+     * The public signed URLs *you* minted and may still read, newest first —
+     * scoped to the caller rather than the pod, because each row carries the
+     * `code`, which is the whole capability.
+     *
+     * Paged: a response with `next_cursor` set has more, so pass it back as
+     * `cursor` and keep going until it is null. A link you do not list is one you
+     * cannot revoke. `includeDead` also returns expired, revoked and spent links,
+     * which are kept for a grace period.
+     */
+    listSignedUrls(options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b, _c;
+          return FilesService.fileSignedUrlList(
+            this.podId(),
+            (_a = options.includeDead) != null ? _a : false,
+            (_b = options.limit) != null ? _b : 100,
+            (_c = options.cursor) != null ? _c : null
+          );
+        }
+      );
+    }
+    /**
+     * Kill a public signed URL now rather than waiting out its expiry. `revoked`
+     * is false when the code was already dead or was never this pod's — reported
+     * rather than thrown, so a cleanup pass cannot use this to discover codes.
+     */
+    revokeSignedUrl(code) {
+      return this.client.request(() => FilesService.fileSignedUrlRevoke(this.podId(), code));
     }
     delete(path) {
       return this.client.request(() => FilesService.fileDelete(this.podId(), path));

@@ -107,9 +107,9 @@ lemma files url /reports/summary.pdf                  # app_url (in-app, signed-
 lemma files share /reports/summary.pdf --ttl 3h --max-hits 50   # public, no-login, expiring + hit-capped
 ```
 
-`--ttl` = `30m`/`3h`/`24h` (default 3h, max 24h); `--max-hits` caps downloads
-(default 50, max 100). The public link streams through the backend and stops at the
-cap — both bounds are clamped server-side. Folders have no URL.
+`--ttl` = `30m`/`3h`/`7d` (default 24h, max 7d); `--max-hits` caps downloads
+(default 200, max 1000). The public link streams through the backend and stops at
+the cap — a value outside either range is rejected. Folders have no URL.
 
 ## Tables + Files pattern
 

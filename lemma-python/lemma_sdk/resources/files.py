@@ -21,6 +21,8 @@ from ..openapi_client.api.files import (
     file_markdown_detach,
     file_search,
     file_signed_url,
+    file_signed_url_list,
+    file_signed_url_revoke,
     file_tree,
     file_update,
     file_url,
@@ -35,6 +37,8 @@ from ..openapi_client.models.file_search_request import FileSearchRequest
 from ..openapi_client.models.file_search_response import FileSearchResponse
 from ..openapi_client.models.file_signed_url_request import FileSignedUrlRequest
 from ..openapi_client.models.file_signed_url_response import FileSignedUrlResponse
+from ..openapi_client.models.signed_url_list_response import SignedUrlListResponse
+from ..openapi_client.models.signed_url_revoke_response import SignedUrlRevokeResponse
 from ..openapi_client.models.file_url_response import FileUrlResponse
 from ..openapi_client.models.update import Update
 from ..openapi_client.types import File
@@ -110,11 +114,13 @@ class PodFiles(BoundResource):
         """Mint a public, hit-capped short signed URL for a file.
 
         The returned ``signed_url`` needs no login to open, expires after
-        ``expires_seconds`` (default 3h, max 24h), and serves the file at most
-        ``max_hits`` times (default 50, max 100). Both bounds are clamped
-        server-side, so you can pass user input directly. Use it to share a file
-        with someone outside the pod, or to hand an agent a short link to pass
-        around — the hit cap keeps a leaked link from running up egress.
+        ``expires_seconds`` (default 24h, max 7d), and serves the file at most
+        ``max_hits`` times (default 200, max 1000). A value outside either range
+        is rejected with a 422, so validate user input before passing it. Use it
+        to share a file with someone outside the pod, or to hand an agent a
+        short link to pass around — the cap keeps a leaked link from running up
+        egress. Only bytes actually sent are counted, so a browser revalidating
+        costs nothing.
         """
         body: dict[str, int] = {}
         if expires_seconds is not None:
@@ -128,6 +134,47 @@ class PodFiles(BoundResource):
             body_model=FileSignedUrlRequest,
             path=path,
         )
+
+    def list_signed_urls(
+        self,
+        *,
+        include_dead: bool = False,
+        limit: int = 100,
+        cursor: str | None = None,
+    ) -> SignedUrlListResponse:
+        """The public signed URLs *you* minted and may still read, newest first.
+
+        Scoped to the caller, not the pod: each row carries the ``code``, which
+        is the whole capability, and a delegated agent sees only links to files
+        it has access to in its own right.
+
+        Paged. A response whose ``next_cursor`` is set has more — pass it back
+        as ``cursor`` and keep going until it is ``None``. A full page is not
+        itself proof that more exist, so the cursor is the signal; a link you do
+        not list is one you cannot revoke.
+
+        ``include_dead`` also returns links that have expired, been revoked, or
+        run out of downloads, which are kept for a grace period.
+        """
+        return self._call(
+            file_signed_url_list,
+            self._pod_uuid(),
+            include_dead=include_dead,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    def revoke_signed_url(self, code: str) -> SignedUrlRevokeResponse:
+        """Kill a public signed URL now rather than waiting out its expiry.
+
+        ``revoked`` is False when the code was already dead, was never this
+        pod's, or is not one you may act on — reported rather than raised, so a
+        cleanup pass cannot use this to discover which codes exist.
+
+        Raises on a 503: the link is revoked in the record but its cached copy
+        could not be dropped, so it may still open. Repeat the call to finish.
+        """
+        return self._call(file_signed_url_revoke, self._pod_uuid(), code=code)
 
     def create_folder(
         self,

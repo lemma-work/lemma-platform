@@ -413,31 +413,71 @@ class DatastoreSettings(BaseSettings):
 
     # Public (short) signed datastore URLs
     datastore_signed_url_default_expiry_seconds: int = Field(
-        default=10800,
+        default=86400,
         description=(
             "Default lifetime (seconds) of a public, hit-capped datastore signed "
-            "(short) URL. Used when a caller does not specify an expiry."
+            "(short) URL. Used when a caller does not specify an expiry. Defaults "
+            "to 24 hours: an outbound email attachment link takes this value (the "
+            "`sign_pod_file` contract deliberately does not let its caller pick "
+            "one), and anything shorter dies overnight before the recipient reads "
+            "the mail."
         ),
     )
     datastore_signed_url_max_expiry_seconds: int = Field(
-        default=86400,
+        default=604800,
         description=(
             "Hard ceiling (seconds) on a public datastore signed URL's lifetime. "
-            "Requests above this are clamped down. Defaults to 24 hours."
+            "Requests above this are clamped down. Defaults to 7 days. The link "
+            "record is a Postgres row, so it survives a Redis restart; Redis "
+            "holds a cached copy and the spend counter, and a fetch that finds "
+            "nothing cached rebuilds it from the row."
         ),
     )
     datastore_signed_url_default_max_hits: int = Field(
-        default=50,
+        default=200,
         description=(
-            "Default maximum number of times a public datastore signed URL may be "
-            "fetched before it is rejected. Bounds egress from link misuse."
+            "Default download budget for a public datastore signed URL, counted in "
+            "whole copies of the file. Bounds egress from link misuse. Only bytes "
+            "actually sent are charged, so a revalidation (304) or a HEAD from a "
+            "link-unfurling bot costs nothing."
         ),
     )
     datastore_signed_url_max_hits: int = Field(
-        default=100,
+        default=1000,
         description=(
-            "Hard ceiling on the per-link hit cap for public datastore signed URLs. "
-            "Requests above this are clamped down."
+            "Hard ceiling on the per-link download budget for public datastore "
+            "signed URLs. Requests above this are clamped down."
+        ),
+    )
+    datastore_signed_url_max_active_per_user: int = Field(
+        default=500,
+        description=(
+            "How many public signed URLs one person may have live in one pod at "
+            "once. Counts only links that still resolve — revoking one, or "
+            "letting it expire, frees the slot immediately. Bounds a runaway "
+            "minting loop, which is the only way this number is reached in "
+            "practice: an agent emailing 50 attachments a day would sit at ~350 "
+            "against a 7-day lifetime. "
+            "Exact for a caller minting one link at a time. A simultaneous "
+            "burst settles above it by roughly the number of mints in flight, "
+            "because the check and the insert are one statement rather than a "
+            "serialized allocation — so the overshoot tracks concurrency, not "
+            "this number, and at the default it is a fraction of a percent. It "
+            "is a bound on abuse, not a quota anything is billed against; "
+            "`SignedLinkRepository.create_within_allowance` says why it is not "
+            "enforced more strictly than that."
+        ),
+    )
+    datastore_signed_url_row_retention_seconds: int = Field(
+        default=604800,
+        # Not negative: the purge subtracts this from `now` to get its cutoff,
+        # so a negative value puts the cutoff in the future and deletes rows
+        # whose links have not expired.
+        ge=0,
+        description=(
+            "How long a public signed URL's row is kept after the link expires. "
+            "The link stops resolving at expiry regardless; this is only so a "
+            "pod can still see what it recently handed out. Defaults to 7 days."
         ),
     )
     datastore_signed_url_code_bytes: int = Field(

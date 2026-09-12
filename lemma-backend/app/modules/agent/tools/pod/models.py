@@ -223,14 +223,14 @@ class GetFileUrlRequest(BaseModel):
     expires_seconds: int | None = Field(
         default=None,
         ge=1,
-        le=86400,
-        description="Link lifetime. Default ~1h for 'app', 3h for 'public' (max 24h).",
+        le=604800,
+        description="Link lifetime. Default ~1h for 'app', 24h for 'public' (max 7d).",
     )
     max_hits: int | None = Field(
         default=None,
         ge=1,
-        le=100,
-        description="'public' only: downloads before the link dies (default 50).",
+        le=1000,
+        description="'public' only: downloads before the link dies (default 200).",
     )
 
 

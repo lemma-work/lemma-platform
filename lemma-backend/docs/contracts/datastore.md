@@ -22,6 +22,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `file.markdown.detach` | DELETE | `/pods/{pod_id}/datastore/files/by-path/markdown` | Detach Document Markdown |
 | `file.search` | POST | `/pods/{pod_id}/datastore/files/search` | Search Files |
 | `file.signed_url` | POST | `/pods/{pod_id}/datastore/files/signed-url` | Create a public, hit-capped signed URL for a file |
+| `file.signed_url.list` | GET | `/pods/{pod_id}/datastore/files/signed-urls` | List this pod's public signed URLs |
+| `file.signed_url.revoke` | DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | Revoke a public signed URL |
 | `file.tree` | GET | `/pods/{pod_id}/datastore/files/tree` | Get Directory Tree |
 | `file.update` | PATCH | `/pods/{pod_id}/datastore/files/by-path` | Update File |
 | `file.upload` | POST | `/pods/{pod_id}/datastore/files` | Upload File |

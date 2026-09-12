@@ -378,6 +378,13 @@ class DatastoreStoragePort(Protocol):
 
     def iter_download(self, source_blob_name: str) -> AsyncIterator[bytes]: ...
 
+    async def open_download(
+        self,
+        source_blob_name: str,
+        *,
+        byte_range: tuple[int, int] | None = None,
+    ) -> tuple[int, AsyncIterator[bytes]]: ...
+
     async def get_signed_url(self, blob_name: str, expires_hours: int = 1) -> str: ...
 
     async def delete_file(self, blob_name: str) -> bool: ...

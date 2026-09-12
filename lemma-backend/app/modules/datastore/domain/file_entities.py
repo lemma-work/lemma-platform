@@ -212,3 +212,46 @@ class DatastoreFileSearchResult(BaseModel):
     # page annotation was added.
     page_number: int | None = None
     page_end: int | None = None
+
+
+class DatastoreSignedLinkEntity(BaseModel):
+    """A public short link to one file, as the durable record knows it.
+
+    Deliberately not an ``AggregateRoot``: a link has no behaviour and emits no
+    events. It is a row that says "this code, until this instant, resolves to
+    these bytes" — plus the two things the serving route cannot look up for
+    itself, because it runs unauthenticated with no pod context.
+    """
+
+    id: UUID
+    code: str
+    pod_id: UUID
+    created_by_user_id: UUID | None = None
+    path: str
+    object_key: str
+    content_type: str
+    filename: str
+    content_sha256: str | None = None
+    size_bytes: int = 0
+    max_hits: int
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    exhausted_at: datetime | None = None
+    created_at: datetime | None = None
+
+    @property
+    def is_live(self) -> bool:
+        """Whether this link still resolves.
+
+        Redis owns how much budget is *left*; the row owns the three ways a
+        link stops resolving for good. Exhaustion is among them because the
+        serving path rehydrates from this row whenever Redis has nothing — and
+        spending the budget is precisely when the key gets dropped, so without
+        it the very next fetch would mint a fresh budget and serve again.
+        """
+        if self.revoked_at is not None or self.exhausted_at is not None:
+            return False
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at > datetime.now(timezone.utc)

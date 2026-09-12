@@ -549,8 +549,8 @@ class FileUrlResponse(BaseModel):
 
 
 class FileSignedUrlRequest(BaseModel):
-    expires_seconds: Optional[int] = None
-    max_hits: Optional[int] = None
+    expires_seconds: Optional[int] = Field(default=None, ge=1, le=604800)
+    max_hits: Optional[int] = Field(default=None, ge=1, le=1000)
 
 
 class FileSignedUrlResponse(BaseModel):
@@ -558,3 +558,36 @@ class FileSignedUrlResponse(BaseModel):
     signed_url: str
     expires_at: datetime
     max_hits: int
+
+
+class SignedUrlSummary(BaseModel):
+    """One live public link, as its pod sees it.
+
+    Deliberately carries the ``code`` and not the full URL: this is the listing
+    a pod member reads to decide what to revoke, and the code is what revoking
+    takes. Anyone who needs the openable URL already has it.
+    """
+
+    code: str
+    path: str
+    filename: str
+    content_type: str
+    size_bytes: int
+    max_hits: int
+    expires_at: datetime
+    revoked_at: Optional[datetime] = None
+    exhausted_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+
+class SignedUrlListResponse(BaseModel):
+    links: List[SignedUrlSummary]
+    #: Pass back as ``cursor`` to continue. ``None`` means this is the last
+    #: page — a full page is not itself proof that more exist, so the cursor is
+    #: the only signal, and callers cleaning up links must follow it.
+    next_cursor: Optional[str] = None
+
+
+class SignedUrlRevokeResponse(BaseModel):
+    code: str
+    revoked: bool

@@ -348,16 +348,23 @@ class TestTheVisionCallDoesNotHoldADatabaseConnection:
             ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
         )
 
-        assert session.commits == 1, "the connection was never handed back"
+        # Two releases, not one: the per-page URL signing above the model call
+        # is its own stretch of non-database work, and it gets its own release.
+        assert session.commits == 2, "the connection was never handed back"
         assert held["in_transaction"] is False, (
             "the vision model ran while the platform transaction was still open"
         )
 
     @pytest.mark.asyncio
-    async def test_direct_needs_no_release_because_it_makes_no_call(
+    async def test_direct_still_releases_for_the_page_url_signing(
         self, monkeypatch
     ) -> None:
-        """DIRECT returns the bytes inline — there is no round trip to wait on."""
+        """DIRECT returns the bytes inline, so there is no model round trip.
+
+        It still signs a URL per page, though — a Redis lookup each, and on GCS
+        a signing round trip each — so there is still something to hand the
+        connection back for. This path used to hold it through all of them.
+        """
         session = _pdf_services(monkeypatch)
 
         await pod_files.pod_view_document_pages(
@@ -365,4 +372,4 @@ class TestTheVisionCallDoesNotHoldADatabaseConnection:
             ViewDocumentPagesRequest(path="/pod/report.pdf", page_start=1, page_end=2),
         )
 
-        assert session.commits == 0
+        assert session.commits == 1

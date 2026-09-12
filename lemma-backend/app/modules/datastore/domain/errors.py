@@ -35,6 +35,50 @@ class DatastoreConflictError(DatastoreDomainError):
         )
 
 
+class DatastoreSignedLinkLimitError(DatastoreDomainError):
+    """This person already has as many live share links as they may have.
+
+    429 rather than 403: nothing is forbidden, there is simply no slot right now,
+    and the condition clears on its own as links expire. The details say what the
+    limit is and how many are live, because the caller — often an agent — has to
+    decide between revoking one and waiting.
+
+    ``live`` can read slightly above ``limit`` after a simultaneous burst; the
+    limit is a bound on abuse rather than an exactly enforced quota, and
+    ``SignedLinkRepository.create_within_allowance`` says why.
+    """
+
+    def __init__(self, *, limit: int, live: int):
+        super().__init__(
+            (
+                f"You already have {live} live share links in this pod, and the "
+                f"limit is {limit}. Revoke one you no longer need, or wait for "
+                f"one to expire."
+            ),
+            code="DATASTORE_SIGNED_LINK_LIMIT",
+            status_code=429,
+            details={"limit": limit, "live": live},
+        )
+
+
+class DatastoreRevocationIncompleteError(DatastoreDomainError):
+    """The link is revoked in the record but still cached, so still openable.
+
+    503 rather than 500: the durable half succeeded and nothing is corrupt —
+    the cache simply could not be reached — and repeating the call finishes the
+    job. Reporting plain success instead told the caller a link was dead while
+    it was still serving bytes.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The link is revoked but its cached copy could not be dropped; "
+            "retry to finish revoking it.",
+            code="DATASTORE_REVOCATION_INCOMPLETE",
+            status_code=503,
+        )
+
+
 class DatastoreNotFoundError(DatastoreDomainError):
     def __init__(self, message: str = "Datastore not found"):
         super().__init__(message, code="DATASTORE_NOT_FOUND", status_code=404)

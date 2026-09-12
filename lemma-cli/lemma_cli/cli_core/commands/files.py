@@ -3,6 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from types import SimpleNamespace
+
 import typer
 
 from ..confirm import confirm_destructive
@@ -45,7 +47,7 @@ def _split_remote_target(local: Path, remote: str | None) -> tuple[str, str]:
 
 
 def _parse_duration_seconds(value: str) -> int:
-    """Parse a duration like ``30m``, ``3h``, ``24h``, ``90s`` or raw seconds."""
+    """Parse a duration like ``30m``, ``3h``, ``7d``, ``90s`` or raw seconds."""
     text = value.strip().lower()
     if not text:
         raise typer.BadParameter("duration cannot be empty")
@@ -57,7 +59,7 @@ def _parse_duration_seconds(value: str) -> int:
         return int(text)
     except ValueError as exc:
         raise typer.BadParameter(
-            f"invalid duration {value!r}; use e.g. 30m, 3h, 24h, or seconds"
+            f"invalid duration {value!r}; use e.g. 30m, 3h, 7d, or seconds"
         ) from exc
 
 
@@ -608,18 +610,18 @@ def share_file(
         None,
         "--ttl",
         "--expires",
-        help="Link lifetime, e.g. 30m, 3h, 24h (default 3h, max 24h).",
+        help="Link lifetime, e.g. 30m, 3h, 24h, 7d (default 24h, max 7d).",
     ),
     max_hits: int | None = typer.Option(
         None,
         "--max-hits",
-        help="Max downloads before the link is rejected (default 50, max 100).",
+        help="Max downloads before the link is rejected (default 200, max 1000).",
     ),
 ) -> None:
     """Mint a public, hit-capped signed URL (no login needed to open).
 
-    The link expires (default 3h, max 24h) and serves the file at most a set
-    number of times (default 50, max 100), bounding egress if it leaks.
+    The link expires (default 24h, max 7d) and serves the file at most a set
+    number of times (default 200, max 1000), bounding egress if it leaks.
     """
     state = state_from_ctx(ctx)
     expires_seconds = _parse_duration_seconds(ttl) if ttl is not None else None
@@ -630,6 +632,61 @@ def share_file(
             expires_seconds=expires_seconds,
             max_hits=max_hits,
         ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("shares")
+def list_shares(
+    ctx: typer.Context,
+    pod: str | None = typer.Option(None, "--pod"),
+    include_dead: bool = typer.Option(
+        False, "--all", help="Also show links that have expired or been revoked."
+    ),
+) -> None:
+    """List the public links you have handed out, newest first.
+
+    Yours, not the pod's: the code in each row is the whole capability. Follows
+    `next_cursor` to the end, because a link you cannot see is one you cannot
+    revoke.
+    """
+    state = state_from_ctx(ctx)
+
+    def _all_pages(client, s):
+        pod_files = pod_client(client, s, pod).files
+        links: list = []
+        cursor = None
+        while True:
+            page = pod_files.list_signed_urls(include_dead=include_dead, cursor=cursor)
+            links.extend(page.links)
+            cursor = getattr(page, "next_cursor", None)
+            # Same guard as `PodFiles.list_all`: a cursor is a non-empty string
+            # or it is the end. Testing it for truthiness alone loops forever on
+            # anything else the attribute might hold.
+            if not isinstance(cursor, str) or not cursor:
+                return SimpleNamespace(links=links, next_cursor=None)
+
+    result = run_with_client(ctx, _all_pages)
+    if result is not None:
+        emit(state, result)
+
+
+@app.command("unshare")
+def revoke_share(
+    ctx: typer.Context,
+    code: str = typer.Argument(..., help="The code from the /s/<code> link."),
+    pod: str | None = typer.Option(None, "--pod"),
+) -> None:
+    """Kill a public link now, rather than waiting out its expiry.
+
+    Reports `revoked: false` for a code that was already dead or was never this
+    pod's, rather than failing — so this is safe to run over a list.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, s: pod_client(client, s, pod).files.revoke_signed_url(code),
     )
     if result is not None:
         emit(state, result)

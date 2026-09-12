@@ -270,12 +270,18 @@ async def pod_view_document_pages(
                 "error": "No pages rendered — the requested pages are out of range.",
             }
 
+        # One Redis lookup per page, and on GCS a signing round trip each, for
+        # up to `pdf_render_max_pages_per_call` pages — all of it with nothing
+        # left to ask the database. `build_file_url` grew a `session` parameter
+        # for exactly this; this caller reaches `build_object_url` directly, so
+        # it releases the connection itself.
         page_refs = []
-        for page in pages:
-            url, _expires = await build_object_url(
-                services.file.storage, page.storage_key
-            )
-            page_refs.append({"page_number": page.page_number, "url": url})
+        async with connection_released(services.uow.session):
+            for page in pages:
+                url, _expires = await build_object_url(
+                    services.file.storage, page.storage_key
+                )
+                page_refs.append({"page_number": page.page_number, "url": url})
 
         # This tool used to hand BinaryContent to whatever model was running.
         # `view_image` was withheld from text-only models for exactly that
