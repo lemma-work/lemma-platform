@@ -111,26 +111,29 @@ class DirectoryTreeBuilder:
             requester_user_id=requester_user_id,
             ctx=ctx,
         )
-        # A tree needs its subtree, not the pod. For any request below the root
-        # the rows outside it were being loaded and thrown away; only `/` still
-        # asks for everything, because there the subtree *is* the pod.
+        # A tree needs its subtree, not the pod — and within that subtree it
+        # needs every folder but only the handful of files it will actually
+        # show. Asking for exactly that is what keeps this off the size of the
+        # pod: it used to load every row and then, separately, every visible id,
+        # two passes of O(files) to render a few files per folder.
         #
         # Safe because `children_by_directory` is keyed on the parent path and
         # `build_node` only ever descends from this root, so no key it can reach
-        # is missing. The root row itself is never read out of `all_items` --
-        # `build_node` is handed the directory's own fields -- which is why
-        # `get_descendants` excluding the prefix row does not matter here.
+        # is missing. The root row itself is never read out of `visible_items` --
+        # `build_node` is handed the directory's own fields -- which is why a
+        # query excluding the prefix row does not matter here.
         subtree_root = root_directory.path if root_directory is not None else "/"
-        all_items = (
-            await self.file_repository.get_all_by_datastore(pod_id)
-            if subtree_root == "/"
-            else await self.file_repository.get_descendants(pod_id, subtree_root)
-        )
-        visible_items = await self.authorizer.filter_visible_items(
-            all_items,
-            requester_user_id,
+        visible_items = await self.file_repository.get_tree_items(
             pod_id,
             ctx=ctx,
+            subtree_root=subtree_root,
+            # One more than will be displayed, which is how `has_more_files`
+            # below can still tell that a directory has been truncated.
+            files_per_directory=files_per_directory,
+            # Asked rather than restated: the human/workload split is the
+            # authorizer's rule, and a second copy of it here would be a second
+            # thing to keep right.
+            walk_ancestors=self.authorizer.walks_ancestors(ctx),
         )
         children_by_directory: dict[str, list[DatastoreFileEntity]] = {}
         for item in visible_items:

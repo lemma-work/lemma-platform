@@ -1037,7 +1037,7 @@ async def test_tree_root_includes_me_and_skills_nodes(
         visibility="PERSONAL",
         parent_path=f"/{requester_user_id}",
     )
-    file_repository_mock.get_all_by_datastore.return_value = [team_file, personal_note]
+    file_repository_mock.get_tree_items.return_value = [team_file, personal_note]
     file_repository_mock.get_by_paths.return_value = []
     file_repository_mock.get_by_path.return_value = None
 
@@ -1070,7 +1070,7 @@ async def test_tree_me_resolves_to_personal_root_not_pod_root(
     pod_file = _make_file(
         pod_id=pod_id, name="shared.txt", owner_user_id=uuid4(), visibility="POD"
     )
-    file_repository_mock.get_all_by_datastore.return_value = [personal_note, pod_file]
+    file_repository_mock.get_tree_items.return_value = [personal_note, pod_file]
     file_repository_mock.get_by_paths.return_value = []
     file_repository_mock.get_by_path.return_value = None
 
@@ -1291,4 +1291,4 @@ async def test_the_skills_overlay_asks_for_the_subtree_not_the_pod(
     assert "custom-skill" in {item.name for item in items}
     file_repository_mock.get_descendants.assert_awaited()
     assert file_repository_mock.get_descendants.await_args.args[1] == "/skills"
-    file_repository_mock.get_all_by_datastore.assert_not_awaited()
+    file_repository_mock.get_tree_items.assert_not_awaited()

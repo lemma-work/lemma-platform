@@ -29,6 +29,9 @@ from app.modules.datastore.domain.file_entities import (
 )
 from app.modules.datastore.domain.ports import DatastoreFileRepositoryPort
 from app.modules.datastore.infrastructure.models import DatastoreFile
+from app.modules.datastore.infrastructure.repositories.file_tree_sql import (
+    tree_statements,
+)
 from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
     has_unreadable_ancestor,
 )
@@ -414,6 +417,17 @@ class DatastoreFileRepository(
         pod_id: UUID,
         owner_user_id: UUID | None = None,
     ) -> Sequence[DatastoreFileEntity]:
+        """Every file row in a pod. Deliberately not on the port.
+
+        Nothing in production calls this, and nothing should: it is O(files) for
+        any question, and the last caller — the directory tree — was using it to
+        render a handful of files per folder. `get_tree_items` and
+        `get_descendants` are the bounded ways to ask.
+
+        It stays here because the tests that check the visibility predicate have
+        to enumerate a pod to compare against, which is a fair thing to do to a
+        fixture and not a thing to do to a pod.
+        """
         stmt = select(DatastoreFile).where(DatastoreFile.pod_id == pod_id)
         if owner_user_id is not None:
             stmt = stmt.where(DatastoreFile.owner_user_id == owner_user_id)
@@ -525,6 +539,34 @@ class DatastoreFileRepository(
         for file_id, is_visible in rows.all():
             (visible if is_visible else hidden).add(file_id)
         return visible, hidden
+
+    async def get_tree_items(
+        self,
+        pod_id: UUID,
+        *,
+        ctx: Context,
+        subtree_root: str,
+        files_per_directory: int,
+        walk_ancestors: bool,
+    ) -> Sequence[DatastoreFileEntity]:
+        """Everything a directory tree can display, and nothing else.
+
+        See ``file_tree_sql.tree_statements`` for the shape and why it is two
+        statements rather than one read of the pod.
+        """
+        folders_stmt, files_stmt = tree_statements(
+            _file_actions_expr(ctx),
+            pod_id,
+            ctx,
+            subtree_root=subtree_root,
+            files_per_directory=files_per_directory,
+            walk_ancestors=walk_ancestors,
+        )
+        folders = await self.session.execute(folders_stmt)
+        items = [instance.to_entity() for instance in folders.scalars().all()]
+        files = await self.session.execute(files_stmt)
+        items.extend(instance.to_entity() for instance in files.scalars().all())
+        return items
 
     async def get_descendants(
         self,

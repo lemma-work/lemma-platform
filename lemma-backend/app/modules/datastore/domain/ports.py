@@ -127,10 +127,14 @@ class DatastoreFileRepositoryPort(Protocol):
         path_prefix: str,
     ) -> Sequence[DatastoreFileEntity]: ...
 
-    async def get_all_by_datastore(
+    async def get_tree_items(
         self,
         pod_id: UUID,
-        owner_user_id: UUID | None = None,
+        *,
+        ctx: Context,
+        subtree_root: str,
+        files_per_directory: int,
+        walk_ancestors: bool,
     ) -> Sequence[DatastoreFileEntity]: ...
 
     async def get_by_paths(
