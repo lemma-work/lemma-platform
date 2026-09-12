@@ -42,7 +42,6 @@ import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
-import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
 import {
     SettingsHelpText,
     SettingsList,
@@ -87,7 +86,6 @@ function OrgMembersPageContent() {
             backHref="/home"
             backLabel="Home"
             meta={organization?.name || 'Organization'}
-            tabs={<OrganizationSettingsNav organizationId={orgId} />}
             contentWidthClassName="max-w-6xl"
             contentAlign="left"
             contentClassName="pb-16 sm:pb-20"
