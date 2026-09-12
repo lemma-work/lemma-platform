@@ -4,7 +4,6 @@ import { use } from 'react';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
-import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { UsageOverview } from '@/components/usage/usage-overview';
 import { useOrganizationDetails } from '@/lib/hooks/use-organizations';
@@ -28,7 +27,6 @@ function OrganizationUsagePageContent({ params }: { params: Promise<{ id: string
             backHref="/home"
             backLabel="Home"
             meta={organization?.name || 'Organization'}
-            tabs={<OrganizationSettingsNav organizationId={organizationId} />}
             contentWidthClassName="max-w-6xl"
             contentAlign="left"
             contentClassName="pb-16 sm:pb-20"
