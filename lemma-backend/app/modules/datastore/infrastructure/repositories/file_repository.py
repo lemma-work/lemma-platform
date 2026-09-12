@@ -20,6 +20,7 @@ from app.core.authorization.sql_actions import (
     allowed_actions_expr,
 )
 from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
+from app.core.infrastructure.db.sql_text import escape_like
 from app.core.infrastructure.db.transaction_locks import (
     mark_transaction_scoped_lock,
 )
@@ -41,7 +42,6 @@ from app.modules.datastore.infrastructure.repositories._base import (
 from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
     DatastoreFileRecoveryQueriesMixin,
 )
-from app.modules.datastore.infrastructure.sql_identifiers import escape_like
 
 
 def _direct_child_patterns(directory_path: str) -> tuple[str, str]:

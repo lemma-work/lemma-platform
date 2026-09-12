@@ -35,6 +35,13 @@ def _release(app_id, number, *, source="source/aa/archive.zip", age_days=100):
 def _retention(app, releases):
     repo = AsyncMock()
     repo.get_for_update.return_value = app
+    # The double filters the way the repository's statement does. Retention asks
+    # only for what it can still act on, so a purged row must not reach it here
+    # either -- a double that hands over more than production would is how a
+    # test certifies a plan the real query cannot produce.
+    repo.list_unpurged_releases.return_value = [
+        release for release in releases if release.purged_at is None
+    ]
     repo.list_releases.return_value = releases
     storage = AsyncMock()
     return AppReleaseRetention(repo, Mock(return_value=storage)), repo, storage
@@ -118,6 +125,63 @@ async def test_source_no_retained_release_references_is_deleted():
 
     assert plan.source_archives == (orphaned,)
     assert orphaned in [call.args[0] for call in storage.delete_file.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_retention_reads_only_the_releases_it_can_act_on():
+    """A tombstone is not a candidate, so reading it was pure cost.
+
+    This sweep runs after every deploy and the rows are never deleted, so the
+    old read grew with the app's whole lifetime to choose from a set that never
+    exceeds `max_keep`. The plan must be identical with a thousand tombstones in
+    the table and with none.
+    """
+    app = _app()
+    live = _release(app.id, 99)
+    prunable = _release(app.id, 98)
+    app.current_release_id = live.id
+    tombstones = []
+    for number in range(1, 51):
+        purged = _release(app.id, number, source=f"source/gone/{number}.zip")
+        purged.pruned_at = NOW - timedelta(days=200)
+        purged.purged_at = NOW - timedelta(days=199)
+        tombstones.append(purged)
+
+    retention, repo, _storage = _retention(app, [*tombstones, prunable, live])
+    plan = await retention.plan(app, policy=_TIGHT, now=NOW)
+
+    repo.list_releases.assert_not_called()
+    assert plan.version_ids == (prunable.id,), (
+        "a purged release was re-selected, or a live one was missed"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_purged_release_stops_pinning_the_source_it_no_longer_has():
+    """The one behaviour the narrowed read changes, and it is a leak being fixed.
+
+    `_prunable_source_paths` spares a source blob any *retained* release still
+    points at. A purged release points at nothing -- its bytes are already gone
+    -- so counting it as a reference pinned a blob whose only remaining referent
+    had been deleted, and pinned it forever, because tombstones are never
+    removed.
+    """
+    app = _app()
+    shared = "source/shared/archive.zip"
+    long_gone = _release(app.id, 1, source=shared)
+    long_gone.pruned_at = NOW - timedelta(days=200)
+    long_gone.purged_at = NOW - timedelta(days=199)
+    old = _release(app.id, 2, source=shared)
+    live = _release(app.id, 3, source="source/new/archive.zip")
+    app.current_release_id = live.id
+    app.source_archive_path = live.source_archive_path
+
+    retention, _repo, storage = _retention(app, [long_gone, old, live])
+    plan = await retention.plan(app, policy=_TIGHT, now=NOW)
+    await retention.execute(plan)
+
+    assert plan.source_archives == (shared,)
+    assert shared in [call.args[0] for call in storage.delete_file.await_args_list]
 
 
 @pytest.mark.asyncio

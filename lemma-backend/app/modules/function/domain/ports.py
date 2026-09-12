@@ -74,7 +74,26 @@ class FunctionRepositoryPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    async def find_revisions_by_hash_prefix(
+        self, function_id: UUID, prefix: str
+    ) -> list[FunctionRevisionEntity]:
+        """The best revision of each distinct hash the prefix names, max two.
+
+        Two is enough to answer "which revision" and "is it ambiguous" at once,
+        and bounds the read: resolving a ref must not cost the function's whole
+        build history.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def list_revisions(self, function_id: UUID) -> list[FunctionRevisionEntity]:
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_unpurged_revisions(
+        self, function_id: UUID
+    ) -> list[FunctionRevisionEntity]:
+        """The revisions retention can still act on: everything not yet purged."""
         raise NotImplementedError
 
     @abstractmethod

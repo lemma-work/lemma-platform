@@ -20,12 +20,12 @@ from sqlalchemy.orm import aliased
 from app.core.authorization.context import Context
 from app.core.authorization.permissions import Permissions
 from app.core.authorization.sql_actions import allowed_actions_contains
+from app.core.infrastructure.db.sql_text import escape_like
 from app.modules.datastore.domain.file_entities import FileKind
 from app.modules.datastore.infrastructure.models import DatastoreFile
 from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
     has_unreadable_ancestor,
 )
-from app.modules.datastore.infrastructure.sql_identifiers import escape_like
 
 
 def tree_statements(

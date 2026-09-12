@@ -103,22 +103,24 @@ class AppReleaseService:
             # carries that number resolves it without making people prefix every
             # number with `v`.
             if release is None:
-                digest_prefix = ref.strip().lower()
+                digest_prefix = ref.strip().lower().removeprefix("sha256:")
         if release is None and digest_prefix is not None:
-            matches = [
-                candidate
-                for candidate in await self.repository.list_releases(app.id)
-                if candidate.version.startswith(digest_prefix)
-            ]
+            # Two rows is all this question needs: the repository collapses each
+            # distinct digest to its best release and stops at two, so a second
+            # row *is* the ambiguity. Reading the whole history to sort it here
+            # answered the same question by loading every deploy the app has
+            # ever had.
+            matches = await self.repository.find_releases_by_digest_prefix(
+                app.id, digest_prefix
+            )
             # An ambiguous prefix is refused rather than resolved to "the newest
             # match": promoting the wrong build is not a recoverable mistake.
-            if len({candidate.version for candidate in matches}) > 1:
+            if len(matches) > 1:
                 raise AppReleaseNotFoundError(
-                    f"Release '{ref}' is ambiguous -- it matches "
-                    f"{len(matches)} releases. Use the full digest or the "
-                    "release number."
+                    f"Release '{ref}' is ambiguous -- more than one release "
+                    "digest starts with it. Use a longer prefix, the full "
+                    "digest, or the release number."
                 )
-            matches.sort(key=lambda item: (item.is_pruned, -(item.release_number or 0)))
             release = matches[0] if matches else None
         if release is None:
             raise AppReleaseNotFoundError(f"App '{app.name}' has no release '{ref}'")

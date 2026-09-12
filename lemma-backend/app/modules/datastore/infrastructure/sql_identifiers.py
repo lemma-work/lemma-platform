@@ -4,6 +4,10 @@ These helpers were previously duplicated across ``schema_manager``,
 ``record_repository``, ``datastore_repository`` and ``file_chunk_repository``.
 They are intentionally dependency-light (only domain errors) so any layer can
 import them without creating cycles.
+
+``escape_like`` used to sit here too. It moved to
+``app.core.infrastructure.db.sql_text`` when two other modules needed it --
+unlike everything below, it raises nothing and knows nothing about datastores.
 """
 
 from __future__ import annotations
@@ -58,11 +62,6 @@ def ensure_identifier_fits(identifier: str, *, kind: str) -> str:
             "name."
         )
     return identifier
-
-
-def escape_like(value: str) -> str:
-    """Escape ``%``/``_`` wildcards for a ``LIKE ... ESCAPE '!'`` clause."""
-    return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
 
 
 def quote_sql_literal(value: object) -> str:

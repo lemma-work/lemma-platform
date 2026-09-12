@@ -52,7 +52,36 @@ def _service(app, releases):
         return next((r for r in releases if r.release_number == number), None)
 
     repo.get_release_by_number.side_effect = by_number
+    repo.find_releases_by_digest_prefix.side_effect = _digest_prefix_oracle(releases)
     return AppReleaseService(repo), repo
+
+
+def _digest_prefix_oracle(releases):
+    """The Python the SQL replaced, kept here to stand in for the repository.
+
+    These tests are about the resolver: which release a ref names, and when it
+    refuses. Running the old list-and-filter as the double keeps them that way,
+    and leaves "the statement agrees with this" to
+    ``test_app_release_ref_lookup_e2e.py``, which runs both against a real table.
+
+    Ordering the surviving versions lexicographically mirrors the statement's
+    ``ORDER BY version``. It only decides *which* two of three-or-more come
+    back, which the resolver has already refused by then.
+    """
+
+    async def find(_app_id, prefix):
+        if not prefix:
+            return []
+        matches = sorted(
+            (item for item in releases if item.version.startswith(prefix)),
+            key=lambda item: (item.is_pruned, -(item.release_number or 0)),
+        )
+        best: dict[str, object] = {}
+        for item in matches:
+            best.setdefault(item.version, item)
+        return [best[version] for version in sorted(best)][:2]
+
+    return find
 
 
 def _app(**overrides):

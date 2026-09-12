@@ -12,9 +12,7 @@ from sqlalchemy.sql import text
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
-from app.modules.datastore.infrastructure.sql_identifiers import (
-    escape_like as _escape_like,
-)
+from app.core.infrastructure.db.sql_text import escape_like as _escape_like
 
 # Query-time HNSW recall/latency knob (pgvector default is 40). Raising it
 # improves recall, especially when post-filtering by folder subtree / visibility.

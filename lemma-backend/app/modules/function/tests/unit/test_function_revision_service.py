@@ -67,7 +67,37 @@ def _service(function, revisions):
         return next((r for r in revisions if r.revision_number == number), None)
 
     repo.get_revision_by_number.side_effect = by_number
+    repo.find_revisions_by_hash_prefix.side_effect = _hash_prefix_oracle(revisions)
     return FunctionRevisionService(repo), repo
+
+
+def _hash_prefix_oracle(revisions):
+    """The Python the SQL replaced, kept here to stand in for the repository.
+
+    These tests are about the resolver: which revision a ref names, and when it
+    refuses. Running the old list-and-filter as the double keeps them that way,
+    and leaves "the statement agrees with this" to
+    ``test_function_revision_ref_lookup_e2e.py``, which runs both against a real
+    table.
+    """
+
+    async def find(_function_id, prefix):
+        if not prefix:
+            return []
+        matches = sorted(
+            (
+                item
+                for item in revisions
+                if item.revision_hash.removeprefix("sha256:").startswith(prefix)
+            ),
+            key=lambda item: (item.is_pruned, -(item.revision_number or 0)),
+        )
+        best: dict[str, object] = {}
+        for item in matches:
+            best.setdefault(item.revision_hash, item)
+        return [best[digest] for digest in sorted(best)][:2]
+
+    return find
 
 
 @pytest.mark.parametrize(

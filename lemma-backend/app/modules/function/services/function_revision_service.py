@@ -141,22 +141,20 @@ class FunctionRevisionService:
             if revision is None:
                 hash_prefix = ref.strip().lower().removeprefix("sha256:")
         if revision is None and hash_prefix is not None:
-            matches = [
-                candidate
-                for candidate in await self.repository.list_revisions(function.id)
-                if candidate.revision_hash.removeprefix("sha256:").startswith(
-                    hash_prefix
-                )
-            ]
-            if len({candidate.revision_hash for candidate in matches}) > 1:
-                raise FunctionRevisionNotFoundError(
-                    f"Revision '{ref}' is ambiguous -- it matches "
-                    f"{len(matches)} revisions. Use the full hash or the "
-                    "revision number."
-                )
-            matches.sort(
-                key=lambda item: (item.is_pruned, -(item.revision_number or 0))
+            # Two rows is all this question needs: the repository collapses each
+            # distinct hash to its best revision and stops at two, so a second
+            # row *is* the ambiguity. Reading the whole history to sort it here
+            # answered the same question by loading every build the function has
+            # ever had.
+            matches = await self.repository.find_revisions_by_hash_prefix(
+                function.id, hash_prefix
             )
+            if len(matches) > 1:
+                raise FunctionRevisionNotFoundError(
+                    f"Revision '{ref}' is ambiguous -- more than one revision "
+                    "hash starts with it. Use a longer prefix, the full hash, "
+                    "or the revision number."
+                )
             revision = matches[0] if matches else None
         if revision is None:
             raise FunctionRevisionNotFoundError(
