@@ -55,6 +55,10 @@ async def _seed_large_tree(
     Shaped like the pods that hurt: many members with personal roots (the main
     source of rows a given caller may not read), a shared subtree, and a couple
     of RESTRICTED folders whose descendants only the ancestor walk can hide.
+
+    `status` is written as a value `FileStatus` actually has. It used to be
+    'READY', which is not one — harmless while every test here read ids only,
+    and an immediate `ValueError` for the first one that hydrated a row.
     """
     await session.execute(
         text("""
@@ -62,7 +66,7 @@ async def _seed_large_tree(
           (id, pod_id, owner_user_id, kind, visibility, path, name, size_bytes,
            search_enabled, status, processing_attempts, created_at, updated_at)
         SELECT gen_random_uuid(), :pod, :owner, 'FOLDER', 'POD', '/', 'root', 0,
-               false, 'READY', 0, now(), now()
+               false, 'COMPLETED', 0, now(), now()
         """),
         {"pod": pod_id, "owner": owner_user_id},
     )
@@ -72,7 +76,7 @@ async def _seed_large_tree(
           (id, pod_id, owner_user_id, kind, visibility, path, name, size_bytes,
            search_enabled, status, processing_attempts, created_at, updated_at)
         SELECT gen_random_uuid(), :pod, :stranger, 'FOLDER', 'PERSONAL',
-               '/u' || g, 'u' || g, 0, false, 'READY', 0, now(), now()
+               '/u' || g, 'u' || g, 0, false, 'COMPLETED', 0, now(), now()
         FROM generate_series(1, :members) g
         """),
         {"pod": pod_id, "members": _MEMBERS, "stranger": stranger_user_id},
@@ -84,7 +88,7 @@ async def _seed_large_tree(
            search_enabled, status, processing_attempts, created_at, updated_at)
         SELECT gen_random_uuid(), :pod, f.owner_user_id, 'FILE', 'PERSONAL',
                f.path || '/n' || g || '.md', 'n' || g || '.md', 100,
-               true, 'READY', 0, now(), now()
+               true, 'COMPLETED', 0, now(), now()
         FROM datastore_files f, generate_series(1, 20) g
         WHERE f.pod_id = :pod AND f.kind = 'FOLDER' AND f.path LIKE '/u%'
         """),
@@ -96,7 +100,7 @@ async def _seed_large_tree(
           (id, pod_id, owner_user_id, kind, visibility, path, name, size_bytes,
            search_enabled, status, processing_attempts, created_at, updated_at)
         SELECT gen_random_uuid(), :pod, :owner, 'FOLDER', 'POD',
-               '/shared' || g, 'shared' || g, 0, false, 'READY', 0, now(), now()
+               '/shared' || g, 'shared' || g, 0, false, 'COMPLETED', 0, now(), now()
         FROM generate_series(1, 20) g WHERE g % 10 <> 0
         """),
         {"pod": pod_id, "owner": owner_user_id},
@@ -110,7 +114,7 @@ async def _seed_large_tree(
           (id, pod_id, owner_user_id, kind, visibility, path, name, size_bytes,
            search_enabled, status, processing_attempts, created_at, updated_at)
         SELECT gen_random_uuid(), :pod, :stranger, 'FOLDER', 'RESTRICTED',
-               '/shared' || g, 'shared' || g, 0, false, 'READY', 0, now(), now()
+               '/shared' || g, 'shared' || g, 0, false, 'COMPLETED', 0, now(), now()
         FROM generate_series(1, 20) g WHERE g % 10 = 0
         """),
         {"pod": pod_id, "stranger": stranger_user_id},
@@ -122,7 +126,7 @@ async def _seed_large_tree(
            search_enabled, status, processing_attempts, created_at, updated_at)
         SELECT gen_random_uuid(), :pod, :owner, 'FILE', 'POD',
                f.path || '/d' || g || '.md', 'd' || g || '.md', 500,
-               true, 'READY', 0, now(), now()
+               true, 'COMPLETED', 0, now(), now()
         FROM datastore_files f, generate_series(1, :per_folder) g
         WHERE f.pod_id = :pod AND f.kind = 'FOLDER' AND f.path LIKE '/shared%'
         """),
@@ -372,4 +376,85 @@ async def test_a_restricted_folder_still_hides_its_subtree_at_scale(
     others = [row[0] for row in personal.all()]
     assert others and not (set(others) & visible), (
         "another member's PERSONAL files were visible"
+    )
+
+
+async def test_the_tree_reads_what_it_displays_not_the_whole_pod(
+    db_session, async_client, pod_api: DatastoreApi, fixed_test_user
+) -> None:
+    """The directory tree must not scale with the number of files in the pod.
+
+    It shows every folder but caps files at `files_per_directory` in each one,
+    and it used to reach that shape by loading the pod twice over: every row
+    hydrated into an entity, then every visible id fetched again, to render a
+    few files per folder. Correct, and O(files) for an answer that is
+    O(folders x files_per_directory).
+
+    Asserted on what comes back rather than on the clock, for the same reason
+    as the plan assertions above: row counts are a property of the query, and
+    wall time is a property of whatever hardware CI provides.
+    """
+    pod_id = UUID(pod_api.pod_id)
+    user_id = UUID(fixed_test_user["id"])
+    stranger = await signup_user(async_client, "tree-scale")
+    await _seed_large_tree(db_session, pod_id, user_id, UUID(stranger["id"]))
+
+    counts = await db_session.execute(
+        text("""
+        SELECT kind, count(*) FROM datastore_files
+        WHERE pod_id = :pod GROUP BY kind
+        """),
+        {"pod": pod_id},
+    )
+    by_kind = dict(counts.all())
+    files, folders = by_kind.get("FILE", 0), by_kind.get("FOLDER", 0)
+    assert files >= _FILE_COUNT, (
+        f"the fixture only seeded {files} files; below ~{_FILE_COUNT} reading "
+        "the whole pod is cheap enough to pass unnoticed"
+    )
+
+    service = AuthorizationDataService(db_session)
+    ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
+    repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
+
+    per_directory = 3
+    items = await repository.get_tree_items(
+        pod_id,
+        ctx=ctx,
+        subtree_root="/",
+        files_per_directory=per_directory,
+        walk_ancestors=True,
+    )
+
+    returned_files = [item for item in items if item.is_file]
+    print(
+        f"\n  pod has {files} files in {folders} folders; "
+        f"the tree read {len(returned_files)}"
+    )
+
+    # The bound that matters: one extra row per directory beyond what is shown,
+    # which is how `has_more_files` is still answerable.
+    ceiling = folders * (per_directory + 1)
+    assert len(returned_files) <= ceiling, (
+        f"the tree read {len(returned_files)} files for a view that can show at "
+        f"most {folders} x {per_directory}; it is still scaling with the pod "
+        f"({files} files) rather than with what it displays"
+    )
+    assert len(returned_files) < files, (
+        "the tree read every file in the pod — the per-directory cap is not "
+        "reaching the database at all"
+    )
+
+    # And no directory came back short: the cap has to be applied after
+    # visibility, or a folder whose first entries the caller cannot read would
+    # quietly show fewer files than it has.
+    by_parent: dict[str, int] = {}
+    for item in returned_files:
+        by_parent[item.path.rsplit("/", 1)[0]] = (
+            by_parent.get(item.path.rsplit("/", 1)[0], 0) + 1
+        )
+    assert by_parent, "the tree returned no files at all"
+    assert max(by_parent.values()) <= per_directory + 1, (
+        f"a directory came back with {max(by_parent.values())} files, more than "
+        f"the {per_directory} shown plus the one that signals there are more"
     )

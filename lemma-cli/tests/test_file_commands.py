@@ -162,3 +162,65 @@ def test_child_saves_to_local(monkeypatch, tmp_path):
     )
     assert result.exit_code == 0, result.stdout
     assert out.read_bytes() == b"<!-- PAGE 1 -->\n\n# Title"
+
+
+class FakeSharedFiles:
+    """A paged `list_signed_urls`, shaped like the generated client's."""
+
+    def __init__(self, pages):
+        self._pages = pages
+        self.cursors: list[str | None] = []
+
+    def list_signed_urls(self, *, include_dead=False, cursor=None):
+        self.cursors.append(cursor)
+        links, next_cursor = self._pages[len(self.cursors) - 1]
+        return SimpleNamespace(links=links, next_cursor=next_cursor)
+
+
+def _link(code: str) -> SimpleNamespace:
+    """A link record, carrying `to_dict` the way the generated models do."""
+    payload = {"code": code, "path": f"/me/{code}.txt", "filename": f"{code}.txt"}
+    return SimpleNamespace(to_dict=lambda payload=payload: payload)
+
+
+def test_shares_renders_a_table_rather_than_a_repr(monkeypatch):
+    """`files shares` is the command for auditing what you have handed out.
+
+    Returning a wrapper object printed `namespace(links=[SignedUrlSummary(...)])`
+    — `emit` renders a list of records as a table and a dict as a detail view,
+    and anything else falls through untouched and prints as a repr.
+    """
+    fake = FakeSharedFiles([([_link("aaa"), _link("bbb")], None)])
+    _patch(monkeypatch, fake)
+
+    result = runner.invoke(app, ["files", "shares", "--pod", POD])
+
+    assert result.exit_code == 0, result.output
+    assert "namespace(" not in result.output, result.output
+    assert "SignedUrlSummary(" not in result.output, result.output
+    # The codes are what you revoke by, so they have to be readable.
+    assert "aaa" in result.output and "bbb" in result.output, result.output
+
+
+def test_shares_follows_the_cursor_to_the_end(monkeypatch):
+    """A link you cannot see is a link you cannot revoke."""
+    fake = FakeSharedFiles([([_link("page1")], "cursor-1"), ([_link("page2")], None)])
+    _patch(monkeypatch, fake)
+
+    result = runner.invoke(app, ["files", "shares", "--pod", POD])
+
+    assert result.exit_code == 0, result.output
+    assert fake.cursors == [None, "cursor-1"], fake.cursors
+    assert "page1" in result.output and "page2" in result.output, result.output
+
+
+def test_shares_stops_when_the_cursor_is_not_a_string(monkeypatch):
+    """Truthiness is not the test: a non-string cursor used to loop forever,
+    and the CLI suite hung rather than failed."""
+    fake = FakeSharedFiles([([_link("only")], object())])
+    _patch(monkeypatch, fake)
+
+    result = runner.invoke(app, ["files", "shares", "--pod", POD])
+
+    assert result.exit_code == 0, result.output
+    assert fake.cursors == [None], fake.cursors

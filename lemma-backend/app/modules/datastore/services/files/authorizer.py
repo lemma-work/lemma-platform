@@ -220,6 +220,17 @@ class FileAuthorizer:
                 ctx=ctx,
             )
 
+    @staticmethod
+    def walks_ancestors(ctx: Context) -> bool:
+        """Whether an unreadable folder above a file should hide it.
+
+        The human/workload split, exposed so callers that push the visibility
+        predicate into their own query decide it the same way this class does
+        rather than restating the rule. See ``visible_file_ids`` for why the two
+        halves differ.
+        """
+        return not _is_workload(ctx)
+
     async def get_visible_file_ids(
         self,
         *,

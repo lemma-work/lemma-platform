@@ -3,8 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from types import SimpleNamespace
-
 import typer
 
 from ..confirm import confirm_destructive
@@ -665,7 +663,16 @@ def list_shares(
             # or it is the end. Testing it for truthiness alone loops forever on
             # anything else the attribute might hold.
             if not isinstance(cursor, str) or not cursor:
-                return SimpleNamespace(links=links, next_cursor=None)
+                # The links themselves, not a wrapper around them. `emit`
+                # renders a list of records as a table and a dict as a detail
+                # view, but anything else falls through `to_plain` untouched and
+                # prints as a repr — which is what a `SimpleNamespace` here did:
+                # `namespace(links=[SignedUrlSummary(code='...', ...)])` on the
+                # one command whose whole job is to show you what you shared.
+                #
+                # No cursor to carry back: this has already followed it to the
+                # end, so there is nothing left for a caller to page.
+                return links
 
     result = run_with_client(ctx, _all_pages)
     if result is not None:
