@@ -24,10 +24,19 @@ from app.modules.datastore.domain.file_entities import (
     FileKind,
     FileStatus,
 )
+from app.modules.datastore.services.files.transaction_writer import (
+    FileTransactionWriter,
+)
 
 
-class FolderCreationMixin:
-    """Folder creation for the host writer's collaborators."""
+class FolderCreationMixin(FileTransactionWriter):
+    """Folder creation, as a specialisation of the transaction writer.
+
+    Extends rather than sits beside it because `_ensure_directory_path` is
+    declared abstract there and implemented here: two independent base classes
+    both naming it is an ambiguity a reader has to resolve by working out the
+    MRO, and one that CodeQL rightly refuses to.
+    """
 
     async def create_folder(
         self,

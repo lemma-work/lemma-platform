@@ -37,7 +37,6 @@ from app.modules.datastore.services.files.storage_phase import (
     _UpdatePlan,
 )
 from app.modules.datastore.services.files.transaction_writer import (
-    FileTransactionWriter,
     _MARKDOWN_ASSET_NAMES_KEY,
     _MARKDOWN_SOURCE_KEY,
 )
@@ -46,7 +45,7 @@ from app.modules.datastore.services.system_skill_files import SystemSkillFilePro
 logger = get_logger(__name__)
 
 
-class FileWriter(FolderCreationMixin, FileTransactionWriter):
+class FileWriter(FolderCreationMixin):
     """Write API: create file/folder, update (incl. move/rename), and delete
     paths. Owns the move/rename descendant-path rewrite."""
 

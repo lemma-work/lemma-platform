@@ -34,9 +34,7 @@ from app.modules.function.domain.errors import (
 from app.modules.function.domain.ports import (
     FunctionRepositoryPort,
 )
-from app.modules.function.infrastructure.run_repository import (
-    FunctionRunRepository as FunctionRunRepository,
-)
+from app.modules.function.infrastructure.run_repository import FunctionRunRepository
 from app.modules.function.infrastructure.revision_repository import (
     FunctionRevisionRepositoryMixin,
 )
@@ -323,3 +321,10 @@ class FunctionRepository(FunctionRevisionRepositoryMixin, FunctionRepositoryPort
         )
         deleted_id = (await self.session.execute(stmt)).scalar_one_or_none()
         return deleted_id is not None
+
+
+#: `FunctionRunRepository` moved to `run_repository` when this file crossed the
+#: per-file ceiling; re-exported so its importers did not all have to move with
+#: it. Named here rather than aliased `X as X`, which reads as an unused import
+#: to anything that does not know the convention.
+__all__ = ["FunctionRepository", "FunctionRunRepository"]
