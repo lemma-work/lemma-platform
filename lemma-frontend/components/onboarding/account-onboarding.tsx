@@ -98,6 +98,7 @@ import {
 } from "./account-onboarding-steps";
 import { LocalIntelligenceStep, LocalSharingStep } from "./local-setup-steps";
 import { isLocalDeployment } from "@/lib/config";
+import { FirstRunTour } from "./first-run-tour";
 import { useFirstPodProvisioning } from "./use-first-pod-provisioning";
 import { readLocalAiStatus } from "@/lib/desktop/local-capabilities";
 
@@ -246,17 +247,27 @@ export function AccountOnboarding({
     );
   }
 
-  // `navigated` keeps this held after `canAutoProvision` goes false: the pod now
-  // exists, so the conditions that justified provisioning have stopped being
-  // true, and falling through here renders the redirect that overwrites the
-  // composer launch with a bare pod URL.
-  if ((canAutoProvision || provisioning === "navigated") && provisioning !== "failed") {
-    return preflightFallback ?? (
-      <SetupShell>
-        <WaitingScreen
-          title="Setting up your workspace"
-          description="This takes a moment. You will land straight in your pod."
-          className="w-full max-w-xl"
+  // `ready` and `navigated` keep this held after `canAutoProvision` goes false:
+  // the pod now exists, so the conditions that justified provisioning have
+  // stopped being true, and falling through here renders the redirect that
+  // overwrites the composer launch with a bare pod URL.
+  //
+  // What is on screen meanwhile is the first-run tour, not a spinner. The wait
+  // is a few seconds nobody was using, and the door at the end used to open on
+  // somebody who had never been told what the product is. The tour decides
+  // when to go in — `open` — so a frame somebody is reading is never cut short
+  // by a request finishing.
+  if (
+    provisioning.state !== "failed" &&
+    (canAutoProvision ||
+      provisioning.state === "ready" ||
+      provisioning.state === "navigated")
+  ) {
+    return (
+      <SetupShell fullBleed>
+        <FirstRunTour
+          status={provisioning.state === "running" ? "working" : "ready"}
+          onOpen={provisioning.open}
         />
       </SetupShell>
     );
