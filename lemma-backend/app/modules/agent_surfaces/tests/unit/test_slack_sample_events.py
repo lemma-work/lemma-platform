@@ -24,6 +24,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
+from app.modules.test_support.surface_routing_double import (
+    routing_surfaces_double,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -116,7 +119,9 @@ def _conversation_operations(monkeypatch, *, conversation):
 def _build_service(*, surface, monkeypatch):
     uow = SimpleNamespace(session=AsyncMock())
     surface_repository = AsyncMock()
-    surface_repository.list_active_by_type.return_value = [surface]
+    surface_repository.list_active_for_routing.side_effect = routing_surfaces_double(
+        [surface]
+    )
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = None
     conversation_link_repository.create.side_effect = lambda link: link

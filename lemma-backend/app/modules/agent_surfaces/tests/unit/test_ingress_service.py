@@ -77,6 +77,9 @@ from app.modules.agent_surfaces.services.telegram_mini_app_service import (
 from app.modules.agent_surfaces.services.telegram_command_service import (
     handle_telegram_command,
 )
+from app.modules.test_support.surface_routing_double import (
+    routing_surfaces_double,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -312,7 +315,9 @@ def _build_service(
 ):
     resolved_surfaces = surfaces or []
     surface_repository = AsyncMock()
-    surface_repository.list_active_by_type.return_value = resolved_surfaces
+    surface_repository.list_active_for_routing.side_effect = routing_surfaces_double(
+        resolved_surfaces
+    )
     surface_repository.get.side_effect = lambda surface_id: next(
         (surface for surface in resolved_surfaces if surface.id == surface_id),
         None,

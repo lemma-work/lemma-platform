@@ -19,7 +19,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
-    SurfaceCredentialMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -83,28 +82,24 @@ async def release_ingress_claim(
     )
 
 
-def _system_bot_surfaces(
-    surfaces: list[AgentSurfaceEntity], platform: str
-) -> list[AgentSurfaceEntity]:
-    """Narrow a shared platform webhook to the surfaces it can legitimately be.
+def _has_shared_system_bot(platform: str) -> bool:
+    """Whether a platform-wide webhook for this platform arrives on shared credentials.
 
-    A platform-wide webhook arrives on shared system credentials. Custom or
-    bound bots have to come with `receiver_surface_ids` (a native receiver) or
-    over a direct surface webhook; without this narrowing, continuity for the
-    same external user or thread can pull a system-bot message into a custom-bot
-    conversation.
+    Only where that is true may a shared webhook be narrowed to system-credential
+    surfaces. Custom or bound bots on those platforms have to come with
+    `receiver_surface_ids` (a native receiver) or over a direct surface webhook;
+    without the narrowing, continuity for the same external user or thread can
+    pull a system-bot message into a custom-bot conversation.
+
+    Applying it to every platform instead would delete the Slack own-app path,
+    where an org signs with its own secret and its surface is legitimately not on
+    system credentials. The list is the whole rule, which is why it stays here
+    rather than moving into the statement that consumes it.
     """
-    if platform not in {
+    return platform in {
         SurfacePlatform.TELEGRAM.value,
         SurfacePlatform.WHATSAPP.value,
-    }:
-        return surfaces
-    return [
-        surface
-        for surface in surfaces
-        if surface.account_id is None
-        and surface.credential_mode is SurfaceCredentialMode.SYSTEM
-    ]
+    }
 
 
 def _needs_mention_verification(
@@ -163,20 +158,28 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             )
             return None
 
-        surfaces = await self.surface_repository.list_active_by_type(platform)
-        if request.receiver_surface_ids is not None:
-            # Scope to the bot that actually delivered this event, when a native
-            # receiver told us which surfaces it serves (Telegram polling / Slack
-            # socket). Without it a custom bot's update can be attributed to a
-            # different bot's surface.
-            allowed_ids = set(request.receiver_surface_ids)
-            surfaces = [surface for surface in surfaces if surface.id in allowed_ids]
-            if not surfaces:
-                return None
-        else:
-            # A shared system-bot platform webhook: platform-wide fan-in,
-            # disambiguated per-sender below.
-            surfaces = _system_bot_surfaces(surfaces, platform)
+        # Two narrowings, and which one applies is decided by whether a native
+        # receiver named the surfaces it serves. Both were applied in Python to
+        # a list of every surface of this platform in the deployment -- read and
+        # hydrated to throw most of it away, on the path every inbound message
+        # takes. They are the same two predicates, asked of the database.
+        #
+        # `receiver_surface_ids` scopes to the bot that actually delivered this
+        # event (Telegram polling / Slack socket); without it a custom bot's
+        # update can be attributed to a different bot's surface. Absent, this is
+        # a shared system-bot webhook: platform-wide fan-in, disambiguated
+        # per-sender below, and narrowed to shared credentials where the
+        # platform has a shared bot at all.
+        receiver_surface_ids = request.receiver_surface_ids
+        surfaces = await self.surface_repository.list_active_for_routing(
+            platform,
+            surface_ids=receiver_surface_ids,
+            system_credentials_only=(
+                receiver_surface_ids is None and _has_shared_system_bot(platform)
+            ),
+        )
+        if receiver_surface_ids is not None and not surfaces:
+            return None
 
         if _needs_mention_verification(platform, parsed, surfaces):
             async with connection_released(

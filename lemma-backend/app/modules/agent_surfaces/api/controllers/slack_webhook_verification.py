@@ -31,13 +31,18 @@ async def slack_candidates_for_workspace(
     # reading `list_channels` gives it, and the reason this is `| None` at all.
     if not team_id or service._credential_resolver is None:
         return []
-    surfaces = await service.surface_repository.list_active_by_type(
-        SurfacePlatform.SLACK.value
+    # The `team_id` names the workspace, and a workspace's surfaces are a
+    # handful. This used to read every Slack surface in the deployment and then
+    # apply exactly this predicate in Python -- on the path that runs *before*
+    # the signature is checked, which `PS-SURF-010` says is the wrong side of
+    # "verify every inbound message before acting on it". The credential resolve
+    # below was in the same loop, so it ran per surface that happened to match
+    # rather than per surface that could.
+    surfaces = await service.surface_repository.list_active_for_routing(
+        SurfacePlatform.SLACK.value, external_workspace_id=team_id
     )
     grouped: dict[tuple[str, str], list[UUID]] = {}
     for surface in surfaces:
-        if str(surface.external_workspace_id or "").strip() != team_id:
-            continue
         credentials = await service._credential_resolver.slack_webhook_credentials(
             surface
         )

@@ -19,6 +19,9 @@ from app.modules.agent_surfaces.services.surface_configuration import (
 )
 from app.modules.agent_surfaces.services.surface_consent import SurfaceConsentMixin
 from app.modules.agent_surfaces.services.surface_setup_read import SurfaceSetupReadMixin
+from app.modules.test_support.surface_routing_double import (
+    routing_surfaces_double,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -50,8 +53,8 @@ async def test_configuration_candidates_are_scoped_to_verified_receiver_and_memb
 
     harness = _Harness()
     harness.surface_repository = SimpleNamespace(
-        list_active_by_type=AsyncMock(
-            return_value=[allowed_surface, cross_app_surface, other_pod_surface]
+        list_active_for_routing=routing_surfaces_double(
+            [allowed_surface, cross_app_surface, other_pod_surface]
         )
     )
     harness.external_user_repository = SimpleNamespace(
@@ -105,7 +108,7 @@ async def test_configuration_requires_the_same_agent_permission_as_http(
     surface = _surface(pod_id=pod_id)
     harness = _Harness()
     harness.surface_repository = SimpleNamespace(
-        list_active_by_type=AsyncMock(return_value=[surface])
+        list_active_for_routing=routing_surfaces_double([surface])
     )
     harness.external_user_repository = SimpleNamespace(
         get_by_identity=AsyncMock(
