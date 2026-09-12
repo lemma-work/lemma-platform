@@ -30,6 +30,45 @@ class SkillsOverlay:
         self.paths = path_resolver
         self.lookup = lookup
 
+    async def _visible_pod_items(
+        self,
+        items: Sequence[DatastoreFileEntity],
+        *,
+        pod_id: UUID,
+        requester_user_id: UUID,
+        ctx: Context,
+    ) -> list[DatastoreFileEntity]:
+        return await self.authorizer.filter_visible_items(
+            items,
+            requester_user_id,
+            pod_id,
+            include_full_datastore_context=False,
+            ctx=ctx,
+        )
+
+    async def _visible_children_of(
+        self,
+        *,
+        pod_id: UUID,
+        directory_path: str,
+        requester_user_id: UUID,
+        ctx: Context,
+    ) -> list[DatastoreFileEntity]:
+        """The pod-created entries of one directory under `/skills`.
+
+        `PS-DATA-031` says a person can list one folder's contents without
+        loading the whole tree, and listing a folder here loaded the whole
+        `/skills` subtree so it could keep the rows whose parent matched. The
+        directory is known before the read; asking for its children is the same
+        question, without the descent.
+        """
+        return await self._visible_pod_items(
+            await self.file_repository.get_direct_children(pod_id, directory_path),
+            pod_id=pod_id,
+            requester_user_id=requester_user_id,
+            ctx=ctx,
+        )
+
     async def _visible_pod_items_under_system_skills(
         self,
         *,
@@ -55,11 +94,10 @@ class SkillsOverlay:
         skills_items = await self.file_repository.get_descendants(
             pod_id, self.system_skill_files.root_path
         )
-        return await self.authorizer.filter_visible_items(
+        return await self._visible_pod_items(
             skills_items,
-            requester_user_id,
-            pod_id,
-            include_full_datastore_context=False,
+            pod_id=pod_id,
+            requester_user_id=requester_user_id,
             ctx=ctx,
         )
 
@@ -86,15 +124,12 @@ class SkillsOverlay:
             if not directory.is_folder:
                 raise DatastoreValidationError("Path must point to a folder")
 
-        db_children = [
-            item
-            for item in await self._visible_pod_items_under_system_skills(
-                pod_id=pod_id,
-                requester_user_id=requester_user_id,
-                ctx=ctx,
-            )
-            if self.paths._parent_path(item.path) == normalized_directory
-        ]
+        db_children = await self._visible_children_of(
+            pod_id=pod_id,
+            directory_path=normalized_directory,
+            requester_user_id=requester_user_id,
+            ctx=ctx,
+        )
         system_children = self.system_skill_files.list_direct_children(
             pod_id,
             normalized_directory,

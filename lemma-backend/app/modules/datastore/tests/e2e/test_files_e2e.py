@@ -153,6 +153,45 @@ class TestDatastoreFilePaths:
         )
 
     @pytest.mark.asyncio
+    async def test_listing_one_skill_folder_does_not_read_the_others(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """`PS-DATA-031`: list a folder's contents without loading the tree.
+
+        The overlay used to read the whole `/skills` subtree and keep the rows
+        whose parent matched the directory asked for -- so opening one skill
+        folder read every file of every other skill in the pod, and the listing
+        got slower as unrelated skills were added.
+
+        The result was always right -- the Python filter returned exactly these
+        items, which is what made the cost invisible -- so this end of it checks
+        that narrowing the read did not change the answer, with a neighbour
+        holding files that must neither appear nor be fetched. That the subtree
+        read is gone at all is asserted on the call itself in
+        ``tests/unit/test_file_service.py``.
+        """
+        mine = f"e2e-skill-{uuid4().hex[:8]}"
+        neighbour = f"e2e-skill-{uuid4().hex[:8]}"
+        await pod_api.create_folder(f"/skills/{mine}")
+        await pod_api.create_folder(f"/skills/{neighbour}")
+        await pod_api.upload_file(
+            "SKILL.md", b"---\nname: mine\n---\n", directory_path=f"/skills/{mine}"
+        )
+        for index in range(5):
+            await pod_api.upload_file(
+                f"note-{index}.md",
+                b"noise",
+                directory_path=f"/skills/{neighbour}",
+            )
+
+        listing = await pod_api.list_files(directory_path=f"/skills/{mine}", limit=1000)
+
+        assert {item["name"] for item in listing["items"]} == {"SKILL.md"}, (
+            "the neighbour's files must not appear -- and must not have been read"
+        )
+
+    @pytest.mark.asyncio
     async def test_file_tree_pagination_rename_update_and_recursive_delete(
         self,
         pod_api: DatastoreApi,

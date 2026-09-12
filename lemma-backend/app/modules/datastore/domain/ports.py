@@ -121,6 +121,12 @@ class DatastoreFileRepositoryPort(Protocol):
         ctx: Context | None = None,
     ) -> Optional[DatastoreFileEntity]: ...
 
+    async def get_direct_children(
+        self,
+        pod_id: UUID,
+        directory_path: str,
+    ) -> Sequence[DatastoreFileEntity]: ...
+
     async def get_descendants(
         self,
         pod_id: UUID,

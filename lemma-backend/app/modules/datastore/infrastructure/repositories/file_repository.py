@@ -20,7 +20,6 @@ from app.core.authorization.sql_actions import (
     allowed_actions_expr,
 )
 from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
-from app.core.infrastructure.db.sql_text import escape_like
 from app.core.infrastructure.db.transaction_locks import (
     mark_transaction_scoped_lock,
 )
@@ -39,17 +38,14 @@ from app.modules.datastore.infrastructure.repositories.file_visibility_sql impor
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
 )
+from app.modules.datastore.infrastructure.repositories.file_listing_sql import (
+    descendants_of,
+    direct_child_patterns,
+    direct_children_of,
+)
 from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
     DatastoreFileRecoveryQueriesMixin,
 )
-
-
-def _direct_child_patterns(directory_path: str) -> tuple[str, str]:
-    """LIKE patterns matching a directory's direct children but not deeper."""
-    if directory_path == "/":
-        return "/%", "/%/%"
-    escaped = escape_like(directory_path)
-    return f"{escaped}/%", f"{escaped}/%/%"
 
 
 def _file_actions_expr(ctx: Context):
@@ -337,7 +333,7 @@ class DatastoreFileRepository(
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[DatastoreFileEntity], Optional[str]]:
-        direct, nested = _direct_child_patterns(directory_path)
+        direct, nested = direct_child_patterns(directory_path)
         stmt = select(DatastoreFile).where(
             DatastoreFile.pod_id == pod_id,
             DatastoreFile.path.like(direct, escape="!"),
@@ -363,7 +359,7 @@ class DatastoreFileRepository(
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[DatastoreFileEntity], Optional[str]]:
-        direct, nested = _direct_child_patterns(directory_path)
+        direct, nested = direct_child_patterns(directory_path)
         actions = _file_actions_expr(ctx)
         stmt = select(DatastoreFile, actions).where(
             DatastoreFile.pod_id == pod_id,
@@ -568,19 +564,21 @@ class DatastoreFileRepository(
         items.extend(instance.to_entity() for instance in files.scalars().all())
         return items
 
+    async def get_direct_children(
+        self,
+        pod_id: UUID,
+        directory_path: str,
+    ) -> Sequence[DatastoreFileEntity]:
+        """One directory's own entries -- `PS-DATA-031`, as a statement."""
+        result = await self.session.execute(direct_children_of(pod_id, directory_path))
+        return [instance.to_entity() for instance in result.scalars().all()]
+
     async def get_descendants(
         self,
         pod_id: UUID,
         path_prefix: str,
     ) -> Sequence[DatastoreFileEntity]:
-        result = await self.session.execute(
-            select(DatastoreFile)
-            .where(
-                DatastoreFile.pod_id == pod_id,
-                DatastoreFile.path.like(f"{escape_like(path_prefix)}/%", escape="!"),
-            )
-            .order_by(DatastoreFile.path)
-        )
+        result = await self.session.execute(descendants_of(pod_id, path_prefix))
         return [instance.to_entity() for instance in result.scalars().all()]
 
 

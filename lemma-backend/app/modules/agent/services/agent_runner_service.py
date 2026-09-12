@@ -60,6 +60,7 @@ from app.modules.agent.services.run_phase_spans import (
     run_phase,
 )
 from app.modules.agent.services.runtime_history import (
+    MAX_HISTORY_AGENT_RUNS,
     bound_runtime_history,
     runtime_full_run_ids,
     select_runtime_history,
@@ -527,8 +528,14 @@ class AgentRunnerService:
         with run_phase("load_context") as span:
             async with self.uow_factory() as uow:
                 repo = ConversationRepository(uow)
-                runs = await repo.load_runtime_history_digests_by_run_id(agent_run_id)
-                agent_run = self._find_agent_run(runs, agent_run_id)
+                window = await repo.load_runtime_history_digests_by_run_id(
+                    agent_run_id, limit=MAX_HISTORY_AGENT_RUNS
+                )
+                runs = window.runs
+                # In the window or not -- see `RuntimeHistoryWindow`.
+                agent_run = window.current_run
+                if agent_run is None:
+                    raise ConversationNotFoundError()
                 conversation = validate_conversation_access(
                     await repo.get_conversation(agent_run.conversation_id),
                     user_id=user_id,
@@ -545,22 +552,17 @@ class AgentRunnerService:
                 # runs before the messages are asked for, and only what survives
                 # it gets them. Attaching to the untrimmed list meant a long
                 # conversation read hundreds of runs it then discarded.
-                bounded, dropped_runs = bound_runtime_history(runs, conversation)
+                bounded, dropped_runs = bound_runtime_history(
+                    runs, conversation, total_runs=window.total_runs
+                )
                 await repo.attach_runtime_history_messages(
                     bounded, full_run_ids=runtime_full_run_ids(bounded, conversation)
                 )
-                agent_run = self._find_agent_run(runs, agent_run_id)
                 messages = self._select_runtime_history(
                     bounded, conversation, already_dropped=dropped_runs
                 )
                 record_history_size(span, runs=runs, sent=messages)
                 return conversation, agent, agent_run, messages
-
-    def _find_agent_run(self, runs: list[AgentRun], agent_run_id: UUID) -> AgentRun:
-        for run in runs:
-            if run.id == agent_run_id:
-                return run
-        raise ConversationNotFoundError()
 
     def _select_runtime_history(
         self,
