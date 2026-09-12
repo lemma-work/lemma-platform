@@ -173,6 +173,39 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
             == before_redelivery
         ), "a redelivered event with the same id extracted the document again"
 
+        # A rename is not a content change, and the whole point of carrying the
+        # derived container across is that this stays true end to end: the
+        # extracted markdown, the figure and the rendered page are still
+        # readable at the new path, and the extractor was never asked again.
+        #
+        # The negative is the one that matters. Before this, renaming deleted
+        # the container and marked the row PENDING, so every document under a
+        # renamed folder was re-extracted -- OCR included -- to arrive at
+        # artifacts identical to the ones just deleted.
+        await pod_api.create_folder("/me/archive")
+        renamed = await pod_api.update_file(
+            uploaded["path"], new_path="/me/archive/success.pdf"
+        )
+        assert renamed["path"] == "/me/archive/success.pdf"
+        assert renamed["status"] == "COMPLETED", (
+            "a rename marked the file for re-extraction"
+        )
+
+        carried = await pod_api.list_children(renamed["path"])
+        carried_by_name = {item["name"]: item for item in carried["items"]}
+        assert {"document.md", "figure.png"} <= set(carried_by_name), carried_by_name
+        assert b"Deterministic extracted content for success.pdf" in (
+            await pod_api.child_content(carried_by_name["document.md"]["path"])
+        )
+        carried_page = next(item for item in carried["items"] if item["kind"] == "page")
+        assert (await pod_api.child_content(carried_page["path"])).startswith(
+            b"\xff\xd8"
+        )
+        assert (
+            fake_document_processor_server.requests["kreuzberg:success.pdf"]
+            == before_redelivery
+        ), "the rename re-extracted a document whose bytes had not changed"
+
 
 # `slow` keeps this out of the fast lane every PR runs and puts it in the
 # scheduled protected run (backend-protected-e2e.yml selects `slow`). The
