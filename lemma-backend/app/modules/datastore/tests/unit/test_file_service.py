@@ -1228,7 +1228,10 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
         nested_file,
         sibling_file,
     ]
-    file_repository_mock.delete_entity.return_value = True
+    # The double answers the way the statement does: how many rows went.
+    file_repository_mock.delete_entities.side_effect = lambda entities: len(
+        list(entities)
+    )
 
     search_service = AsyncMock()
     search_service.engine = None
@@ -1251,10 +1254,17 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
         f"pods/{pod_id}/files/research/notes/draft.md",
         f"pods/{pod_id}/files/research/summary.md",
     }
-    assert search_service.remove_file.await_count == 2
-    deleted_ids = {call.args[0] for call in search_service.remove_file.await_args_list}
-    assert deleted_ids == {nested_file.id, sibling_file.id}
-    assert file_repository_mock.delete_entity.await_count == 4
+    # One purge for the folder, not one per file: the per-file call opened its
+    # own session and committed, so deleting a folder of five hundred opened
+    # five hundred.
+    search_service.remove_files.assert_awaited_once()
+    assert set(search_service.remove_files.await_args.args[0]) == {
+        nested_file.id,
+        sibling_file.id,
+    }
+    # Four rows, one statement -- it was a `SELECT` plus a `DELETE` each.
+    file_repository_mock.delete_entities.assert_awaited_once()
+    assert len(file_repository_mock.delete_entities.await_args.args[0]) == 4
 
 
 @pytest.mark.asyncio

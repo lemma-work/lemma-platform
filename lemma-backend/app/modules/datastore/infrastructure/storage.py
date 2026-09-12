@@ -146,6 +146,44 @@ class ObstoreDatastoreStorage:
             )
             raise DatastoreInfrastructureError("Failed to delete file")
 
+    async def move_prefix(self, source_prefix: str, destination_prefix: str) -> int:
+        """Relocate every object under one prefix, and return how many moved.
+
+        Copy-then-delete rather than a rename, because object stores have no
+        rename: the two are the same operation and only the order matters. Copy
+        first, so an interruption leaves both copies rather than neither.
+
+        Defined once on the obstore base, so every backend gets it: the listing
+        it needs is the same listing ``delete_prefix`` above already does, and
+        the only reason a caller could not move a prefix before was that this
+        method did not exist.
+        """
+        sources: list[str] = []
+        try:
+            async for batch in self.store.list_async(prefix=source_prefix):
+                sources.extend(
+                    item["path"]
+                    for item in batch
+                    if isinstance(item, dict) and item.get("path")
+                )
+            if not sources:
+                return 0
+            for source in sources:
+                suffix = source[len(source_prefix) :].lstrip("/")
+                await obs.copy_async(
+                    self.store, source, f"{destination_prefix}{suffix}"
+                )
+            await obs.delete_async(self.store, sources)
+            return len(sources)
+        except Exception as exc:
+            if self._is_missing_object_error(exc):
+                return 0
+            logger.debug(
+                "datastore.storage.moving_datastore_prefix_s.propagated",
+                exc_info=True,
+            )
+            raise DatastoreInfrastructureError("Failed to move folder contents")
+
     async def delete_prefix(self, prefix: str) -> int:
         deleted_paths: list[str] = []
         try:

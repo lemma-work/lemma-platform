@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, Update, func, select, update
 
 from app.core.infrastructure.db.sql_text import escape_like
 from app.modules.datastore.infrastructure.models import DatastoreFile
@@ -67,4 +67,34 @@ def direct_children_of(pod_id: UUID, directory_path: str) -> Select:
             ~DatastoreFile.path.like(nested, escape="!"),
         )
         .order_by(DatastoreFile.path)
+    )
+
+
+def repoint_descendants(
+    pod_id: UUID, *, previous_prefix: str, new_prefix: str
+) -> Update:
+    """Repoint every path under a renamed folder, in one statement.
+
+    A prefix substitution the database can do itself: keep the part of the path
+    after the old prefix, put the new one in front of it. `substring` is
+    1-indexed, which is why the offset is the prefix length plus one.
+
+    Bounded by the prefix rather than by a list of ids, which is also why it
+    needs no staleness fence. It acts on whatever is under the old path at the
+    moment it runs -- so a file created there while the storage phase was
+    working is repointed too, where an id list gathered earlier would have left
+    it stranded under a folder that no longer exists.
+    """
+    return (
+        update(DatastoreFile)
+        .where(
+            DatastoreFile.pod_id == pod_id,
+            DatastoreFile.path.like(descendant_pattern(previous_prefix), escape="!"),
+        )
+        .values(
+            path=func.concat(
+                new_prefix,
+                func.substring(DatastoreFile.path, len(previous_prefix) + 1),
+            )
+        )
     )
