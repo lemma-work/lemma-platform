@@ -90,6 +90,13 @@ class FunctionRepositoryPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    async def page_revisions(
+        self, function_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[FunctionRevisionEntity], UUID | None]:
+        """One page of a function's history, newest first, plus the next cursor."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def list_unpurged_revisions(
         self, function_id: UUID
     ) -> list[FunctionRevisionEntity]:

@@ -31,6 +31,7 @@ from app.modules.apps.api.dependencies import (
     WidgetContentReaderDep,
 )
 from app.modules.apps.api.schemas.app_schemas import (
+    MAX_RELEASE_PAGE_SIZE,
     CreateAppFromWidgetRequest,
     CreateAppRequest,
     AppBundleUploadResponse,
@@ -356,15 +357,34 @@ async def list_app_releases(
     user: CurrentUser,
     request: Request,
     use_cases: AppUseCasesDep,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=MAX_RELEASE_PAGE_SIZE,
+        description=(
+            "Max releases to return, up to "
+            f"{MAX_RELEASE_PAGE_SIZE}. Page beyond that with `page_token`."
+        ),
+    ),
+    page_token: str | None = Query(
+        default=None,
+        description="`next_page_token` from the previous page.",
+    ),
 ) -> AppReleaseListResponse:
     history = await use_cases.list_releases(
-        pod_id=pod_id, app_name=app_name, request=request, user_id=user.id
+        pod_id=pod_id,
+        app_name=app_name,
+        request=request,
+        user_id=user.id,
+        limit=limit,
+        cursor=parse_uuid_page_token(page_token),
     )
     return AppReleaseListResponse(
         items=[
             _release_response(entry, app_public_slug=history.app_public_slug)
             for entry in history.items
-        ]
+        ],
+        next_page_token=history.next_page_token,
     )
 
 

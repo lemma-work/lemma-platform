@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import uuid4, uuid7
 
 import pytest
 
@@ -30,9 +30,12 @@ def _hash(seed: str) -> str:
 
 
 def _revision(function_id, number, *, seed=None, pruned=False, schemas=None):
+    # uuid7, not uuid4: the paging statement orders by id because these rows key
+    # on uuid7, so id order IS creation order. A fixture minting uuid4 would let
+    # the double hand back an order the database never produces.
     schemas = schemas or {}
     return FunctionRevisionEntity(
-        id=uuid4(),
+        id=uuid7(),
         function_id=function_id,
         revision_number=number,
         revision_hash=_hash(seed or str(number + 1)),
@@ -68,6 +71,18 @@ def _service(function, revisions):
 
     repo.get_revision_by_number.side_effect = by_number
     repo.find_revisions_by_hash_prefix.side_effect = _hash_prefix_oracle(revisions)
+
+    # The double pages the way the statement does; a fixed list here would let
+    # an unpaginated caller keep passing.
+    async def page(_function_id, *, limit, cursor):
+        ordered = sorted(revisions, key=lambda r: r.id, reverse=True)
+        if cursor is not None:
+            ordered = [item for item in ordered if item.id < cursor]
+        window = ordered[: limit + 1]
+        next_cursor = window[limit - 1].id if len(window) > limit else None
+        return window[:limit], next_cursor
+
+    repo.page_revisions.side_effect = page
     return FunctionRevisionService(repo), repo
 
 
@@ -146,18 +161,23 @@ async def test_unknown_revision_is_not_found():
 @pytest.mark.asyncio
 async def test_list_marks_the_live_revision():
     function = _function()
+    # Built in the order they were saved: ids are uuid7, so creating revision 2
+    # first would give it the earlier id and the paging order would be a fact
+    # about this fixture rather than about the history it stands for.
+    older = _revision(function.id, 1, seed="a")
     live = _revision(function.id, 2, seed="b")
     function.revision_hash = live.revision_hash
-    service, _ = _service(function, [_revision(function.id, 1, seed="a"), live])
+    service, _ = _service(function, [older, live])
 
-    listings = await service.list_revisions(
-        function.pod_id, "score_lead", ctx=allow_all_context()
+    listings, next_page_token = await service.list_revisions(
+        function.pod_id, "score_lead", ctx=allow_all_context(), limit=50, cursor=None
     )
 
     assert [(item.revision.revision_number, item.is_live) for item in listings] == [
         (2, True),
         (1, False),
     ]
+    assert next_page_token is None
 
 
 @pytest.mark.asyncio
@@ -168,7 +188,9 @@ async def test_redeploying_a_digest_does_not_make_its_pruned_revision_live():
     service, _ = _service(function, [pruned, live])
     ctx = allow_all_context()
 
-    listings = await service.list_revisions(function.pod_id, function.name, ctx=ctx)
+    listings, _ = await service.list_revisions(
+        function.pod_id, function.name, ctx=ctx, limit=50, cursor=None
+    )
     assert [(item.revision.revision_number, item.is_live) for item in listings] == [
         (2, True),
         (1, False),
@@ -232,3 +254,33 @@ async def test_record_is_skipped_for_a_function_with_no_built_revision():
 
     assert await service.record(function) is None
     repo.record_revision.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_long_history_pages_rather_than_arriving_whole():
+    """`PS-DATA-011`: publish a maximum and page beyond it.
+
+    This was the only unpaginated list in the module, on a table retention
+    stamps rather than empties -- so a function saved daily for a year answered
+    with every one of those revisions, every time somebody opened its history.
+    """
+    function = _function()
+    revisions = [
+        _revision(function.id, number, seed=f"{number:x}c") for number in range(1, 8)
+    ]
+    service, _ = _service(function, revisions)
+    ctx = allow_all_context()
+
+    first, token = await service.list_revisions(
+        function.pod_id, function.name, ctx=ctx, limit=3, cursor=None
+    )
+    assert len(first) == 3
+    assert token is not None
+
+    second, _ = await service.list_revisions(
+        function.pod_id, function.name, ctx=ctx, limit=3, cursor=token
+    )
+    assert len(second) == 3
+    assert {item.revision.id for item in first}.isdisjoint(
+        {item.revision.id for item in second}
+    ), "a page must not repeat what the one before it returned"

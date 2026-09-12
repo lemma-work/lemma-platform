@@ -646,7 +646,7 @@ def list_shares(
     """List the public links you have handed out, newest first.
 
     Yours, not the pod's: the code in each row is the whole capability. Follows
-    `next_cursor` to the end, because a link you cannot see is one you cannot
+    `next_page_token` to the end, because a link you cannot see is one you cannot
     revoke.
     """
     state = state_from_ctx(ctx)
@@ -654,15 +654,17 @@ def list_shares(
     def _all_pages(client, s):
         pod_files = pod_client(client, s, pod).files
         links: list = []
-        cursor = None
+        token = None
         while True:
-            page = pod_files.list_signed_urls(include_dead=include_dead, cursor=cursor)
+            page = pod_files.list_signed_urls(
+                include_dead=include_dead, page_token=token
+            )
             links.extend(page.links)
-            cursor = getattr(page, "next_cursor", None)
+            token = getattr(page, "next_page_token", None)
             # Same guard as `PodFiles.list_all`: a cursor is a non-empty string
             # or it is the end. Testing it for truthiness alone loops forever on
             # anything else the attribute might hold.
-            if not isinstance(cursor, str) or not cursor:
+            if not isinstance(token, str) or not token:
                 # The links themselves, not a wrapper around them. `emit`
                 # renders a list of records as a table and a dict as a detail
                 # view, but anything else falls through `to_plain` untouched and

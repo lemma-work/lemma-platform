@@ -272,12 +272,16 @@ export class AppsService {
      * List App Releases
      * @param podId
      * @param appName
+     * @param limit Max releases to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns AppReleaseListResponse Successful Response
      * @throws ApiError
      */
     public static appReleaseList(
         podId: string,
         appName: string,
+        limit: number = 50,
+        pageToken?: (string | null),
     ): CancelablePromise<AppReleaseListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -285,6 +289,10 @@ export class AppsService {
             path: {
                 'pod_id': podId,
                 'app_name': appName,
+            },
+            query: {
+                'limit': limit,
+                'page_token': pageToken,
             },
             errors: {
                 422: `Validation Error`,

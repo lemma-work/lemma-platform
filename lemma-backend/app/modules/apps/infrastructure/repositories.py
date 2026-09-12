@@ -370,6 +370,31 @@ class AppRepository(AppRepositoryPort):
         result = await self.session.execute(release_prefix_statement(app_id, prefix))
         return [model.to_entity() for model in result.scalars().all()]
 
+    async def page_releases(
+        self, app_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[AppReleaseEntity], UUID | None]:
+        """One page of an app's history, newest first, plus the next cursor.
+
+        Keyset on the id, which is also the ordering: these rows key on uuid7,
+        so id order *is* creation order -- the same invariant `select_prunable`
+        relies on to call the prunable set a suffix of the ranking. That is what
+        lets a bare-UUID page token, the house contract, order by time.
+
+        `list_releases` stays for deletion, which needs every row by definition.
+        """
+        statement = select(AppReleaseModel).where(AppReleaseModel.app_id == app_id)
+        if cursor is not None:
+            statement = statement.where(AppReleaseModel.id < cursor)
+        rows = list(
+            (
+                await self.session.execute(
+                    statement.order_by(desc(AppReleaseModel.id)).limit(limit + 1)
+                )
+            ).scalars()
+        )
+        next_cursor = rows[limit - 1].id if len(rows) > limit else None
+        return [row.to_entity() for row in rows[:limit]], next_cursor
+
     async def list_unpurged_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
         """The releases retention can still act on, newest first.
 

@@ -230,8 +230,14 @@ class FunctionRevisionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+#: The largest page this endpoint will serve. `PS-DATA-011` says publish a
+#: maximum and refuse a request for more rather than quietly returning fewer.
+MAX_REVISION_PAGE_SIZE = 200
+
+
 class FunctionRevisionListResponse(BaseModel):
     items: list[FunctionRevisionResponse]
+    next_page_token: str | None = None
 
 
 class FunctionRevisionPromoteResponse(BaseModel):

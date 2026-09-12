@@ -168,13 +168,21 @@ class FunctionRevisionService:
         return revision
 
     async def list_revisions(
-        self, pod_id: UUID, name: str, *, ctx: Context
-    ) -> list[RevisionListing]:
+        self, pod_id: UUID, name: str, *, ctx: Context, limit: int, cursor: UUID | None
+    ) -> tuple[list[RevisionListing], UUID | None]:
+        """One page of a function's revision history, newest first.
+
+        It used to return every revision a function had ever had, with no limit
+        and no cursor -- the only unpaginated list in this module, on a table
+        retention stamps rather than empties.
+        """
         function = await self._load_function(
             pod_id, name, permission=Permissions.FUNCTION_READ, ctx=ctx
         )
         assert function.id is not None
-        revisions = await self.repository.list_revisions(function.id)
+        revisions, next_cursor = await self.repository.page_revisions(
+            function.id, limit=limit, cursor=cursor
+        )
         return [
             RevisionListing(
                 revision=revision,
@@ -184,7 +192,7 @@ class FunctionRevisionService:
                 ),
             )
             for revision in revisions
-        ]
+        ], next_cursor
 
     async def get_revision(
         self, pod_id: UUID, name: str, ref: str, *, ctx: Context

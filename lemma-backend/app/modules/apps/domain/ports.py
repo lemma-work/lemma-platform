@@ -113,6 +113,13 @@ class AppRepositoryPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    async def page_releases(
+        self, app_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[AppReleaseEntity], UUID | None]:
+        """One page of an app's history, newest first, plus the next cursor."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def list_unpurged_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
         """The releases retention can still act on: everything not yet purged."""
         raise NotImplementedError

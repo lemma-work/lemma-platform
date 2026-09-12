@@ -47,6 +47,7 @@ class ReleaseHistory:
 
     app_public_slug: str
     items: list[ReleaseListing]
+    next_page_token: str | None = None
 
 
 def parse_release_ref(ref: str) -> tuple[int | None, str | None]:
@@ -132,13 +133,27 @@ class AppReleaseService:
         return release
 
     async def list_releases(
-        self, pod_id: UUID, app_name: str, *, ctx: Context
+        self,
+        pod_id: UUID,
+        app_name: str,
+        *,
+        ctx: Context,
+        limit: int,
+        cursor: UUID | None,
     ) -> ReleaseHistory:
+        """One page of an app's release history, newest first.
+
+        It used to return every release an app had ever had, with no limit and
+        no cursor -- the only unpaginated list in this module, on a table
+        retention stamps rather than empties.
+        """
         app = await self._load_app(
             pod_id, app_name, permission=Permissions.APP_READ, ctx=ctx
         )
         assert app.id is not None
-        releases = await self.repository.list_releases(app.id)
+        releases, next_cursor = await self.repository.page_releases(
+            app.id, limit=limit, cursor=cursor
+        )
         return ReleaseHistory(
             app_public_slug=app.public_slug,
             items=[
@@ -148,6 +163,7 @@ class AppReleaseService:
                 )
                 for release in releases
             ],
+            next_page_token=str(next_cursor) if next_cursor else None,
         )
 
     async def promote_release(

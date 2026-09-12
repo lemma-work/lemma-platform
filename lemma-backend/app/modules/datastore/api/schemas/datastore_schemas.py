@@ -582,10 +582,16 @@ class SignedUrlSummary(BaseModel):
 
 class SignedUrlListResponse(BaseModel):
     links: List[SignedUrlSummary]
-    #: Pass back as ``cursor`` to continue. ``None`` means this is the last
-    #: page — a full page is not itself proof that more exist, so the cursor is
-    #: the only signal, and callers cleaning up links must follow it.
-    next_cursor: Optional[str] = None
+    #: Pass back as ``page_token`` to continue. ``None`` means this is the last
+    #: page — a full page is not itself proof that more exist, so this is the
+    #: only signal, and callers cleaning up links must follow it.
+    #:
+    #: Named for the house contract rather than for what it holds: every other
+    #: paginated endpoint answers with ``next_page_token``, and this was the one
+    #: that said ``next_cursor``. The value stays opaque -- this list orders by
+    #: (created_at, id) and its token carries both, where the bare-UUID tokens
+    #: elsewhere carry one.
+    next_page_token: Optional[str] = None
 
 
 class SignedUrlRevokeResponse(BaseModel):

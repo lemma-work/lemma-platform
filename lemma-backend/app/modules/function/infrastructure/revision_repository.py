@@ -198,6 +198,30 @@ class FunctionRevisionRepositoryMixin:
         result = await self.session.execute(statement)
         return [model.to_entity() for model in result.scalars().all()]
 
+    async def page_revisions(
+        self, function_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[FunctionRevisionEntity], UUID | None]:
+        """One page of a function's history, newest first, plus the next cursor.
+
+        Keyset on the id rather than on `revision_number`, so the page token is
+        the bare UUID the house contract uses everywhere else; these rows key on
+        uuid7, so id order is creation order and therefore revision order.
+        """
+        statement = select(FunctionRevisionModel).where(
+            FunctionRevisionModel.function_id == function_id
+        )
+        if cursor is not None:
+            statement = statement.where(FunctionRevisionModel.id < cursor)
+        rows = list(
+            (
+                await self.session.execute(
+                    statement.order_by(FunctionRevisionModel.id.desc()).limit(limit + 1)
+                )
+            ).scalars()
+        )
+        next_cursor = rows[limit - 1].id if len(rows) > limit else None
+        return [row.to_entity() for row in rows[:limit]], next_cursor
+
     async def list_unpurged_revisions(
         self, function_id: UUID
     ) -> list[FunctionRevisionEntity]:

@@ -116,11 +116,11 @@ async def list_file_signed_urls(
         False, description="Also list links that have expired or been revoked."
     ),
     limit: int = Query(100, ge=1, le=200, description="Links per page."),
-    cursor: str | None = Query(
-        None, description="`next_cursor` from the previous page."
+    page_token: str | None = Query(
+        None, description="`next_page_token` from the previous page."
     ),
 ) -> SignedUrlListResponse:
-    before, before_id = _decode_cursor(cursor)
+    before, before_id = _decode_cursor(page_token)
     links = await file_service.list_signed_urls(
         pod_id,
         ctx=ctx,
@@ -130,7 +130,7 @@ async def list_file_signed_urls(
         before_id=before_id,
     )
     return SignedUrlListResponse(
-        next_cursor=_encode_cursor(links[-1]) if len(links) == limit else None,
+        next_page_token=_encode_cursor(links[-1]) if len(links) == limit else None,
         links=[
             SignedUrlSummary(
                 code=link.code,
