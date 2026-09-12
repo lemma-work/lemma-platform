@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import AsyncIterator, Protocol, Sequence
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.agent.domain.events import AgentDomainEvent
 from app.modules.agent.domain.context import AgentContext
-from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
+from app.modules.agent.domain.entities import (
+    Agent,
+    AgentRun,
+    Conversation,
+    Message,
+    RuntimeHistoryWindow,
+)
 from app.modules.agent.domain.run_projections import (
     ConversationOpeningTexts,
     StaleAgentRunRef,
@@ -55,6 +62,8 @@ class Harness(Protocol):
 
 class AgentRepository(Protocol):
     async def get(self, agent_id: UUID, ctx: Context | None = None) -> Agent | None: ...
+
+    async def get_many(self, agent_ids: Collection[UUID]) -> dict[UUID, Agent]: ...
 
     async def get_by_pod_and_name(
         self, *, pod_id: UUID, name: str, ctx: Context | None = None
@@ -247,7 +256,9 @@ class ConversationRepository(Protocol):
     async def load_runtime_history_digests_by_run_id(
         self,
         agent_run_id: UUID,
-    ) -> list[AgentRun]: ...
+        *,
+        limit: int,
+    ) -> RuntimeHistoryWindow: ...
 
     async def attach_runtime_history_messages(
         self,

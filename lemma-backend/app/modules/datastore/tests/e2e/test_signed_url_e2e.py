@@ -1231,11 +1231,11 @@ class TestSignedUrlRecoveryAndPaging:
             ).status_code == status.HTTP_201_CREATED
 
         seen: list[str] = []
-        cursor = None
-        for _ in range(10):  # bounded, so a broken cursor cannot spin
+        token = None
+        for _ in range(10):  # bounded, so a broken token cannot spin
             params = {"limit": 2}
-            if cursor:
-                params["cursor"] = cursor
+            if token:
+                params["page_token"] = token
             page = await pod_api.request(
                 "GET",
                 FILES.format(pod_id=pod_api.pod_id) + "/signed-urls",
@@ -1244,21 +1244,21 @@ class TestSignedUrlRecoveryAndPaging:
             assert page.status_code == status.HTTP_200_OK, page.text
             body = page.json()
             seen.extend(link["code"] for link in body["links"])
-            cursor = body["next_cursor"]
-            if not cursor:
+            token = body["next_page_token"]
+            if not token:
                 break
 
-        assert cursor is None, "pagination did not terminate"
+        assert token is None, "pagination did not terminate"
         assert len(seen) >= 5, seen
         assert len(seen) == len(set(seen)), "a page repeated a row"
 
     @pytest.mark.asyncio
-    async def test_a_malformed_cursor_is_rejected_rather_than_ignored(
+    async def test_a_malformed_page_token_is_rejected_rather_than_ignored(
         self, pod_api: DatastoreApi
     ):
         resp = await pod_api.request(
             "GET",
             FILES.format(pod_id=pod_api.pod_id) + "/signed-urls",
-            params={"cursor": "not-a-cursor"},
+            params={"page_token": "not-a-token"},
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.text

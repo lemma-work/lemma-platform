@@ -153,6 +153,104 @@ class TestDatastoreFilePaths:
         )
 
     @pytest.mark.asyncio
+    async def test_listing_one_skill_folder_does_not_read_the_others(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """`PS-DATA-031`: list a folder's contents without loading the tree.
+
+        The overlay used to read the whole `/skills` subtree and keep the rows
+        whose parent matched the directory asked for -- so opening one skill
+        folder read every file of every other skill in the pod, and the listing
+        got slower as unrelated skills were added.
+
+        The result was always right -- the Python filter returned exactly these
+        items, which is what made the cost invisible -- so this end of it checks
+        that narrowing the read did not change the answer, with a neighbour
+        holding files that must neither appear nor be fetched. That the subtree
+        read is gone at all is asserted on the call itself in
+        ``tests/unit/test_file_service.py``.
+        """
+        mine = f"e2e-skill-{uuid4().hex[:8]}"
+        neighbour = f"e2e-skill-{uuid4().hex[:8]}"
+        await pod_api.create_folder(f"/skills/{mine}")
+        await pod_api.create_folder(f"/skills/{neighbour}")
+        await pod_api.upload_file(
+            "SKILL.md", b"---\nname: mine\n---\n", directory_path=f"/skills/{mine}"
+        )
+        for index in range(5):
+            await pod_api.upload_file(
+                f"note-{index}.md",
+                b"noise",
+                directory_path=f"/skills/{neighbour}",
+            )
+
+        listing = await pod_api.list_files(directory_path=f"/skills/{mine}", limit=1000)
+
+        assert {item["name"] for item in listing["items"]} == {"SKILL.md"}, (
+            "the neighbour's files must not appear -- and must not have been read"
+        )
+
+    @pytest.mark.asyncio
+    async def test_renaming_a_folder_costs_the_same_whatever_is_in_it(
+        self,
+        pod_api: DatastoreApi,
+        db_session,
+    ):
+        """Two defects, one operation, and neither was visible in the result.
+
+        The paths were rewritten a row at a time -- and `update()` reads a row
+        before writing it, so a folder of N files issued 2N statements inside the
+        request transaction. And every one of those rows was marked for
+        reprocessing, so renaming a folder re-extracted every document under it,
+        OCR included, to produce artifacts identical to the ones the same
+        operation had just deleted.
+
+        Asserted differentially: the statement count must not move between a
+        folder of one file and a folder of eight, and no file may come back
+        PENDING. An absolute budget would miss the second half, because a
+        re-extraction is not a statement.
+        """
+        from sqlalchemy import select
+
+        from app.modules.datastore.infrastructure.models import DatastoreFile
+        from app.modules.test_support.query_counting import counted_queries
+
+        async def rename_folder_of(count: int, tag: str) -> int:
+            await pod_api.create_folder(f"/me/{tag}")
+            for index in range(count):
+                await pod_api.upload_file(
+                    f"doc-{index}.md", b"# doc", directory_path=f"/me/{tag}"
+                )
+            with counted_queries() as statements:
+                await pod_api.update_file(f"/me/{tag}", new_path=f"/me/{tag}-renamed")
+            return len([text for text in statements if "datastore_files" in text])
+
+        small = await rename_folder_of(1, f"small-{uuid4().hex[:6]}")
+        large = await rename_folder_of(8, f"large-{uuid4().hex[:6]}")
+
+        assert small == large, (
+            f"renaming one file cost {small} statements and eight cost {large}"
+        )
+        # Not vacuous: the rename does touch the table, so equality is a real
+        # claim about growth rather than about nothing having happened.
+        assert small > 0
+
+        pending = (
+            (
+                await db_session.execute(
+                    select(DatastoreFile.path).where(
+                        DatastoreFile.path.like("/me/%-renamed/%"),
+                        DatastoreFile.status == "PENDING",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert pending == [], f"a rename queued these for re-extraction: {pending}"
+
+    @pytest.mark.asyncio
     async def test_file_tree_pagination_rename_update_and_recursive_delete(
         self,
         pod_api: DatastoreApi,

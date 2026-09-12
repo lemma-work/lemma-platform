@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 import time
 from uuid import UUID
 
@@ -277,6 +277,11 @@ class PostgresSearchService:
     async def remove_file(self, file_id: UUID):
         await self.ensure_schema()
         await self.chunk_repo.remove_chunks_by_file(file_id)
+
+    async def remove_files(self, file_ids: Sequence[UUID]) -> None:
+        """The batch spelling, for a folder delete; see `remove_chunks_by_files`."""
+        await self.ensure_schema()
+        await self.chunk_repo.remove_chunks_by_files(file_ids)
 
     async def update_file_path(self, file_id: UUID, path: str, parent_path: str | None):
         await self.ensure_schema()

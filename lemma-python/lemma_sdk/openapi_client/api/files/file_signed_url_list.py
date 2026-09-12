@@ -17,7 +17,7 @@ def _get_kwargs(
     *,
     include_dead: bool | Unset = False,
     limit: int | Unset = 100,
-    cursor: None | str | Unset = UNSET,
+    page_token: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -26,12 +26,12 @@ def _get_kwargs(
 
     params["limit"] = limit
 
-    json_cursor: None | str | Unset
-    if isinstance(cursor, Unset):
-        json_cursor = UNSET
+    json_page_token: None | str | Unset
+    if isinstance(page_token, Unset):
+        json_page_token = UNSET
     else:
-        json_cursor = cursor
-    params["cursor"] = json_cursor
+        json_page_token = page_token
+    params["page_token"] = json_page_token
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -82,7 +82,7 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
     limit: int | Unset = 100,
-    cursor: None | str | Unset = UNSET,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | SignedUrlListResponse]:
     """List this pod's public signed URLs
 
@@ -91,7 +91,7 @@ def sync_detailed(
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
         limit (int | Unset): Links per page. Default: 100.
-        cursor (None | str | Unset): `next_cursor` from the previous page.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -105,7 +105,7 @@ def sync_detailed(
         pod_id=pod_id,
         include_dead=include_dead,
         limit=limit,
-        cursor=cursor,
+        page_token=page_token,
     )
 
     response = client.get_httpx_client().request(
@@ -121,7 +121,7 @@ def sync(
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
     limit: int | Unset = 100,
-    cursor: None | str | Unset = UNSET,
+    page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | SignedUrlListResponse | None:
     """List this pod's public signed URLs
 
@@ -130,7 +130,7 @@ def sync(
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
         limit (int | Unset): Links per page. Default: 100.
-        cursor (None | str | Unset): `next_cursor` from the previous page.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -145,7 +145,7 @@ def sync(
         client=client,
         include_dead=include_dead,
         limit=limit,
-        cursor=cursor,
+        page_token=page_token,
     ).parsed
 
 
@@ -155,7 +155,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
     limit: int | Unset = 100,
-    cursor: None | str | Unset = UNSET,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | SignedUrlListResponse]:
     """List this pod's public signed URLs
 
@@ -164,7 +164,7 @@ async def asyncio_detailed(
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
         limit (int | Unset): Links per page. Default: 100.
-        cursor (None | str | Unset): `next_cursor` from the previous page.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -178,7 +178,7 @@ async def asyncio_detailed(
         pod_id=pod_id,
         include_dead=include_dead,
         limit=limit,
-        cursor=cursor,
+        page_token=page_token,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -192,7 +192,7 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     include_dead: bool | Unset = False,
     limit: int | Unset = 100,
-    cursor: None | str | Unset = UNSET,
+    page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | SignedUrlListResponse | None:
     """List this pod's public signed URLs
 
@@ -201,7 +201,7 @@ async def asyncio(
         include_dead (bool | Unset): Also list links that have expired or been revoked. Default:
             False.
         limit (int | Unset): Links per page. Default: 100.
-        cursor (None | str | Unset): `next_cursor` from the previous page.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -217,6 +217,6 @@ async def asyncio(
             client=client,
             include_dead=include_dead,
             limit=limit,
-            cursor=cursor,
+            page_token=page_token,
         )
     ).parsed

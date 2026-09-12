@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable
 from uuid import UUID
 
 from app.core.api.uploads import upload_source_size
@@ -13,8 +13,6 @@ from app.modules.datastore.domain.errors import (
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileUpdateEntity,
-    FileKind,
-    FileStatus,
 )
 from app.modules.datastore.domain.ports import (
     DatastoreSearchFactoryPort,
@@ -24,6 +22,9 @@ from app.modules.datastore.infrastructure.storage_paths import (
     build_datastore_folder_storage_prefix,
 )
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
+from app.modules.datastore.services.files.folder_creation import (
+    FolderCreationMixin,
+)
 from app.modules.datastore.services.files.lookup import FileLookup
 from app.modules.datastore.services.files.path_resolver import PathResolver
 from app.modules.datastore.services.files.projection import FileProjection
@@ -31,11 +32,11 @@ from app.modules.datastore.services.files.reader import FileReader
 from app.modules.datastore.services.files.storage_phase import (
     FileStoragePhase,
     _PathDeletionCleanup,
+    plan_artifact_moves,
     plan_storage_moves,
     _UpdatePlan,
 )
 from app.modules.datastore.services.files.transaction_writer import (
-    FileTransactionWriter,
     _MARKDOWN_ASSET_NAMES_KEY,
     _MARKDOWN_SOURCE_KEY,
 )
@@ -44,7 +45,7 @@ from app.modules.datastore.services.system_skill_files import SystemSkillFilePro
 logger = get_logger(__name__)
 
 
-class FileWriter(FileTransactionWriter):
+class FileWriter(FolderCreationMixin):
     """Write API: create file/folder, update (incl. move/rename), and delete
     paths. Owns the move/rename descendant-path rewrite."""
 
@@ -79,157 +80,6 @@ class FileWriter(FileTransactionWriter):
             FileProjection(storage, file_repository=None),
             path_resolver,
         )
-
-    async def create_folder(
-        self,
-        pod_id: UUID,
-        path: str,
-        requester_user_id: UUID,
-        description: Optional[str] = None,
-        visibility: str | None = None,
-    ) -> DatastoreFileEntity:
-        path = self.paths._resolve_api_path(
-            path,
-            requester_user_id=requester_user_id,
-        )
-        normalized_path = self.paths._normalize_path(path)
-        if normalized_path == "/" or self.paths._is_personal_root_path(normalized_path):
-            raise DatastoreValidationError("Root path already exists")
-        self.system_skill_files.ensure_writable(normalized_path)
-
-        parent_path, name = self.paths._split_parent_path(normalized_path)
-        self.paths._ensure_personal_write_path(
-            path=normalized_path,
-            requester_user_id=requester_user_id,
-        )
-        parent_directory = await self._ensure_directory_path(
-            pod_id,
-            parent_path,
-            requester_user_id=requester_user_id,
-        )
-        await self.authorizer.require_path_write_permission(
-            requester_user_id=requester_user_id,
-            pod_id=pod_id,
-            path=normalized_path,
-            resource_id=parent_directory.id if parent_directory is not None else None,
-        )
-        await self.lookup.ensure_path_available(
-            pod_id=pod_id,
-            path=normalized_path,
-        )
-        resolved_visibility = self.paths._resolve_visibility_for_path(
-            normalized_path,
-            requester_user_id,
-            visibility,
-        )
-
-        folder = DatastoreFileEntity(
-            pod_id=pod_id,
-            owner_user_id=requester_user_id,
-            kind=FileKind.FOLDER,
-            visibility=resolved_visibility,
-            path=normalized_path,
-            name=name,
-            description=description,
-            mime_type="application/x-directory",
-            size_bytes=0,
-            search_enabled=False,
-            status=FileStatus.NOT_REQUIRED,
-        )
-        return await self.file_repository.create(folder)
-
-    async def _ensure_directory_path(
-        self,
-        pod_id: UUID,
-        directory_path: str,
-        *,
-        requester_user_id: UUID | None = None,
-        ctx: Context | None = None,
-    ) -> DatastoreFileEntity | None:
-        """Resolve ``directory_path`` to a folder, creating it and any missing
-        ancestors on the way (``mkdir -p``).
-
-        System roots stay synthetic: ``/`` and the personal ``/me`` root resolve
-        to ``None`` (no backing row), and the read-only ``/skills`` overlay
-        (root + built-in skill dirs) resolves to its synthetic entity. Only real,
-        user-owned folders are materialized, with each level's visibility derived
-        from its path (personal under ``/me``, pod-shared elsewhere) so an
-        auto-created parent never widens access.
-        """
-        normalized_path = self.paths._normalize_path(directory_path)
-        if normalized_path == "/" or self.paths._is_personal_root_path(normalized_path):
-            return None
-
-        if self.system_skill_files.is_path(normalized_path):
-            synthetic = self.system_skill_files.get_entity(pod_id, normalized_path)
-            if synthetic is not None:
-                if not synthetic.is_folder:
-                    raise DatastoreValidationError("Path must point to a folder")
-                return synthetic
-            # A non-built-in path under /skills (e.g. a user-authored skill dir)
-            # has no overlay entity; fall through to materialize it as a real,
-            # pod-visible folder.
-
-        # Concurrent uploads commonly share a new directory. Hold a transaction-
-        # scoped lock across the check/create decision so all losers re-read the
-        # winner instead of surfacing a unique-constraint 500.
-        await self.file_repository.acquire_path_lock(pod_id, normalized_path)
-        existing = await self.file_repository.get_by_path(
-            pod_id=pod_id,
-            path=normalized_path,
-        )
-        if existing is not None:
-            if not existing.is_folder:
-                raise DatastoreValidationError("Path must point to a folder")
-            if requester_user_id is not None:
-                await self.authorizer.ensure_file_path_access(
-                    existing,
-                    requester_user_id,
-                    ctx=ctx,
-                )
-            return existing
-
-        parent_path, name = self.paths._split_parent_path(normalized_path)
-        parent_directory = await self._ensure_directory_path(
-            pod_id,
-            parent_path,
-            requester_user_id=requester_user_id,
-            ctx=ctx,
-        )
-        self.system_skill_files.ensure_writable(normalized_path)
-        if requester_user_id is not None:
-            self.paths._ensure_personal_write_path(
-                path=normalized_path,
-                requester_user_id=requester_user_id,
-            )
-            await self.authorizer.require_path_write_permission(
-                requester_user_id=requester_user_id,
-                pod_id=pod_id,
-                path=normalized_path,
-                resource_id=parent_directory.id
-                if parent_directory is not None
-                else None,
-                ctx=ctx,
-            )
-        resolved_visibility = self.paths._resolve_visibility_for_path(
-            normalized_path,
-            requester_user_id,
-            None,
-        )
-        folder = DatastoreFileEntity(
-            pod_id=pod_id,
-            owner_user_id=requester_user_id,
-            kind=FileKind.FOLDER,
-            visibility=resolved_visibility,
-            path=normalized_path,
-            name=name,
-            description=None,
-            mime_type="application/x-directory",
-            size_bytes=0,
-            search_enabled=False,
-            status=FileStatus.NOT_REQUIRED,
-        )
-        return await self.file_repository.create(folder)
 
     async def resolve_update_file(
         self,
@@ -291,13 +141,17 @@ class FileWriter(FileTransactionWriter):
             has_content=has_content,
         )
         rename_moved = not has_content and bool(storage_moves)
+        artifact_moves = plan_artifact_moves(
+            file_entity=file_entity,
+            descendants=descendants,
+            previous_path=previous_path,
+            has_content=has_content,
+        )
         should_sync = self._update_requires_sync(
             update_entity=update_entity,
             file_entity=file_entity,
-            previous_path=previous_path,
             previous_search_enabled=previous_search_enabled,
             has_content=has_content,
-            rename_moved=rename_moved,
         )
 
         return _UpdatePlan(
@@ -309,6 +163,8 @@ class FileWriter(FileTransactionWriter):
             has_content=has_content,
             rename_moved=rename_moved,
             storage_moves=tuple(storage_moves),
+            artifact_moves=tuple(artifact_moves),
+            renamed_descendants=tuple(descendants),
             should_sync=should_sync,
             requester_user_id=requester_user_id,
         )
@@ -376,21 +232,25 @@ class FileWriter(FileTransactionWriter):
         *,
         update_entity: DatastoreFileUpdateEntity,
         file_entity: DatastoreFileEntity,
-        previous_path: str,
         previous_search_enabled: bool,
         has_content: bool,
-        rename_moved: bool,
     ) -> bool:
+        """Whether this update makes the file's derived artifacts wrong.
+
+        New bytes do. Turning search on does -- there is nothing indexed yet.
+        A **rename does not**, and used to: every path change re-extracted the
+        file, so renaming a folder ran OCR over every document in it to produce
+        artifacts byte-identical to the ones the same operation had just
+        deleted. The artifacts now travel with the file, and the only rename
+        that still invalidates them -- one that changes the name, and so how the
+        bytes are read -- is refused a move by `plan_artifact_moves` and lands
+        in `artifacts_left_behind`, which the persist phase marks individually.
+        """
         search_changed = (
             update_entity.search_enabled is not None
             and update_entity.search_enabled != previous_search_enabled
         )
-        return (
-            previous_path != file_entity.path
-            or has_content
-            or rename_moved
-            or search_changed
-        )
+        return has_content or search_changed
 
     async def _move_descendants(
         self,
@@ -416,18 +276,29 @@ class FileWriter(FileTransactionWriter):
     async def persist_update_file(self, plan: _UpdatePlan) -> DatastoreFileEntity:
         """Persist the mutated row (+ folder descendant paths) — DB only."""
         file_entity = plan.file_entity
-        if plan.should_sync and self.paths._should_sync_projections(
+        # `should_sync` is about the update; `artifacts_left_behind` is about
+        # what the storage phase managed. Either one means this file's derived
+        # artifacts no longer describe it, and a rename that kept its name and
+        # carried its artifacts means neither.
+        needs_reprocessing = (
+            plan.should_sync or file_entity.id in plan.artifacts_left_behind
+        )
+        if needs_reprocessing and self.paths._should_sync_projections(
             True,
             file_entity,
             previous_search_enabled=plan.previous_search_enabled,
         ):
             file_entity.mark_content_updated(plan.requester_user_id)
+        elif plan.previous_path != file_entity.path:
+            # One event for the move, on the thing that moved -- see
+            # `mark_moved`. The descendants below send none: the cache this
+            # feeds clears by prefix, so the first of them was doing all the
+            # work and the rest were repeating it.
+            file_entity.mark_moved(plan.requester_user_id)
 
         updated_entity = await self.file_repository.update(file_entity)
         if plan.previous_path != updated_entity.path and updated_entity.is_folder:
-            await self._update_descendant_paths(
-                updated_entity, plan.previous_path, plan.requester_user_id
-            )
+            await self._update_descendant_paths(plan, updated_entity)
         return updated_entity
 
     async def cleanup_uncommitted_update(self, plan: _UpdatePlan) -> None:
@@ -482,24 +353,34 @@ class FileWriter(FileTransactionWriter):
             if is_folder
             else None
         )
-        files: list[dict[str, str]] = []
-        for entity in sorted(
+        # Deepest first, so a partial failure can never orphan a child under a
+        # folder that is already gone. The ordering is kept even though the rows
+        # now leave in one statement: it is what the cleanup payload below is
+        # built in, and the foreign keys do not enforce it.
+        doomed = sorted(
             [*descendants, file_entity],
             key=lambda item: (item.path.count("/"), item.path),
             reverse=True,
-        ):
-            if entity.is_file:
-                files.append(
-                    {
-                        "file_id": str(entity.id),
-                        "path": entity.path,
-                        "storage_key": self.projection.storage_key(entity),
-                    }
-                )
+        )
+        files: list[dict[str, str]] = [
+            {
+                "file_id": str(entity.id),
+                "path": entity.path,
+                "storage_key": self.projection.storage_key(entity),
+            }
+            for entity in doomed
+            if entity.is_file
+        ]
+        for entity in doomed:
             entity.mark_deleted(requester_user_id)
-            deleted = await self.file_repository.delete_entity(entity)
-            if not deleted:
-                raise DatastoreFileNotFoundError(f"File {entity.path} not found")
+        # One statement, not two per row -- `delete_entity` read each row back
+        # before removing it. A short count is the staleness check the read used
+        # to be: these ids came from a `SELECT` earlier in this transaction.
+        removed = await self.file_repository.delete_entities(doomed)
+        if removed != len(doomed):
+            raise DatastoreFileNotFoundError(
+                f"File {file_entity.path} changed while it was being deleted"
+            )
         return _PathDeletionCleanup(
             pod_id=file_entity.pod_id,
             is_folder=is_folder,
@@ -569,19 +450,30 @@ class FileWriter(FileTransactionWriter):
 
     async def _update_descendant_paths(
         self,
+        plan: _UpdatePlan,
         folder_entity: DatastoreFileEntity,
-        previous_path: str,
-        requester_user_id: UUID,
     ) -> None:
-        descendants = await self.file_repository.get_descendants(
+        """Repoint every path under a renamed folder, in one statement.
+
+        This read the descendants a second time -- the plan already had them --
+        and then called `update()` per row, which does a `SELECT` of its own
+        first. Two statements per file, inside the request transaction, for a
+        rewrite that is one prefix substitution the database can do itself.
+
+        Nothing is marked for reprocessing any more. A rename does not change
+        what a file says, and its derived artifacts travelled with it; the
+        exceptions are the files whose artifacts did not go, and only those are
+        marked.
+        """
+        await self.file_repository.rewrite_descendant_paths(
             folder_entity.pod_id,
-            previous_path,
+            previous_prefix=plan.previous_path,
+            new_prefix=folder_entity.path,
         )
-        for descendant in descendants:
-            suffix = descendant.path.removeprefix(previous_path)
+        for descendant in plan.renamed_descendants:
+            if descendant.id not in plan.artifacts_left_behind:
+                continue
+            suffix = descendant.path.removeprefix(plan.previous_path)
             descendant.path = f"{folder_entity.path}{suffix}"
-            if descendant.is_file and self.paths._should_sync_projections(
-                True, descendant
-            ):
-                descendant.mark_content_updated(requester_user_id)
+            descendant.mark_content_updated(plan.requester_user_id)
             await self.file_repository.update(descendant)

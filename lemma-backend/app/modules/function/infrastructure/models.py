@@ -97,6 +97,15 @@ class FunctionRevisionModel(UUIDCreatedBase):
         UniqueConstraint(
             "function_id", "revision_number", name="uq_function_revision_number"
         ),
+        # Ref resolution has to see pruned rows, so the partial unique index
+        # above cannot serve it; `text_pattern_ops` is what makes the prefix
+        # comparison index-driven.
+        Index(
+            "ix_function_revision_function_hash_prefix",
+            "function_id",
+            "revision_hash",
+            postgresql_ops={"revision_hash": "text_pattern_ops"},
+        ),
         Index(
             "ix_function_revision_function_created",
             "function_id",

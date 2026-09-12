@@ -169,12 +169,12 @@ class FakeSharedFiles:
 
     def __init__(self, pages):
         self._pages = pages
-        self.cursors: list[str | None] = []
+        self.page_tokens: list[str | None] = []
 
-    def list_signed_urls(self, *, include_dead=False, cursor=None):
-        self.cursors.append(cursor)
-        links, next_cursor = self._pages[len(self.cursors) - 1]
-        return SimpleNamespace(links=links, next_cursor=next_cursor)
+    def list_signed_urls(self, *, include_dead=False, page_token=None):
+        self.page_tokens.append(page_token)
+        links, next_page_token = self._pages[len(self.page_tokens) - 1]
+        return SimpleNamespace(links=links, next_page_token=next_page_token)
 
 
 def _link(code: str) -> SimpleNamespace:
@@ -202,20 +202,20 @@ def test_shares_renders_a_table_rather_than_a_repr(monkeypatch):
     assert "aaa" in result.output and "bbb" in result.output, result.output
 
 
-def test_shares_follows_the_cursor_to_the_end(monkeypatch):
+def test_shares_follows_the_page_token_to_the_end(monkeypatch):
     """A link you cannot see is a link you cannot revoke."""
-    fake = FakeSharedFiles([([_link("page1")], "cursor-1"), ([_link("page2")], None)])
+    fake = FakeSharedFiles([([_link("page1")], "token-1"), ([_link("page2")], None)])
     _patch(monkeypatch, fake)
 
     result = runner.invoke(app, ["files", "shares", "--pod", POD])
 
     assert result.exit_code == 0, result.output
-    assert fake.cursors == [None, "cursor-1"], fake.cursors
+    assert fake.page_tokens == [None, "token-1"], fake.page_tokens
     assert "page1" in result.output and "page2" in result.output, result.output
 
 
-def test_shares_stops_when_the_cursor_is_not_a_string(monkeypatch):
-    """Truthiness is not the test: a non-string cursor used to loop forever,
+def test_shares_stops_when_the_page_token_is_not_a_string(monkeypatch):
+    """Truthiness is not the test: a non-string token used to loop forever,
     and the CLI suite hung rather than failed."""
     fake = FakeSharedFiles([([_link("only")], object())])
     _patch(monkeypatch, fake)
@@ -223,4 +223,4 @@ def test_shares_stops_when_the_cursor_is_not_a_string(monkeypatch):
     result = runner.invoke(app, ["files", "shares", "--pod", POD])
 
     assert result.exit_code == 0, result.output
-    assert fake.cursors == [None], fake.cursors
+    assert fake.page_tokens == [None], fake.page_tokens

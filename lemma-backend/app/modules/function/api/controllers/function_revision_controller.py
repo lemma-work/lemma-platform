@@ -7,11 +7,13 @@ ratchet's per-file ceiling. The router carries the same prefix and the same
 
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 
 from app.modules.identity.contracts import AuthenticatedUser as UserEntity
 from app.modules.function.api.dependencies import FunctionUseCasesDep
+from app.core.api.pagination import parse_uuid_page_token
 from app.modules.function.api.schemas.function_schemas import (
+    MAX_REVISION_PAGE_SIZE,
     FunctionRevisionListResponse,
     FunctionRevisionPromoteResponse,
     FunctionRevisionResponse,
@@ -59,16 +61,35 @@ async def list_function_revisions(
     pod_id: UUID,
     function_name: str,
     use_cases: FunctionUseCasesDep,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=MAX_REVISION_PAGE_SIZE,
+        description=(
+            "Max revisions to return, up to "
+            f"{MAX_REVISION_PAGE_SIZE}. Page beyond that with `page_token`."
+        ),
+    ),
+    page_token: str | None = Query(
+        default=None,
+        description="`next_page_token` from the previous page.",
+    ),
 ) -> FunctionRevisionListResponse:
     user: UserEntity = request.state.user
-    listings = await use_cases.list_revisions(
-        pod_id=pod_id, name=function_name, user_id=user.id, request=request
+    listings, next_cursor = await use_cases.list_revisions(
+        pod_id=pod_id,
+        name=function_name,
+        user_id=user.id,
+        request=request,
+        limit=limit,
+        cursor=parse_uuid_page_token(page_token),
     )
     return FunctionRevisionListResponse(
         items=[
             _revision_response(entry.revision, is_live=entry.is_live)
             for entry in listings
-        ]
+        ],
+        next_page_token=str(next_cursor) if next_cursor else None,
     )
 
 

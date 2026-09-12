@@ -140,7 +140,7 @@ class PodFiles(BoundResource):
         *,
         include_dead: bool = False,
         limit: int = 100,
-        cursor: str | None = None,
+        page_token: str | None = None,
     ) -> SignedUrlListResponse:
         """The public signed URLs *you* minted and may still read, newest first.
 
@@ -148,10 +148,10 @@ class PodFiles(BoundResource):
         is the whole capability, and a delegated agent sees only links to files
         it has access to in its own right.
 
-        Paged. A response whose ``next_cursor`` is set has more — pass it back
-        as ``cursor`` and keep going until it is ``None``. A full page is not
-        itself proof that more exist, so the cursor is the signal; a link you do
-        not list is one you cannot revoke.
+        Paged. A response whose ``next_page_token`` is set has more — pass it
+        back as ``page_token`` and keep going until it is ``None``. A full page
+        is not itself proof that more exist, so this is the signal; a link you
+        do not list is one you cannot revoke.
 
         ``include_dead`` also returns links that have expired, been revoked, or
         run out of downloads, which are kept for a grace period.
@@ -161,7 +161,7 @@ class PodFiles(BoundResource):
             self._pod_uuid(),
             include_dead=include_dead,
             limit=limit,
-            cursor=cursor,
+            page_token=page_token,
         )
 
     def revoke_signed_url(self, code: str) -> SignedUrlRevokeResponse:

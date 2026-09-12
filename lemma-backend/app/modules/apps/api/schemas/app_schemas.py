@@ -109,8 +109,16 @@ class AppReleaseResponse(BaseModel):
     app_public_slug: str = Field(exclude=True)
 
 
+#: The largest page this endpoint will serve. `PS-DATA-011` says publish a
+#: maximum and refuse a request for more rather than quietly returning fewer --
+#: so it is a named constant, it appears in the description, and `le=` enforces
+#: it at the boundary instead of being clamped in silence.
+MAX_RELEASE_PAGE_SIZE = 200
+
+
 class AppReleaseListResponse(BaseModel):
     items: list[AppReleaseResponse]
+    next_page_token: str | None = None
 
 
 class AppMessageResponse(BaseModel):

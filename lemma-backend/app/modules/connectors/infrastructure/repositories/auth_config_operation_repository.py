@@ -20,6 +20,9 @@ from app.modules.connectors.domain.connector_operation import InstallOperationEn
 from app.modules.connectors.infrastructure.models.auth_config_operation import (
     AuthConfigOperation,
 )
+from app.modules.connectors.infrastructure.models.connector_operation import (
+    ConnectorOperation,
+)
 
 
 class AuthConfigOperationRepository:
@@ -51,6 +54,46 @@ class AuthConfigOperationRepository:
             stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
         return [row.to_entity() for row in result.scalars().all()]
+
+    async def count_with_catalog_overlap(
+        self,
+        auth_config_id: UUID,
+        *,
+        connector_id: str,
+        kind: str | None = None,
+    ) -> tuple[int, int]:
+        """How many operations this install discovered, and how many the catalog also has.
+
+        Returns ``(discovered, shadowed)``. The caller adds the first and
+        subtracts the second, because an install's own operation and a catalog
+        one of the same name are the same operation listed once.
+
+        Both numbers used to be arrived at by listing: the install's rows to
+        take a ``len()``, and the *whole catalog* for the connector to lowercase
+        its names into a set. Two full reads of the two largest tables in this
+        module, JSONB request and response schemas included, to produce two
+        integers -- on the path the agent's cross-install search fans out over
+        every install in the organization.
+
+        One statement, because the second number is a property of the two sets
+        together and asking for it separately is what made it expensive. The
+        ``lower()`` on both sides is the comparison the Python did, kept
+        verbatim rather than swapped for a case-sensitive join that would report
+        a different overlap.
+        """
+        shadowing_names = select(func.lower(ConnectorOperation.name)).where(
+            ConnectorOperation.connector_id == connector_id
+        )
+        if kind is not None:
+            shadowing_names = shadowing_names.where(ConnectorOperation.kind == kind)
+        statement = select(
+            func.count(),
+            func.count().filter(
+                func.lower(AuthConfigOperation.name).in_(shadowing_names)
+            ),
+        ).where(AuthConfigOperation.auth_config_id == auth_config_id)
+        discovered, shadowed = (await self.session.execute(statement)).one()
+        return int(discovered), int(shadowed)
 
     async def get_by_auth_config_and_name(
         self, auth_config_id: UUID, name: str

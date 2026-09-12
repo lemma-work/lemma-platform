@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
@@ -12,9 +13,7 @@ from sqlalchemy.sql import text
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
-from app.modules.datastore.infrastructure.sql_identifiers import (
-    escape_like as _escape_like,
-)
+from app.core.infrastructure.db.sql_text import escape_like as _escape_like
 
 # Query-time HNSW recall/latency knob (pgvector default is 40). Raising it
 # improves recall, especially when post-filtering by folder subtree / visibility.
@@ -115,6 +114,33 @@ class DatastoreFileChunkRepository:
             )
             await session.commit()
             return True
+
+    async def remove_chunks_by_files(self, file_ids: Sequence[UUID]) -> int:
+        """Drop the chunks of many files in one statement, and one transaction.
+
+        The single-file version opens a session and commits on its own, which is
+        right for one file and wrong for a folder: deleting five hundred files
+        opened five hundred sessions and committed five hundred times, on the
+        cleanup path that runs after the rows are already gone. The work is one
+        `DELETE`, and doing it in one transaction also means a folder's chunks
+        go together or not at all.
+        """
+        ids = list(file_ids)
+        if not ids:
+            return 0
+        async with self._session_factory() as session:
+            await session.execute(
+                text(f'SET LOCAL search_path TO "{self.schema_name}", public')
+            )
+            result = await session.execute(
+                text(
+                    f'DELETE FROM "{self.schema_name}".reserved_chunks '
+                    "WHERE file_id = ANY(:file_ids)"
+                ),
+                {"file_ids": ids},
+            )
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def update_file_path(
         self,

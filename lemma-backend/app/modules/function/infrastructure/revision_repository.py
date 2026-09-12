@@ -18,6 +18,8 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.sql_text import starts_with
+
 from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRevisionEntity,
@@ -29,6 +31,45 @@ from app.modules.function.infrastructure.models import (
     FunctionRevisionModel,
     FunctionRunModel,
 )
+
+
+def revision_prefix_statement(function_id: UUID, prefix: str):
+    """Revisions whose hash starts with *prefix*, one row per distinct hash.
+
+    The stored hash carries its ``sha256:`` algorithm prefix -- the entity's own
+    pattern requires it -- while a typed ref does not, so the literal goes back
+    on here. That keeps the match anchored, which is what lets
+    ``ix_function_revision_function_hash_prefix`` serve it;
+    ``uq_function_revision_active_hash`` looks like it would do instead, but it
+    is partial on ``pruned_at IS NULL`` and ref resolution has to see pruned
+    rows so it can tell "removed by retention" from "never existed".
+
+    Ambiguity counts **distinct hashes, not rows**: republishing identical code
+    writes another revision carrying the same hash and is not ambiguous, so
+    ``DISTINCT ON`` collapses each hash to its best row -- live before pruned,
+    then newest -- before the limit applies.
+
+    A module-level builder so the statement a test explains is the statement the
+    repository runs; a copy in the test would certify itself.
+    """
+    return (
+        select(FunctionRevisionModel)
+        .where(
+            FunctionRevisionModel.function_id == function_id,
+            starts_with(FunctionRevisionModel.revision_hash, f"sha256:{prefix}"),
+        )
+        .distinct(FunctionRevisionModel.revision_hash)
+        # DISTINCT ON keeps the first row of each group, so its column has to
+        # lead the ordering and the tiebreak follows. `revision_number` is NOT
+        # NULL here, so DESC needs no NULLS clause to match the Python it
+        # replaces.
+        .order_by(
+            FunctionRevisionModel.revision_hash,
+            FunctionRevisionModel.pruned_at.is_not(None),
+            FunctionRevisionModel.revision_number.desc(),
+        )
+        .limit(2)
+    )
 
 
 class FunctionRevisionRepositoryMixin:
@@ -128,6 +169,24 @@ class FunctionRevisionRepositoryMixin:
         model = (await self.session.execute(statement)).scalar_one_or_none()
         return model.to_entity() if model else None
 
+    async def find_revisions_by_hash_prefix(
+        self, function_id: UUID, prefix: str
+    ) -> list[FunctionRevisionEntity]:
+        """The best revision under each distinct hash a prefix names, at most two.
+
+        Callers want one revision and a yes/no on ambiguity, and two rows answer
+        both. This replaces reading a function's entire revision history to run
+        ``startswith`` over it in Python -- a read that grew with the function's
+        lifetime build count to answer a single ref, on a table retention stamps
+        rather than empties.
+        """
+        if not prefix:
+            return []
+        result = await self.session.execute(
+            revision_prefix_statement(function_id, prefix)
+        )
+        return [model.to_entity() for model in result.scalars().all()]
+
     async def list_revisions(self, function_id: UUID) -> list[FunctionRevisionEntity]:
         statement = (
             select(FunctionRevisionModel)
@@ -135,6 +194,57 @@ class FunctionRevisionRepositoryMixin:
             .order_by(
                 FunctionRevisionModel.revision_number.desc(),
             )
+        )
+        result = await self.session.execute(statement)
+        return [model.to_entity() for model in result.scalars().all()]
+
+    async def page_revisions(
+        self, function_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[FunctionRevisionEntity], UUID | None]:
+        """One page of a function's history, newest first, plus the next cursor.
+
+        Keyset on the id rather than on `revision_number`, so the page token is
+        the bare UUID the house contract uses everywhere else; these rows key on
+        uuid7, so id order is creation order and therefore revision order.
+        """
+        statement = select(FunctionRevisionModel).where(
+            FunctionRevisionModel.function_id == function_id
+        )
+        if cursor is not None:
+            statement = statement.where(FunctionRevisionModel.id < cursor)
+        rows = list(
+            (
+                await self.session.execute(
+                    statement.order_by(FunctionRevisionModel.id.desc()).limit(limit + 1)
+                )
+            ).scalars()
+        )
+        next_cursor = rows[limit - 1].id if len(rows) > limit else None
+        return [row.to_entity() for row in rows[:limit]], next_cursor
+
+    async def list_unpurged_revisions(
+        self, function_id: UUID
+    ) -> list[FunctionRevisionEntity]:
+        """The revisions retention can still act on, newest first.
+
+        A purged revision's bytes are already gone: it is not a candidate, it
+        is not an unfinished deletion, and because pruning only ever takes from
+        the old end it cannot change where any surviving revision ranks. It is
+        a tombstone kept so the history stays legible, and retention reading it
+        achieved nothing.
+
+        Which matters because retention runs after every save and these rows
+        are never deleted -- so the plan's input grew with the function's whole
+        lifetime while the set it can choose from stays at `max_keep`. This is
+        that bound made real rather than assumed.
+        """
+        statement = (
+            select(FunctionRevisionModel)
+            .where(
+                FunctionRevisionModel.function_id == function_id,
+                FunctionRevisionModel.purged_at.is_(None),
+            )
+            .order_by(FunctionRevisionModel.revision_number.desc())
         )
         result = await self.session.execute(statement)
         return [model.to_entity() for model in result.scalars().all()]

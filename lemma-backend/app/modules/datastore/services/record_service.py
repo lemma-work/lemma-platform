@@ -97,38 +97,56 @@ class RecordService:
             admin_mode=admin_mode,
         )
 
-    async def _validate_user_reference_columns(
-        self,
-        ctx: TableContext,
-        data: dict[str, Any],
-        checked_user_ids: set[UUID] | None = None,
-    ) -> None:
-        """Confirm every USER-typed value names a real user.
+    def _user_references(
+        self, ctx: TableContext, data: dict[str, Any]
+    ) -> list[tuple[str, UUID]]:
+        """Every USER-typed value in one row, as ``(column, user id)``.
 
-        ``checked_user_ids`` lets a bulk caller share the dedup set across rows.
+        In the row's own column order, because that is the order the error
+        below reports in: the column a person is told about should be the first
+        one they would find reading their own file.
+
+        Empty when there is no user directory to check against. Collecting is
+        the half that costs something -- it converts the row -- and a caller
+        that cannot validate should not pay for it.
         """
         if self.user_repository is None:
-            return
-
-        converted = convert_record(ctx.columns, data, skip_auto=False)
-        if checked_user_ids is None:
-            checked_user_ids = set()
-
-        for key, value in converted.items():
+            return []
+        references: list[tuple[str, UUID]] = []
+        for key, value in convert_record(ctx.columns, data, skip_auto=False).items():
             column = ctx.get_column(key)
             if column is None or column.type != DatastoreDataType.USER or value is None:
                 continue
+            references.append(
+                (key, value if isinstance(value, UUID) else UUID(str(value)))
+            )
+        return references
 
-            user_id = value if isinstance(value, UUID) else UUID(str(value))
-            if user_id in checked_user_ids:
-                continue
+    async def _reject_unknown_user_references(
+        self, references: list[tuple[str, UUID]]
+    ) -> None:
+        """Confirm every collected reference names a real user, in one read.
 
-            user = await self.user_repository.get(user_id)
-            if user is None:
+        A dedup set made this cheap for the batch that names one person over
+        and over, and left the batch that names a different person per row
+        exactly as expensive -- one round trip per distinct id, which for an
+        import is one per row. Asking which of the ids exist answers both in a
+        single statement.
+
+        Deactivated and deleted users still count as existing, as they did when
+        this was ``user_repository.get``: a USER column records who something
+        belongs to, and someone leaving must not make an old row unwritable.
+        """
+        if self.user_repository is None or not references:
+            return
+        existing = await self.user_repository.existing_ids(
+            {user_id for _, user_id in references}
+        )
+        for key, user_id in references:
+            if user_id not in existing:
                 raise DatastoreValidationError(
                     f"User does not exist for column '{key}'"
                 )
-            checked_user_ids.add(user_id)
 
     async def create_record(
         self,
@@ -150,7 +168,9 @@ class RecordService:
                 details={"errors": error_details},
             )
 
-        await self._validate_user_reference_columns(ctx, sanitized_data)
+        await self._reject_unknown_user_references(
+            self._user_references(ctx, sanitized_data)
+        )
         if ctx.events_enabled:
             event_factory = partial(
                 self.events.required_for_record,
@@ -316,7 +336,6 @@ class RecordService:
         user_id: UUID,
         *,
         enforce_user_scope: bool,
-        checked_user_ids: set[UUID] | None = None,
         expected_updated_at: datetime | None = None,
     ):
         """Validate and write one row, without the per-caller preamble.
@@ -328,8 +347,8 @@ class RecordService:
         """
         sanitized_data = RecordValidator(ctx).strip_system_write_overrides(data)
         RecordValidator(ctx).validate_update(sanitized_data)
-        await self._validate_user_reference_columns(
-            ctx, sanitized_data, checked_user_ids
+        await self._reject_unknown_user_references(
+            self._user_references(ctx, sanitized_data)
         )
         event_factory = (
             partial(
@@ -393,6 +412,11 @@ class RecordService:
             validator.strip_system_write_overrides(record) for record in records
         ]
 
+        # Collected row by row so each row's own validation still runs in
+        # order, then resolved once for the batch. The sibling below shared a
+        # dedup set to the same end and only half solved it; see
+        # `_reject_unknown_user_references`.
+        user_references: list[tuple[str, UUID]] = []
         for record in sanitized_records:
             is_valid, errors, error_details = validator.validate(
                 record, is_creation=True
@@ -402,7 +426,8 @@ class RecordService:
                     f"Invalid record data: {'; '.join(errors)}",
                     details={"errors": error_details},
                 )
-            await self._validate_user_reference_columns(ctx, record)
+            user_references.extend(self._user_references(ctx, record))
+        await self._reject_unknown_user_references(user_references)
 
         # One INSERT event per written row, built by the repository from the row
         # it actually wrote — the same contract as a single create. Building
@@ -459,10 +484,8 @@ class RecordService:
             admin_mode=admin_mode,
         )
         pk = ctx.primary_key_column
-        # Shared across the batch: the dedup set was per row, so 200 rows
-        # naming one owner asked the user repository for it 200 times.
-        checked_user_ids: set[UUID] = set()
         prepared: list[tuple[Any, dict[str, Any]]] = []
+        user_references: list[tuple[str, UUID]] = []
 
         for update in updates:
             pk_val = update.get(pk) or update.get("id")
@@ -477,10 +500,10 @@ class RecordService:
 
             sanitized = RecordValidator(ctx).strip_system_write_overrides(payload)
             RecordValidator(ctx).validate_update(sanitized)
-            await self._validate_user_reference_columns(
-                ctx, sanitized, checked_user_ids
-            )
+            user_references.extend(self._user_references(ctx, sanitized))
             prepared.append((pk_val, sanitized))
+
+        await self._reject_unknown_user_references(user_references)
 
         event_factory = (
             partial(

@@ -20,11 +20,11 @@ class SignedUrlListResponse:
     """
     Attributes:
         links (list[SignedUrlSummary]):
-        next_cursor (None | str | Unset):
+        next_page_token (None | str | Unset):
     """
 
     links: list[SignedUrlSummary]
-    next_cursor: None | str | Unset = UNSET
+    next_page_token: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -33,11 +33,11 @@ class SignedUrlListResponse:
             links_item = links_item_data.to_dict()
             links.append(links_item)
 
-        next_cursor: None | str | Unset
-        if isinstance(self.next_cursor, Unset):
-            next_cursor = UNSET
+        next_page_token: None | str | Unset
+        if isinstance(self.next_page_token, Unset):
+            next_page_token = UNSET
         else:
-            next_cursor = self.next_cursor
+            next_page_token = self.next_page_token
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -46,8 +46,8 @@ class SignedUrlListResponse:
                 "links": links,
             }
         )
-        if next_cursor is not UNSET:
-            field_dict["next_cursor"] = next_cursor
+        if next_page_token is not UNSET:
+            field_dict["next_page_token"] = next_page_token
 
         return field_dict
 
@@ -63,18 +63,18 @@ class SignedUrlListResponse:
 
             links.append(links_item)
 
-        def _parse_next_cursor(data: object) -> None | str | Unset:
+        def _parse_next_page_token(data: object) -> None | str | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             return cast(None | str | Unset, data)
 
-        next_cursor = _parse_next_cursor(d.pop("next_cursor", UNSET))
+        next_page_token = _parse_next_page_token(d.pop("next_page_token", UNSET))
 
         signed_url_list_response = cls(
             links=links,
-            next_cursor=next_cursor,
+            next_page_token=next_page_token,
         )
 
         signed_url_list_response.additional_properties = d

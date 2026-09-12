@@ -210,12 +210,16 @@ export class FunctionsService {
      * List the built revisions of a function, newest first.
      * @param podId
      * @param functionName
+     * @param limit Max revisions to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns FunctionRevisionListResponse Successful Response
      * @throws ApiError
      */
     public static functionRevisionList(
         podId: string,
         functionName: string,
+        limit: number = 50,
+        pageToken?: (string | null),
     ): CancelablePromise<FunctionRevisionListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -223,6 +227,10 @@ export class FunctionsService {
             path: {
                 'pod_id': podId,
                 'function_name': functionName,
+            },
+            query: {
+                'limit': limit,
+                'page_token': pageToken,
             },
             errors: {
                 422: `Validation Error`,

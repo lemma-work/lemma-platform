@@ -101,6 +101,30 @@ class AppRepositoryPort(Protocol):
         raise NotImplementedError
 
     @abstractmethod
+    async def find_releases_by_digest_prefix(
+        self, app_id: UUID, prefix: str
+    ) -> list[AppReleaseEntity]:
+        """The best release of each distinct version the prefix names, max two.
+
+        Two is enough to answer "which release" and "is it ambiguous" at once,
+        and bounds the read: resolving a ref must not cost the app's whole
+        deploy history.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def page_releases(
+        self, app_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[AppReleaseEntity], UUID | None]:
+        """One page of an app's history, newest first, plus the next cursor."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_unpurged_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
+        """The releases retention can still act on: everything not yet purged."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
         raise NotImplementedError
 

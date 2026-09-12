@@ -121,6 +121,22 @@ class DatastoreFileRepositoryPort(Protocol):
         ctx: Context | None = None,
     ) -> Optional[DatastoreFileEntity]: ...
 
+    async def delete_entities(self, entities: Sequence[DatastoreFileEntity]) -> int: ...
+
+    async def rewrite_descendant_paths(
+        self,
+        pod_id: UUID,
+        *,
+        previous_prefix: str,
+        new_prefix: str,
+    ) -> int: ...
+
+    async def get_direct_children(
+        self,
+        pod_id: UUID,
+        directory_path: str,
+    ) -> Sequence[DatastoreFileEntity]: ...
+
     async def get_descendants(
         self,
         pod_id: UUID,
@@ -395,6 +411,8 @@ class DatastoreStoragePort(Protocol):
 
     async def delete_prefix(self, prefix: str) -> int: ...
 
+    async def move_prefix(self, source_prefix: str, destination_prefix: str) -> int: ...
+
 
 class DocumentProcessorPort(Protocol):
     """The whole document-processing capability the datastore needs: turn a
@@ -456,6 +474,8 @@ class DatastoreSearchPort(Protocol):
     ) -> IndexingMetrics: ...
 
     async def remove_file(self, file_id: UUID) -> None: ...
+
+    async def remove_files(self, file_ids: Sequence[UUID]) -> None: ...
 
     async def update_file_path(
         self,

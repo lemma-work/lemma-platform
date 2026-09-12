@@ -33,6 +33,23 @@ async def get_function_by_id(uow, function_id: UUID) -> FunctionEntity | None:
     return await FunctionRepository(uow).get(function_id)
 
 
+async def get_functions_by_ids(uow, function_ids) -> dict[UUID, FunctionEntity]:
+    """Several functions at once, keyed by id.
+
+    Building an agent's toolset resolves every granted function, and asking per
+    grant is one statement per tool on the path that runs before every agent
+    turn. Ids naming nothing are simply absent, the same "cost that one tool"
+    the singular above chose.
+    """
+    from app.modules.function.infrastructure.repositories import FunctionRepository
+
+    wanted = {function_id for function_id in function_ids if function_id is not None}
+    if not wanted:
+        return {}
+    found = await FunctionRepository(uow).get_many(wanted)
+    return {function.id: function for function in found if function.id is not None}
+
+
 async def list_pod_functions(
     uow, pod_id: UUID, *, limit: int
 ) -> tuple[list[FunctionEntity], str | None]:

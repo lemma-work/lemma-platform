@@ -101,7 +101,10 @@ class FunctionRevisionRetention:
         if function is None:
             raise ValueError("function was deleted before retention could lock it")
         moment = now or datetime.now(timezone.utc)
-        revisions = await self.repository.list_revisions(function.id)
+        # Not `list_revisions`: purged rows are tombstones whose bytes are
+        # already gone, and reading them made the plan's cost the function's
+        # whole deploy history rather than the handful retention can act on.
+        revisions = await self.repository.list_unpurged_revisions(function.id)
         live_id = next(
             (
                 revision.id

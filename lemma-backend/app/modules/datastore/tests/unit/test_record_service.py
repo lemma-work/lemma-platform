@@ -705,7 +705,7 @@ async def test_create_record_rejects_unknown_user_reference():
     ctx = TableContext.from_table_entity(table, "pod_test")
     record_repository = AsyncMock()
     user_repository = AsyncMock()
-    user_repository.get.return_value = None
+    user_repository.existing_ids.return_value = set()
     service = RecordService(
         record_repository=record_repository,
         user_repository=user_repository,
@@ -721,7 +721,7 @@ async def test_create_record_rejects_unknown_user_reference():
             uuid4(),
         )
 
-    user_repository.get.assert_awaited_once_with(missing_user_id)
+    user_repository.existing_ids.assert_awaited_once_with({missing_user_id})
     record_repository.create_record.assert_not_called()
 
 
@@ -747,7 +747,7 @@ async def test_update_record_rejects_unknown_user_reference():
     ctx = TableContext.from_table_entity(table, "pod_test")
     record_repository = AsyncMock()
     user_repository = AsyncMock()
-    user_repository.get.return_value = None
+    user_repository.existing_ids.return_value = set()
     service = RecordService(
         record_repository=record_repository,
         user_repository=user_repository,
@@ -764,7 +764,7 @@ async def test_update_record_rejects_unknown_user_reference():
             uuid4(),
         )
 
-    user_repository.get.assert_awaited_once_with(missing_user_id)
+    user_repository.existing_ids.assert_awaited_once_with({missing_user_id})
     record_repository.update_record.assert_not_called()
 
 
@@ -790,7 +790,7 @@ async def test_bulk_create_rejects_unknown_user_reference():
     ctx = TableContext.from_table_entity(table, "pod_test")
     record_repository = AsyncMock()
     user_repository = AsyncMock()
-    user_repository.get.return_value = None
+    user_repository.existing_ids.return_value = set()
     service = RecordService(
         record_repository=record_repository,
         user_repository=user_repository,
@@ -806,8 +806,122 @@ async def test_bulk_create_rejects_unknown_user_reference():
             uuid4(),
         )
 
-    user_repository.get.assert_awaited_once_with(missing_user_id)
+    user_repository.existing_ids.assert_awaited_once_with({missing_user_id})
     record_repository.bulk_create_records.assert_not_called()
+
+
+def _user_table_context():
+    """A table whose USER column is what the reference check reads."""
+    table = DatastoreTableEntity(
+        pod_id=uuid4(),
+        table_name="tasks",
+        primary_key_column="id",
+        columns=[
+            ColumnSchema(
+                name="id",
+                type=DatastoreDataType.UUID,
+                required=True,
+                unique=True,
+                auto=True,
+            ),
+            ColumnSchema(name="title", type=DatastoreDataType.TEXT, required=True),
+            ColumnSchema(name="assignee", type=DatastoreDataType.USER, required=True),
+        ],
+        enable_rls=False,
+    )
+    return TableContext.from_table_entity(table, "pod_test")
+
+
+async def test_bulk_create_checks_every_named_user_in_one_read():
+    """The cost of validating a batch is one read, whoever it names.
+
+    The regression this pins is not "too many queries" in the abstract: the
+    dedup set that used to sit here made a batch naming ONE person cheap and
+    left a batch naming a different person per row at one round trip per row,
+    which is the shape an import actually has. Both are asserted, because
+    fixing only the first is what the sibling already did.
+    """
+    ctx = _user_table_context()
+    one_owner = uuid4()
+    many_owners = [uuid4() for _ in range(50)]
+    record_repository = AsyncMock()
+    record_repository.bulk_create_records.return_value = 50
+
+    for assignees in ([one_owner] * 50, many_owners):
+        user_repository = AsyncMock()
+        user_repository.existing_ids.return_value = set(assignees)
+        service = RecordService(
+            record_repository=record_repository,
+            user_repository=user_repository,
+        )
+
+        await service.bulk_create_records(
+            ctx,
+            [
+                {"title": f"task {index}", "assignee": str(assignee)}
+                for index, assignee in enumerate(assignees)
+            ],
+            uuid4(),
+        )
+
+        assert user_repository.existing_ids.await_count == 1
+        user_repository.existing_ids.assert_awaited_once_with(set(assignees))
+
+
+async def test_bulk_create_names_the_first_offending_column_in_input_order():
+    """Which row is reported matters -- it is how someone finds it in their file."""
+    ctx = _user_table_context()
+    known = uuid4()
+    missing = uuid4()
+    user_repository = AsyncMock()
+    user_repository.existing_ids.return_value = {known}
+    record_repository = AsyncMock()
+    service = RecordService(
+        record_repository=record_repository,
+        user_repository=user_repository,
+    )
+
+    with pytest.raises(
+        DatastoreValidationError,
+        match="User does not exist for column 'assignee'",
+    ):
+        await service.bulk_create_records(
+            ctx,
+            [
+                {"title": "first", "assignee": str(known)},
+                {"title": "second", "assignee": str(missing)},
+                {"title": "third", "assignee": str(known)},
+            ],
+            uuid4(),
+        )
+
+    record_repository.bulk_create_records.assert_not_called()
+
+
+async def test_a_deactivated_user_is_still_a_valid_reference():
+    """`existing_ids` asks who exists, not who can sign in.
+
+    A USER column records who a row belongs to. Someone leaving the company
+    must not make every row naming them unwritable, which is why the batch
+    lookup is as permissive as the per-id `get` it replaced -- the repository
+    method carries the same note.
+    """
+    ctx = _user_table_context()
+    departed = uuid4()
+    user_repository = AsyncMock()
+    user_repository.existing_ids.return_value = {departed}
+    record_repository = AsyncMock()
+    record_repository.bulk_create_records.return_value = 1
+    service = RecordService(
+        record_repository=record_repository,
+        user_repository=user_repository,
+    )
+
+    written = await service.bulk_create_records(
+        ctx, [{"title": "handover", "assignee": str(departed)}], uuid4()
+    )
+
+    assert written == 1
 
 
 async def test_rls_list_records_enforces_current_user_scope_for_non_admin():

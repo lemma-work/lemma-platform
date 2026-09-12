@@ -16,6 +16,7 @@ from app.core.authorization.sql_actions import (
     allowed_actions_expr,
 )
 from app.core.domain.message_bus import MessageBus
+from app.core.infrastructure.db.sql_text import starts_with
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.apps.domain.entities import AppEntity, AppReleaseEntity
 from app.modules.apps.domain.errors import AppNotFoundError
@@ -43,6 +44,44 @@ def _record_release_statement(entity: AppReleaseEntity) -> Insert:
         **values,
     )
     return statement.returning(AppReleaseModel)
+
+
+def release_prefix_statement(app_id: UUID, prefix: str):
+    """Releases whose version starts with *prefix*, one row per distinct version.
+
+    Ambiguity is a property of **distinct versions, not rows**. Redeploying
+    identical bytes writes several releases carrying the same digest, and that
+    is not ambiguous, so ``DISTINCT ON (version)`` collapses each version to its
+    best row before the limit applies. "Best" is the resolver's own tiebreak --
+    live before pruned, then newest -- resolved inside the version here rather
+    than across the whole match set, which is the same answer because a prefix
+    that resolves at all has only one version to sort within.
+
+    Pruned rows stay in. They lose the ordering to live ones, but a caller left
+    holding only a pruned match has to be able to say "removed by retention"
+    instead of "no such release".
+
+    A module-level builder so the statement a test explains is the statement the
+    repository runs; a copy in the test would certify itself.
+    """
+    return (
+        select(AppReleaseModel)
+        .where(
+            AppReleaseModel.app_id == app_id,
+            starts_with(AppReleaseModel.version, prefix),
+        )
+        .distinct(AppReleaseModel.version)
+        # DISTINCT ON keeps the first row of each `version` group, so the column
+        # it distinguishes on has to lead the ordering and the tiebreak follows.
+        # `release_number` is NOT NULL in this table, so DESC needs no NULLS
+        # clause to match the Python it replaces.
+        .order_by(
+            AppReleaseModel.version,
+            AppReleaseModel.pruned_at.is_not(None),
+            desc(AppReleaseModel.release_number),
+        )
+        .limit(2)
+    )
 
 
 class AppRepository(AppRepositoryPort):
@@ -313,6 +352,72 @@ class AppRepository(AppRepositoryPort):
             )
             .values(pruned_at=datetime.now(timezone.utc))
         )
+
+    async def find_releases_by_digest_prefix(
+        self, app_id: UUID, prefix: str
+    ) -> list[AppReleaseEntity]:
+        """The best release under each distinct version a prefix names, at most two.
+
+        Callers want one release and a yes/no on ambiguity, and two rows answer
+        both: one row means the prefix resolves, two means it does not. This
+        replaces reading an app's entire release history to run ``startswith``
+        over it in Python -- a read that grew with the app's lifetime deploy
+        count to answer a single ref, on a table retention stamps rather than
+        empties.
+        """
+        if not prefix:
+            return []
+        result = await self.session.execute(release_prefix_statement(app_id, prefix))
+        return [model.to_entity() for model in result.scalars().all()]
+
+    async def page_releases(
+        self, app_id: UUID, *, limit: int, cursor: UUID | None
+    ) -> tuple[list[AppReleaseEntity], UUID | None]:
+        """One page of an app's history, newest first, plus the next cursor.
+
+        Keyset on the id, which is also the ordering: these rows key on uuid7,
+        so id order *is* creation order -- the same invariant `select_prunable`
+        relies on to call the prunable set a suffix of the ranking. That is what
+        lets a bare-UUID page token, the house contract, order by time.
+
+        `list_releases` stays for deletion, which needs every row by definition.
+        """
+        statement = select(AppReleaseModel).where(AppReleaseModel.app_id == app_id)
+        if cursor is not None:
+            statement = statement.where(AppReleaseModel.id < cursor)
+        rows = list(
+            (
+                await self.session.execute(
+                    statement.order_by(desc(AppReleaseModel.id)).limit(limit + 1)
+                )
+            ).scalars()
+        )
+        next_cursor = rows[limit - 1].id if len(rows) > limit else None
+        return [row.to_entity() for row in rows[:limit]], next_cursor
+
+    async def list_unpurged_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
+        """The releases retention can still act on, newest first.
+
+        A purged release's bytes are already gone: it is not a candidate, it is
+        not an unfinished deletion, and because pruning only ever takes from the
+        old end it cannot change where any surviving release ranks. It is a
+        tombstone kept so the history stays legible ("v3 -- build removed"), and
+        retention reading it achieved nothing.
+
+        Which matters because retention runs after every deploy and these rows
+        are never deleted -- so the plan's input grew with the app's whole
+        lifetime while the set it can choose from stays at `max_keep`.
+        """
+        statement = (
+            select(AppReleaseModel)
+            .where(
+                AppReleaseModel.app_id == app_id,
+                AppReleaseModel.purged_at.is_(None),
+            )
+            .order_by(desc(AppReleaseModel.created_at), desc(AppReleaseModel.id))
+        )
+        result = await self.session.execute(statement)
+        return [model.to_entity() for model in result.scalars().all()]
 
     async def list_releases(self, app_id: UUID) -> list[AppReleaseEntity]:
         stmt = (

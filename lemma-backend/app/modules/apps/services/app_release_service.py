@@ -47,6 +47,7 @@ class ReleaseHistory:
 
     app_public_slug: str
     items: list[ReleaseListing]
+    next_page_token: str | None = None
 
 
 def parse_release_ref(ref: str) -> tuple[int | None, str | None]:
@@ -103,22 +104,24 @@ class AppReleaseService:
             # carries that number resolves it without making people prefix every
             # number with `v`.
             if release is None:
-                digest_prefix = ref.strip().lower()
+                digest_prefix = ref.strip().lower().removeprefix("sha256:")
         if release is None and digest_prefix is not None:
-            matches = [
-                candidate
-                for candidate in await self.repository.list_releases(app.id)
-                if candidate.version.startswith(digest_prefix)
-            ]
+            # Two rows is all this question needs: the repository collapses each
+            # distinct digest to its best release and stops at two, so a second
+            # row *is* the ambiguity. Reading the whole history to sort it here
+            # answered the same question by loading every deploy the app has
+            # ever had.
+            matches = await self.repository.find_releases_by_digest_prefix(
+                app.id, digest_prefix
+            )
             # An ambiguous prefix is refused rather than resolved to "the newest
             # match": promoting the wrong build is not a recoverable mistake.
-            if len({candidate.version for candidate in matches}) > 1:
+            if len(matches) > 1:
                 raise AppReleaseNotFoundError(
-                    f"Release '{ref}' is ambiguous -- it matches "
-                    f"{len(matches)} releases. Use the full digest or the "
-                    "release number."
+                    f"Release '{ref}' is ambiguous -- more than one release "
+                    "digest starts with it. Use a longer prefix, the full "
+                    "digest, or the release number."
                 )
-            matches.sort(key=lambda item: (item.is_pruned, -(item.release_number or 0)))
             release = matches[0] if matches else None
         if release is None:
             raise AppReleaseNotFoundError(f"App '{app.name}' has no release '{ref}'")
@@ -130,13 +133,27 @@ class AppReleaseService:
         return release
 
     async def list_releases(
-        self, pod_id: UUID, app_name: str, *, ctx: Context
+        self,
+        pod_id: UUID,
+        app_name: str,
+        *,
+        ctx: Context,
+        limit: int,
+        cursor: UUID | None,
     ) -> ReleaseHistory:
+        """One page of an app's release history, newest first.
+
+        It used to return every release an app had ever had, with no limit and
+        no cursor -- the only unpaginated list in this module, on a table
+        retention stamps rather than empties.
+        """
         app = await self._load_app(
             pod_id, app_name, permission=Permissions.APP_READ, ctx=ctx
         )
         assert app.id is not None
-        releases = await self.repository.list_releases(app.id)
+        releases, next_cursor = await self.repository.page_releases(
+            app.id, limit=limit, cursor=cursor
+        )
         return ReleaseHistory(
             app_public_slug=app.public_slug,
             items=[
@@ -146,6 +163,7 @@ class AppReleaseService:
                 )
                 for release in releases
             ],
+            next_page_token=str(next_cursor) if next_cursor else None,
         )
 
     async def promote_release(

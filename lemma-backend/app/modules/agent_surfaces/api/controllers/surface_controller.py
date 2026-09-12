@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from functools import partial
 from uuid import UUID
 
@@ -16,7 +17,11 @@ from app.modules.connectors.contracts.surfaces import (
     require_account_owner,
     surface_connector,
 )
-from app.modules.agent.contracts.agents import agent_id_for_name, agent_name_for_id
+from app.modules.agent.contracts.agents import (
+    agent_id_for_name,
+    agent_name_for_id,
+    agent_names_for_ids,
+)
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceConnectionResolverDep,
     SurfaceEventHandlerDep,
@@ -146,9 +151,9 @@ async def list_surfaces(
         cursor=cursor,
         limit=limit,
     )
-    visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = []
+    readable: list[AgentSurfaceEntity] = []
+    named: set[UUID] = set()
     for surface in surfaces:
-        resolved_agent_name = None
         # The assistant's surfaces stay visible to every pod member: it is
         # pod-scoped, so there is no per-agent grant to hold. Reading this as an
         # ordinary agent would silently drop the pod's own mailbox out of the
@@ -164,11 +169,28 @@ async def list_surfaces(
             )
             if not allowed:
                 continue
-            resolved_agent_name = await _resolve_agent_display_name(
-                uow.session, surface.agent_id
-            )
-        reach = await _resolve_surface_reach(surface, service=service, uow=uow)
-        visible.append((surface, resolved_agent_name, reach))
+            named.add(surface.agent_id)
+        readable.append(surface)
+
+    # One lookup for the page's agents rather than one per row, and the reaches
+    # concurrently rather than in series -- resolving a reach can call the
+    # platform, so a page of eight surfaces was eight sequential round trips to
+    # Slack or Telegram before the response could start.
+    agent_names = await agent_names_for_ids(uow.session, named)
+    reaches = await asyncio.gather(
+        *(
+            _resolve_surface_reach(surface, service=service, uow=uow)
+            for surface in readable
+        )
+    )
+    visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = [
+        (
+            surface,
+            agent_names.get(surface.agent_id) if surface.agent_id in named else None,
+            reach,
+        )
+        for surface, reach in zip(readable, reaches)
+    ]
 
     # Resolved once for the page, after the per-agent filter, so the two queries
     # it costs cover only surfaces this caller can actually see.

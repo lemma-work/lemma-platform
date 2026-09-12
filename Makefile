@@ -1932,6 +1932,7 @@ quality:
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded-reads
 	@echo "→ Import-bound defaults…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-bound-defaults
 	@echo "→ Typed surfaces…"

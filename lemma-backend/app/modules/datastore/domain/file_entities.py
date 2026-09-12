@@ -176,6 +176,35 @@ class DatastoreFileEntity(AggregateRoot):
         self.status = FileStatus.FAILED_PERMANENT
         self.last_processing_error = error
 
+    def mark_moved(self, actor_id: UUID | None = None) -> None:
+        """Announce a path change without claiming the content changed.
+
+        A rename has always emitted ``DatastoreFileUpdatedEvent``, but only as a
+        side effect of ``mark_content_updated`` on every descendant -- which
+        also set them PENDING, and that is what re-extracted a whole folder's
+        worth of documents to produce artifacts identical to the ones it had.
+
+        The event still matters, and for a reason unrelated to indexing: it is
+        what drops the cached memory brief, and that cache clears by pod (or by
+        owner) prefix, so **one** event covers a renamed subtree -- the hundreds
+        that used to follow it were each clearing what the first one had.
+
+        Touching no column is what makes this safe to send: the reindex consumer
+        enqueues only a PENDING row, so a file that is merely somewhere else is
+        offered to the queue and declined.
+        """
+        from app.modules.datastore.domain.events import DatastoreFileUpdatedEvent
+
+        self.add_event(
+            DatastoreFileUpdatedEvent(
+                file_id=self.id,
+                pod_id=self.pod_id,
+                actor_id=actor_id,
+                path=self.path,
+                metadata=self.metadata or {},
+            )
+        )
+
     def mark_deleted(self, actor_id: UUID | None = None) -> None:
         from app.modules.datastore.domain.events import DatastoreFileDeletedEvent
 

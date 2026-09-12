@@ -158,9 +158,22 @@ def file_repository_mock() -> AsyncMock:
         items = await repository.get_all_by_datastore(pod_id)
         return [item for item in items if item.path.startswith(f"{path_prefix}/")]
 
+    # Derived the same way, and narrowed the same way the statement is: one
+    # directory's own entries, not the tree beneath it. A double that returned
+    # descendants here would let a caller that had not been narrowed keep
+    # passing.
+    async def _direct_children(pod_id, directory_path) -> list:
+        prefix = "/" if directory_path == "/" else f"{directory_path}/"
+        return [
+            item
+            for item in await _descendants(pod_id, directory_path.rstrip("/"))
+            if "/" not in item.path[len(prefix) :]
+        ]
+
     repository.visible_file_ids.side_effect = _visible_file_ids
     repository.file_visibility_split.side_effect = _visibility_split
     repository.get_descendants.side_effect = _descendants
+    repository.get_direct_children.side_effect = _direct_children
     return repository
 
 
@@ -1215,7 +1228,10 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
         nested_file,
         sibling_file,
     ]
-    file_repository_mock.delete_entity.return_value = True
+    # The double answers the way the statement does: how many rows went.
+    file_repository_mock.delete_entities.side_effect = lambda entities: len(
+        list(entities)
+    )
 
     search_service = AsyncMock()
     search_service.engine = None
@@ -1238,10 +1254,17 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
         f"pods/{pod_id}/files/research/notes/draft.md",
         f"pods/{pod_id}/files/research/summary.md",
     }
-    assert search_service.remove_file.await_count == 2
-    deleted_ids = {call.args[0] for call in search_service.remove_file.await_args_list}
-    assert deleted_ids == {nested_file.id, sibling_file.id}
-    assert file_repository_mock.delete_entity.await_count == 4
+    # One purge for the folder, not one per file: the per-file call opened its
+    # own session and committed, so deleting a folder of five hundred opened
+    # five hundred.
+    search_service.remove_files.assert_awaited_once()
+    assert set(search_service.remove_files.await_args.args[0]) == {
+        nested_file.id,
+        sibling_file.id,
+    }
+    # Four rows, one statement -- it was a `SELECT` plus a `DELETE` each.
+    file_repository_mock.delete_entities.assert_awaited_once()
+    assert len(file_repository_mock.delete_entities.await_args.args[0]) == 4
 
 
 @pytest.mark.asyncio
@@ -1277,8 +1300,8 @@ async def test_the_skills_overlay_asks_for_the_subtree_not_the_pod(
     # Stubbed directly rather than through the fixture's derived side effect,
     # which reads `get_all_by_datastore` itself -- the negative assertion below
     # is the point of the test and that helper would satisfy it spuriously.
-    file_repository_mock.get_descendants.side_effect = None
-    file_repository_mock.get_descendants.return_value = [custom]
+    file_repository_mock.get_direct_children.side_effect = None
+    file_repository_mock.get_direct_children.return_value = [custom]
     file_repository_mock.visible_file_ids.side_effect = None
     file_repository_mock.visible_file_ids.return_value = {custom.id}
 
@@ -1289,6 +1312,10 @@ async def test_the_skills_overlay_asks_for_the_subtree_not_the_pod(
     )
 
     assert "custom-skill" in {item.name for item in items}
-    file_repository_mock.get_descendants.assert_awaited()
-    assert file_repository_mock.get_descendants.await_args.args[1] == "/skills"
+    # Narrower than the subtree it used to ask for, which is `PS-DATA-031`:
+    # listing one folder does not load the tree under it. Both negatives matter
+    # -- the pod read and the subtree read are each a thing this must not do.
+    file_repository_mock.get_direct_children.assert_awaited()
+    assert file_repository_mock.get_direct_children.await_args.args[1] == "/skills"
+    file_repository_mock.get_descendants.assert_not_awaited()
     file_repository_mock.get_tree_items.assert_not_awaited()

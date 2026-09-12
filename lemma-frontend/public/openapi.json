@@ -2725,6 +2725,17 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
           }
         },
         "required": [
@@ -7771,6 +7782,17 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
           }
         },
         "required": [
@@ -13507,7 +13529,7 @@
             "title": "Links",
             "type": "array"
           },
-          "next_cursor": {
+          "next_page_token": {
             "anyOf": [
               {
                 "type": "string"
@@ -13516,7 +13538,7 @@
                 "type": "null"
               }
             ],
-            "title": "Next Cursor"
+            "title": "Next Page Token"
           }
         },
         "required": [
@@ -24010,6 +24032,38 @@
               "title": "App Name",
               "type": "string"
             }
+          },
+          {
+            "description": "Max releases to return, up to 200. Page beyond that with `page_token`.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Max releases to return, up to 200. Page beyond that with `page_token`.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_page_token` from the previous page.",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_page_token` from the previous page.",
+              "title": "Page Token"
+            }
           }
         ],
         "responses": {
@@ -24040,7 +24094,7 @@
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": false,
+          "paginates": true,
           "resource": "app.release",
           "result": "collection",
           "verb": "list"
@@ -26890,9 +26944,9 @@
             }
           },
           {
-            "description": "`next_cursor` from the previous page.",
+            "description": "`next_page_token` from the previous page.",
             "in": "query",
-            "name": "cursor",
+            "name": "page_token",
             "required": false,
             "schema": {
               "anyOf": [
@@ -26903,8 +26957,8 @@
                   "type": "null"
                 }
               ],
-              "description": "`next_cursor` from the previous page.",
-              "title": "Cursor"
+              "description": "`next_page_token` from the previous page.",
+              "title": "Page Token"
             }
           }
         ],
@@ -29012,6 +29066,38 @@
               "title": "Function Name",
               "type": "string"
             }
+          },
+          {
+            "description": "Max revisions to return, up to 200. Page beyond that with `page_token`.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Max revisions to return, up to 200. Page beyond that with `page_token`.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "`next_page_token` from the previous page.",
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`next_page_token` from the previous page.",
+              "title": "Page Token"
+            }
           }
         ],
         "responses": {
@@ -29042,7 +29128,7 @@
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": false,
+          "paginates": true,
           "resource": "function.revision",
           "result": "collection",
           "verb": "list"

@@ -5,4 +5,5 @@
 import type { AppReleaseResponse } from './AppReleaseResponse.js';
 export type AppReleaseListResponse = {
     items: Array<AppReleaseResponse>;
+    next_page_token?: (string | null);
 };

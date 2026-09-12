@@ -186,7 +186,11 @@ class SubAgentService:
                 user_id=deps.user_id,
                 limit=limit,
             )
-            agent_repo = AgentRepository(uow)
+            # One read for the page's agents rather than one per child, on a
+            # listing an agent calls while it is running.
+            agents = await AgentRepository(uow).get_many(
+                [child.agent_id for child in children]
+            )
             rows: list[dict[str, object]] = []
             for child in children:
                 latest = child.agent_runs[-1] if child.agent_runs else None
@@ -203,7 +207,7 @@ class SubAgentService:
                     )
                 ):
                     continue
-                agent = await agent_repo.get(child.agent_id) if child.agent_id else None
+                agent = agents.get(child.agent_id) if child.agent_id else None
                 rows.append(
                     {
                         "conversation_id": str(child.id),

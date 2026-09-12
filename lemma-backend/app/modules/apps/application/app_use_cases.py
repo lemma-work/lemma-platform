@@ -225,14 +225,21 @@ class AppUseCases:
         return await service.read_app_asset(resolved)
 
     async def list_releases(
-        self, *, pod_id: UUID, app_name: str, request: Request, user_id: UUID
+        self,
+        *,
+        pod_id: UUID,
+        app_name: str,
+        request: Request,
+        user_id: UUID,
+        limit: int,
+        cursor: UUID | None,
     ) -> ReleaseHistory:
-        """List an app's release history (one short UoW, no storage)."""
+        """One page of an app's release history (one short UoW, no storage)."""
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
             return await self._build_releases(scope.uow).list_releases(
-                pod_id, app_name, ctx=scope.ctx
+                pod_id, app_name, ctx=scope.ctx, limit=limit, cursor=cursor
             )
 
     async def promote_release(
