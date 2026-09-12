@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import AsyncIterator, Protocol, Sequence
 from uuid import UUID
 
@@ -61,6 +62,8 @@ class Harness(Protocol):
 
 class AgentRepository(Protocol):
     async def get(self, agent_id: UUID, ctx: Context | None = None) -> Agent | None: ...
+
+    async def get_many(self, agent_ids: Collection[UUID]) -> dict[UUID, Agent]: ...
 
     async def get_by_pod_and_name(
         self, *, pod_id: UUID, name: str, ctx: Context | None = None

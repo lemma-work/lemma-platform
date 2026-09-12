@@ -29,6 +29,20 @@ def organization_repository_mock() -> AsyncMock:
     mock.get_by_slug.return_value = None
     mock.get_email_domain_org.return_value = None
     mock.list_auto_join_organizations_by_email_domain.return_value = ([], None)
+
+    # Derived from `get`, so a test still describes the organization in one
+    # place. A double that answered this with a bare `AsyncMock` would hand a
+    # display path something shaped nothing like an organization and fail for a
+    # reason unrelated to what the test is checking.
+    async def _get_many(ids):
+        found = {}
+        for id in {id for id in ids if id is not None}:
+            organization = await mock.get(id)
+            if organization is not None:
+                found[id] = organization
+        return found
+
+    mock.get_many.side_effect = _get_many
     return mock
 
 

@@ -116,6 +116,21 @@ class AgentRepository:
             entity.allowed_actions = list(allowed_actions)
         return entity
 
+    async def get_many(self, agent_ids) -> dict[UUID, AgentEntity]:
+        """Several agents in one statement, keyed by id.
+
+        No authorization variant, for the same reason the function twin has
+        none: the caller is turning an agent's own sub-agent grants into tools,
+        and the grant is the decision.
+        """
+        wanted = {agent_id for agent_id in agent_ids if agent_id is not None}
+        if not wanted:
+            return {}
+        result = await self.session.execute(
+            select(AgentModel).where(AgentModel.id.in_(wanted))
+        )
+        return {model.id: model.to_entity() for model in result.scalars().all()}
+
     async def get(
         self, agent_id: UUID, ctx: Context | None = None
     ) -> AgentEntity | None:
