@@ -248,8 +248,18 @@ BACKEND_SLACK_SOCKET_MODE       ?= true
 # account in fifteen minutes locked the developer out of their own laptop for
 # four minutes. None of these gates protects anything on localhost; they exist
 # to stop strangers abusing a public deployment.
+#
+# The frontend needs telling too, and that is the one that bites. It reads
+# `AUTH_EMAIL_VERIFICATION_REQUIRED` from its own runtime config and defaults
+# it to *true* when nothing sets it -- so turning verification off here alone
+# left the two halves disagreeing: the backend stopped registering the
+# verification recipe, the frontend kept gating on it, and its call to
+# `/st/auth/user/email/verify` answered 404. What a person saw after signing in
+# was "we couldn't reach the verification service", on a screen with no way
+# past it, for a gate that was supposed to be off.
 DEV_LOCAL_AUTH_ENV := \
 	AUTH_EMAIL_VERIFICATION_REQUIRED=false \
+	AUTH_WHATSAPP_MOBILE_VERIFICATION_ENABLED=false \
 	AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED=false \
 	AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED=false \
 	AUTH_ABUSE_PROTECTION_ENABLED=false \
@@ -306,7 +316,8 @@ FRONTEND_DEV_ENV := \
 	NEXT_PUBLIC_SITE_URL=$(FRONTEND_SITE_URL) \
 	NEXT_PUBLIC_AUTH_URL=$(FRONTEND_AUTH_URL) \
 	NEXT_PUBLIC_SESSION_TOKEN_DOMAIN=$(FRONTEND_SESSION_TOKEN_DOMAIN) \
-	NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(FRONTEND_APPS_DOMAIN_SUFFIX)
+	NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(FRONTEND_APPS_DOMAIN_SUFFIX) \
+	NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=false
 
 
 # ── Workspace sandbox provisioning ────────────────────────────────────────────
