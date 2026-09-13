@@ -33,8 +33,8 @@ and no page content.
 precisely the event somebody would come here to find, so deleting the login must
 not delete the record of its deletion.
 
-Revision ID: 0031_saved_site_logins
-Revises: 0030_usage_requests
+Revision ID: 0035_saved_site_logins
+Revises: 0034_ref_prefix_indexes
 """
 
 from __future__ import annotations
@@ -43,8 +43,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0031_saved_site_logins"
-down_revision = "0030_usage_requests"
+revision = "0035_saved_site_logins"
+down_revision = "0034_ref_prefix_indexes"
 branch_labels = None
 depends_on = None
 

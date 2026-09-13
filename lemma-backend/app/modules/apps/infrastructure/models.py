@@ -57,8 +57,20 @@ class AppReleaseModel(UUIDCreatedBase):
     __tablename__ = "app_releases"
     __table_args__ = (
         UniqueConstraint("app_id", "release_number", name="uq_app_release_number"),
-        Index("ix_app_release_app_id", "app_id"),
         Index("ix_app_release_app_created", "app_id", text("created_at DESC")),
+        # `text_pattern_ops` so a digest-prefix `LIKE 'abc%'` is index-driven;
+        # a plain btree on text cannot serve one under a non-C collation.
+        Index(
+            "ix_app_release_app_version_prefix",
+            "app_id",
+            "version",
+            postgresql_ops={"version": "text_pattern_ops"},
+        ),
+        # The keyset the history endpoint pages on. `app_created` cannot serve
+        # it: the page filters and orders by `id`, so without this the bounded
+        # page still sorts the app's whole history to return fifty rows -- the
+        # cost the pagination was added to remove, moved rather than paid.
+        Index("ix_app_release_app_id_desc", "app_id", text("id DESC")),
     )
 
     app_id: Mapped[UUID] = mapped_column(ForeignKey("apps.id", ondelete="CASCADE"))

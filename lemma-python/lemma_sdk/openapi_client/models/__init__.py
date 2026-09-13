@@ -424,6 +424,9 @@ _NAME_TO_MODULE = {
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
     'SignInRequestResponse': 'sign_in_request_response',
     'SignInRequestStatus': 'sign_in_request_status',
+    'SignedUrlListResponse': 'signed_url_list_response',
+    'SignedUrlRevokeResponse': 'signed_url_revoke_response',
+    'SignedUrlSummary': 'signed_url_summary',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -971,6 +974,9 @@ if TYPE_CHECKING:
     from .set_default_surface_request import SetDefaultSurfaceRequest
     from .sign_in_request_response import SignInRequestResponse
     from .sign_in_request_status import SignInRequestStatus
+    from .signed_url_list_response import SignedUrlListResponse
+    from .signed_url_revoke_response import SignedUrlRevokeResponse
+    from .signed_url_summary import SignedUrlSummary
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1531,6 +1537,9 @@ __all__ = [
     'SetDefaultSurfaceRequest',
     'SignInRequestResponse',
     'SignInRequestStatus',
+    'SignedUrlListResponse',
+    'SignedUrlRevokeResponse',
+    'SignedUrlSummary',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',

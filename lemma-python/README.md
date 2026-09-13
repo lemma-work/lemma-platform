@@ -119,6 +119,13 @@ export LEMMA_CONFIG_FILE="~/.lemma/config.json"  # optional override
 export LEMMA_SSL_NO_VERIFY=1              # local/self-signed only
 ```
 
+`LEMMA_REFRESH_TOKEN` is what keeps a long-running process working past its
+access token's lifetime: on a 401 the client exchanges it once, replaces the
+token in memory, and replays the request. Nothing is written to
+`~/.lemma/config.json` — the refreshed token lives for the process. A refresh
+token found in a CLI session is used the same way, unless you passed `token=`
+yourself, in which case the credential stays exactly what you supplied.
+
 Inside a Lemma function, `LEMMA_TOKEN` (a workload token scoped to the function's
 grants) and `LEMMA_POD_ID` are injected for you — just call `Pod.from_env()`.
 

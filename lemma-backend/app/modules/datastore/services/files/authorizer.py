@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Iterable, Sequence
 from uuid import UUID
 
 from app.core.authorization.context import (
@@ -12,7 +12,7 @@ from app.core.authorization.context import (
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.errors import DatastoreAccessDeniedError
-from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
+from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.files.path_resolver import PathResolver
@@ -113,22 +113,23 @@ class FileAuthorizer:
         requester_user_id: UUID,
         pod_id: UUID,
         *,
-        include_full_datastore_context: bool = True,
         ctx: Context,
     ) -> list[DatastoreFileEntity]:
-        if include_full_datastore_context:
-            visible_file_ids = await self.get_visible_file_ids(
-                pod_id=pod_id,
-                requester_user_id=requester_user_id,
-                ctx=ctx,
-            )
-        else:
-            visible_file_ids = await self.get_visible_file_ids_for_items(
-                pod_id=pod_id,
-                requester_user_id=requester_user_id,
-                items=items,
-                ctx=ctx,
-            )
+        """Narrow a list of rows to the ones this caller may read.
+
+        This used to take an ``include_full_datastore_context`` flag whose
+        default answered the question by reading every file row in the pod and
+        then discarding all but the handful passed in. Nothing set it: the one
+        caller turned it off. It is gone rather than defaulted the other way,
+        because the cheap path is not a mode -- the rows are already in hand,
+        which is the whole reason this overload exists.
+        """
+        visible_file_ids = await self.get_visible_file_ids_for_items(
+            pod_id=pod_id,
+            requester_user_id=requester_user_id,
+            items=items,
+            ctx=ctx,
+        )
         return [item for item in items if item.id in visible_file_ids]
 
     async def ensure_file_path_access(
@@ -220,65 +221,111 @@ class FileAuthorizer:
                 ctx=ctx,
             )
 
-    async def get_visible_file_ids(
+    @staticmethod
+    def walks_ancestors(ctx: Context) -> bool:
+        """Whether an unreadable folder above a file should hide it.
+
+        The human/workload split, exposed so callers that push the visibility
+        predicate into their own query decide it the same way this class does
+        rather than restating the rule. See ``visible_file_ids`` for why the two
+        halves differ.
+        """
+        return not _is_workload(ctx)
+
+    async def search_file_scope(
         self,
         *,
         pod_id: UUID,
-        requester_user_id: UUID,
         ctx: Context,
-    ) -> set[UUID]:
-        """Every file id in the pod this caller may read.
+    ) -> SearchFileScope:
+        """How far search may narrow its chunk query before running it.
 
-        One statement. This used to load every file row in the pod, hydrate all
-        of them into entities, collect their ancestor paths, re-query by those
-        paths and then re-derive inheritance in Python — work that scaled with
-        the size of the pod to answer a question about the caller.
+        Chunks live in the pod's own database, which holds no authorization
+        data and no join back to the file table, so the answer can only travel
+        as an array of ids. This used to build that array unconditionally, from
+        a read of *every* file row in the pod -- so the cost of one search
+        scaled with the size of the pod rather than with the size of its
+        answer, on every search, for every caller.
 
-        ``get_visible_file_ids_for_items`` below still does it the old way, and
-        must: it is given a list of rows that is not the whole pod, and it is
-        cheap precisely because that list is short.
+        The array is still the right thing to send when it is short, and it is
+        short for most callers: it is worth one bounded probe to find out. The
+        probe asks for one id more than may be sent, which is the whole
+        question -- a short answer is the complete readable set and goes down
+        as an exact filter; a full one only says "more than the ceiling", and
+        search falls back to authorizing what comes back.
+
+        The ceiling decides which strategy is *tried first*. It does not decide
+        whether the answer is right, and an earlier version of this argued that
+        it did -- that post-filtering is safe above the ceiling because a
+        caller who can read that many files reads most of the pod. That does
+        not follow: post-filtering loses recall in proportion to the readable
+        *fraction*, and a caller with six thousand readable files in a pod of
+        ten million is over the ceiling with a fraction near zero. Their
+        candidate pool is then all files they may not read, and the search
+        answers nothing while readable matches exist.
+
+        So the fallback is not the last word. `readable_file_scope` below is,
+        and the searcher reaches for it when post-filtering comes up short.
         """
-        del requester_user_id  # visibility is a property of ctx, not the caller id
+        ceiling = datastore_settings.datastore_search_readable_id_pushdown_limit
+        readable = await self.file_repository.visible_file_ids(
+            pod_id=pod_id,
+            ctx=ctx,
+            walk_ancestors=not _is_workload(ctx),
+            limit=ceiling + 1,
+        )
+        if len(readable) > ceiling:
+            return SearchFileScope.post_filtered()
+        return SearchFileScope.only(readable)
+
+    async def readable_file_scope(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+    ) -> SearchFileScope:
+        """The caller's complete readable set, however large it is.
+
+        The unbounded read this whole change exists to stop being the *default*
+        -- kept, because it is the only thing that is exactly right when a
+        caller may read a small fraction of a large pod, and that caller
+        otherwise gets an empty answer to a query with readable matches in it.
+
+        Reached only when the bounded probe went over the ceiling *and*
+        post-filtering a saturated candidate pool still came up short, which is
+        both rare and self-announcing: the searcher logs the pod when it
+        happens. Making the ceiling larger is what stops it happening; making
+        it smaller never makes an answer wrong, only slower.
+        """
+        return SearchFileScope.only(
+            await self.file_repository.visible_file_ids(
+                pod_id=pod_id,
+                ctx=ctx,
+                walk_ancestors=not _is_workload(ctx),
+            )
+        )
+
+    async def readable_among(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+        file_ids: Iterable[UUID],
+    ) -> set[UUID]:
+        """Which of these specific files the caller may read.
+
+        The authorization half of an unnarrowed search: bounded by the
+        candidate pool, and primary-key driven. It also settles the orphan
+        chunk on its own -- a chunk whose file row is gone cannot come back
+        from a query over the file table, so there is no separate "and does the
+        pod still have it?" set to carry alongside.
+        """
         return await self.file_repository.visible_file_ids(
             pod_id=pod_id,
             ctx=ctx,
             walk_ancestors=not _is_workload(ctx),
+            among=file_ids,
         )
-
-    async def visibility_filter(
-        self,
-        *,
-        pod_id: UUID,
-        ctx: Context,
-    ) -> FileVisibilityFilter:
-        """The filter search should push down, in whichever direction is shorter.
-
-        Search runs against the pod's own database, which holds no
-        authorization data and no join back to the file table, so the answer
-        has to travel as an array of ids. Sending the *visible* side meant
-        sending essentially the whole pod to say "all of it"; the hidden side
-        is usually far shorter and frequently empty.
-
-        Nothing is truncated when both sides are long. Truncating the visible
-        list would silently drop results; truncating the hidden list would
-        leak files the caller may not read. So the ceiling is observability,
-        not a cap: it is logged, with the pod named, so it surfaces before a
-        user reports it.
-        """
-        visible, hidden = await self.file_repository.file_visibility_split(
-            pod_id=pod_id,
-            ctx=ctx,
-            walk_ancestors=not _is_workload(ctx),
-        )
-        pushed = min(len(visible), len(hidden))
-        if pushed > datastore_settings.datastore_search_visibility_id_soft_limit:
-            logger.warning(
-                "datastore.search.visibility_filter.degraded",
-                pod_id=str(pod_id),
-                visible_count=len(visible),
-                hidden_count=len(hidden),
-            )
-        return FileVisibilityFilter.smaller_of(visible, hidden)
 
     async def get_visible_file_ids_for_items(
         self,

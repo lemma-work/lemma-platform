@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.domain.uow import IUnitOfWork
@@ -168,19 +168,24 @@ class NotificationRepository:
         return int(result.scalar_one())
 
     async def mark_all_read(self, *, pod_id: UUID, recipient_user_id: UUID) -> int:
-        now = datetime.now(timezone.utc)
+        """Stamp every unread notification, and say how many were stamped.
+
+        The count is the only thing the caller wants, and it used to be arrived
+        at by selecting whole notification rows -- title, body, payload, action
+        -- hydrating each one, setting a single column, and taking `len()`. An
+        `UPDATE` returns that count itself. A person with a thousand unread
+        notices was reading a thousand of them to mark them read.
+        """
         result = await self.session.execute(
-            select(NotificationModel).where(
+            update(NotificationModel)
+            .where(
                 NotificationModel.pod_id == pod_id,
                 NotificationModel.recipient_user_id == recipient_user_id,
                 NotificationModel.read_at.is_(None),
             )
+            .values(read_at=datetime.now(timezone.utc))
         )
-        models = list(result.scalars().all())
-        for model in models:
-            model.read_at = now
-        await self.session.flush()
-        return len(models)
+        return int(result.rowcount or 0)
 
     async def list_open_for_conversation(
         self, conversation_id: UUID

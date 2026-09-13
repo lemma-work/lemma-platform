@@ -18,7 +18,6 @@ session decides whose browser this is.
 from __future__ import annotations
 
 import httpx
-import websockets
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, WebSocket, status
@@ -30,7 +29,6 @@ from supertokens_python.recipe.session.asyncio import (
 from app.core.api.dependencies import CurrentUser
 from app.core.config import settings
 from app.core.log.log import get_logger
-from app.modules.workspace.providers.docker_engine import DockerEngineError
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
 )
@@ -47,6 +45,25 @@ from app.modules.workspace.services.ws_bridge import (
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 logger = get_logger(__name__)
+
+
+def _ws_error() -> type[Exception]:
+    """The socket library's failure type, named where it is caught.
+
+    At module scope it would sit in the import graph of every process that
+    registers these routes, for the sake of an `except` clause.
+    """
+    import websockets
+
+    return websockets.exceptions.WebSocketException
+
+
+def _ws_closed() -> type[Exception]:
+    """Likewise, for the ordinary close."""
+    import websockets
+
+    return websockets.exceptions.ConnectionClosed
+
 
 router = APIRouter(prefix="/workspace/browser", tags=["Workspace Apps"])
 
@@ -92,6 +109,13 @@ def allowed_origins() -> tuple[str, ...]:
         getattr(settings, "auth_frontend_url", None),
     )
     return tuple(str(c) for c in candidates if c)
+
+
+def _engine_error() -> type[Exception]:
+    """See `browser_view_service._engine_error` -- same reason, same cost."""
+    from app.modules.workspace.providers.docker_engine import DockerEngineError
+
+    return DockerEngineError
 
 
 def browser_view_service() -> BrowserViewService:
@@ -207,7 +231,7 @@ async def browser_view(
         await websocket.close(code=CLOSE_NO_BROWSER)
         await service.close()
         return
-    except (OSError, httpx.HTTPError, DockerEngineError) as exc:
+    except (OSError, httpx.HTTPError, _engine_error()) as exc:
         # An image built before the relay existed, or a sandbox that went away
         # between resolving it and reaching it. Named rather than broad: the
         # remedy is "restart this computer", and anything else reaching here is
@@ -224,7 +248,7 @@ async def browser_view(
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
             await bridge(websocket, upstream, name="workspace.browser_view")
-    except (OSError, websockets.exceptions.WebSocketException) as exc:
+    except (OSError, _ws_error()) as exc:
         # The sandbox side dropped. Not a bug on this side, and the person is
         # told the connection dropped rather than that something failed.
         logger.warning(

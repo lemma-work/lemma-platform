@@ -1,8 +1,8 @@
 """The one statement must return exactly what the Python walk returned.
 
-``get_visible_file_ids`` used to load every file row in a pod, hydrate all of
-them, collect their ancestor paths, re-query by those paths and re-derive
-inheritance in Python. It now asks the database once. That is a rewrite of an
+Visibility used to load every file row in a pod, hydrate all of them, collect
+their ancestor paths, re-query by those paths and re-derive inheritance in
+Python. ``visible_file_ids`` asks the database once. That is a rewrite of an
 *authorization* answer, so speed is not the property under test here — set
 equality is.
 
@@ -21,7 +21,7 @@ does not stop.
 
 from __future__ import annotations
 
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 from fastapi import status
@@ -29,6 +29,7 @@ from httpx import AsyncClient
 
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.infrastructure.repositories.file_repository import (
     DatastoreFileRepository,
 )
@@ -48,6 +49,19 @@ def _authorizer(session):
     return (
         FileAuthorizer(DatastoreAuthorization(object()), repository, PathResolver()),
         repository,
+    )
+
+
+async def _readable(repository, *, pod_id, ctx) -> set[UUID]:
+    """The whole readable set, which production no longer asks for.
+
+    Search takes this statement with a ``limit`` or an ``among``; nothing takes
+    it bare any more. Bare is still the oracle the bounded forms are checked
+    against — the narrowings must not change the answer, only how much of it
+    is computed.
+    """
+    return await repository.visible_file_ids(
+        pod_id=pod_id, ctx=ctx, walk_ancestors=True
     )
 
 
@@ -163,9 +177,7 @@ async def test_the_statement_matches_the_walk_for_every_principal(
     legacy = await _legacy_visible_file_ids(
         authorizer, repository, pod_id=pod_id, ctx=ctx, user_id=user_id
     )
-    batched = await authorizer.get_visible_file_ids(
-        pod_id=pod_id, requester_user_id=user_id, ctx=ctx
-    )
+    batched = await _readable(repository, pod_id=pod_id, ctx=ctx)
 
     paths = {
         item.id: item.path for item in await repository.get_all_by_datastore(pod_id)
@@ -190,11 +202,9 @@ async def test_the_granted_folder_is_visible_and_the_ungranted_one_is_not(
     user_id = UUID(visibility_pod["custom_viewer"]["id"])
     service = AuthorizationDataService(db_session)
     ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
-    authorizer, _ = _authorizer(db_session)
+    _, repository = _authorizer(db_session)
 
-    visible = await authorizer.get_visible_file_ids(
-        pod_id=pod_id, requester_user_id=user_id, ctx=ctx
-    )
+    visible = await _readable(repository, pod_id=pod_id, ctx=ctx)
 
     assert UUID(visibility_pod["leaf"]["id"]) in visible, (
         "a folder grant did not cascade to a RESTRICTED file two levels down"
@@ -215,15 +225,19 @@ async def test_the_granted_folder_is_visible_and_the_ungranted_one_is_not(
 
 
 @pytest.mark.parametrize("principal", ["custom_viewer", "viewer"])
-async def test_the_split_agrees_with_the_filter_it_is_projected_from(
-    db_session, visibility_pod, principal
+async def test_both_scope_branches_admit_the_same_files(
+    db_session, visibility_pod, principal, monkeypatch
 ) -> None:
-    """Search sends the smaller side; both sides must describe the same pod.
+    """Which branch search takes is a cost decision. It must not be an answer.
 
-    ``file_visibility_split`` projects the identical predicate as a boolean
-    instead of applying it as a filter, which is exactly the kind of near-copy
-    that drifts. It also has a failure mode the WHERE-clause form cannot have:
-    the value is read back into Python, so its declared SQL type matters.
+    A search either enumerates what the caller may read and sends it to the pod
+    database, or runs unnarrowed and authorizes the rows that come back. One
+    ceiling in configuration decides which, so the two have to agree exactly --
+    and they are different statements over different inputs, which is precisely
+    the kind of pair that drifts.
+
+    Both are checked against the unbounded form of the same statement, so a
+    drift in either direction names itself.
     """
     pod_id = UUID(visibility_pod["pod_id"])
     user_id = UUID(visibility_pod[principal]["id"])
@@ -231,26 +245,66 @@ async def test_the_split_agrees_with_the_filter_it_is_projected_from(
     ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
     authorizer, repository = _authorizer(db_session)
 
-    filtered = await authorizer.get_visible_file_ids(
-        pod_id=pod_id, requester_user_id=user_id, ctx=ctx
-    )
-    visible, hidden = await repository.file_visibility_split(
-        pod_id=pod_id, ctx=ctx, walk_ancestors=True
-    )
+    readable = await _readable(repository, pod_id=pod_id, ctx=ctx)
     every_id = {item.id for item in await repository.get_all_by_datastore(pod_id)}
-
-    assert visible == filtered, "the projected predicate disagreed with the filter"
-    assert visible | hidden == every_id, "the split lost rows"
-    assert not (visible & hidden), "a file was both visible and hidden"
-
-    pushed = await authorizer.visibility_filter(pod_id=pod_id, ctx=ctx)
-    assert {i for i in every_id if pushed.allows(i)} == filtered, (
-        "the filter search actually pushes down admits a different set than the "
-        f"visibility answer it was built from (direction={pushed.direction.value})"
+    assert readable and readable != every_id, (
+        "this caller reads all of the pod or none of it, so neither branch is "
+        "being asked anything"
     )
-    assert len(pushed.file_ids) <= max(len(visible), len(hidden)), (
-        "the pushed side is not the smaller one"
+
+    monkeypatch.setattr(
+        datastore_settings, "datastore_search_readable_id_pushdown_limit", 10_000
     )
+    enumerated = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    assert enumerated.enumerated, "a pod this small must fit under any real ceiling"
+    assert enumerated.file_ids == readable, (
+        "the ids pushed into the chunk query are not the ids this caller may read"
+    )
+
+    monkeypatch.setattr(
+        datastore_settings, "datastore_search_readable_id_pushdown_limit", 1
+    )
+    post_filtered = await authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+    assert not post_filtered.enumerated, (
+        "the readable set is over the ceiling and was enumerated anyway"
+    )
+    assert not post_filtered.file_ids, (
+        "an unnarrowed scope carried ids into a query that applies no filter"
+    )
+    admitted = await authorizer.readable_among(
+        pod_id=pod_id, ctx=ctx, file_ids=every_id
+    )
+    assert admitted == readable, (
+        "authorizing rows after the fact admits a different set than pushing "
+        "the filter down would have"
+    )
+
+
+async def test_an_unnarrowed_scope_still_rejects_a_chunk_whose_file_is_gone(
+    db_session, visibility_pod
+) -> None:
+    """The orphan chunk, which used to need a set of its own.
+
+    Chunk removal happens in a different database from the file delete, so a
+    failure between the two leaves chunks behind. The old filter carried every
+    id in the pod purely so it could reject those. Authorizing the candidate
+    rows removes the need: the question is asked of the file table, and a row
+    that is not there cannot answer it.
+    """
+    pod_id = UUID(visibility_pod["pod_id"])
+    user_id = UUID(visibility_pod["viewer"]["id"])
+    service = AuthorizationDataService(db_session)
+    ctx = await service.build_user_context(user_id=user_id, pod_id=pod_id)
+    authorizer, repository = _authorizer(db_session)
+
+    real = {item.id for item in await repository.get_all_by_datastore(pod_id)}
+    orphan = uuid7()
+    admitted = await authorizer.readable_among(
+        pod_id=pod_id, ctx=ctx, file_ids=[*real, orphan]
+    )
+
+    assert orphan not in admitted, "a chunk with no file row was authorized"
+    assert admitted <= real
 
 
 async def test_visibility_costs_one_statement_regardless_of_pod_size(
@@ -268,9 +322,7 @@ async def test_visibility_costs_one_statement_regardless_of_pod_size(
             authorizer, repository, pod_id=pod_id, ctx=ctx, user_id=user_id
         )
     with counted_queries() as batched_statements:
-        await authorizer.get_visible_file_ids(
-            pod_id=pod_id, requester_user_id=user_id, ctx=ctx
-        )
+        await _readable(repository, pod_id=pod_id, ctx=ctx)
 
     assert len(batched_statements) == 1, (
         f"visibility took {len(batched_statements)} statements, not one:\n"

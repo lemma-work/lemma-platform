@@ -17,7 +17,6 @@ import contextlib
 from collections.abc import Mapping
 
 from fastapi import WebSocket, WebSocketDisconnect
-import websockets
 
 from app.core.request_context import create_inherited_task
 
@@ -42,7 +41,13 @@ async def connect_upstream(
     The headers come from `reach_port`, so this stays ignorant of which fabric
     it is on: E2B wants a traffic token, a preview proxy wants its own, Docker
     wants nothing.
+
+    Imported here rather than at module scope: the library is only ever needed
+    once a socket is actually being opened, and naming it at the top puts it in
+    the import graph of every process that merely registers a route.
     """
+    import websockets
+
     return websockets.connect(
         url,
         additional_headers=dict(headers or {}),
@@ -74,6 +79,8 @@ async def bridge(client: WebSocket, upstream, *, name: str = "workspace") -> Non
                 await upstream.send(text)
             elif (data := message.get("bytes")) is not None:
                 await upstream.send(data)
+
+    import websockets
 
     async def to_client() -> None:
         async for frame in upstream:

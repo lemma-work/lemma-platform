@@ -3,6 +3,7 @@ import type { HttpClient } from "../http.js";
 import type { CreateAppRequest } from "../openapi_client/models/CreateAppRequest.js";
 import type { AppBundleUploadRequest } from "../openapi_client/models/AppBundleUploadRequest.js";
 import type { UpdateAppRequest } from "../openapi_client/models/UpdateAppRequest.js";
+import type { AppReleaseResponse } from "../openapi_client/models/AppReleaseResponse.js";
 import { AppsService } from "../openapi_client/services/AppsService.js";
 
 export class AppsNamespace {
@@ -42,9 +43,30 @@ export class AppsNamespace {
     });
   }
 
-  /** This app's release history, newest first. */
-  releases(name: string) {
-    return this.client.request(() => AppsService.appReleaseList(this.podId(), name));
+  /** One page of this app's release history, newest first. */
+  releases(name: string, options?: { limit?: number; pageToken?: string | null }) {
+    return this.client.request(() =>
+      AppsService.appReleaseList(this.podId(), name, options?.limit, options?.pageToken),
+    );
+  }
+
+  /**
+   * Every release this app has had, newest first, paged to exhaustion.
+   *
+   * The endpoint answers a page now, and retention keeps a pruned release's row
+   * -- so an app deployed daily has history past the first page, and a live
+   * release can itself be on a later one. Anything that has to be complete
+   * wants this rather than `releases`.
+   */
+  async allReleases(name: string, pageSize = 200) {
+    const items: AppReleaseResponse[] = [];
+    let pageToken: string | null | undefined;
+    for (;;) {
+      const page = await this.releases(name, { limit: pageSize, pageToken });
+      items.push(...(page.items ?? []));
+      pageToken = page.next_page_token;
+      if (typeof pageToken !== "string" || !pageToken) return items;
+    }
   }
 
   /**

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
+from app.core.infrastructure.db.session_uow import active_uow
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.helpers.identifiers import normalize_mobile_digits, normalize_telegram
 from app.modules.identity.domain.email import normalize_identity_email
@@ -37,8 +38,7 @@ class UserService:
         if send_welcome:
             entity.mark_signed_up()
         user = await self.user_repository.create(entity)
-        if self.user_cache is not None:
-            await self.user_cache.set(user)
+        await self._cache_after_commit(user)
         return user
 
     async def mark_email_verified(self, user_id: UUID) -> UserEntity:
@@ -48,9 +48,36 @@ class UserService:
             raise UserNotFoundError()
         user.mark_email_verified()
         updated = await self.user_repository.update(user)
-        if self.user_cache is not None:
-            await self.user_cache.set(updated)
+        await self._cache_after_commit(updated)
         return updated
+
+    async def _cache_after_commit(self, user: UserEntity) -> None:
+        """Populate the user cache once the write has actually committed.
+
+        Deliberately not `connection_released`, which is what the read path
+        above uses: these callers have just written, so `safe_to_release`
+        correctly refuses and the release would be a silent no-op -- the "false
+        clean" its own docstring warns about, where the report disappears and
+        the hold does not.
+
+        Deferring is also the right order on its own terms. Writing the cache
+        before the commit means a rollback leaves an entry for a user that never
+        existed, and the next reader believes it.
+
+        Falls back to caching immediately when there is no unit of work to defer
+        to, which is also when there is no pooled connection to keep.
+        """
+        if self.user_cache is None:
+            return
+        uow = active_uow(self.user_repository)
+
+        async def _run() -> None:
+            await self.user_cache.set(user)
+
+        if uow is None:
+            await _run()
+            return
+        uow.after_commit(_run)
 
     async def get_user(self, user_id: UUID) -> UserEntity:
         """Read a user, cache-first, without holding a connection over Redis.
@@ -100,6 +127,5 @@ class UserService:
     async def update_user(self, entity: UserEntity) -> UserEntity:
         await self._ensure_identifiers_unique(entity)
         updated = await self.user_repository.update(entity)
-        if self.user_cache is not None:
-            await self.user_cache.set(updated)
+        await self._cache_after_commit(updated)
         return updated

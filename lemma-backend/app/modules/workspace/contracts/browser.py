@@ -53,4 +53,33 @@ def host_of(origin: str) -> str:
     return (parsed.hostname or "").lower()
 
 
-__all__ = ["BrowserCookie", "BrowserOrigin", "BrowserState", "host_of"]
+def browser_view_service():
+    """This workspace's live browser, for a module that drives one.
+
+    A thunk, not a re-export: naming the class here would pull the provider
+    stack into the import graph of everything that wants the *shapes* above.
+    """
+    from app.modules.workspace.services.browser_view_service import (
+        BrowserViewService,
+    )
+
+    return BrowserViewService
+
+
+def browser_unavailable() -> type[Exception]:
+    """What a browser call raises when the sandbox cannot answer."""
+    from app.modules.workspace.services.browser_relay_client import (
+        BrowserRelayUnavailable,
+    )
+
+    return BrowserRelayUnavailable
+
+
+__all__ = [
+    "BrowserCookie",
+    "BrowserOrigin",
+    "BrowserState",
+    "browser_unavailable",
+    "browser_view_service",
+    "host_of",
+]

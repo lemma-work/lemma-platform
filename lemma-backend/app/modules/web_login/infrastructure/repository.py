@@ -36,6 +36,11 @@ from app.modules.web_login.infrastructure.models import (
 )
 
 
+#: How many saved logins one listing returns. Far above what a person
+#: accumulates in practice, and still a number rather than "all of them".
+MAX_LOGINS_LISTED = 500
+
+
 class WebLoginNotFound(Exception):
     """No saved login for that id, or it is not this person's."""
 
@@ -47,12 +52,22 @@ class WebLoginRepository:
         self._session = session
         self._cipher = cipher or get_secret_cipher()
 
-    async def list_for_user(self, user_id: UUID) -> list[WebLogin]:
+    async def list_for_user(
+        self, user_id: UUID, *, limit: int = MAX_LOGINS_LISTED
+    ) -> list[WebLogin]:
+        """Every site this person has a saved login for.
+
+        Bounded. One per site and one site per sign-in makes a large number
+        unlikely, but "unlikely" is not a limit -- a person who has been using
+        this for a year has whatever they have, and the page that renders this
+        should not be the thing that discovers the number.
+        """
         rows = (
             await self._session.execute(
                 select(WebLoginModel)
                 .where(WebLoginModel.user_id == user_id)
                 .order_by(WebLoginModel.origin)
+                .limit(limit)
             )
         ).scalars()
         return [_to_entity(row) for row in rows]

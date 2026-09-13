@@ -25,7 +25,6 @@ import asyncio
 import contextlib
 
 import httpx
-import websockets
 from fastapi import APIRouter, Request, Response, WebSocket, status
 from fastapi.responses import StreamingResponse
 
@@ -48,6 +47,25 @@ from app.modules.workspace.services.port_access import (
 )
 
 logger = get_logger(__name__)
+
+
+def _ws_error() -> type[Exception]:
+    """The socket library's failure type, named where it is caught.
+
+    At module scope it would sit in the import graph of every process that
+    registers these routes, for the sake of an `except` clause.
+    """
+    import websockets
+
+    return websockets.exceptions.WebSocketException
+
+
+def _ws_closed() -> type[Exception]:
+    """Likewise, for the ordinary close."""
+    import websockets
+
+    return websockets.exceptions.ConnectionClosed
+
 
 router = APIRouter(prefix="/workspace-ports", tags=["Workspace"])
 
@@ -173,7 +191,7 @@ async def proxy_sandbox_websocket(
             upstream_target, headers=endpoint.headers
         ) as upstream:
             await bridge(websocket, upstream, name="workspace.port_proxy")
-    except OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError:
+    except OSError, _ws_error(), asyncio.TimeoutError:
         logger.warning(
             "workspace.port_proxy.upstream_websocket.degraded", exc_info=True
         )

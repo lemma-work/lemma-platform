@@ -30,11 +30,11 @@ from app.modules.connectors.domain.ports import (
     AppOperationGatewayPort,
 )
 from app.modules.connectors.services.operation_ranking import (
-    normalized_operation_name,
     operation_relevance_score,
 )
 from app.modules.connectors.services.operation_visibility import (
     count_operations_for_install,
+    named_operations,
     find_install_or_catalog_operation,
     list_operations_for_install,
 )
@@ -340,33 +340,29 @@ class ConnectorOperationService:
         endpoint documented that as its intended usage, which made it the
         cheapest way for any org member to exhaust the API's memory.
         """
-        operations = await self._list_operation_entities(
-            connector_id,
-            kind=kind,
-            auth_config_id=auth_config_id,
-        )
-        operations_by_name = {
-            normalized_operation_name(operation.name): operation
-            for operation in operations
-        }
-        operations_by_provider_name = {
-            normalized_operation_name(operation.provider_operation_name): operation
-            for operation in operations
-            if operation.provider_operation_name
-        }
-
         if operation_names:
-            selected_operations: list[Any] = []
-            for operation_name in operation_names:
-                normalized_name = normalized_operation_name(operation_name)
-                operation = operations_by_name.get(
-                    normalized_name
-                ) or operations_by_provider_name.get(normalized_name)
-                if not operation:
-                    raise OperationNotFoundError(operation_name)
-                selected_operations.append(operation)
+            await self._get_connector(connector_id)
+            selected_operations = await named_operations(
+                catalog_repository=self.operation_repository,
+                install_repository=self.auth_config_operation_repository,
+                connector_id=connector_id,
+                operation_names=operation_names,
+                kind=kind,
+                auth_config_id=auth_config_id,
+            )
         else:
-            selected_operations = operations[:limit]
+            # `limit` down into the read rather than a slice over everything:
+            # a detail carries the operation's whole input and output schema,
+            # so reading the connector's catalog to return `limit` of them is
+            # the cost this endpoint's own docstring warns about, paid anyway.
+            selected_operations = list(
+                await self._list_operation_entities(
+                    connector_id,
+                    kind=kind,
+                    auth_config_id=auth_config_id,
+                    limit=limit,
+                )
+            )[:limit]
 
         items = [
             self._build_operation_detail(operation) for operation in selected_operations
@@ -375,7 +371,16 @@ class ConnectorOperationService:
             connector_id=connector_id,
             items=items,
             returned_count=len(items),
-            total_operations=len(operations),
+            # A count, not `len()` of a listing that no longer exists. It is the
+            # number the client sizes the connector by -- "showing 10 of 340" --
+            # and it was the last reason to read every row.
+            total_operations=await count_operations_for_install(
+                catalog_repository=self.operation_repository,
+                install_repository=self.auth_config_operation_repository,
+                connector_id=connector_id,
+                kind=kind,
+                auth_config_id=auth_config_id,
+            ),
         )
 
     async def get_operation_details_batch_for_auth_config(

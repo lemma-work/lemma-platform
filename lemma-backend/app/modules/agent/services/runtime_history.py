@@ -143,7 +143,10 @@ def apply_surface_history_window(
 
 
 def bound_runtime_history(
-    runs: list[AgentRun], conversation: Conversation | None = None
+    runs: list[AgentRun],
+    conversation: Conversation | None = None,
+    *,
+    total_runs: int | None = None,
 ) -> tuple[list[AgentRun], int]:
     """The runs the prompt will carry, and how many were dropped to get there.
 
@@ -155,10 +158,12 @@ def bound_runtime_history(
 
     The dropped count comes back because it is the one thing the trimmed list no
     longer knows about itself, and the notice announcing those runs to the model
-    is built from it.
+    is built from it. ``total_runs`` is how many the conversation actually has,
+    for a caller whose ``runs`` is already a window: without it the count starts
+    from the window and the notice under-reports by everything the window took.
     """
     bounded = apply_surface_history_window(runs, conversation)
-    return bounded, len(runs) - len(bounded)
+    return bounded, (len(runs) if total_runs is None else total_runs) - len(bounded)
 
 
 def runtime_full_run_ids(

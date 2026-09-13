@@ -1,8 +1,10 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 
+from app.core.infrastructure.db.session_uow import SESSION_UOW_KEY
 from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
@@ -226,3 +228,98 @@ async def test_datastore_event_handler_returns_empty_when_no_matches():
 
     assert result == []
     processor.process_event.assert_not_called()
+
+
+class _Journal:
+    """What happened, in the order it happened."""
+
+    def __init__(self) -> None:
+        self.entries: list[str] = []
+
+    def note(self, name: str):
+        async def _record(*_args, **_kwargs):
+            self.entries.append(name)
+
+        return _record
+
+
+class _Uow:
+    """A unit of work that records its commits, reachable the production way."""
+
+    def __init__(self, journal: _Journal) -> None:
+        self._journal = journal
+
+    async def commit(self) -> None:
+        self._journal.entries.append("commit")
+
+    def after_commit(self, callback) -> None:  # pragma: no cover - unused here
+        raise AssertionError("this path defers nothing")
+
+
+def _repository_on(journal: _Journal) -> AsyncMock:
+    """A schedule repository whose session carries a real unit of work.
+
+    An `AsyncMock` alone is not enough: `active_uow` reads `session.info` and
+    wants a genuine mapping, so a bare mock silently answers "no unit of work"
+    and the release under test never runs. That is exactly how the previous
+    `release=` callback went untested -- every caller here omitted it.
+    """
+    repo = AsyncMock()
+    repo.session = SimpleNamespace(info={SESSION_UOW_KEY: _Uow(journal)})
+    repo.record_fire.side_effect = journal.note("record_fire")
+    return repo
+
+
+@pytest.mark.asyncio
+async def test_the_connection_is_handed_back_before_each_schedule_is_processed():
+    """Per iteration, not once before the loop.
+
+    A schedule carrying a `filter_instruction` runs an LLM inference inline, so
+    holding the transaction across it keeps a pooled connection idle for the
+    length of every call in the loop. One release before the loop would not do:
+    the FILTERED/TRIGGERED fire row written for schedule N re-dirties the
+    session before schedule N+1's inference.
+
+    The property is an ordering, so the assertion is on the sequence. A commit
+    *count* would pass just as well with the commit in the wrong place.
+    """
+    journal = _Journal()
+    repo = _repository_on(journal)
+    processor = AsyncMock()
+    processor.process_event.side_effect = journal.note("process_event")
+
+    pod_id = uuid4()
+    schedules = [
+        ScheduleEntity(
+            id=uuid4(),
+            user_id=uuid4(),
+            pod_id=pod_id,
+            schedule_type=ScheduleType.DATASTORE,
+            config={"table_name": "users", "operations": ["INSERT"]},
+        )
+        for _ in range(2)
+    ]
+    repo.find_by_pod_table_event.return_value = schedules
+
+    handler = DatastoreEventHandler(
+        schedule_repository=repo, schedule_processor=processor
+    )
+    await handler.handle_datastore_event(
+        DatastoreRecordEvent.create(
+            pod_id=pod_id,
+            table_name="users",
+            record_id="rec_1",
+            operation=DatastoreRecordOperation.INSERT,
+            payload={"id": "rec_1"},
+            actor_id=schedules[0].user_id,
+        )
+    )
+
+    assert journal.entries == [
+        "commit",
+        "process_event",
+        "record_fire",
+        "commit",
+        "process_event",
+        "record_fire",
+    ]

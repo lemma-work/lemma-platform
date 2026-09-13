@@ -119,3 +119,82 @@ def test_missing_token_names_the_three_ways_to_supply_one(tmp_path: Path) -> Non
         load_settings(config_path=tmp_path / "absent.json")
 
     assert "LEMMA_TOKEN" in str(excinfo.value)
+
+
+def test_a_config_refresh_token_is_carried_into_settings(config_file: Path) -> None:
+    """`LEMMA_REFRESH_TOKEN` was documented and inert.
+
+    It reached the synthetic ``env`` server config and stopped there: nothing
+    read it, so a long-lived process using the SDK simply began failing when its
+    access token aged out. The transport's 401 branch is what uses this.
+    """
+    config_file.write_text(
+        json.dumps(
+            {
+                "active_server": "self-hosted",
+                "servers": {
+                    "self-hosted": {
+                        "base_url": SELF_HOSTED,
+                        "auth": {
+                            "access_token": "access-1",
+                            "refresh_token": "refresh-1",
+                        },
+                    }
+                },
+            }
+        )
+    )
+
+    settings = load_settings(config_path=config_file)
+
+    assert settings.token == "access-1"
+    assert settings.refresh_token == "refresh-1"
+
+
+def test_an_env_refresh_token_is_carried_into_settings(
+    config_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The environment pair works the same way the config pair does.
+
+    The CLI refuses to refresh an env-sourced session because it has nowhere to
+    persist the result. The SDK holds its transport in memory for the life of
+    the process, which is exactly the scope a refreshed token needs, so there is
+    nothing to persist and nothing to refuse.
+    """
+    monkeypatch.setenv("LEMMA_TOKEN", "access-from-env")
+    monkeypatch.setenv("LEMMA_REFRESH_TOKEN", "refresh-from-env")
+
+    settings = load_settings(config_path=config_file)
+
+    assert settings.server == "env"
+    assert settings.refresh_token == "refresh-from-env"
+
+
+def test_an_explicit_token_gets_no_refresh_token(config_file: Path) -> None:
+    """A caller that passed `token=` owns that credential.
+
+    Pairing their token with a refresh token from a config file they did not
+    name would mean the SDK quietly replacing what they supplied, with a
+    credential for whatever server that file happens to select.
+    """
+    config_file.write_text(
+        json.dumps(
+            {
+                "active_server": "self-hosted",
+                "servers": {
+                    "self-hosted": {
+                        "base_url": SELF_HOSTED,
+                        "auth": {
+                            "access_token": "access-1",
+                            "refresh_token": "refresh-1",
+                        },
+                    }
+                },
+            }
+        )
+    )
+
+    settings = load_settings(token="caller-supplied", config_path=config_file)
+
+    assert settings.token == "caller-supplied"
+    assert settings.refresh_token is None

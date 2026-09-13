@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -100,11 +100,13 @@ help:
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
+	@echo "  make lint-unbounded-reads # collection reads with no ceiling"
 	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
 	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
 	@echo "  make test-e2e-shard-ci SHARD=sandbox   # one CI shard, exactly as CI runs it"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
+	@echo "  make lint-migration-order  # one alembic head, numbers matching apply order"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
 	@echo "  make test-connection-scope # runtime: no connection held across non-DB work"
 	@echo "  make typecheck-critical # strict reliability/domain type gate"
@@ -478,6 +480,13 @@ lint-io-hygiene:
 lint-unbounded:
 	uv run python scripts/check_unbounded.py
 
+# Queries that read a collection with no limit, no in_() and no aggregate --
+# the shape behind twenty-five reads whose cost followed a tenant's data
+# rather than the caller's request. Ratcheted against
+# unbounded-reads-baseline.json.
+lint-unbounded-reads:
+	uv run python scripts/check_unbounded_reads.py
+
 # A default argument naming something tests replace by patching a module
 # attribute. Defaults bind at import, so the patch never reaches them -- and
 # the test usually still passes. No baseline: the rule is quiet by
@@ -502,6 +511,16 @@ lint-controller-types:
 # Ratcheted against swallowed-errors-baseline.json.
 lint-swallowed-errors:
 	uv run python scripts/check_swallowed_errors.py
+
+# Migration order gate (enforced in CI). One head — a second one makes
+# `alembic upgrade head` refuse to run at all — and filename numbers that match
+# apply order, so the directory still reads as a history. A long-lived branch
+# authored at position 21 and merged at 30 left two 0021s and two 0022s behind,
+# and a chain that read 22 -> 30 with no file missing.
+# Ratcheted by LEGACY_ID_POSITION_MISMATCH in the script: filenames are free to
+# rename, revision ids are not, because databases are stamped with them.
+lint-migration-order:
+	uv run python scripts/check_migration_order.py
 
 # In-subject test doubles (enforced in CI). A double in front of a collaborator
 # isolates the unit; one *inside* it certifies the half you did not write, so a

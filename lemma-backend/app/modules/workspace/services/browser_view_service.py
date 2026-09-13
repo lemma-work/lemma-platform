@@ -31,10 +31,21 @@ from typing import TypedDict
 
 from app.modules.workspace.contracts.browser import BrowserState, host_of
 from app.modules.workspace.providers.base import ProviderGone
-from app.modules.workspace.providers.docker_engine import DockerEngineError
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 logger = get_logger(__name__)
+
+
+def _engine_error() -> type[Exception]:
+    """Docker's own failure type, named when it is caught rather than at import.
+
+    Naming it at module scope pulls the engine client and the runtime client
+    into the API's import graph for every process that merely registers these
+    routes, and this is an `except` clause.
+    """
+    from app.modules.workspace.providers.docker_engine import DockerEngineError
+
+    return DockerEngineError
 
 
 class BrowserStatus(TypedDict, total=False):
@@ -103,7 +114,7 @@ class BrowserViewService:
             return {"state": "unsupported", "detail": str(exc)}
         except BrowserRelayUnavailable:
             return {"state": "asleep"}
-        except (OSError, httpx.HTTPError, DockerEngineError, ProviderGone) as exc:
+        except (OSError, httpx.HTTPError, ProviderGone, _engine_error()) as exc:
             # A provider that cannot be reached, or a container that went away
             # between the two calls. This renders in a panel, so it answers with
             # a state rather than a traceback -- but only for failures meaning

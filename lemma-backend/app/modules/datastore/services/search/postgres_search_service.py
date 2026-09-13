@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 import time
 from uuid import UUID
 
@@ -8,7 +8,7 @@ from sqlalchemy.sql import text
 
 from app.modules.datastore.config import datastore_settings
 from app.core.config import settings
-from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
+from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileSearchResult,
     SearchMethod,
@@ -50,6 +50,7 @@ class PostgresSearchService:
         self.embedder = embedder
         self.reranker = reranker or create_reranker()
         self._initialized = False
+        self._last_embedded: tuple[str, list[float]] | None = None
 
     # Serializes concurrent ensure_schema() calls. CREATE EXTENSION/TYPE ... IF
     # NOT EXISTS is NOT atomic in Postgres: parallel indexers (e.g. the worker
@@ -278,9 +279,35 @@ class PostgresSearchService:
         await self.ensure_schema()
         await self.chunk_repo.remove_chunks_by_file(file_id)
 
+    async def remove_files(self, file_ids: Sequence[UUID]) -> None:
+        """The batch spelling, for a folder delete; see `remove_chunks_by_files`."""
+        await self.ensure_schema()
+        await self.chunk_repo.remove_chunks_by_files(file_ids)
+
     async def update_file_path(self, file_id: UUID, path: str, parent_path: str | None):
         await self.ensure_schema()
         await self.chunk_repo.update_file_path(file_id, path, parent_path)
+
+    async def _embed(self, query: str) -> list[float]:
+        """Embed the query, remembering the last one.
+
+        A search can run twice for the same query: when the readable set is too
+        large to enumerate up front and post-filtering the candidate pool comes
+        up short, the caller widens the scope and asks again. The provider
+        round trip is the slowest part of a vector or hybrid search -- measured
+        at a 4.3s median in production -- and paying it twice for the same
+        string is pure waste.
+
+        One entry, keyed by the text, because the second pass is the only
+        repeat there is. Keyed rather than counted so it cannot answer with
+        another query's vector, which is the failure a bare "cache the last
+        result" would have.
+        """
+        if self._last_embedded is not None and self._last_embedded[0] == query:
+            return self._last_embedded[1]
+        embedding = await self.embedder.embed(query)
+        self._last_embedded = (query, embedding)
+        return embedding
 
     async def search(
         self,
@@ -290,10 +317,10 @@ class PostgresSearchService:
         scope_path: str | None = None,
         include_descendants: bool = True,
         *,
-        visibility: FileVisibilityFilter,
+        file_scope: SearchFileScope,
     ) -> list[DatastoreFileSearchResult]:
         await self.ensure_schema()
-        if visibility.matches_nothing:
+        if file_scope.matches_nothing:
             return []
 
         rerank_active = datastore_settings.reranker_mode != "off"
@@ -313,24 +340,24 @@ class PostgresSearchService:
                 limit=pool,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             ranked = list(rows)
             diversify = False
         elif method == SearchMethod.VECTOR:
-            emb = await self.embedder.embed(query)
+            emb = await self._embed(query)
             rows = await self.chunk_repo.vector_search(
                 emb,
                 pod_id=self.pod_id,
                 limit=pool,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             ranked = list(rows)
             diversify = False
         else:
-            emb = await self.embedder.embed(query)
+            emb = await self._embed(query)
             per_side = max(limit * 3, pool)
             vector_results = await self.chunk_repo.vector_search(
                 emb,
@@ -338,7 +365,7 @@ class PostgresSearchService:
                 limit=per_side,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             text_results = await self.chunk_repo.text_search(
                 query=query,
@@ -346,7 +373,7 @@ class PostgresSearchService:
                 limit=per_side,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             ranked = self._merge_ranked_results(vector_results, text_results)
             diversify = True

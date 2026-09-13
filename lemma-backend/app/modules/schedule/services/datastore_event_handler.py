@@ -15,9 +15,9 @@ from app.modules.schedule.domain.value_objects import (
 )
 from app.modules.schedule.repositories.schedule_repository import ScheduleRepository
 from app.modules.schedule.services.schedule_processor import ScheduleProcessor
+from app.core.infrastructure.db.session_uow import commit_now
 from app.core.log.log import get_logger
 from app.core.origin import Origin, OriginKind, origin_scope
-from collections.abc import Awaitable, Callable
 
 logger = get_logger(__name__)
 
@@ -36,10 +36,16 @@ class DatastoreEventHandler:
     async def handle_datastore_event(
         self,
         event: DatastoreRecordEvent,
-        *,
-        release: Callable[[], Awaitable[None]] | None = None,
     ) -> List[UUID]:
-        """Handle a datastore record event and fire matching schedules."""
+        """Handle a datastore record event and fire matching schedules.
+
+        The connection is handed back before each schedule is processed; see the
+        comment in the loop. That used to be an optional ``release`` callback the
+        consumer passed and every test omitted, so the release had no coverage
+        and the static gate could not see it either. It is taken from the
+        repository's own unit of work now, which is the same object the consumer
+        was passing.
+        """
 
         # Bridge datastore's record operation (lowercase) to schedule's
         # DatastoreOperation used for matching.
@@ -77,8 +83,12 @@ class DatastoreEventHandler:
             # a pooled connection idle for the length of every call in the
             # loop. The webhook sibling (schedule_consumer) already does this
             # and says why in its docstring.
-            if release is not None:
-                await release()
+            #
+            # A commit rather than `connection_released`: a previous iteration
+            # may have written a FILTERED fire row, and `safe_to_release`
+            # correctly refuses a dirty session -- the release would be a
+            # silent no-op exactly when the loop is longest.
+            await commit_now(self.schedule_repository)
 
             # One bad schedule must not drop the event for the rest.
             try:

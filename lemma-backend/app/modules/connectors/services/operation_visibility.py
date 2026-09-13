@@ -23,6 +23,11 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.modules.connectors.domain.errors import OperationNotFoundError
+from app.modules.connectors.services.operation_ranking import (
+    normalized_operation_name,
+)
+
 
 async def list_operations_for_install(
     *,
@@ -68,25 +73,79 @@ async def count_operations_for_install(
     are not, so the install side is listed and the catalog side counted, and
     the overlap is subtracted.
 
-    A count, because the caller only wants the number -- "showing 10 of 340".
-    Producing it by listing every row with its JSONB schemas and taking `len()`
-    is a second full read of the largest table in the module, on the path the
-    agent's cross-install search fans out over every install in the org.
+    Counts, because the caller only wants the number -- "showing 10 of 340".
+    Every part of it used to be arrived at by listing rows and taking `len()`:
+    the catalog side, the install's own set, and -- the last one to go -- the
+    whole catalog again, read with its JSONB schemas so its names could be
+    lowercased into a set the overlap was then counted against. Three full
+    reads of the two largest tables in the module to produce one integer, on
+    the path the agent's cross-install search fans out over every install in
+    the org.
     """
     catalog_total = await catalog_repository.count_by_connector(connector_id, kind=kind)
     if install_repository is None or auth_config_id is None:
         return catalog_total
-    installed = list(await install_repository.list_by_auth_config(auth_config_id))
-    if not installed:
-        return catalog_total
-    catalog_names = {
-        str(operation.name).lower()
-        for operation in await catalog_repository.list_by_connector(
-            connector_id, kind=kind
+    discovered, shadowed = await install_repository.count_with_catalog_overlap(
+        auth_config_id, connector_id=connector_id, kind=kind
+    )
+    return catalog_total + discovered - shadowed
+
+
+async def named_operations(
+    *,
+    catalog_repository: Any,
+    install_repository: Any | None,
+    connector_id: str,
+    operation_names: list[str],
+    kind: str | None = None,
+    auth_config_id: UUID | None = None,
+) -> list[Any]:
+    """The operations these names address, in the order they were asked for.
+
+    Read by name rather than picked out of the whole catalog. Install
+    precedence is the same rule every other listing path applies: an
+    install's own operation wins over a catalog one of the same name,
+    because where both exist the install describes the server actually
+    being called.
+    """
+    catalog = await catalog_repository.list_by_connector_and_names(
+        connector_id, operation_names, kind=kind
+    )
+    installed: list[Any] = []
+    if auth_config_id is not None and install_repository:
+        installed = list(
+            await install_repository.list_by_auth_config_and_names(
+                auth_config_id, operation_names
+            )
         )
-    }
-    shadowed = sum(1 for item in installed if str(item.name).lower() in catalog_names)
-    return catalog_total + len(installed) - shadowed
+
+    # Two maps, not one, and both filled catalog-first so the install
+    # overwrites it. A single map had the alias entries written with
+    # `setdefault`, which inverts precedence for exactly those: the catalog's
+    # alias landed first and the install's could not replace it, so asking by
+    # a provider alias answered with the catalog's schema while asking by the
+    # operation's own name answered with the install's.
+    #
+    # Keeping them separate also preserves the other half of the rule. A real
+    # name outranks an alias that collides with it, whichever operation owns
+    # which, because the alias map is only consulted when the name map misses.
+    by_name: dict[str, Any] = {}
+    by_provider_name: dict[str, Any] = {}
+    for operation in (*catalog, *installed):
+        by_name[normalized_operation_name(operation.name)] = operation
+        if operation.provider_operation_name:
+            by_provider_name[
+                normalized_operation_name(operation.provider_operation_name)
+            ] = operation
+
+    selected: list[Any] = []
+    for operation_name in operation_names:
+        normalized = normalized_operation_name(operation_name)
+        operation = by_name.get(normalized) or by_provider_name.get(normalized)
+        if not operation:
+            raise OperationNotFoundError(operation_name)
+        selected.append(operation)
+    return selected
 
 
 async def merge_install_and_catalog_operations(

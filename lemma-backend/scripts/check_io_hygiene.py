@@ -49,7 +49,29 @@ worker or a pinned connection hours later.
     function decorated with ``lru_cache``/``cache`` is exempt, as are the few
     modules whose whole job is to own one of these singletons.
 
-All three are ratcheted against a baseline: it may shrink freely, and anything
+``per-instance-signature-default``
+    Any ``default_factory`` on a ``PrivateAttr``.
+
+    Unlike a normal ``Field``, whose default is resolved once when the schema is
+    built, a *private* attribute's default is resolved again for every instance:
+    ``init_private_attributes`` -> ``get_default`` -> ``resolve_default_value``
+    -> ``takes_validated_data_argument``, which calls ``inspect.signature`` on
+    the factory to decide whether it wants the validated data. Nothing caches
+    that, it happens twice per instance per attribute, and a C builtin like
+    ``list`` is the most expensive kind of object to introspect.
+
+    Two lines carrying this cost the API 63us per domain entity against 2.6us
+    without it. Listing one pod's files builds an entity per file, so a large
+    pod blocked the event loop for up to 1.7 seconds, and the stall sampler
+    named that frame in 38 of the 55 reports on the release it was measured on.
+
+    The fix is ``default=[]``: pydantic deep-copies a private attribute's
+    default into each instance, so the list is still per-instance, and no
+    signature is ever resolved. It reads like the classic shared-mutable-default
+    bug and is not one, which is exactly why this rule exists -- to stop the
+    "fix" being reverted.
+
+All four are ratcheted against a baseline: it may shrink freely, and anything
 new fails the build. See ``scripts/check_session_scope.py`` for the sibling gate
 on connection scope, and ``make lint-async`` for the ruff rules that cover
 blocking calls made directly on the loop.
@@ -121,6 +143,25 @@ PROCESS_LIFETIME_OWNERS = (
 
 MEMOIZING_DECORATORS = {"lru_cache", "cache", "cached", "cached_property"}
 
+# Factories whose result is a constant, for which `default=<constant>` is an
+# exact and far cheaper equivalent. Named rather than inferred so the remedy the
+# gate prints is always actionable.
+CONSTANT_FACTORIES = {
+    "list",
+    "dict",
+    "set",
+    "tuple",
+    "frozenset",
+    "str",
+    "int",
+    "float",
+    "bytes",
+    "OrderedDict",
+    "Counter",
+    "defaultdict",
+    "deque",
+}
+
 # Dotted callees that hand work to a thread pool this process does not bound.
 UNLIMITED_OFFLOADS = {
     "asyncio.to_thread",
@@ -134,6 +175,32 @@ UNLIMITED_OFFLOADS = {
     "loop.run_in_executor",
     "get_event_loop.run_in_executor",
     "get_running_loop.run_in_executor",
+}
+
+
+# What to do about each rule, printed only for the rules that actually fired.
+# The gate used to print the same two sentences about offloads and aiohttp
+# timeouts whatever it caught, which said nothing useful for the other rules.
+REMEDIES = {
+    "unlimited-offload": (
+        "offload through run_blocking(..., limiter=...) so the work is bounded."
+    ),
+    "untimed-aiohttp-session": (
+        "pass an explicit timeout=ClientTimeout(...); aiohttp's default is 5 minutes."
+    ),
+    "disabled-aiohttp-timeout": (
+        "timeout=None disables the timeout entirely; give it a real ClientTimeout."
+    ),
+    "process-lifetime-construction": (
+        "memoize it (@lru_cache) so the process builds it once, not per call."
+    ),
+    "per-instance-signature-default": (
+        "a private attribute's default_factory is re-resolved through "
+        "inspect.signature on every single instantiation. If the default is a "
+        "constant use PrivateAttr(default=<constant>) -- pydantic copies it per "
+        "instance. If it genuinely computes a value there is no cheaper form: "
+        "baseline it."
+    ),
 }
 
 
@@ -273,6 +340,23 @@ class IoHygieneChecker(ast.NodeVisitor):
                 # exact failure this rule exists to prevent -- and it passed.
                 self._record(node.lineno, "disabled-aiohttp-timeout", callee)
 
+        if callee.split(".")[-1] == "PrivateAttr":
+            factory = next(
+                (kw for kw in node.keywords if kw.arg == "default_factory"), None
+            )
+            if factory is not None:
+                # Every `default_factory` on a private attribute pays the same
+                # per-instance `inspect.signature`, so all of them are reported.
+                # Naming the constant ones separately is what lets the remedy
+                # say "use default=X" instead of "think about it".
+                name = _dotted(factory.value) or "<lambda>"
+                self._record(
+                    node.lineno,
+                    "per-instance-signature-default",
+                    f"default_factory={name}"
+                    + (" (constant)" if name in CONSTANT_FACTORIES else ""),
+                )
+
         if not self._lifetime_owner and self._in_uncached_sync_function():
             qualified = self._aliases.resolve(callee)
             if qualified in PROCESS_LIFETIME_CLIENTS:
@@ -365,10 +449,8 @@ def main() -> int:
     print(f"✗ I/O hygiene: {len(new)} new violation(s)\n")
     for violation in new:
         print(f"  {violation.render()}")
-    print(
-        "\nOffload through run_blocking(..., limiter=...) so the work is bounded, "
-        "and give every aiohttp session an explicit ClientTimeout."
-    )
+    for rule in sorted({violation.rule for violation in new}):
+        print(f"\n  {rule}: {REMEDIES[rule]}")
     return 1
 
 

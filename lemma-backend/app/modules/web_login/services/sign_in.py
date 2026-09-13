@@ -18,6 +18,7 @@ authenticated request to the relay, which hands it straight to the browser.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -40,11 +41,10 @@ from app.modules.web_login.services.scope import (
     looks_signed_in,
     scope_state,
 )
-from app.modules.workspace.services.browser_relay_client import (
-    BrowserRelayUnavailable,
-)
-from app.modules.workspace.services.browser_view_service import BrowserViewService
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
+
+if TYPE_CHECKING:
+    from app.modules.workspace.contracts.browser import BrowserState
 
 logger = get_logger(__name__)
 
@@ -59,13 +59,36 @@ class SignInService:
         self,
         uow_factory: UnitOfWorkFactory,
         *,
-        browser: BrowserViewService | None = None,
+        browser: object | None = None,
     ) -> None:
         self._uow_factory = uow_factory
-        self._browser = browser or BrowserViewService()
+        self._browser_override = browser
+        self._browser_built: object | None = None
+
+    @property
+    def _browser(self):
+        """The browser, built on first use.
+
+        Deferred because constructing it imports the whole workspace provider
+        stack -- Docker, the E2B SDK, httpx -- and every process that merely
+        registers these routes would pay for it at import. The sign-in paths
+        that touch a browser are a minority of what this service does.
+        """
+        if self._browser_override is not None:
+            return self._browser_override
+        if self._browser_built is None:
+            from app.modules.workspace.contracts.browser import (
+                browser_view_service,
+            )
+
+            self._browser_built = browser_view_service()()
+        return self._browser_built
 
     async def close(self) -> None:
-        await self._browser.close()
+        # Only if one was ever built: closing must not be what constructs it.
+        built = self._browser_override or self._browser_built
+        if built is not None:
+            await built.close()
 
     async def try_saved_login(
         self, *, origin: str, auth_ctx: Context | None = None
@@ -100,7 +123,7 @@ class SignInService:
                 {"cookies": secret.cookies, "origins": secret.origins},
                 domain=domain,
             )
-        except (BrowserRelayUnavailable, SandboxCapabilityUnsupported) as exc:
+        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
             await self._audit(
                 owner, site, action="inject", outcome="failed", detail=str(exc)
             )
@@ -159,7 +182,7 @@ class SignInService:
 
         try:
             await self._browser.ensure_for_sign_in(owner, origin=site)
-        except BrowserRelayUnavailable, SandboxCapabilityUnsupported:
+        except _relay_unavailable(), SandboxCapabilityUnsupported:
             # Not fatal: the arrival opens the browser again. Logged because a
             # person landing on a cold browser waits, and knowing it started
             # cold is what explains the wait.
@@ -200,7 +223,7 @@ class SignInService:
             state: (
                 BrowserState | dict[str, object]
             ) = await self._browser.save_login_state(user_id, domain=domain)
-        except (BrowserRelayUnavailable, SandboxCapabilityUnsupported) as exc:
+        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
             state = {}
             detail = f"the browser could not be read: {exc}"
 
@@ -269,6 +292,17 @@ class SignInService:
                 outcome=outcome,
                 detail=detail,
             )
+
+
+def _relay_unavailable() -> type[Exception]:
+    """The relay's own failure type, imported when it is needed.
+
+    A function rather than a module-level import for the same reason the
+    browser is: naming it at import time pulls the provider stack in.
+    """
+    from app.modules.workspace.contracts.browser import browser_unavailable
+
+    return browser_unavailable()
 
 
 class NotSignedInYet(Exception):

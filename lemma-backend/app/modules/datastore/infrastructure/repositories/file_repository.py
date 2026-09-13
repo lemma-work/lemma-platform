@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional, Sequence, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 from uuid import UUID
 
 from sqlalchemy import (
-    and_,
     delete,
     select,
     text,
-    update,
 )
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -19,34 +16,41 @@ from app.core.authorization.sql_actions import (
     allowed_actions_contains,
     allowed_actions_expr,
 )
-from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
+from app.modules.datastore.domain.errors import (
+    DatastoreConflictError,
+    DatastoreRecordNotFoundError,
+)
 from app.core.infrastructure.db.transaction_locks import (
     mark_transaction_scoped_lock,
 )
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
-    FileStatus,
 )
 from app.modules.datastore.domain.ports import DatastoreFileRepositoryPort
 from app.modules.datastore.infrastructure.models import DatastoreFile
+from app.modules.datastore.infrastructure.repositories.file_tree_sql import (
+    tree_statements,
+)
 from app.modules.datastore.infrastructure.repositories.file_visibility_sql import (
     has_unreadable_ancestor,
 )
 from app.modules.datastore.infrastructure.repositories._base import (
     DatastoreRepositoryBase,
 )
+from app.modules.datastore.infrastructure.repositories.file_listing_reads import (
+    DatastoreFileListingMixin,
+)
+from app.modules.datastore.infrastructure.repositories.file_processing_state import (
+    DatastoreFileProcessingStateMixin,
+)
+from app.modules.datastore.infrastructure.repositories.file_listing_sql import (
+    direct_child_patterns,
+    repoint_descendants,
+    stragglers_under,
+)
 from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
     DatastoreFileRecoveryQueriesMixin,
 )
-from app.modules.datastore.infrastructure.sql_identifiers import escape_like
-
-
-def _direct_child_patterns(directory_path: str) -> tuple[str, str]:
-    """LIKE patterns matching a directory's direct children but not deeper."""
-    if directory_path == "/":
-        return "/%", "/%/%"
-    escaped = escape_like(directory_path)
-    return f"{escaped}/%", f"{escaped}/%/%"
 
 
 def _file_actions_expr(ctx: Context):
@@ -61,12 +65,6 @@ def _file_actions_expr(ctx: Context):
     )
 
 
-def _content_identity_matches(content_sha256: str | None):
-    if content_sha256 is None:
-        return DatastoreFile.content_sha256.is_(None)
-    return DatastoreFile.content_sha256 == content_sha256
-
-
 def _file_payload(entity: DatastoreFileEntity) -> dict:
     payload = entity.model_dump(exclude={"allowed_actions"})
     payload["kind"] = entity.kind.value
@@ -76,6 +74,8 @@ def _file_payload(entity: DatastoreFileEntity) -> dict:
 
 
 class DatastoreFileRepository(
+    DatastoreFileListingMixin,
+    DatastoreFileProcessingStateMixin,
     DatastoreFileRecoveryQueriesMixin,
     DatastoreRepositoryBase,
     DatastoreFileRepositoryPort,
@@ -123,164 +123,6 @@ class DatastoreFileRepository(
             )
         ).scalar_one_or_none()
 
-    async def mark_not_required(self, file_id: UUID) -> None:
-        await self.session.execute(
-            update(DatastoreFile)
-            .where(DatastoreFile.id == file_id)
-            .values(status=FileStatus.NOT_REQUIRED.value, indexed_at=None)
-        )
-
-    async def claim_for_processing(
-        self, file_id: UUID, *, content_sha256: str | None
-    ) -> int | None:
-        """Atomically claim one content identity and return its attempt token."""
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PENDING.value,
-                _content_identity_matches(content_sha256),
-            )
-            .values(
-                status=FileStatus.PROCESSING.value,
-                processing_attempts=DatastoreFile.processing_attempts + 1,
-            )
-            .returning(DatastoreFile.processing_attempts)
-        )
-        return result.scalar_one_or_none()
-
-    async def is_processing_claim_current(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-    ) -> bool:
-        return bool(
-            await self.session.scalar(
-                select(DatastoreFile.id).where(
-                    DatastoreFile.id == file_id,
-                    DatastoreFile.status == FileStatus.PROCESSING.value,
-                    _content_identity_matches(content_sha256),
-                    DatastoreFile.processing_attempts == processing_attempt,
-                )
-            )
-        )
-
-    async def mark_completed(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-        file_metadata: dict,
-    ) -> bool:
-        """Complete only the exact content identity and processing claim."""
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.COMPLETED.value,
-                indexed_at=datetime.now(timezone.utc),
-                last_processing_error=None,
-                processing_attempts=0,
-                file_metadata=file_metadata,
-            )
-        )
-        return result.rowcount > 0
-
-    async def mark_failed(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-        error: str,
-    ) -> bool:
-        """Fail only the exact content identity and processing claim."""
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.FAILED.value,
-                last_processing_error=error,
-            )
-        )
-        return result.rowcount > 0
-
-    async def release_claim(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-    ) -> bool:
-        """Return a claim to PENDING *without* spending an attempt.
-
-        For infrastructure backpressure — the extractor is down, overloaded, or
-        the circuit is open — the document itself is fine and nothing about it
-        was learned. ``claim_for_processing`` incremented ``processing_attempts``
-        on the way in, and the recovery cron terminally fails a file once that
-        counter reaches ``datastore_recovery_max_attempts`` (3). Without this,
-        three extractor blips are enough to mark a perfectly good user document
-        FAILED_PERMANENT.
-
-        So this decrements the counter back to its pre-claim value, which is what
-        distinguishes "we could not reach the extractor" from "this document
-        cannot be processed". Document-level failures keep using ``mark_failed``
-        and do spend their attempt.
-
-        Fenced on the same (status, content identity, attempt) triple as every
-        other transition, so a stale worker cannot release a newer claim.
-        """
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.PENDING.value,
-                processing_attempts=DatastoreFile.processing_attempts - 1,
-            )
-        )
-        return result.rowcount > 0
-
-    async def mark_missing_original(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-        error: str,
-    ) -> bool:
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.FAILED_PERMANENT.value,
-                last_processing_error=error,
-            )
-        )
-        return result.rowcount > 0
-
     async def update(self, entity: DatastoreFileEntity) -> DatastoreFileEntity:
         result = await self.session.execute(
             select(DatastoreFile).where(DatastoreFile.id == entity.id)
@@ -327,6 +169,28 @@ class DatastoreFileRepository(
         await self.session.delete(instance)
         return True
 
+    async def delete_entities(self, entities: Sequence[DatastoreFileEntity]) -> int:
+        """Delete many rows in one statement, and say how many went.
+
+        The per-entity version reads the row before deleting it, so removing a
+        folder of five hundred files issued a thousand statements inside the
+        request transaction. The read was there to answer "was it still there",
+        which a `DELETE`'s own row count answers without it.
+
+        The caller compares that count against what it asked for, which is the
+        staleness check: the ids came from a `SELECT` taken earlier in the same
+        transaction, and a short count means the tree moved underneath.
+        """
+        ids = [entity.id for entity in entities if entity.id is not None]
+        if not ids:
+            return 0
+        for entity in entities:
+            self._collect_events(entity)
+        result = await self.session.execute(
+            delete(DatastoreFile).where(DatastoreFile.id.in_(ids))
+        )
+        return int(result.rowcount or 0)
+
     async def get_by_datastore(
         self,
         pod_id: UUID,
@@ -334,7 +198,7 @@ class DatastoreFileRepository(
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[DatastoreFileEntity], Optional[str]]:
-        direct, nested = _direct_child_patterns(directory_path)
+        direct, nested = direct_child_patterns(directory_path)
         stmt = select(DatastoreFile).where(
             DatastoreFile.pod_id == pod_id,
             DatastoreFile.path.like(direct, escape="!"),
@@ -360,7 +224,7 @@ class DatastoreFileRepository(
         limit: int = 100,
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[DatastoreFileEntity], Optional[str]]:
-        direct, nested = _direct_child_patterns(directory_path)
+        direct, nested = direct_child_patterns(directory_path)
         actions = _file_actions_expr(ctx)
         stmt = select(DatastoreFile, actions).where(
             DatastoreFile.pod_id == pod_id,
@@ -409,34 +273,6 @@ class DatastoreFileRepository(
         row = result.first()
         return self._with_allowed_actions(row[0].to_entity(), row[1]) if row else None
 
-    async def get_all_by_datastore(
-        self,
-        pod_id: UUID,
-        owner_user_id: UUID | None = None,
-    ) -> Sequence[DatastoreFileEntity]:
-        stmt = select(DatastoreFile).where(DatastoreFile.pod_id == pod_id)
-        if owner_user_id is not None:
-            stmt = stmt.where(DatastoreFile.owner_user_id == owner_user_id)
-        result = await self.session.execute(stmt.order_by(DatastoreFile.path))
-        return [instance.to_entity() for instance in result.scalars().all()]
-
-    async def get_by_paths(
-        self,
-        pod_id: UUID,
-        paths: Sequence[str],
-    ) -> Sequence[DatastoreFileEntity]:
-        if not paths:
-            return []
-        result = await self.session.execute(
-            select(DatastoreFile)
-            .where(
-                DatastoreFile.pod_id == pod_id,
-                DatastoreFile.path.in_(list(paths)),
-            )
-            .order_by(DatastoreFile.path)
-        )
-        return [instance.to_entity() for instance in result.scalars().all()]
-
     async def filter_visible_ids(
         self,
         *,
@@ -444,17 +280,19 @@ class DatastoreFileRepository(
         ctx: Context,
         file_ids: Sequence[UUID],
     ) -> set[UUID]:
-        if not file_ids:
-            return set()
-        actions = _file_actions_expr(ctx)
-        result = await self.session.execute(
-            select(DatastoreFile.id).where(
-                DatastoreFile.pod_id == pod_id,
-                DatastoreFile.id.in_(list(file_ids)),
-                allowed_actions_contains(actions, Permissions.FOLDER_READ),
-            )
+        """The row-alone rule over a short list, with no ancestor walk.
+
+        ``get_visible_file_ids_for_items`` owns the walk for this shape: it
+        already holds the rows, so it builds the ancestor context once and
+        climbs it in Python. Search takes ``walk_ancestors=True`` through
+        ``visible_file_ids`` instead, which does the climb in SQL.
+        """
+        return await self.visible_file_ids(
+            pod_id=pod_id,
+            ctx=ctx,
+            walk_ancestors=False,
+            among=file_ids,
         )
-        return set(result.scalars().all())
 
     async def visible_file_ids(
         self,
@@ -462,8 +300,10 @@ class DatastoreFileRepository(
         pod_id: UUID,
         ctx: Context,
         walk_ancestors: bool,
+        among: Iterable[UUID] | None = None,
+        limit: int | None = None,
     ) -> set[UUID]:
-        """Every file id in the pod the caller may read, in one statement.
+        """The file ids in the pod the caller may read, in one statement.
 
         This replaces a loop that loaded *every* file row in the pod, hydrated
         them into ORM objects and then entities,
@@ -481,65 +321,129 @@ class DatastoreFileRepository(
         agent holding a real folder grant. A human, by contrast, may
         read a POD file by role alone, so an unreadable folder above it has to
         hide what is inside.
+
+        ``among`` narrows the question to a known list -- the shape search uses
+        to authorize a candidate pool -- and costs a primary-key lookup per id
+        rather than a pass over the pod. It composes with ``walk_ancestors``:
+        the ancestor EXISTS correlates against the un-aliased ``DatastoreFile``,
+        so an extra predicate on the outer query leaves that correlation alone.
+
+        ``limit`` stops the statement early. Its only caller asks "is the
+        readable set small enough to send to the other database?" and passes
+        ``ceiling + 1``, so a short answer is the complete set and a full one
+        means *more than this*. That is why there is no ORDER BY: a truncated
+        result is never used as a result, only as that verdict.
         """
         actions = _file_actions_expr(ctx)
+        if among is not None:
+            among = list(among)
+            if not among:
+                return set()
         stmt = select(DatastoreFile.id).where(
             DatastoreFile.pod_id == pod_id,
             allowed_actions_contains(actions, Permissions.FOLDER_READ),
         )
+        if among is not None:
+            stmt = stmt.where(DatastoreFile.id.in_(among))
         if walk_ancestors:
             stmt = stmt.where(~has_unreadable_ancestor(ctx, pod_id))
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
 
-    async def file_visibility_split(
+    async def get_tree_items(
         self,
+        pod_id: UUID,
         *,
-        pod_id: UUID,
         ctx: Context,
+        subtree_root: str,
+        files_per_directory: int,
         walk_ancestors: bool,
-    ) -> tuple[set[UUID], set[UUID]]:
-        """``(visible, hidden)`` for the whole pod, in one statement.
+    ) -> Sequence[DatastoreFileEntity]:
+        """Everything a directory tree can display, and nothing else.
 
-        Search sends its filter to a *different database* — chunks live in the
-        pod's datastore schema, and there is no join back to here — so the ids
-        travel as an array either way. Which side to send is then a question of
-        length, and it is worth asking: in the observed data most files are
-        POD-visible and RESTRICTED is rare, so the hidden side is usually the
-        short one and often empty. Returning both costs the same single scan.
-
-        The predicate is the same one ``visible_file_ids`` uses, projected as a
-        boolean instead of applied as a filter, so the two cannot drift.
+        See ``file_tree_sql.tree_statements`` for the shape and why it is two
+        statements rather than one read of the pod.
         """
-        actions = _file_actions_expr(ctx)
-        visible_expr = allowed_actions_contains(actions, Permissions.FOLDER_READ)
-        if walk_ancestors:
-            visible_expr = and_(visible_expr, ~has_unreadable_ancestor(ctx, pod_id))
-        rows = await self.session.execute(
-            select(DatastoreFile.id, visible_expr.label("visible")).where(
-                DatastoreFile.pod_id == pod_id
-            )
+        folders_stmt, files_stmt = tree_statements(
+            _file_actions_expr(ctx),
+            pod_id,
+            ctx,
+            subtree_root=subtree_root,
+            files_per_directory=files_per_directory,
+            walk_ancestors=walk_ancestors,
         )
-        visible: set[UUID] = set()
-        hidden: set[UUID] = set()
-        for file_id, is_visible in rows.all():
-            (visible if is_visible else hidden).add(file_id)
-        return visible, hidden
+        folders = await self.session.execute(folders_stmt)
+        items = [instance.to_entity() for instance in folders.scalars().all()]
+        files = await self.session.execute(files_stmt)
+        items.extend(instance.to_entity() for instance in files.scalars().all())
+        return items
 
-    async def get_descendants(
+    async def rewrite_descendant_paths(
         self,
         pod_id: UUID,
-        path_prefix: str,
-    ) -> Sequence[DatastoreFileEntity]:
-        result = await self.session.execute(
-            select(DatastoreFile)
-            .where(
-                DatastoreFile.pod_id == pod_id,
-                DatastoreFile.path.like(f"{escape_like(path_prefix)}/%", escape="!"),
+        *,
+        previous_prefix: str,
+        new_prefix: str,
+        planned: Sequence[tuple[UUID, str]],
+    ) -> int:
+        """Repoint a renamed folder's descendants; see `repoint_descendants`.
+
+        This was a `SELECT` plus an `UPDATE` per descendant -- `update()` reads
+        the row before writing it -- so renaming a folder of five hundred files
+        issued a thousand statements inside the request transaction.
+
+        ``planned`` is the ``(id, path)`` of every descendant the copy plan was
+        built from, and both halves are load-bearing. The bytes were copied
+        from those paths, so a row that no longer holds the path it was copied
+        from must not be repointed: its new path would name an object nobody
+        wrote. Pairing the id with the path is what refuses that, and it is
+        what a row *count* could not -- renaming one child inside the folder
+        while the copy ran left the count unchanged and the fence silent.
+
+        Two disagreements are possible and both are refused. A planned row that
+        moved, vanished, or was renamed does not match its pair, so fewer rows
+        move than were staged. A row that arrived under the old path after the
+        plan was taken is in no pair at all, so it does not move -- and would
+        be stranded under a folder that no longer exists, which is why
+        ``stragglers_under`` looks for it rather than trusting the count.
+
+        Refusing is the answer rather than repairing: the transaction rolls
+        back, the rename is reported as failed, and the caller retries against
+        a tree that has stopped moving. The old per-row loop re-read the
+        descendants after the copies and repointed the late file just the same,
+        silently.
+        """
+        expected = len(planned)
+        moved = 0
+        if planned:
+            result = await self.session.execute(
+                repoint_descendants(
+                    pod_id,
+                    previous_prefix=previous_prefix,
+                    new_prefix=new_prefix,
+                    planned=planned,
+                )
             )
-            .order_by(DatastoreFile.path)
+            moved = int(result.rowcount or 0)
+        if moved != expected:
+            raise DatastoreConflictError(
+                f"{new_prefix} changed while it was being renamed: "
+                f"{expected} entries were staged and {moved} still held the "
+                "path their contents were copied from. Nothing was moved; "
+                "try again."
+            )
+        straggler = await self.session.execute(
+            stragglers_under(pod_id, previous_prefix)
         )
-        return [instance.to_entity() for instance in result.scalars().all()]
+        if straggler.scalars().first() is not None:
+            raise DatastoreConflictError(
+                f"{previous_prefix} gained an entry while it was being "
+                "renamed, which has no contents at the new path. Nothing was "
+                "moved; try again."
+            )
+        return moved
 
 
 def _file_payload_unset(entity: DatastoreFileEntity) -> dict:

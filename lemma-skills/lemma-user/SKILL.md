@@ -194,15 +194,33 @@ fresh upload of the content re-opens it).
 ```bash
 lemma files url /reports/summary.pdf                           # app_url (in-app, signed-in member) + short-lived download url
 lemma files share /reports/summary.pdf --ttl 3h --max-hits 50  # public, no-login, expiring + hit-capped
+lemma files shares                                            # what you have handed out
+lemma files unshare CwbaUB9gWY6l                              # kill one now
 ```
 
 `url` returns an `app_url` deep-link for **pod members** (must be logged in) plus a
 short-lived raw download `url`. `share` mints a **public** link anyone can open
-without logging in — it expires (`--ttl` = `30m`/`3h`/`24h`; default 3h, max 24h)
-and stops serving after `--max-hits` downloads (default 50, max 100), bounding
-egress if it leaks. Emailing/messaging someone outside the pod → `share`; pointing
-a member at a file in the app → `url`. (In a function or agent, the same via the
-SDK: `pod.files.get_url(path)` / `pod.files.create_signed_url(path, …)`.)
+without logging in. The two are not interchangeable: `signed_url` is the one to
+send outside the pod, `app_url` the one to point a member at in the app.
+
+A public link expires (`--ttl` = `30m`/`3h`/`7d`; **default 24h, max 7d**) and
+stops serving after `--max-hits` downloads (**default 200, max 1000**). A value
+outside either range is rejected rather than quietly clamped. The cap is a byte
+budget — that many whole copies of the file — so a revalidation (304) or a
+link-preview bot's HEAD costs nothing, and a ranged read costs only the bytes it
+moves.
+
+`shares` lists what **you** have handed out, newest first, and pages: a full page
+returns a `next_cursor`, and you must follow it to see everything — a link you
+cannot list is one you cannot revoke. `unshare <code>` kills one immediately; the
+code is the last path segment of the link. Both are scoped to links you minted
+*and* may still read, so an agent sees only shares to files it has access to.
+
+You may hold **500 live links per pod**; past that, minting answers 429 with how
+many are live. Revoking one, or letting one expire or run out of downloads, frees
+a slot straight away. (In a function or agent, the same via the SDK:
+`pod.files.get_url(path)` / `pod.files.create_signed_url(path, …)` /
+`pod.files.list_signed_urls()` / `pod.files.revoke_signed_url(code)`.)
 
 ## Tables, records, query
 

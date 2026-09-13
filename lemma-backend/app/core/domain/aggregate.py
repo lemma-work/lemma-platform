@@ -17,7 +17,26 @@ class AggregateRoot(Entity):
     Events are collected during domain operations and published on commit.
     """
 
-    _domain_events: list["DomainEvent"] = PrivateAttr(default_factory=list)
+    # `default=[]` rather than `default_factory=list`, and the empty list is not
+    # shared: pydantic copies a private attribute's default into every instance
+    # (`smart_deepcopy`), so each aggregate still gets its own list.
+    #
+    # The spelling is load-bearing. `default_factory` sends every single
+    # instantiation through `takes_validated_data_argument`, which calls
+    # `inspect.signature(list)` to decide whether the factory wants the
+    # validated data -- uncached, twice per instance, and `list` is a C builtin,
+    # which is the slowest thing to introspect. That is 63us per entity against
+    # 2.6us for this line: a 24x tax on every domain object the process builds.
+    # It stalled the API event loop for up to 1.7s listing one pod's files, and
+    # the stall sampler named this frame in 38 of the 55 reports on the release
+    # it was measured on. (Across the whole preceding week it is 8%: that window
+    # is dominated by a decode path fixed in #618 but not yet deployed. The
+    # sampler reports a stall once it crosses a one-second threshold, so its
+    # counts compare sites against each other -- they are not a measure of total
+    # blocked time.)
+    #
+    # `scripts/check_io_hygiene.py` fails the build if this comes back.
+    _domain_events: list["DomainEvent"] = PrivateAttr(default=[])
 
     def add_event(self, event: "DomainEvent") -> None:
         """Register a domain event to be published on commit."""
