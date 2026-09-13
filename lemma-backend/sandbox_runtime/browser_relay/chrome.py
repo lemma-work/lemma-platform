@@ -293,10 +293,44 @@ async def _read_port(process: asyncio.subprocess.Process) -> int:
     # asked to watch -- the CLI's output is not theirs to read. Without this the
     # only symptom is an empty panel, which is what made this so expensive to
     # debug the first time.
-    logging.getLogger(__name__).warning(
-        "the browser did not start: %s", " | ".join(transcript) or "no output"
-    )
+    complaint = " | ".join(transcript) or "no output"
+    logging.getLogger(__name__).warning("the browser did not start: %s", complaint)
+    if _daemon_is_wedged(complaint):
+        # One hung command leaves the daemon unable to answer, and it serves
+        # every session in the sandbox -- so a person watching and the agent
+        # working both get nothing until somebody clears it. Nothing did.
+        await restart_daemon()
+        raise BrowserNotRunning(
+            "the browser daemon was not responding and has been restarted"
+        )
     raise BrowserNotRunning("the browser could not be started")
+
+
+#: What the CLI prints when its daemon has stopped answering. Matched on text
+#: because that is all it gives us -- there is no exit code that distinguishes
+#: a wedged daemon from a page that would not load.
+_WEDGED = ("daemon may be busy", "unresponsive", "Resource temporarily unavailable")
+
+
+def _daemon_is_wedged(complaint: str) -> bool:
+    return any(marker.lower() in complaint.lower() for marker in _WEDGED)
+
+
+async def restart_daemon() -> None:
+    """Kill the browser daemon so the next command starts a fresh one.
+
+    Best effort: this runs when something has already failed, and the caller
+    has an error to report that matters more than this succeeding.
+    """
+    with suppress(OSError, asyncio.TimeoutError):
+        process = await asyncio.create_subprocess_exec(
+            "pkill",
+            "-f",
+            "agent-browser",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_SECONDS)
 
 
 async def page_targets(*, port: int) -> list[dict[str, str]]:

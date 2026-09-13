@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import TypeAlias
 from uuid import uuid4
 
@@ -98,19 +99,38 @@ ScriptRunner: TypeAlias = Callable[
     Awaitable[tuple[str | None, BaseException | None]],
 ]
 
+#: How a browser command reaches a shell. Injected so a test supplies a session
+#: in front of this rather than replacing what is inside it.
+SessionOpener: TypeAlias = Callable[[BaseAgentContext], Awaitable[object]]
+
+
+async def _open_shell_session(ctx: BaseAgentContext):
+    """The conversation's own shell, which is where the browser CLI lives."""
+    runtime_context = workspace_runtime_context(ctx)
+    return await get_workspace_session(
+        ctx,
+        session_id=runtime_context.default_shell_session_id,
+        close_on_exit=False,
+    )
+
 
 async def run_browser_script(
-    ctx: BaseAgentContext, script: str, operation: str
+    ctx: BaseAgentContext,
+    script: str,
+    operation: str,
+    *,
+    open_session: "SessionOpener | None" = None,
 ) -> tuple[str | None, BaseException | None]:
-    """Run one chained script in the conversation's shell session."""
+    """Run one chained script in the conversation's shell session.
+
+    `open_session` is a seam so a test can hand this a session rather than
+    reach into the module and replace the one it would have built: a double
+    inside the subject certifies the half you did not write.
+    """
+    opener = open_session or _open_shell_session
     try:
-        runtime_context = workspace_runtime_context(ctx)
         with run_phase("tool.browser.session"):
-            session = await get_workspace_session(
-                ctx,
-                session_id=runtime_context.default_shell_session_id,
-                close_on_exit=False,
-            )
+            session = await opener(ctx)
         async with session:
             with run_phase("tool.browser.exec"):
                 result = await session.exec_command(
@@ -123,7 +143,37 @@ async def run_browser_script(
                 )
         stdout = result.get("stdout") or ""
         stderr = result.get("stderr") or ""
-        return normalize_terminal_output(f"{stdout}{stderr}"), None
+        output = normalize_terminal_output(f"{stdout}{stderr}")
+
+        # The runtime's own verdict, not just its output. `exec_command` returns
+        # `completed: False` when the wait window elapsed while the process ran
+        # on, and `success: False` when it could not be run at all -- and in
+        # both cases stdout is whatever had been printed so far, which for a
+        # browser command is usually nothing. Reading only stdout is how a
+        # timed-out `browser_snapshot` came back `success: true` with every
+        # field null: true in the sense that nothing raised, and useless to the
+        # agent reading it.
+        timed_out = result.get("completed") is False
+        refused = result.get("success") is False
+        if timed_out or refused:
+            # A command that timed out is still holding the browser daemon, and
+            # the daemon serves every session in the sandbox -- so the next call
+            # from this agent, and the relay behind the person watching, both
+            # fail with "daemon may be busy" until something clears it. Nothing
+            # did, so one slow page wedged the browser for the life of the
+            # sandbox.
+            await _restart_browser_daemon(ctx, operation=operation, opener=opener)
+            reason = (
+                f"the browser did not finish within {_BROWSER_TIMEOUT_SECONDS}s"
+                if timed_out
+                else str(result.get("error") or "the browser command could not run")
+            )
+            return None, BrowserCommandFailed(
+                f"{reason}. The browser has been restarted, so trying again is "
+                f"worth it -- but open the page again first, because the "
+                f"restart took its tabs with it."
+            )
+        return output, None
     except sandbox_failure_types() as exc:
         # Only the sandbox's own failures are shaped into a tool result, because
         # only those have an answer for "is this worth retrying". Anything else
@@ -135,6 +185,38 @@ async def run_browser_script(
             exc_info=exc,
         )
         return None, exc
+
+
+class BrowserCommandFailed(RuntimeError):
+    """A browser command that did not run, or did not finish."""
+
+
+async def _restart_browser_daemon(
+    ctx: BaseAgentContext,
+    *,
+    operation: str,
+    opener: "SessionOpener | None" = None,
+) -> None:
+    """Clear a wedged browser daemon so the next command can work.
+
+    `agent-browser` runs one daemon per sandbox and every command talks to it,
+    so a single hung command makes every later one fail -- the agent's, and the
+    relay's behind a person watching the same browser. Killing it is the
+    recovery: the next invocation starts a fresh one.
+
+    Best effort by design. This runs while something has already gone wrong,
+    and a failure to clean up must not replace the error the caller is about to
+    report with a less useful one.
+    """
+    logger.warning("agent.browser.daemon_restarted.degraded", operation=operation)
+    with suppress(Exception):
+        session = await (opener or _open_shell_session)(ctx)
+        async with session:
+            await session.exec_command(
+                cmd="pkill -f agent-browser || true",
+                max_output_tokens=256,
+                timeout=20,
+            )
 
 
 def _failure(exc: BaseException, *, operation: str) -> BrowserResult:

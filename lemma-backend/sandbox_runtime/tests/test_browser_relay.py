@@ -531,3 +531,23 @@ def test_a_route_refuses_an_unusable_session_name(monkeypatch, tmp_path) -> None
         headers={"X-Lemma-Relay-Token": "token-abc"},
     )
     assert response.status_code == 422, response.text
+
+
+def test_a_wedged_daemon_is_recognised_from_what_the_cli_says() -> None:
+    """There is no exit code that separates a wedged daemon from a page that
+    would not load, so the text is all there is to go on."""
+    for complaint in (
+        "✗ Could not configure browser: Failed to read: Resource temporarily "
+        "unavailable (os error 11) (after 5 retries - daemon may be busy or "
+        "unresponsive)",
+        "daemon may be busy",
+        "the daemon is UNRESPONSIVE",
+    ):
+        assert chrome._daemon_is_wedged(complaint) is True, complaint
+
+
+def test_an_ordinary_failure_is_not_mistaken_for_a_wedged_daemon() -> None:
+    """Restarting the daemon on every failure would take a working browser's
+    tabs away from whoever was using it."""
+    for complaint in ("net::ERR_NAME_NOT_RESOLVED", "no output", "page not found"):
+        assert chrome._daemon_is_wedged(complaint) is False, complaint

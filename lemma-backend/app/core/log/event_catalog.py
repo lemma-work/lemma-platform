@@ -26,6 +26,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_runner_service.agent_run_quota_exhausted.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_s.failed': EventSpec('error', frozenset()),
     'agent.agent_runner_service.finalize_agent_run_run_s.propagated': EventSpec('debug', frozenset({'agent_run_id'})),
+    'agent.browser.daemon_restarted.degraded': EventSpec('warning', frozenset({'operation'})),
     'agent.browser.screenshot_cleanup_failed.diagnostic': EventSpec('debug', frozenset()),
     'agent.browser.screenshot_failed.diagnostic': EventSpec('debug', frozenset()),
     'agent.browser.script_failed.diagnostic': EventSpec('debug', frozenset({'operation'})),

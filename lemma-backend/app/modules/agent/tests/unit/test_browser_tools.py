@@ -289,3 +289,108 @@ async def test_browser_tools_are_registered_with_their_docstrings():
         tools["browser_act"].tool_def.parameters_json_schema["properties"]["action"]
         is not None
     )
+
+
+# ---------------------------------------------------------------------------
+# A command that did not finish is not a success
+# ---------------------------------------------------------------------------
+
+
+class _Session:
+    """A workspace session that answers the way the runtime actually does."""
+
+    def __init__(self, result: dict) -> None:
+        self.result = result
+        self.commands: list[str] = []
+
+    async def exec_command(self, *, cmd, max_output_tokens=0, timeout=0):
+        del max_output_tokens, timeout
+        self.commands.append(cmd)
+        if cmd.startswith("pkill"):
+            return {"success": True, "completed": True, "stdout": "", "stderr": ""}
+        return self.result
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _opener(result: dict) -> tuple[_Session, object]:
+    """A session, and the opener that hands it over.
+
+    Injected rather than patched: the double sits in front of the subject's
+    collaborator, so a rename inside the subject fails these tests instead of
+    slipping past them.
+    """
+    session = _Session(result)
+
+    async def open_session(_ctx):
+        return session
+
+    return session, open_session
+
+
+async def test_a_timed_out_command_is_not_reported_as_success() -> None:
+    """`exec_command` returns `completed: False` with whatever had been printed
+    -- for a browser command, usually nothing. Reading only stdout is how a
+    timed-out snapshot came back `success: true` with every field null."""
+    from app.modules.agent.tools.browser import browser as module
+
+    _, opener = _opener(
+        {"success": True, "completed": False, "stdout": "", "stderr": ""}
+    )
+
+    output, error = await module.run_browser_script(
+        object(), "snapshot", "snapshot", open_session=opener
+    )
+
+    assert output is None
+    assert error is not None
+    assert "did not finish" in str(error)
+
+
+async def test_a_timed_out_command_clears_the_wedged_daemon() -> None:
+    """One hung command leaves the daemon unable to answer, and it serves every
+    session in the sandbox -- so the agent's next call and the relay behind a
+    person watching both fail until something clears it."""
+    from app.modules.agent.tools.browser import browser as module
+
+    session, opener = _opener(
+        {"success": True, "completed": False, "stdout": "", "stderr": ""}
+    )
+
+    await module.run_browser_script(
+        object(), "open https://slow.test", "open", open_session=opener
+    )
+
+    assert any(c.startswith("pkill") for c in session.commands), session.commands
+
+
+async def test_a_command_the_runtime_refused_is_reported() -> None:
+    from app.modules.agent.tools.browser import browser as module
+
+    _, opener = _opener(
+        {"success": False, "completed": True, "error": "no such session", "stdout": ""}
+    )
+
+    output, error = await module.run_browser_script(
+        object(), "snapshot", "snapshot", open_session=opener
+    )
+    assert output is None
+    assert "no such session" in str(error)
+
+
+async def test_a_command_that_finished_returns_its_output() -> None:
+    from app.modules.agent.tools.browser import browser as module
+
+    _, opener = _opener(
+        {"success": True, "completed": True, "stdout": "hello", "stderr": ""}
+    )
+
+    output, error = await module.run_browser_script(
+        object(), "get url", "read", open_session=opener
+    )
+    assert error is None
+    assert "hello" in (output or "")
