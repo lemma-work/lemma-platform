@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 import json
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -75,7 +76,7 @@ def is_safe_session(session: str) -> bool:
     return bool(_SAFE_SESSION.match(session)) and session not in {".", ".."}
 
 
-def profile_for_session(session: str | None) -> str | None:
+def profile_for_session(session: str | None) -> str | None:  # noqa: D401
     """The profile directory a session's browser should use, if not the default.
 
     A session is a whole separate browser, and a browser needs a profile
@@ -94,7 +95,17 @@ def profile_for_session(session: str | None) -> str | None:
         return None
     if not is_safe_session(session):
         raise UnsafeSessionName(f"{session!r} cannot be part of a path")
-    return f"{_DEFAULT_PROFILE}-{session}"
+    # The directory is named from a *digest* of the session, not from the
+    # session itself. Validating the name and then interpolating it would work,
+    # and still leaves a path built out of a caller's string -- one refactor
+    # away from the check being bypassed, and not something a reader (or a
+    # scanner) can confirm by looking at this line. A hex digest has no
+    # separators, no dots and no way to climb out, whatever it was made from.
+    #
+    # Nobody reads this directory's name: the *session* keeps the readable
+    # `login-app.example.com`, and that is what appears in commands and logs.
+    fingerprint = hashlib.sha256(session.encode()).hexdigest()[:32]
+    return f"{_DEFAULT_PROFILE}-{fingerprint}"
 
 
 def active_port_file(session: str | None = None) -> Path:

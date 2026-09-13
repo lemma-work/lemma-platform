@@ -295,7 +295,6 @@ def create_app() -> FastAPI:
                 await viewer.start()
                 try:
                     await pump(
-                        websocket,
                         cdp_socket,
                         viewer,
                         send_json=websocket.send_json,
@@ -308,8 +307,11 @@ def create_app() -> FastAPI:
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)
         finally:
             keepalive_task.cancel()
+            # Awaited, not just cancelled: a cancelled task is not finished
+            # until it has been collected, and leaving it uncollected is how a
+            # socket outlives the request that opened it.
             with suppress(asyncio.CancelledError):
-                await keepalive_task
+                _ = await keepalive_task
 
     return app
 

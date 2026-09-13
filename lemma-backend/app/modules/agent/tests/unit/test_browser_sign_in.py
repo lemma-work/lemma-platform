@@ -67,22 +67,13 @@ class _Service:
 @pytest.fixture
 def patched(monkeypatch):
     def _install(service):
-        import app.modules.agent.tools.browser.sign_in as module
-
-        monkeypatch.setattr(
-            module,
-            "sign_in_internal",
-            module.sign_in_internal,
-        )
         # Patched where the tool looks it up -- through the published
         # contract, which is the only way another module may reach it.
         monkeypatch.setattr(
             "app.modules.web_login.contracts.SignInService",
-            lambda *a, **k: service,
+            lambda *_a, **_k: service,
         )
-        monkeypatch.setattr(
-            "app.core.api.dependencies.get_uow_factory", lambda: object()
-        )
+        monkeypatch.setattr("app.core.api.dependencies.get_uow_factory", object)
 
     return _install
 

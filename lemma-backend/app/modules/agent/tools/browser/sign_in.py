@@ -18,7 +18,6 @@ worked.
 
 from __future__ import annotations
 
-from app.core.log.log import get_logger
 from app.modules.agent.tools.browser.models import (
     BrowserSignInRequest,
     BrowserSignInResponse,
@@ -26,8 +25,6 @@ from app.modules.agent.tools.browser.models import (
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.web_login.contracts import InvalidOrigin, normalize_origin
-
-logger = get_logger(__name__)
 
 SIGN_IN_TOOL_NAME = "browser_sign_in"
 

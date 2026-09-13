@@ -38,10 +38,6 @@ _FRAME_FORMAT = "jpeg"
 _FRAME_QUALITY = 60
 _MAX_DIMENSION = 1600
 
-#: Bounds one viewer's input queue. Reached only if somebody scripts against the
-#: socket; a person's hands cannot outrun this.
-_INPUT_QUEUE_LIMIT = 256
-
 #: Every input method a viewer may cause, mapped to the CDP call it becomes.
 #: A closed set, so "what can a viewer do" is answered by reading this rather
 #: than by reasoning about what a domain prefix admits.
@@ -200,7 +196,6 @@ class ScreencastSession:
 
 
 async def pump(
-    viewer,
     cdp_socket,
     session: ScreencastSession,
     *,
@@ -212,8 +207,11 @@ async def pump(
     Two tasks rather than one loop: a screencast pushes frames continuously
     while a viewer sends nothing for long stretches, so interleaving the reads
     would stall the picture behind an input that never comes.
+
+    The viewer's socket is not a parameter: everything this needs from it is
+    already `send_json` and `receive_text`, and taking the socket as well meant
+    holding a thing it never used.
     """
-    del viewer
 
     async def to_viewer() -> None:
         async for raw in cdp_socket:

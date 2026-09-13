@@ -536,13 +536,12 @@ def test_a_route_refuses_an_unusable_session_name(monkeypatch, tmp_path) -> None
 def test_a_wedged_daemon_is_recognised_from_what_the_cli_says() -> None:
     """There is no exit code that separates a wedged daemon from a page that
     would not load, so the text is all there is to go on."""
-    for complaint in (
+    real = (
         "✗ Could not configure browser: Failed to read: Resource temporarily "
         "unavailable (os error 11) (after 5 retries - daemon may be busy or "
-        "unresponsive)",
-        "daemon may be busy",
-        "the daemon is UNRESPONSIVE",
-    ):
+        "unresponsive)"
+    )
+    for complaint in (real, "daemon may be busy", "the daemon is UNRESPONSIVE"):
         assert chrome._daemon_is_wedged(complaint) is True, complaint
 
 
@@ -551,3 +550,25 @@ def test_an_ordinary_failure_is_not_mistaken_for_a_wedged_daemon() -> None:
     tabs away from whoever was using it."""
     for complaint in ("net::ERR_NAME_NOT_RESOLVED", "no output", "page not found"):
         assert chrome._daemon_is_wedged(complaint) is False, complaint
+
+
+def test_the_profile_path_is_not_built_from_the_session_string() -> None:
+    """Validating a name and then interpolating it still leaves a path made out
+    of a caller's string. A digest cannot carry a separator, a dot, or a way to
+    climb out, whatever it was made from."""
+    profile = chrome.profile_for_session("login-app.example.com")
+    assert profile is not None
+    assert "app.example.com" not in profile
+    assert profile.startswith("/tmp/lemma-browser/profile-")
+    tail = profile.rsplit("-", 1)[-1]
+    assert len(tail) == 32 and all(c in "0123456789abcdef" for c in tail)
+
+
+def test_the_same_session_always_gets_the_same_profile() -> None:
+    """A browser has to come back to the directory it locked last time."""
+    assert chrome.profile_for_session("login-a.test") == chrome.profile_for_session(
+        "login-a.test"
+    )
+    assert chrome.profile_for_session("login-a.test") != chrome.profile_for_session(
+        "login-b.test"
+    )

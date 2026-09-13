@@ -56,14 +56,15 @@ def host_of(origin: str) -> str:
 def browser_view_service():
     """This workspace's live browser, for a module that drives one.
 
-    A thunk, not a re-export: naming the class here would pull the provider
-    stack into the import graph of everything that wants the *shapes* above.
+    Imported inside the function, not at module scope: naming the class here
+    would pull the provider stack into the import graph of everything that
+    wants the *shapes* above, and the service imports those shapes back -- a
+    cycle at import time, which is only not a crash because this line does not
+    run until somebody calls it.
     """
-    from app.modules.workspace.services.browser_view_service import (
-        BrowserViewService,
-    )
+    from app.modules.workspace.services import browser_view_service as module
 
-    return BrowserViewService
+    return module.BrowserViewService
 
 
 def browser_unavailable() -> type[Exception]:
