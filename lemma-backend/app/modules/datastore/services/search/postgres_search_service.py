@@ -8,7 +8,7 @@ from sqlalchemy.sql import text
 
 from app.modules.datastore.config import datastore_settings
 from app.core.config import settings
-from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
+from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileSearchResult,
     SearchMethod,
@@ -295,10 +295,10 @@ class PostgresSearchService:
         scope_path: str | None = None,
         include_descendants: bool = True,
         *,
-        visibility: FileVisibilityFilter,
+        file_scope: SearchFileScope,
     ) -> list[DatastoreFileSearchResult]:
         await self.ensure_schema()
-        if visibility.matches_nothing:
+        if file_scope.matches_nothing:
             return []
 
         rerank_active = datastore_settings.reranker_mode != "off"
@@ -318,7 +318,7 @@ class PostgresSearchService:
                 limit=pool,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             ranked = list(rows)
             diversify = False
@@ -330,7 +330,7 @@ class PostgresSearchService:
                 limit=pool,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             ranked = list(rows)
             diversify = False
@@ -343,7 +343,7 @@ class PostgresSearchService:
                 limit=per_side,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             text_results = await self.chunk_repo.text_search(
                 query=query,
@@ -351,7 +351,7 @@ class PostgresSearchService:
                 limit=per_side,
                 scope_path=scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
             ranked = self._merge_ranked_results(vector_results, text_results)
             diversify = True

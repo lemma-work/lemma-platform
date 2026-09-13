@@ -143,10 +143,20 @@ def file_repository_mock() -> AsyncMock:
     # contains through ``get_all_by_datastore``.
     async def _visible_file_ids(**kwargs) -> set:
         items = await repository.get_all_by_datastore(kwargs["pod_id"])
-        return {item.id for item in items}
-
-    async def _visibility_split(**kwargs) -> tuple[set, set]:
-        return await _visible_file_ids(**kwargs), set()
+        ids = {item.id for item in items}
+        # Both narrowings are honoured, because both are how the caller reads
+        # the answer. `among` is the authorization of a search's candidate
+        # rows -- a double that ignored it would authorize ids the pod does
+        # not have. `limit` is how the caller decides whether the readable set
+        # is small enough to send: ignoring it makes every pod look small and
+        # the unnarrowed branch unreachable from a unit test.
+        among = kwargs.get("among")
+        if among is not None:
+            ids &= set(among)
+        limit = kwargs.get("limit")
+        if limit is not None:
+            ids = set(sorted(ids, key=str)[:limit])
+        return ids
 
     # Derived from the same stub, so a test still describes the pod in one
     # place. Without this, the callers that moved from `get_all_by_datastore` to
@@ -171,7 +181,6 @@ def file_repository_mock() -> AsyncMock:
         ]
 
     repository.visible_file_ids.side_effect = _visible_file_ids
-    repository.file_visibility_split.side_effect = _visibility_split
     repository.get_descendants.side_effect = _descendants
     repository.get_direct_children.side_effect = _direct_children
     return repository
@@ -1178,11 +1187,15 @@ async def test_search_files_excludes_private_or_private_ancestor_results_for_non
     )
 
     assert [result.file_id for result in results] == [pod_root_id]
-    visibility = seen_search_kwargs["visibility"]
-    assert visibility.known_file_ids == {pod_root_id}
-    assert not visibility.allows(pod_child_id), (
+    file_scope = seen_search_kwargs["file_scope"]
+    assert file_scope.enumerated and file_scope.file_ids == frozenset({pod_root_id}), (
+        "a readable set this small is sent to the pod database as an exact "
+        "filter rather than being applied after the fact"
+    )
+    assert pod_child_id not in file_scope.file_ids, (
         "a chunk whose file row the pod no longer has must not survive the "
-        "filter, whichever direction was pushed down"
+        "filter -- the scope is built from the file table, so a row that is "
+        "not there cannot be in it"
     )
 
 

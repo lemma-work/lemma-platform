@@ -4,6 +4,7 @@ from typing import Callable
 from uuid import UUID
 
 from app.core.authorization.context import Context
+from app.core.log.log import get_logger
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.datastore.domain.file_entities import SearchMethod
 from app.modules.datastore.domain.ports import DatastoreSearchFactoryPort
@@ -11,6 +12,30 @@ from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
 from app.modules.datastore.services.files.lookup import FileLookup
 from app.modules.datastore.services.files.path_resolver import PathResolver
+
+logger = get_logger(__name__)
+
+
+#: How many times the requested limit an unnarrowed search retrieves, and the
+#: ceiling on the result. Retrieval/rerank tuning rather than an operational
+#: knob, so they sit beside the code that reads them like `_HNSW_EF_SEARCH`
+#: does; the number that decides how much travels between the two databases is
+#: the one in configuration.
+_CANDIDATE_OVERSHOOT = 5
+_MAX_CANDIDATES = 200
+
+
+def _candidate_limit(limit: int) -> int:
+    """How many chunks to retrieve when the query could not be narrowed.
+
+    The overshoot is what keeps an unnarrowed search from returning a short
+    page: rows the caller may not read are dropped after the query, so the
+    query has to bring back more than the page needs. The cap is what keeps
+    the overshoot from being paid for twice -- this pool is also what the
+    reranker scores, so multiplying a large `limit` without a ceiling makes
+    the cross-encoder, not the database, the cost of a search.
+    """
+    return max(limit, min(limit * _CANDIDATE_OVERSHOOT, _MAX_CANDIDATES))
 
 
 class FileSearcher:
@@ -86,12 +111,15 @@ class FileSearcher:
                 "HYBRID": SearchMethod.HYBRID,
             }.get(str(search_method).upper(), SearchMethod.HYBRID)
 
-        visibility = await self.authorizer.visibility_filter(pod_id=pod_id, ctx=ctx)
+        file_scope = await self.authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
+        # An exact scope needs no headroom: every row the chunk query returns
+        # is one the caller may read, so asking for `limit` gets `limit`. An
+        # unnarrowed one does -- rows are dropped after the fact, and without
+        # slack to drop them from a page comes back short of what was asked.
+        candidate_limit = limit if file_scope.enumerated else _candidate_limit(limit)
         search_service = self._search_factory_provider()(pod_id)
-        # Every authorization read is done by this point, and nothing below
-        # touches the platform database -- the search runs against the datastore
-        # database and the rest is path translation in Python. So the platform
-        # connection is handed back for the duration.
+        # The search itself touches only the datastore database, so the
+        # platform connection is handed back for the duration of it.
         #
         # What it was costing: a vector or hybrid search embeds the query with
         # the provider before it can query anything, and an agent calling
@@ -99,27 +127,56 @@ class FileSearcher:
         # round trip. Measured in production: 105 holds with a median of 4.3s
         # and a maximum of 33s, idle in an open transaction for ~97% of it.
         #
-        # The release must wrap this call and not the whole method. Release
-        # happens once, on entry, so a block that queries the platform database
-        # first would re-acquire the connection and hold it across the slow part
-        # anyway -- while the static gate went quiet. See `connection_released`.
+        # The release must wrap this call and nothing wider. It happens once,
+        # on entry, so a platform read *inside* the block re-acquires the
+        # connection and then holds it across the slow part anyway -- while the
+        # static gate goes quiet, which is worse than not releasing at all.
+        # That is why the post-filter below sits after the block and not in it.
+        # See `connection_released`.
         async with connection_released(self._platform_session):
             results = await search_service.search(
                 query=query,
-                limit=limit,
+                limit=candidate_limit,
                 method=method,
                 scope_path=normalized_scope_path,
                 include_descendants=include_descendants,
-                visibility=visibility,
+                file_scope=file_scope,
             )
-        # Kept even though the filter is applied in the query. It costs one set
-        # membership test per returned row and it is the only thing standing
-        # between a future bug in the pushdown and a leaked file. The direction
-        # is asked of the filter rather than assumed, so it stays correct
-        # whichever side was pushed.
-        visible_results = [
-            result for result in results if visibility.allows(result.file_id)
+        # One rule, both branches: nothing is returned whose id is not in a set
+        # the *platform* database just said this caller may read.
+        #
+        # When the scope was enumerated that set is the scope itself, and the
+        # check is belt and braces -- it costs one set membership test per row
+        # and it is the only thing standing between a future bug in the
+        # pushdown and a leaked file. When it was not, this is the
+        # authorization, and it is the only place it happens.
+        if file_scope.enumerated:
+            readable = file_scope.file_ids
+        else:
+            readable = await self.authorizer.readable_among(
+                pod_id=pod_id,
+                ctx=ctx,
+                file_ids={result.file_id for result in results},
+            )
+        visible_results = [result for result in results if result.file_id in readable][
+            :limit
         ]
+        if not file_scope.enumerated and len(visible_results) < limit < len(results):
+            # The one case where a search can come back short of what it could
+            # have found: the chunk query was not narrowed, its candidates were
+            # capped, and enough of them turned out to be unreadable to eat
+            # into the page. Logged rather than fixed in place because the fix
+            # is a larger `datastore_search_readable_id_pushdown_limit`, which
+            # is an operator's decision about how much may travel between the
+            # two databases -- and the alternative, searching again, costs a
+            # second embedding round trip on the slowest path there is.
+            logger.warning(
+                "datastore.search.post_filter.short_page",
+                pod_id=str(pod_id),
+                requested=limit,
+                returned=len(visible_results),
+                candidates=len(results),
+            )
         return [
             self._to_api_search_result(result, requester_user_id=requester_user_id)
             for result in visible_results

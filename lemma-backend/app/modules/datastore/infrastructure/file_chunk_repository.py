@@ -12,11 +12,12 @@ from sqlalchemy.sql import text
 
 from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
-from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
 from app.core.infrastructure.db.sql_text import escape_like as _escape_like
+from app.modules.datastore.domain.search_scope import SearchFileScope
 
 # Query-time HNSW recall/latency knob (pgvector default is 40). Raising it
-# improves recall, especially when post-filtering by folder subtree / visibility.
+# improves recall, especially when the WHERE clause filters the ANN result
+# (folder subtree, and the readable-id array when the scope is enumerated).
 _HNSW_EF_SEARCH = 100
 
 
@@ -188,10 +189,10 @@ class DatastoreFileChunkRepository:
         scope_path: str | None = None,
         include_descendants: bool = True,
         *,
-        visibility: FileVisibilityFilter,
+        file_scope: SearchFileScope,
     ) -> list[dict[str, Any]]:
         del pod_id
-        if visibility.matches_nothing:
+        if file_scope.matches_nothing:
             return []
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
         dim = settings.embedding_dimension
@@ -201,7 +202,7 @@ class DatastoreFileChunkRepository:
             )
             # Tune the HNSW scan for this query. iterative_scan keeps pulling
             # candidates from the index until enough survive the WHERE filter
-            # (folder subtree + visibility), avoiding ANN over-filtering. These
+            # (folder subtree + readable ids), avoiding ANN over-filtering. These
             # are pgvector 0.8+ GUCs; harmless placeholders if the extension
             # isn't yet loaded in the session.
             await session.execute(text(f"SET LOCAL hnsw.ef_search = {_HNSW_EF_SEARCH}"))
@@ -220,9 +221,9 @@ class DatastoreFileChunkRepository:
                 "include_descendants": include_descendants,
                 "limit": limit,
             }
-            file_filter = visibility.sql_clause("rc.file_id", "visible_file_ids")
-            if visibility.binds:
-                params["visible_file_ids"] = visibility.parameter_value()
+            file_filter = file_scope.sql_clause("rc.file_id", "readable_file_ids")
+            if file_scope.binds:
+                params["readable_file_ids"] = file_scope.parameter_value()
 
             stmt = text(f"""
                 SELECT
@@ -250,10 +251,10 @@ class DatastoreFileChunkRepository:
                 ORDER BY rc.embedding::halfvec({dim}) <=> CAST(:vec AS halfvec({dim}))
                 LIMIT :limit
             """)
-            if visibility.binds:
+            if file_scope.binds:
                 stmt = stmt.bindparams(
                     bindparam(
-                        "visible_file_ids",
+                        "readable_file_ids",
                         type_=ARRAY(PG_UUID(as_uuid=True)),
                     )
                 )
@@ -280,10 +281,10 @@ class DatastoreFileChunkRepository:
         scope_path: str | None = None,
         include_descendants: bool = True,
         *,
-        visibility: FileVisibilityFilter,
+        file_scope: SearchFileScope,
     ) -> list[dict[str, Any]]:
         del pod_id
-        if visibility.matches_nothing:
+        if file_scope.matches_nothing:
             return []
         async with self._session_factory() as session:
             await session.execute(
@@ -301,9 +302,9 @@ class DatastoreFileChunkRepository:
                 "include_descendants": include_descendants,
                 "limit": limit,
             }
-            file_filter = visibility.sql_clause("rc.file_id", "visible_file_ids")
-            if visibility.binds:
-                params["visible_file_ids"] = visibility.parameter_value()
+            file_filter = file_scope.sql_clause("rc.file_id", "readable_file_ids")
+            if file_scope.binds:
+                params["readable_file_ids"] = file_scope.parameter_value()
 
             stmt = text(f"""
                 WITH search_query AS (
@@ -342,10 +343,10 @@ class DatastoreFileChunkRepository:
                 ORDER BY score DESC, rc.chunk_index ASC
                 LIMIT :limit
             """)
-            if visibility.binds:
+            if file_scope.binds:
                 stmt = stmt.bindparams(
                     bindparam(
-                        "visible_file_ids",
+                        "readable_file_ids",
                         type_=ARRAY(PG_UUID(as_uuid=True)),
                     )
                 )

@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterable,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+)
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -19,7 +28,7 @@ from app.modules.datastore.domain.document_processing import (
     IndexingMetrics,
 )
 from app.modules.datastore.domain.file_projections import DispatchableFileRef
-from app.modules.datastore.domain.file_visibility import FileVisibilityFilter
+from app.modules.datastore.domain.search_scope import SearchFileScope
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
@@ -166,15 +175,9 @@ class DatastoreFileRepositoryPort(Protocol):
         pod_id: UUID,
         ctx: Context,
         walk_ancestors: bool,
+        among: Iterable[UUID] | None = None,
+        limit: int | None = None,
     ) -> set[UUID]: ...
-
-    async def file_visibility_split(
-        self,
-        *,
-        pod_id: UUID,
-        ctx: Context,
-        walk_ancestors: bool,
-    ) -> tuple[set[UUID], set[UUID]]: ...
 
     async def filter_visible_ids(
         self,
@@ -493,7 +496,7 @@ class DatastoreSearchPort(Protocol):
         scope_path: str | None = None,
         include_descendants: bool = True,
         *,
-        visibility: FileVisibilityFilter,
+        file_scope: SearchFileScope,
     ) -> list[DatastoreFileSearchResult]: ...
 
 

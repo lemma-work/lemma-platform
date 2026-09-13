@@ -37,8 +37,6 @@
     "app/modules/datastore/infrastructure/repositories/file_listing_sql.py::descendants_of::unbounded-statement": 1,
     "app/modules/datastore/infrastructure/repositories/file_listing_sql.py::direct_children_of::unbounded-statement": 1,
     "app/modules/datastore/infrastructure/repositories/file_recovery_queries.py::DatastoreFileRecoveryQueriesMixin.list_pending_dispatch_candidates::unbounded-read": 1,
-    "app/modules/datastore/infrastructure/repositories/file_repository.py::DatastoreFileRepository.file_visibility_split::unbounded-read": 1,
-    "app/modules/datastore/infrastructure/repositories/file_repository.py::DatastoreFileRepository.visible_file_ids::unbounded-read": 1,
     "app/modules/datastore/infrastructure/repositories/file_tree_sql.py::tree_statements::unbounded-statement": 1,
     "app/modules/datastore/infrastructure/repositories/table_repository.py::DatastoreTableRepository.get_many_by_datastore_and_names::unbounded-read": 1,
     "app/modules/function/infrastructure/revision_repository.py::FunctionRevisionRepositoryMixin.list_revisions::unbounded-read": 1,

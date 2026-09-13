@@ -42,7 +42,6 @@ class SkillsOverlay:
             items,
             requester_user_id,
             pod_id,
-            include_full_datastore_context=False,
             ctx=ctx,
         )
 

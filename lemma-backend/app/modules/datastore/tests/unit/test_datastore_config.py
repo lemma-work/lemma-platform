@@ -39,9 +39,9 @@ EXPECTED = [
     ("datastore_query_max_cost", "DATASTORE_QUERY_MAX_COST", 1_000_000.0),
     ("datastore_query_max_plan_rows", "DATASTORE_QUERY_MAX_PLAN_ROWS", 5_000_000),
     (
-        "datastore_search_visibility_id_soft_limit",
-        "DATASTORE_SEARCH_VISIBILITY_ID_SOFT_LIMIT",
-        20_000,
+        "datastore_search_readable_id_pushdown_limit",
+        "DATASTORE_SEARCH_READABLE_ID_PUSHDOWN_LIMIT",
+        5_000,
     ),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
     (

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 from uuid import UUID
 
 from sqlalchemy import (
-    and_,
     delete,
     select,
     text,
@@ -280,17 +279,19 @@ class DatastoreFileRepository(
         ctx: Context,
         file_ids: Sequence[UUID],
     ) -> set[UUID]:
-        if not file_ids:
-            return set()
-        actions = _file_actions_expr(ctx)
-        result = await self.session.execute(
-            select(DatastoreFile.id).where(
-                DatastoreFile.pod_id == pod_id,
-                DatastoreFile.id.in_(list(file_ids)),
-                allowed_actions_contains(actions, Permissions.FOLDER_READ),
-            )
+        """The row-alone rule over a short list, with no ancestor walk.
+
+        ``get_visible_file_ids_for_items`` owns the walk for this shape: it
+        already holds the rows, so it builds the ancestor context once and
+        climbs it in Python. Search takes ``walk_ancestors=True`` through
+        ``visible_file_ids`` instead, which does the climb in SQL.
+        """
+        return await self.visible_file_ids(
+            pod_id=pod_id,
+            ctx=ctx,
+            walk_ancestors=False,
+            among=file_ids,
         )
-        return set(result.scalars().all())
 
     async def visible_file_ids(
         self,
@@ -298,8 +299,10 @@ class DatastoreFileRepository(
         pod_id: UUID,
         ctx: Context,
         walk_ancestors: bool,
+        among: Iterable[UUID] | None = None,
+        limit: int | None = None,
     ) -> set[UUID]:
-        """Every file id in the pod the caller may read, in one statement.
+        """The file ids in the pod the caller may read, in one statement.
 
         This replaces a loop that loaded *every* file row in the pod, hydrated
         them into ORM objects and then entities,
@@ -317,50 +320,36 @@ class DatastoreFileRepository(
         agent holding a real folder grant. A human, by contrast, may
         read a POD file by role alone, so an unreadable folder above it has to
         hide what is inside.
+
+        ``among`` narrows the question to a known list -- the shape search uses
+        to authorize a candidate pool -- and costs a primary-key lookup per id
+        rather than a pass over the pod. It composes with ``walk_ancestors``:
+        the ancestor EXISTS correlates against the un-aliased ``DatastoreFile``,
+        so an extra predicate on the outer query leaves that correlation alone.
+
+        ``limit`` stops the statement early. Its only caller asks "is the
+        readable set small enough to send to the other database?" and passes
+        ``ceiling + 1``, so a short answer is the complete set and a full one
+        means *more than this*. That is why there is no ORDER BY: a truncated
+        result is never used as a result, only as that verdict.
         """
         actions = _file_actions_expr(ctx)
+        if among is not None:
+            among = list(among)
+            if not among:
+                return set()
         stmt = select(DatastoreFile.id).where(
             DatastoreFile.pod_id == pod_id,
             allowed_actions_contains(actions, Permissions.FOLDER_READ),
         )
+        if among is not None:
+            stmt = stmt.where(DatastoreFile.id.in_(among))
         if walk_ancestors:
             stmt = stmt.where(~has_unreadable_ancestor(ctx, pod_id))
+        if limit is not None:
+            stmt = stmt.limit(limit)
         result = await self.session.execute(stmt)
         return set(result.scalars().all())
-
-    async def file_visibility_split(
-        self,
-        *,
-        pod_id: UUID,
-        ctx: Context,
-        walk_ancestors: bool,
-    ) -> tuple[set[UUID], set[UUID]]:
-        """``(visible, hidden)`` for the whole pod, in one statement.
-
-        Search sends its filter to a *different database* — chunks live in the
-        pod's datastore schema, and there is no join back to here — so the ids
-        travel as an array either way. Which side to send is then a question of
-        length, and it is worth asking: in the observed data most files are
-        POD-visible and RESTRICTED is rare, so the hidden side is usually the
-        short one and often empty. Returning both costs the same single scan.
-
-        The predicate is the same one ``visible_file_ids`` uses, projected as a
-        boolean instead of applied as a filter, so the two cannot drift.
-        """
-        actions = _file_actions_expr(ctx)
-        visible_expr = allowed_actions_contains(actions, Permissions.FOLDER_READ)
-        if walk_ancestors:
-            visible_expr = and_(visible_expr, ~has_unreadable_ancestor(ctx, pod_id))
-        rows = await self.session.execute(
-            select(DatastoreFile.id, visible_expr.label("visible")).where(
-                DatastoreFile.pod_id == pod_id
-            )
-        )
-        visible: set[UUID] = set()
-        hidden: set[UUID] = set()
-        for file_id, is_visible in rows.all():
-            (visible if is_visible else hidden).add(file_id)
-        return visible, hidden
 
     async def get_tree_items(
         self,
