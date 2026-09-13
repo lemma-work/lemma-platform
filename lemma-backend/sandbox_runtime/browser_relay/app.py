@@ -35,6 +35,7 @@ from sandbox_runtime.tasks import create_background_task
 
 from .chrome import (
     BrowserNotRunning,
+    is_safe_session,
     CdpConnection,
     ensure_port,
     keepalive,
@@ -145,11 +146,21 @@ async def require_token(request: Request) -> None:
 
 
 def _session_name(session: str | None, domain: str | None) -> str:
-    if session:
-        return session
-    if domain:
-        return session_for_domain(domain)
-    return DEFAULT_SESSION
+    """Which browser session a request means.
+
+    A caller-supplied name is checked before it is used, because it becomes a
+    profile directory. Refused with a 422 rather than coerced: a name silently
+    rewritten would point the browser somewhere the caller did not ask for and
+    still report success. A name *derived* from a domain is safe by
+    construction, but goes through the same check so there is one answer to
+    "what may a session be called".
+    """
+    candidate = session or (session_for_domain(domain) if domain else DEFAULT_SESSION)
+    if candidate != DEFAULT_SESSION and not is_safe_session(candidate):
+        raise HTTPException(
+            status_code=422, detail=f"{candidate!r} is not a usable session name"
+        )
+    return candidate
 
 
 def create_app() -> FastAPI:
@@ -253,6 +264,11 @@ def create_app() -> FastAPI:
             return
 
         session_name = session or DEFAULT_SESSION
+        if session_name != DEFAULT_SESSION and not is_safe_session(session_name):
+            # Before `accept()`: a socket opened and then closed looks to a
+            # browser like a connection that dropped.
+            await websocket.close(code=CLOSE_UNAUTHENTICATED)
+            return
         try:
             port = await live_port(session_name)
             target_id = target or _first_target_id(await page_targets(port=port))

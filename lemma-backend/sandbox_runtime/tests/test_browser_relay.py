@@ -489,3 +489,45 @@ def test_every_state_route_is_behind_the_token(monkeypatch, tmp_path) -> None:
         ("/state:clear", {}),
     ):
         assert client.post(path, json=body).status_code == 401, path
+
+
+# ---------------------------------------------------------------------------
+# A session name is a path segment
+# ---------------------------------------------------------------------------
+
+
+def test_a_session_name_cannot_escape_the_profile_directory() -> None:
+    """CodeQL found this: the name becomes a directory, so it is checked where
+    the path is built rather than only in the helper that derives one."""
+    for attempt in ("../../etc", "..", ".", "a/b", "a\\b", "x\x00y", "/etc/passwd"):
+        assert chrome.is_safe_session(attempt) is False, attempt
+        with pytest.raises(chrome.UnsafeSessionName):
+            chrome.profile_for_session(attempt)
+
+
+def test_the_names_this_actually_uses_are_allowed() -> None:
+    for good in ("login-app.example.com", "workspace", "login-site", "a_b-1.2"):
+        assert chrome.is_safe_session(good) is True, good
+
+
+def test_a_derived_name_is_safe_by_construction() -> None:
+    """`session_for_domain` already strips; this is belt to that brace."""
+    for hostile in ("a/../../etc/passwd", "a;rm -rf /", "../..", "x\x00y"):
+        assert chrome.is_safe_session(state.session_for_domain(hostile)) is True
+
+
+def test_the_default_session_needs_no_profile_of_its_own() -> None:
+    assert chrome.profile_for_session(chrome.DEFAULT_SESSION) is None
+    assert chrome.profile_for_session(None) is None
+
+
+def test_a_route_refuses_an_unusable_session_name(monkeypatch, tmp_path) -> None:
+    """Refused in words, with nothing touched, rather than coerced into a
+    directory the caller did not ask for."""
+    client = _client(monkeypatch, tmp_path)
+    response = client.post(
+        "/browser:ensure",
+        json={"session": "../../etc"},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+    assert response.status_code == 422, response.text

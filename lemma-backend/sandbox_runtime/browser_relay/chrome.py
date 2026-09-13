@@ -53,6 +53,28 @@ _DEFAULT_PROFILE = "/tmp/lemma-browser/profile"
 DEFAULT_SESSION = os.environ.get("AGENT_BROWSER_SESSION", "workspace")
 
 
+#: A session name is a path segment before it is anything else, so what may be
+#: in one is decided here rather than trusted from whoever passed it. Letters,
+#: digits, dot, dash and underscore: enough for `login-app.example.com`, and
+#: nothing that means "parent directory" or "start again from the root".
+_SAFE_SESSION = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+class UnsafeSessionName(ValueError):
+    """A session name that cannot be part of a path."""
+
+
+def is_safe_session(session: str) -> bool:
+    """Whether this name may be used to build a profile directory.
+
+    Refuses rather than sanitises. Quietly rewriting `../../etc` into something
+    harmless would send the browser to a directory the caller did not ask for
+    and report success, and two callers whose names differ only in the
+    characters being stripped would silently share one profile.
+    """
+    return bool(_SAFE_SESSION.match(session)) and session not in {".", ".."}
+
+
 def profile_for_session(session: str | None) -> str | None:
     """The profile directory a session's browser should use, if not the default.
 
@@ -62,9 +84,16 @@ def profile_for_session(session: str | None) -> str | None:
     session started without this exits immediately, before writing a port, and
     reports only "Chrome exited early". Which is exactly what a sign-in looked
     like the first time the whole flow was run for real.
+
+    The name is validated *here*, where the path is built, rather than only in
+    `session_for_domain` which derives one from a host. A caller may name a
+    session directly, and a name that reached this unchecked would put the
+    profile -- and the port file read from inside it -- anywhere on the disk.
     """
     if not session or session == DEFAULT_SESSION:
         return None
+    if not is_safe_session(session):
+        raise UnsafeSessionName(f"{session!r} cannot be part of a path")
     return f"{_DEFAULT_PROFILE}-{session}"
 
 
