@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Sequence
 from functools import partial
 from uuid import UUID
 
@@ -79,22 +79,32 @@ available_surfaces_router = APIRouter(
 )
 
 
+async def _resolve_surface_reaches(
+    surfaces: Sequence[AgentSurfaceEntity],
+    *,
+    service: AgentSurfaceService,
+    uow,
+) -> list[SurfaceReach]:
+    """``reach`` for a page of surfaces, in one call rather than a gather of
+    one call per surface -- resolving a reach reads and writes through ``uow``,
+    and a session cannot serve two of those at once. See ``resolve_many``."""
+    return await SurfaceReachResolver().resolve_many(
+        surfaces,
+        credential_resolver=service._credential_resolver,
+        find_account=partial(account, uow),
+        surface_repository=service.surface_repository,
+    )
+
+
 async def _resolve_surface_reach(
     surface: AgentSurfaceEntity,
     *,
     service: AgentSurfaceService,
     uow,
 ) -> SurfaceReach | None:
-    """Best-effort ``reach`` for a surface (never breaks the response)."""
-    try:
-        return await SurfaceReachResolver().resolve(
-            surface,
-            credential_resolver=service._credential_resolver,
-            find_account=partial(account, uow),
-            surface_repository=service.surface_repository,
-        )
-    except Exception:
-        return None
+    """``reach`` for one surface."""
+    reaches = await _resolve_surface_reaches([surface], service=service, uow=uow)
+    return reaches[0]
 
 
 async def _resolve_agent_id_filter(
@@ -172,17 +182,10 @@ async def list_surfaces(
             named.add(surface.agent_id)
         readable.append(surface)
 
-    # One lookup for the page's agents rather than one per row, and the reaches
-    # concurrently rather than in series -- resolving a reach can call the
-    # platform, so a page of eight surfaces was eight sequential round trips to
-    # Slack or Telegram before the response could start.
+    # One lookup for the page's agents, and one for its reaches, rather than
+    # one of each per row.
     agent_names = await agent_names_for_ids(uow.session, named)
-    reaches = await asyncio.gather(
-        *(
-            _resolve_surface_reach(surface, service=service, uow=uow)
-            for surface in readable
-        )
-    )
+    reaches = await _resolve_surface_reaches(readable, service=service, uow=uow)
     visible: list[tuple[AgentSurfaceEntity, str | None, SurfaceReach | None]] = [
         (
             surface,
