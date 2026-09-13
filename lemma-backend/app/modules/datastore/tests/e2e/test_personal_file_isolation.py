@@ -338,3 +338,65 @@ class TestSearchScopeBranches:
         # The owner still finds both, whichever branch runs -- a filter that
         # hid everything would satisfy the equality above.
         assert _ids(await owner.search_files(token)) == {shared["id"], personal["id"]}
+
+    @pytest.mark.asyncio
+    async def test_a_readable_match_survives_a_pool_full_of_private_ones(
+        self,
+        authenticated_client: AsyncClient,
+        async_client: AsyncClient,
+        fixed_test_org,
+        index_datastore_file,
+        monkeypatch,
+    ):
+        """Post-filtering is not the last word, and it was written as if it were.
+
+        The argument for it said a caller over the pushdown ceiling reads most
+        of the pod, so almost every candidate is readable. That does not
+        follow. Being over the ceiling is an absolute count; the recall a
+        post-filter loses is a *fraction* -- six thousand readable files in a
+        pod of ten million is over the ceiling with a fraction near zero, and
+        the whole candidate pool comes back unreadable.
+
+        This is that shape in miniature: every row the capped pool can hold is
+        private to someone else, and one readable file matches further down.
+        Post-filtering alone answers nothing. The searcher widens to the exact
+        readable set instead, which is unbounded and is what being right costs.
+        """
+        ctx = await create_role_visibility_context(
+            authenticated_client,
+            async_client,
+            fixed_test_org,
+            pod_name_prefix="datastore-scope-widen",
+            custom_role="SCOPE_WIDEN",
+        )
+        pod_id = ctx["pod_id"]
+        owner = DatastoreApi(authenticated_client, pod_id)
+        other = DatastoreApi(async_client, pod_id, ctx["custom_viewer"])
+
+        token = f"ZZWiden{uuid4().hex[:8]}"
+        # Ranked above the readable one by repetition, so the capped pool is
+        # filled with rows this caller may not see rather than by luck.
+        for index in range(6):
+            private = await owner.upload_file(
+                f"private-{index}.md",
+                f"{token} {token} {token} {token} {token}".encode(),
+                directory_path="/me",
+            )
+            await _index(index_datastore_file, private)
+        shared = await owner.upload_file(
+            "shared.md",
+            f"a note mentioning {token} once".encode(),
+            directory_path="/",
+        )
+        await _index(index_datastore_file, shared)
+
+        # Below the readable set, so the scope is not enumerated up front.
+        monkeypatch.setattr(
+            datastore_settings, "datastore_search_readable_id_pushdown_limit", 0
+        )
+        found = await other.search_files(token, limit=1)
+
+        assert _ids(found) == {shared["id"]}, (
+            "the capped candidate pool was all private, and the readable match "
+            "further down was never returned"
+        )

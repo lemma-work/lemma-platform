@@ -15,6 +15,25 @@ from httpx import AsyncClient
 
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
+
+async def _stored_path(db_session, file_id: str) -> str:
+    """The path as the table holds it, not as the API spells it.
+
+    `/me/x` is per-request sugar for `/{owner}/x`, and the rename statements
+    run on stored paths. A test that passes the API spelling to them matches
+    nothing, which looks like a pass for every assertion that expects a
+    refusal.
+    """
+    from sqlalchemy import select
+
+    from app.modules.datastore.infrastructure.models import DatastoreFile
+
+    result = await db_session.execute(
+        select(DatastoreFile.path).where(DatastoreFile.id == UUID(file_id))
+    )
+    return result.scalars().one()
+
+
 pytestmark = pytest.mark.e2e
 
 
@@ -192,6 +211,64 @@ class TestDatastoreFilePaths:
         )
 
     @pytest.mark.asyncio
+    async def test_a_skill_tree_does_not_read_the_files_it_will_not_show(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """The second half of `PS-DATA-031`, which rooting the query left undone.
+
+        A tree shows every folder but caps files at `files_per_directory` in
+        each one, so its answer is O(folders x cap) however many files exist.
+        The overlay first read all of `/skills` and kept the rows under the
+        requested root; narrowing it to the root fixed which *skill* was read
+        and not how much of it -- every file beneath that root was still loaded
+        for Python to slice three off the front.
+
+        `tree_statements` is where the cap belongs and where the ordinary
+        directory tree already puts it: files ranked within their own directory
+        by a window function and cut at one more than will be shown. Asserting
+        the window is in the statement is asserting the cap is in the database
+        -- a Python slice over a full read produces the same answer, which is
+        exactly why this went unnoticed the first time.
+        """
+        from app.modules.test_support.query_counting import (
+            counted_queries,
+            format_statements,
+            statements_touching,
+        )
+
+        skill = f"e2e-skill-{uuid4().hex[:8]}"
+        await pod_api.create_folder(f"/skills/{skill}")
+        await pod_api.upload_file(
+            "SKILL.md", b"---\nname: mine\n---\n", directory_path=f"/skills/{skill}"
+        )
+        for index in range(12):
+            await pod_api.upload_file(
+                f"attachment-{index:02d}.md",
+                b"body",
+                directory_path=f"/skills/{skill}",
+            )
+
+        with counted_queries() as statements:
+            response = await pod_api.tree(
+                root_path=f"/skills/{skill}", files_per_directory=3
+            )
+
+        tree = response["tree"]
+        shown = [child for child in tree["children"] if child["kind"] != "FOLDER"]
+        assert len(shown) == 3, tree
+        assert tree["has_more_files"] is True, (
+            "thirteen files were capped at three and the caller was not told"
+        )
+
+        file_reads = statements_touching(statements, "datastore_files")
+        assert any("row_number" in statement.lower() for statement in file_reads), (
+            "no statement ranked files within their directory, so the cap is "
+            "still a Python slice over every file under the root:\n"
+            + format_statements(file_reads)
+        )
+
+    @pytest.mark.asyncio
     async def test_renaming_a_folder_costs_the_same_whatever_is_in_it(
         self,
         pod_api: DatastoreApi,
@@ -259,13 +336,11 @@ class TestDatastoreFilePaths:
         """The race the one-statement rewrite would otherwise make silent.
 
         The copy plan is taken before the storage phase and the bytes are copied
-        from it. A prefix `UPDATE` afterwards repoints whatever is under the old
-        path *now* -- so a file uploaded into the folder in between gets a new
-        path with nothing at its new key, a row naming an object nobody wrote.
-
-        Narrowing to the planned ids is not the fix: the late file would then sit
-        under a folder that no longer exists, which is the same corruption facing
-        the other way. Refusing is, and this is that refusal.
+        from it. A file uploaded into the folder in between was never copied, so
+        it must not be repointed -- and it must not be left under a folder that
+        no longer exists either, which is the same corruption facing the other
+        way. Refusing is the only answer that is neither, and this is that
+        refusal.
         """
         from app.modules.datastore.domain.errors import DatastoreConflictError
         from app.modules.datastore.infrastructure.repositories.file_repository import (
@@ -274,18 +349,27 @@ class TestDatastoreFilePaths:
         from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
         tag = f"race-{uuid4().hex[:6]}"
-        await pod_api.create_folder(f"/me/{tag}")
-        await pod_api.upload_file("planned.md", b"planned", directory_path=f"/me/{tag}")
+        folder = await pod_api.create_folder(f"/me/{tag}")
+        planned = await pod_api.upload_file(
+            "planned.md", b"planned", directory_path=f"/me/{tag}"
+        )
         # The plan saw one descendant; a second arrives before the rewrite runs.
         await pod_api.upload_file("late.md", b"late", directory_path=f"/me/{tag}")
 
+        # The *stored* paths, not the `/me` spelling the API answers with: the
+        # table holds `/{owner}/...`, and the rename runs on entity paths. The
+        # earlier version of this test passed the API path, so its `LIKE`
+        # matched nothing and the refusal it asserted was the empty one.
+        folder_path = await _stored_path(db_session, folder["id"])
+        planned_path = await _stored_path(db_session, planned["id"])
+
         repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
-        with pytest.raises(DatastoreConflictError, match="changed while it was"):
+        with pytest.raises(DatastoreConflictError, match="gained an entry"):
             await repository.rewrite_descendant_paths(
                 UUID(pod_api.pod_id),
-                previous_prefix=f"/me/{tag}",
-                new_prefix=f"/me/{tag}-renamed",
-                expected=1,
+                previous_prefix=folder_path,
+                new_prefix=f"{folder_path}-renamed",
+                planned=[(UUID(planned["id"]), planned_path)],
             )
         await db_session.rollback()
 
@@ -294,6 +378,77 @@ class TestDatastoreFilePaths:
             "planned.md",
             "late.md",
         }, "the refusal has to leave the folder exactly as it was"
+
+    @pytest.mark.asyncio
+    async def test_a_child_renamed_mid_rename_does_not_get_a_path_to_nowhere(
+        self,
+        pod_api: DatastoreApi,
+        db_session,
+    ):
+        """The same race, in the shape a row count cannot see.
+
+        One child renamed inside the folder while the copy runs takes a row out
+        of the plan's set and puts a different one in. The number of rows under
+        the old prefix never changes -- so the count check this used to rely on
+        stayed silent, while the renamed row was repointed to a path whose bytes
+        were copied from the name it no longer has.
+
+        The fence is the ``(id, path)`` pair now, and this asserts the count is
+        genuinely uninformative here: it still agrees, and the rename is still
+        refused.
+        """
+        from app.modules.datastore.domain.errors import DatastoreConflictError
+        from app.modules.datastore.infrastructure.repositories.file_repository import (
+            DatastoreFileRepository,
+        )
+        from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+        from sqlalchemy import func, select
+        from app.modules.datastore.infrastructure.models import DatastoreFile
+
+        tag = f"swap-{uuid4().hex[:6]}"
+        folder = await pod_api.create_folder(f"/me/{tag}")
+        staged = await pod_api.upload_file(
+            "before.md", b"contents", directory_path=f"/me/{tag}"
+        )
+        folder_path = await _stored_path(db_session, folder["id"])
+        # What the copy plan captured, taken before the child moves.
+        planned = [(UUID(staged["id"]), await _stored_path(db_session, staged["id"]))]
+
+        # The child is renamed within the same folder while the copy runs. Its
+        # bytes now live under `after.md`; the plan copied `before.md`.
+        await pod_api.update_file(staged["path"], new_path=f"/me/{tag}/after.md")
+
+        under_old_prefix = (
+            (
+                await db_session.execute(
+                    select(func.count())
+                    .select_from(DatastoreFile)
+                    .where(DatastoreFile.path.like(f"{folder_path}/%"))
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert under_old_prefix == len(planned), (
+            "the fixture did not reproduce a swap -- if the row count moved, "
+            "the old count check would have caught this and the test proves "
+            "nothing about the pair"
+        )
+
+        repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
+        with pytest.raises(DatastoreConflictError, match="still held the path"):
+            await repository.rewrite_descendant_paths(
+                UUID(pod_api.pod_id),
+                previous_prefix=folder_path,
+                new_prefix=f"{folder_path}-renamed",
+                planned=planned,
+            )
+        await db_session.rollback()
+
+        still_there = await pod_api.list_files(directory_path=f"/me/{tag}", limit=100)
+        assert {item["name"] for item in still_there["items"]} == {"after.md"}, (
+            "the refusal has to leave the folder exactly as it was"
+        )
 
     @pytest.mark.asyncio
     async def test_file_tree_pagination_rename_update_and_recursive_delete(

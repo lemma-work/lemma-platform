@@ -254,13 +254,18 @@ class FileAuthorizer:
         as an exact filter; a full one only says "more than the ceiling", and
         search falls back to authorizing what comes back.
 
-        The fallback is sound because the two branches cover each other's weak
-        spot rather than overlapping. Post-filtering loses recall in proportion
-        to how much of the pod the caller *cannot* read -- and this branch is
-        only reached by a caller who can read more files than the ceiling, for
-        whom the candidate pool is almost all readable. A caller who can read
-        little of the pod is exactly the caller whose readable set fits, and
-        they get the exact filter.
+        The ceiling decides which strategy is *tried first*. It does not decide
+        whether the answer is right, and an earlier version of this argued that
+        it did -- that post-filtering is safe above the ceiling because a
+        caller who can read that many files reads most of the pod. That does
+        not follow: post-filtering loses recall in proportion to the readable
+        *fraction*, and a caller with six thousand readable files in a pod of
+        ten million is over the ceiling with a fraction near zero. Their
+        candidate pool is then all files they may not read, and the search
+        answers nothing while readable matches exist.
+
+        So the fallback is not the last word. `readable_file_scope` below is,
+        and the searcher reaches for it when post-filtering comes up short.
         """
         ceiling = datastore_settings.datastore_search_readable_id_pushdown_limit
         readable = await self.file_repository.visible_file_ids(
@@ -272,6 +277,33 @@ class FileAuthorizer:
         if len(readable) > ceiling:
             return SearchFileScope.post_filtered()
         return SearchFileScope.only(readable)
+
+    async def readable_file_scope(
+        self,
+        *,
+        pod_id: UUID,
+        ctx: Context,
+    ) -> SearchFileScope:
+        """The caller's complete readable set, however large it is.
+
+        The unbounded read this whole change exists to stop being the *default*
+        -- kept, because it is the only thing that is exactly right when a
+        caller may read a small fraction of a large pod, and that caller
+        otherwise gets an empty answer to a query with readable matches in it.
+
+        Reached only when the bounded probe went over the ceiling *and*
+        post-filtering a saturated candidate pool still came up short, which is
+        both rare and self-announcing: the searcher logs the pod when it
+        happens. Making the ceiling larger is what stops it happening; making
+        it smaller never makes an answer wrong, only slower.
+        """
+        return SearchFileScope.only(
+            await self.file_repository.visible_file_ids(
+                pod_id=pod_id,
+                ctx=ctx,
+                walk_ancestors=not _is_workload(ctx),
+            )
+        )
 
     async def readable_among(
         self,

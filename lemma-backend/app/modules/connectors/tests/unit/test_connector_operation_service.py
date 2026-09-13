@@ -740,3 +740,106 @@ async def test_naming_one_operation_does_not_read_the_connector_catalog():
     assert response.total_operations == 200
     operation_repository.list_by_connector.assert_not_awaited()
     operation_repository.list_by_connector_and_names.assert_awaited_once()
+
+
+def _install_double(operations, *, catalog=()):
+    """The install side of the same read, narrowed the way production narrows it.
+
+    Answering every name asked for regardless of what the install holds would
+    let a precedence bug pass by making the install look like it owns
+    everything; answering by name is what the repository does.
+
+    `count_with_catalog_overlap` is derived from the same two lists rather than
+    stubbed with a number, because the count it returns is `discovered` minus
+    the names the catalog already has -- a double that answered any pair would
+    certify arithmetic the database cannot produce.
+    """
+    repository = AsyncMock()
+    catalog_names = {operation.name.strip().lower() for operation in catalog}
+
+    async def _by_names(auth_config_id, names):
+        wanted = {name.strip().lower() for name in names}
+        return [
+            operation
+            for operation in operations
+            if operation.name.strip().lower() in wanted
+            or (operation.provider_operation_name or "").strip().lower() in wanted
+        ]
+
+    async def _overlap(auth_config_id, *, connector_id=None, kind=None):
+        shadowed = sum(
+            1
+            for operation in operations
+            if operation.name.strip().lower() in catalog_names
+        )
+        return len(operations), shadowed
+
+    repository.list_by_auth_config_and_names.side_effect = _by_names
+    repository.count_with_catalog_overlap.side_effect = _overlap
+    return repository
+
+
+async def test_an_install_operation_wins_by_its_provider_alias_too():
+    """Install precedence has to hold whichever name the caller addressed.
+
+    Where an install and the catalog both describe an operation, the install
+    describes the server actually being called, so it wins. That rule was
+    applied to the operation's own name and inverted for its provider alias:
+    both were merged into one map, the name with an assignment and the alias
+    with `setdefault`, so the catalog's alias landed first and the install's
+    could not replace it. Asking by name got the install's schema and asking by
+    alias got the catalog's -- two different answers about one operation,
+    decided by which spelling the caller happened to use.
+    """
+    catalog_operations = [
+        ConnectorOperationEntity(
+            id="slack:send_message",
+            connector_id="slack",
+            name="send_message",
+            provider_operation_name="chat.postMessage",
+            description="Catalog copy.",
+            input_schema={"type": "object", "title": "catalog"},
+            output_schema={"type": "object"},
+        )
+    ]
+    catalog = _catalog_double(catalog_operations)
+    installs = _install_double(
+        [
+            ConnectorOperationEntity(
+                id="install:send_message",
+                connector_id="slack",
+                name="send_message",
+                provider_operation_name="chat.postMessage",
+                description="Install copy.",
+                input_schema={"type": "object", "title": "install"},
+                output_schema={"type": "object"},
+            )
+        ],
+        catalog=catalog_operations,
+    )
+
+    service = ConnectorOperationService(
+        connector_repository=AsyncMock(
+            get=AsyncMock(
+                return_value=ConnectorEntity(id="slack", auth_kind=ConnectorKind.HTTP)
+            )
+        ),
+        operation_repository=catalog,
+        operation_gateway=AsyncMock(),
+        account_resolution_service=AsyncMock(),
+        auth_config_operation_repository=installs,
+    )
+    auth_config_id = uuid4()
+
+    by_name = await service.get_operation_details_batch(
+        "slack", operation_names=["send_message"], auth_config_id=auth_config_id
+    )
+    by_alias = await service.get_operation_details_batch(
+        "slack", operation_names=["chat.postMessage"], auth_config_id=auth_config_id
+    )
+
+    assert by_name.items[0].input_schema["title"] == "install"
+    assert by_alias.items[0].input_schema["title"] == "install", (
+        "the provider alias resolved to the catalog's schema while the "
+        "operation's own name resolved to the install's"
+    )

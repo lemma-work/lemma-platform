@@ -108,7 +108,6 @@ async def named_operations(
     because where both exist the install describes the server actually
     being called.
     """
-    by_name: dict[str, Any] = {}
     catalog = await catalog_repository.list_by_connector_and_names(
         connector_id, operation_names, kind=kind
     )
@@ -119,18 +118,30 @@ async def named_operations(
                 auth_config_id, operation_names
             )
         )
-    # Catalog first so the install overwrites it, not the other way round.
+
+    # Two maps, not one, and both filled catalog-first so the install
+    # overwrites it. A single map had the alias entries written with
+    # `setdefault`, which inverts precedence for exactly those: the catalog's
+    # alias landed first and the install's could not replace it, so asking by
+    # a provider alias answered with the catalog's schema while asking by the
+    # operation's own name answered with the install's.
+    #
+    # Keeping them separate also preserves the other half of the rule. A real
+    # name outranks an alias that collides with it, whichever operation owns
+    # which, because the alias map is only consulted when the name map misses.
+    by_name: dict[str, Any] = {}
+    by_provider_name: dict[str, Any] = {}
     for operation in (*catalog, *installed):
         by_name[normalized_operation_name(operation.name)] = operation
         if operation.provider_operation_name:
-            by_name.setdefault(
-                normalized_operation_name(operation.provider_operation_name),
-                operation,
-            )
+            by_provider_name[
+                normalized_operation_name(operation.provider_operation_name)
+            ] = operation
 
     selected: list[Any] = []
     for operation_name in operation_names:
-        operation = by_name.get(normalized_operation_name(operation_name))
+        normalized = normalized_operation_name(operation_name)
+        operation = by_name.get(normalized) or by_provider_name.get(normalized)
         if not operation:
             raise OperationNotFoundError(operation_name)
         selected.append(operation)

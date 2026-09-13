@@ -46,6 +46,7 @@ from app.modules.datastore.infrastructure.repositories.file_processing_state imp
 from app.modules.datastore.infrastructure.repositories.file_listing_sql import (
     direct_child_patterns,
     repoint_descendants,
+    stragglers_under,
 )
 from app.modules.datastore.infrastructure.repositories.file_recovery_queries import (
     DatastoreFileRecoveryQueriesMixin,
@@ -385,37 +386,62 @@ class DatastoreFileRepository(
         *,
         previous_prefix: str,
         new_prefix: str,
-        expected: int,
+        planned: Sequence[tuple[UUID, str]],
     ) -> int:
-        """Repoint every path under a renamed folder; see `repoint_descendants`.
+        """Repoint a renamed folder's descendants; see `repoint_descendants`.
 
         This was a `SELECT` plus an `UPDATE` per descendant -- `update()` reads
         the row before writing it -- so renaming a folder of five hundred files
         issued a thousand statements inside the request transaction.
 
-        ``expected`` is how many descendants the copy plan was built from, and
-        the count this returns has to match it. The plan is taken before the
-        storage phase and the bytes are copied from it, so a file that appeared
-        under the folder in between would be repointed here with nothing at its
-        new key -- a row naming an object nobody wrote. A file that vanished is
-        the same disagreement facing the other way.
+        ``planned`` is the ``(id, path)`` of every descendant the copy plan was
+        built from, and both halves are load-bearing. The bytes were copied
+        from those paths, so a row that no longer holds the path it was copied
+        from must not be repointed: its new path would name an object nobody
+        wrote. Pairing the id with the path is what refuses that, and it is
+        what a row *count* could not -- renaming one child inside the folder
+        while the copy ran left the count unchanged and the fence silent.
 
-        Refusing is the answer rather than repairing: the transaction rolls back,
-        the rename is reported as failed, and the caller retries against a tree
-        that has stopped moving. The old per-row loop re-read the descendants
-        after the copies and repointed the late file just the same, silently.
+        Two disagreements are possible and both are refused. A planned row that
+        moved, vanished, or was renamed does not match its pair, so fewer rows
+        move than were staged. A row that arrived under the old path after the
+        plan was taken is in no pair at all, so it does not move -- and would
+        be stranded under a folder that no longer exists, which is why
+        ``stragglers_under`` looks for it rather than trusting the count.
+
+        Refusing is the answer rather than repairing: the transaction rolls
+        back, the rename is reported as failed, and the caller retries against
+        a tree that has stopped moving. The old per-row loop re-read the
+        descendants after the copies and repointed the late file just the same,
+        silently.
         """
-        result = await self.session.execute(
-            repoint_descendants(
-                pod_id, previous_prefix=previous_prefix, new_prefix=new_prefix
+        expected = len(planned)
+        moved = 0
+        if planned:
+            result = await self.session.execute(
+                repoint_descendants(
+                    pod_id,
+                    previous_prefix=previous_prefix,
+                    new_prefix=new_prefix,
+                    planned=planned,
+                )
             )
-        )
-        moved = int(result.rowcount or 0)
+            moved = int(result.rowcount or 0)
         if moved != expected:
             raise DatastoreConflictError(
                 f"{new_prefix} changed while it was being renamed: "
-                f"{expected} entries were staged and {moved} were found. "
-                "Nothing was moved; try again."
+                f"{expected} entries were staged and {moved} still held the "
+                "path their contents were copied from. Nothing was moved; "
+                "try again."
+            )
+        straggler = await self.session.execute(
+            stragglers_under(pod_id, previous_prefix)
+        )
+        if straggler.scalars().first() is not None:
+            raise DatastoreConflictError(
+                f"{previous_prefix} gained an entry while it was being "
+                "renamed, which has no contents at the new path. Nothing was "
+                "moved; try again."
             )
         return moved
 

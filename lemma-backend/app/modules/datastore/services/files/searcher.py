@@ -25,6 +25,17 @@ _CANDIDATE_OVERSHOOT = 5
 _MAX_CANDIDATES = 200
 
 
+def _as_search_method(search_method: str | SearchMethod) -> SearchMethod:
+    """The wire spelling, or the default for anything unrecognised."""
+    if isinstance(search_method, SearchMethod):
+        return search_method
+    return {
+        "VECTOR": SearchMethod.VECTOR,
+        "TEXT": SearchMethod.TEXT,
+        "HYBRID": SearchMethod.HYBRID,
+    }.get(str(search_method).upper(), SearchMethod.HYBRID)
+
+
 def _candidate_limit(limit: int) -> int:
     """How many chunks to retrieve when the query could not be narrowed.
 
@@ -65,6 +76,42 @@ class FileSearcher:
             getattr(authorizer, "file_repository", None), "session", None
         )
 
+    async def _authorized_scope_path(
+        self,
+        pod_id: UUID,
+        scope_path: str | None,
+        *,
+        requester_user_id: UUID,
+        ctx: Context,
+    ) -> str | None:
+        """The scope resolved to a stored path, and read-checked.
+
+        Runs before the connection is released, because all of it reads the
+        platform database. ``None`` means the whole pod, which needs no check
+        of its own -- the file scope below is what bounds that.
+        """
+        if not scope_path:
+            return None
+        scope_path = self.paths._resolve_api_path(
+            scope_path,
+            requester_user_id=requester_user_id,
+        )
+        directory = await self.lookup.validate_directory_path(
+            pod_id,
+            scope_path,
+            requester_user_id=requester_user_id,
+            ctx=ctx,
+        )
+        normalized = directory.path if directory else scope_path
+        if not self.paths._is_requester_personal_path(normalized, requester_user_id):
+            await self.authz.require_document_read(
+                user_id=requester_user_id,
+                pod_id=pod_id,
+                resource_name=normalized,
+                ctx=ctx,
+            )
+        return normalized
+
     async def search_files(
         self,
         pod_id: UUID,
@@ -78,105 +125,95 @@ class FileSearcher:
     ):
         if ctx is None:
             raise RuntimeError("Context is required for datastore file search")
-        normalized_scope_path = None
-        if scope_path:
-            scope_path = self.paths._resolve_api_path(
-                scope_path,
-                requester_user_id=requester_user_id,
-            )
-            directory = await self.lookup.validate_directory_path(
-                pod_id,
-                scope_path,
-                requester_user_id=requester_user_id,
-                ctx=ctx,
-            )
-            normalized_scope_path = directory.path if directory else scope_path
-        if normalized_scope_path and not self.paths._is_requester_personal_path(
-            normalized_scope_path,
-            requester_user_id,
-        ):
-            await self.authz.require_document_read(
-                user_id=requester_user_id,
-                pod_id=pod_id,
-                resource_name=normalized_scope_path,
-                ctx=ctx,
-            )
-
-        if isinstance(search_method, SearchMethod):
-            method = search_method
-        else:
-            method = {
-                "VECTOR": SearchMethod.VECTOR,
-                "TEXT": SearchMethod.TEXT,
-                "HYBRID": SearchMethod.HYBRID,
-            }.get(str(search_method).upper(), SearchMethod.HYBRID)
+        normalized_scope_path = await self._authorized_scope_path(
+            pod_id,
+            scope_path,
+            requester_user_id=requester_user_id,
+            ctx=ctx,
+        )
+        method = _as_search_method(search_method)
 
         file_scope = await self.authorizer.search_file_scope(pod_id=pod_id, ctx=ctx)
-        # An exact scope needs no headroom: every row the chunk query returns
-        # is one the caller may read, so asking for `limit` gets `limit`. An
-        # unnarrowed one does -- rows are dropped after the fact, and without
-        # slack to drop them from a page comes back short of what was asked.
-        candidate_limit = limit if file_scope.enumerated else _candidate_limit(limit)
         search_service = self._search_factory_provider()(pod_id)
-        # The search itself touches only the datastore database, so the
-        # platform connection is handed back for the duration of it.
-        #
-        # What it was costing: a vector or hybrid search embeds the query with
-        # the provider before it can query anything, and an agent calling
-        # `pod_search_files` holds the platform connection across that whole
-        # round trip. Measured in production: 105 holds with a median of 4.3s
-        # and a maximum of 33s, idle in an open transaction for ~97% of it.
-        #
-        # The release must wrap this call and nothing wider. It happens once,
-        # on entry, so a platform read *inside* the block re-acquires the
-        # connection and then holds it across the slow part anyway -- while the
-        # static gate goes quiet, which is worse than not releasing at all.
-        # That is why the post-filter below sits after the block and not in it.
-        # See `connection_released`.
-        async with connection_released(self._platform_session):
-            results = await search_service.search(
-                query=query,
-                limit=candidate_limit,
-                method=method,
-                scope_path=normalized_scope_path,
-                include_descendants=include_descendants,
-                file_scope=file_scope,
+        # At most two passes, and the second is the exact one: widening
+        # replaces the scope with the caller's complete readable set, which is
+        # enumerated, which is the loop's own exit condition.
+        while True:
+            # An exact scope needs no headroom: every row the chunk query
+            # returns is one the caller may read, so asking for `limit` gets
+            # `limit`. An unnarrowed one does -- rows are dropped after the
+            # fact, and without slack to drop them a page comes back short.
+            candidate_limit = (
+                limit if file_scope.enumerated else _candidate_limit(limit)
             )
-        # One rule, both branches: nothing is returned whose id is not in a set
-        # the *platform* database just said this caller may read.
-        #
-        # When the scope was enumerated that set is the scope itself, and the
-        # check is belt and braces -- it costs one set membership test per row
-        # and it is the only thing standing between a future bug in the
-        # pushdown and a leaked file. When it was not, this is the
-        # authorization, and it is the only place it happens.
-        if file_scope.enumerated:
-            readable = file_scope.file_ids
-        else:
-            readable = await self.authorizer.readable_among(
-                pod_id=pod_id,
-                ctx=ctx,
-                file_ids={result.file_id for result in results},
-            )
-        visible_results = [result for result in results if result.file_id in readable][
-            :limit
-        ]
-        if not file_scope.enumerated and len(visible_results) < limit < len(results):
-            # The one case where a search can come back short of what it could
-            # have found: the chunk query was not narrowed, its candidates were
-            # capped, and enough of them turned out to be unreadable to eat
-            # into the page. Logged rather than fixed in place because the fix
-            # is a larger `datastore_search_readable_id_pushdown_limit`, which
-            # is an operator's decision about how much may travel between the
-            # two databases -- and the alternative, searching again, costs a
-            # second embedding round trip on the slowest path there is.
+            # The search itself touches only the datastore database, so the
+            # platform connection is handed back for the duration of it.
+            #
+            # What it was costing: a vector or hybrid search embeds the query
+            # with the provider before it can query anything, and an agent
+            # calling `pod_search_files` holds the platform connection across
+            # that whole round trip. Measured in production: 105 holds with a
+            # median of 4.3s and a maximum of 33s, idle in an open transaction
+            # for ~97% of it.
+            #
+            # The release must wrap this call and nothing wider. It happens
+            # once, on entry, so a platform read *inside* the block re-acquires
+            # the connection and then holds it across the slow part anyway --
+            # while the static gate goes quiet, which is worse than not
+            # releasing at all. That is why the authorization below sits after
+            # the block and not in it. See `connection_released`.
+            async with connection_released(self._platform_session):
+                results = await search_service.search(
+                    query=query,
+                    limit=candidate_limit,
+                    method=method,
+                    scope_path=normalized_scope_path,
+                    include_descendants=include_descendants,
+                    file_scope=file_scope,
+                )
+            # One rule, both branches: nothing is returned whose id is not in a
+            # set the *platform* database just said this caller may read.
+            #
+            # When the scope was enumerated that set is the scope itself, and
+            # the check is belt and braces -- it costs one set membership test
+            # per row and it is the only thing standing between a future bug in
+            # the pushdown and a leaked file. When it was not, this is the
+            # authorization, and it is the only place it happens.
+            if file_scope.enumerated:
+                readable = file_scope.file_ids
+            else:
+                readable = await self.authorizer.readable_among(
+                    pod_id=pod_id,
+                    ctx=ctx,
+                    file_ids={result.file_id for result in results},
+                )
+            visible_results = [
+                result for result in results if result.file_id in readable
+            ][:limit]
+
+            if file_scope.enumerated or len(visible_results) >= limit:
+                break
+            if len(results) < candidate_limit:
+                # The chunk query returned everything it had, so post-filtering
+                # it was exhaustive and the short page is the true answer.
+                break
+
+            # A saturated pool that did not fill the page means this caller
+            # reads too little of this pod for an unnarrowed query to find them
+            # -- over the ceiling in absolute terms and still a small fraction.
+            # Enumerating is unbounded and it is what being right costs here;
+            # the ceiling is the lever that decides how often it is paid.
             logger.warning(
-                "datastore.search.post_filter.short_page",
+                "datastore.search.readable_set_enumerated",
                 pod_id=str(pod_id),
                 requested=limit,
-                returned=len(visible_results),
+                post_filtered=len(visible_results),
                 candidates=len(results),
             )
+            file_scope = await self.authorizer.readable_file_scope(
+                pod_id=pod_id, ctx=ctx
+            )
+
         return [
             self._to_api_search_result(result, requester_user_id=requester_user_id)
             for result in visible_results

@@ -138,7 +138,7 @@ class DatastoreFileRepositoryPort(Protocol):
         *,
         previous_prefix: str,
         new_prefix: str,
-        expected: int,
+        planned: Sequence[tuple[UUID, str]],
     ) -> int: ...
 
     async def get_direct_children(

@@ -479,11 +479,15 @@ class FileWriter(FolderCreationMixin):
             folder_entity.pod_id,
             previous_prefix=plan.previous_path,
             new_prefix=folder_entity.path,
-            # The bytes were copied from `renamed_descendants`; anything else
-            # under the folder now would be repointed with nothing at its new
-            # key. See `rewrite_descendant_paths` for why this refuses rather
-            # than repairs.
-            expected=len(plan.renamed_descendants),
+            # The bytes were copied from `renamed_descendants`, so both halves
+            # of each pair matter: a row that no longer holds the path it was
+            # copied from must not be repointed, and a row that arrived since
+            # was never copied at all. See `rewrite_descendant_paths` for why
+            # this refuses rather than repairs.
+            planned=[
+                (descendant.id, descendant.path)
+                for descendant in plan.renamed_descendants
+            ],
         )
         for descendant in plan.renamed_descendants:
             if descendant.id not in plan.artifacts_to_regenerate:

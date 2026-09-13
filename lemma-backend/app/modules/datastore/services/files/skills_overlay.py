@@ -68,34 +68,57 @@ class SkillsOverlay:
             ctx=ctx,
         )
 
-    async def _visible_subtree(
+    async def _visible_tree_items(
         self,
         *,
         pod_id: UUID,
         root_path: str,
+        files_per_directory: int,
         requester_user_id: UUID,
         ctx: Context,
     ) -> list[DatastoreFileEntity]:
-        """The root and everything under it, for one skill rather than all of them.
+        """What a tree rooted here can display, and nothing else.
 
-        A tree rooted at `/skills/one-skill` used to read the whole `/skills`
-        subtree and then keep the rows whose path began with the root -- so
-        opening one skill's tree read every file of every other skill in the
-        pod, and got slower as unrelated skills were added.
+        Two narrowings, and the first one on its own was not enough. A tree
+        rooted at `/skills/one-skill` used to read the whole `/skills` subtree
+        and keep the rows under the root; rooting the query fixed *that* and
+        left the second half untouched -- every file beneath the root was still
+        loaded so that Python could show `files_per_directory` of each folder.
+        A skill with a thousand attachments still read a thousand rows to
+        render three.
 
-        The root row comes with them because `get_descendants` matches what is
-        *under* a prefix; the tree needs the node it is rooted at.
+        `get_tree_items` is the shape the ordinary directory tree already uses:
+        folders whole, because they are the tree's structure and there are far
+        fewer of them, and files ranked inside their own directory and cut at
+        one more than will be shown -- the extra row being how `has_more_files`
+        can still tell a directory was truncated. Visibility is applied inside
+        that window rather than over its result, so a caller never spends the
+        cap on files they cannot read.
+
+        The root row is fetched separately because those statements match what
+        is *under* a prefix, and the tree needs the node it is rooted at. It is
+        one indexed lookup, and it goes through the short-list visibility check
+        so the root is authorized like everything else.
         """
-        items = [
-            *await self.file_repository.get_by_paths(pod_id, [root_path]),
-            *await self.file_repository.get_descendants(pod_id, root_path),
-        ]
-        return await self._visible_pod_items(
-            items,
+        root = await self._visible_pod_items(
+            await self.file_repository.get_by_paths(pod_id, [root_path]),
             pod_id=pod_id,
             requester_user_id=requester_user_id,
             ctx=ctx,
         )
+        return [
+            *root,
+            *await self.file_repository.get_tree_items(
+                pod_id,
+                ctx=ctx,
+                subtree_root=root_path,
+                files_per_directory=files_per_directory,
+                # Asked rather than restated: the human/workload split is the
+                # authorizer's rule, and a second copy of it here would be a
+                # second thing to keep right.
+                walk_ancestors=self.authorizer.walks_ancestors(ctx),
+            ),
+        ]
 
     async def list_overlay_files(
         self,
@@ -174,9 +197,10 @@ class SkillsOverlay:
             if item.path == normalized_root
             or item.path.startswith(f"{normalized_root}/")
         ]
-        db_items = await self._visible_subtree(
+        db_items = await self._visible_tree_items(
             pod_id=pod_id,
             root_path=normalized_root,
+            files_per_directory=files_per_directory,
             requester_user_id=requester_user_id,
             ctx=ctx,
         )
