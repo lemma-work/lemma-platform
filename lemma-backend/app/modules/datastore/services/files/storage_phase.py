@@ -70,6 +70,22 @@ class _StorageMove:
 
 
 @dataclass(frozen=True, slots=True)
+class _ArtifactPlan:
+    """What a rename can carry across, and what it destroys.
+
+    Separate fields because they are separate decisions with separate
+    consequences: one is bytes to copy, the other is rows to mark. Collapsing
+    them -- an empty move list standing for "nothing to do" -- is how a renamed
+    document lost its converted output and kept a COMPLETED status.
+    """
+
+    moves: tuple["_ArtifactMove", ...]
+    #: File ids whose artifacts the new name invalidates, so they must be
+    #: regenerated rather than carried.
+    invalidated: frozenset[UUID]
+
+
+@dataclass(frozen=True, slots=True)
 class _ArtifactMove:
     """A file's derived artifacts following its bytes to a new path.
 
@@ -94,25 +110,35 @@ def plan_artifact_moves(
     descendants: list[DatastoreFileEntity],
     previous_path: str,
     has_content: bool,
-) -> list[_ArtifactMove]:
-    """Which derived containers a rename can carry across, and which it cannot.
+) -> _ArtifactPlan:
+    """Which derived containers a rename can carry across, and which it voids.
 
     The rule is the file's **name**, not its path. Artifacts describe the bytes
     as read through a particular filename -- `report.pdf` extracts differently
-    from `report.docx` -- so a rename that changes the name invalidates them and
-    they are deleted and regenerated, exactly as before. A rename that only
-    moves a file, or renames the folder above it, leaves every name intact,
-    which is precisely the case that used to cost the most.
+    from `report.docx` -- so a rename that changes the name invalidates them. A
+    rename that only moves a file, or renames the folder above it, leaves every
+    name intact, which is precisely the case that used to cost the most.
 
-    A content update plans nothing: new bytes genuinely need new artifacts.
+    Both halves come back, and that is the correction: refusing the move is only
+    half an answer, because the old container is swept after the commit either
+    way. A file whose artifacts are void has to be *said* to be void, or it
+    keeps a COMPLETED status with no converted output at either path and nothing
+    has any reason to produce it again.
+
+    A content update plans nothing either way: new bytes need new artifacts, and
+    `should_sync` already says so.
     """
     if has_content or previous_path == file_entity.path:
-        return []
+        return _ArtifactPlan(moves=(), invalidated=frozenset())
 
     moves: list[_ArtifactMove] = []
+    invalidated: set[UUID] = set()
 
     def carry(entity: DatastoreFileEntity, was_at: str, now_at: str) -> None:
-        if not entity.is_file or _file_name(was_at) != _file_name(now_at):
+        if not entity.is_file:
+            return
+        if _file_name(was_at) != _file_name(now_at):
+            invalidated.add(entity.id)
             return
         moves.append(
             _ArtifactMove(
@@ -131,7 +157,7 @@ def plan_artifact_moves(
         for descendant in descendants:
             suffix = descendant.path.removeprefix(previous_path)
             carry(descendant, descendant.path, f"{file_entity.path}{suffix}")
-    return moves
+    return _ArtifactPlan(moves=tuple(moves), invalidated=frozenset(invalidated))
 
 
 def _file_name(path: str) -> str:
@@ -197,12 +223,11 @@ class _UpdatePlan:
     renamed_descendants: tuple[DatastoreFileEntity, ...]
     should_sync: bool
     requester_user_id: UUID
-    #: File ids whose derived artifacts could not be carried across. Mutable on
-    #: a frozen dataclass the way `file_entity` already is: the storage phase
-    #: fills it in, and the DB phase that follows marks exactly those rows for
-    #: reprocessing -- which is what the old code did to every row
-    #: unconditionally.
-    artifacts_left_behind: set[UUID] = field(default_factory=set)
+    #: File ids whose derived artifacts will not survive this update, so the
+    #: rows have to be marked for reprocessing. Seeded by the planner with the
+    #: files a name change voids, and added to by the storage phase when a copy
+    #: fails. Mutable on a frozen dataclass the way `file_entity` already is.
+    artifacts_to_regenerate: set[UUID] = field(default_factory=set)
 
 
 class FileStoragePhase:
@@ -280,23 +305,28 @@ class FileStoragePhase:
         await self._carry_artifacts(plan)
 
     async def _carry_artifacts(self, plan: _UpdatePlan) -> None:
-        """Move each file's derived container, noting the ones that would not go.
+        """Copy each file's derived container, noting the ones that would not go.
+
+        Copies, and leaves the source alone. The old location is dropped in
+        `finalize_update`, after the row naming the new one has been committed --
+        the same order the file's own bytes already follow, and for the same
+        reason: a persistence failure after a *move* rolled the path back and
+        left the file readable with its converted output gone.
 
         Best-effort, and deliberately not part of the rollback above: a derived
         artifact is regenerable and the file's own bytes are not, so a figure
         that failed to copy must not cost somebody their rename. What it costs
-        instead is one reprocess -- the row is marked, `_update_requires_sync`
-        sees it, and the file re-extracts exactly as it used to.
+        instead is one reprocess.
 
         Before the DB phase, because that phase is where the mark has to land.
         """
         for move in plan.artifact_moves:
             try:
-                await self.storage.move_prefix(
+                await self.storage.copy_prefix(
                     move.source_prefix, move.destination_prefix
                 )
             except DatastoreDomainError:
-                plan.artifacts_left_behind.add(move.file_id)
+                plan.artifacts_to_regenerate.add(move.file_id)
                 logger.debug(
                     "datastore.storage_phase.carrying_child_artifacts_s.diagnostic",
                     file_id=str(move.file_id),
@@ -358,7 +388,7 @@ class FileStoragePhase:
         updated_entity: DatastoreFileEntity,
         search_service,
     ) -> None:
-        """Tell the index where things are now, and clear what did not move.
+        """Tell the index where things are now, and drop what is behind them.
 
         The index keys chunks by file id, so a rename is a metadata correction
         rather than a reindex -- which is the whole reason a rename no longer
@@ -366,14 +396,14 @@ class FileStoragePhase:
         descendants did not, so a renamed folder left every file beneath it
         claiming its old path in search results.
 
-        The old container is only swept for files whose artifacts stayed behind.
-        Sweeping it unconditionally would delete the container `move_prefix`
-        just wrote when a file's name is unchanged -- source and destination
-        differ, but a failed move leaves the source where a successful one does
-        not.
+        The old container goes for **every** renamed file, and it goes here
+        rather than in the storage phase. A carried file's artifacts were
+        *copied* to the new path, so the old copy is a duplicate the moment the
+        row is committed; an invalidated one's are stale by definition. Doing it
+        before the commit is what left a rolled-back rename without its
+        converted output.
         """
         update_file_path = getattr(search_service, "update_file_path", None)
-        carried = {move.file_id for move in plan.artifact_moves}
 
         # `(entity, where it is now, where it was)`. The descendants in the plan
         # were read before the rename and still carry their old paths, so the
@@ -396,11 +426,8 @@ class FileStoragePhase:
                         entity.id, now_at, self.paths._parent_path(now_at)
                     )
             # Folders have no derived container, so there was never anything at
-            # their old path to sweep -- the call was a no-op issued once per
-            # rename.
-            if entity.is_file and (
-                entity.id not in carried or entity.id in plan.artifacts_left_behind
-            ):
+            # their old path to sweep.
+            if entity.is_file:
                 await self.projection.delete_child_artifacts(entity.pod_id, was_at)
 
     async def _purge_search_entries(self, search_service, files: Sequence) -> None:

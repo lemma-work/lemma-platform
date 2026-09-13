@@ -146,17 +146,17 @@ class ObstoreDatastoreStorage:
             )
             raise DatastoreInfrastructureError("Failed to delete file")
 
-    async def move_prefix(self, source_prefix: str, destination_prefix: str) -> int:
-        """Relocate every object under one prefix, and return how many moved.
+    async def copy_prefix(self, source_prefix: str, destination_prefix: str) -> int:
+        """Copy every object under one prefix to another, and say how many.
 
-        Copy-then-delete rather than a rename, because object stores have no
-        rename: the two are the same operation and only the order matters. Copy
-        first, so an interruption leaves both copies rather than neither.
+        Copy rather than move, and the difference is the whole point: the source
+        stays until somebody decides it is safe to drop it. A move here deleted
+        a renamed file's converted output before the row naming it had been
+        committed, so a persistence failure rolled the path back and left the
+        file readable with its artifacts gone.
 
         Defined once on the obstore base, so every backend gets it: the listing
-        it needs is the same listing ``delete_prefix`` above already does, and
-        the only reason a caller could not move a prefix before was that this
-        method did not exist.
+        it needs is the same listing ``delete_prefix`` below already does.
         """
         sources: list[str] = []
         try:
@@ -173,16 +173,15 @@ class ObstoreDatastoreStorage:
                 await obs.copy_async(
                     self.store, source, f"{destination_prefix}{suffix}"
                 )
-            await obs.delete_async(self.store, sources)
             return len(sources)
         except Exception as exc:
             if self._is_missing_object_error(exc):
                 return 0
             logger.debug(
-                "datastore.storage.moving_datastore_prefix_s.propagated",
+                "datastore.storage.copying_datastore_prefix_s.propagated",
                 exc_info=True,
             )
-            raise DatastoreInfrastructureError("Failed to move folder contents")
+            raise DatastoreInfrastructureError("Failed to copy folder contents")
 
     async def delete_prefix(self, prefix: str) -> int:
         deleted_paths: list[str] = []

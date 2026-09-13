@@ -7,7 +7,7 @@ delete. Search and conversion live in ``test_search_conversion_e2e.py``.
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
@@ -249,6 +249,51 @@ class TestDatastoreFilePaths:
             .all()
         )
         assert pending == [], f"a rename queued these for re-extraction: {pending}"
+
+    @pytest.mark.asyncio
+    async def test_a_file_uploaded_mid_rename_does_not_get_a_path_to_nowhere(
+        self,
+        pod_api: DatastoreApi,
+        db_session,
+    ):
+        """The race the one-statement rewrite would otherwise make silent.
+
+        The copy plan is taken before the storage phase and the bytes are copied
+        from it. A prefix `UPDATE` afterwards repoints whatever is under the old
+        path *now* -- so a file uploaded into the folder in between gets a new
+        path with nothing at its new key, a row naming an object nobody wrote.
+
+        Narrowing to the planned ids is not the fix: the late file would then sit
+        under a folder that no longer exists, which is the same corruption facing
+        the other way. Refusing is, and this is that refusal.
+        """
+        from app.modules.datastore.domain.errors import DatastoreConflictError
+        from app.modules.datastore.infrastructure.repositories.file_repository import (
+            DatastoreFileRepository,
+        )
+        from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
+        tag = f"race-{uuid4().hex[:6]}"
+        await pod_api.create_folder(f"/me/{tag}")
+        await pod_api.upload_file("planned.md", b"planned", directory_path=f"/me/{tag}")
+        # The plan saw one descendant; a second arrives before the rewrite runs.
+        await pod_api.upload_file("late.md", b"late", directory_path=f"/me/{tag}")
+
+        repository = DatastoreFileRepository(SqlAlchemyUnitOfWork(db_session))
+        with pytest.raises(DatastoreConflictError, match="changed while it was"):
+            await repository.rewrite_descendant_paths(
+                UUID(pod_api.pod_id),
+                previous_prefix=f"/me/{tag}",
+                new_prefix=f"/me/{tag}-renamed",
+                expected=1,
+            )
+        await db_session.rollback()
+
+        still_there = await pod_api.list_files(directory_path=f"/me/{tag}", limit=100)
+        assert {item["name"] for item in still_there["items"]} == {
+            "planned.md",
+            "late.md",
+        }, "the refusal has to leave the folder exactly as it was"
 
     @pytest.mark.asyncio
     async def test_file_tree_pagination_rename_update_and_recursive_delete(

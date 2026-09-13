@@ -25,10 +25,11 @@ export function useFunctionRevisions(podId: string, functionName: string, enable
         queryKey: functionRevisionsQueryKey(podId, functionName),
         enabled: Boolean(podId && functionName) && enabled,
         queryFn: async (): Promise<FunctionRevision[]> => {
-            const response = await getLemmaClient(podId).functions.revisions.list(
+            // Paged to exhaustion; see `use-app-releases` for why a history has
+            // pages and why the live entry can be on a later one.
+            return (await getLemmaClient(podId).functions.revisions.listAll(
                 functionName,
-            ) as { items?: FunctionRevision[] };
-            return Array.isArray(response?.items) ? response.items : [];
+            )) as FunctionRevision[];
         },
     });
 }

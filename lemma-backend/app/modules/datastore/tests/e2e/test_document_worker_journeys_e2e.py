@@ -206,6 +206,18 @@ async def test_kreuzberg_upload_indexes_a_document_and_makes_it_searchable(
             == before_redelivery
         ), "the rename re-extracted a document whose bytes had not changed"
 
+        # Changing the *name* is the other half, and it is the one that can
+        # quietly lose data. Artifacts describe bytes read through a filename,
+        # so they cannot travel -- and the old container is dropped either way
+        # once the row commits. Refusing the move without saying the file needs
+        # new output left it COMPLETED with converted output at neither path.
+        renamed_again = await pod_api.update_file(
+            renamed["path"], new_path="/me/archive/report.pdf"
+        )
+        assert renamed_again["status"] == "PENDING", (
+            "a filename change voids the artifacts, so the row has to say so"
+        )
+
 
 # `slow` keeps this out of the fast lane every PR runs and puts it in the
 # scheduled protected run (backend-protected-e2e.yml selects `slow`). The

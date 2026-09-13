@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
@@ -9,7 +8,6 @@ from sqlalchemy import (
     delete,
     select,
     text,
-    update,
 )
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
@@ -19,13 +17,15 @@ from app.core.authorization.sql_actions import (
     allowed_actions_contains,
     allowed_actions_expr,
 )
-from app.modules.datastore.domain.errors import DatastoreRecordNotFoundError
+from app.modules.datastore.domain.errors import (
+    DatastoreConflictError,
+    DatastoreRecordNotFoundError,
+)
 from app.core.infrastructure.db.transaction_locks import (
     mark_transaction_scoped_lock,
 )
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
-    FileStatus,
 )
 from app.modules.datastore.domain.ports import DatastoreFileRepositoryPort
 from app.modules.datastore.infrastructure.models import DatastoreFile
@@ -40,6 +40,9 @@ from app.modules.datastore.infrastructure.repositories._base import (
 )
 from app.modules.datastore.infrastructure.repositories.file_listing_reads import (
     DatastoreFileListingMixin,
+)
+from app.modules.datastore.infrastructure.repositories.file_processing_state import (
+    DatastoreFileProcessingStateMixin,
 )
 from app.modules.datastore.infrastructure.repositories.file_listing_sql import (
     direct_child_patterns,
@@ -62,12 +65,6 @@ def _file_actions_expr(ctx: Context):
     )
 
 
-def _content_identity_matches(content_sha256: str | None):
-    if content_sha256 is None:
-        return DatastoreFile.content_sha256.is_(None)
-    return DatastoreFile.content_sha256 == content_sha256
-
-
 def _file_payload(entity: DatastoreFileEntity) -> dict:
     payload = entity.model_dump(exclude={"allowed_actions"})
     payload["kind"] = entity.kind.value
@@ -78,6 +75,7 @@ def _file_payload(entity: DatastoreFileEntity) -> dict:
 
 class DatastoreFileRepository(
     DatastoreFileListingMixin,
+    DatastoreFileProcessingStateMixin,
     DatastoreFileRecoveryQueriesMixin,
     DatastoreRepositoryBase,
     DatastoreFileRepositoryPort,
@@ -124,164 +122,6 @@ class DatastoreFileRepository(
                 select(DatastoreFile).where(DatastoreFile.id == file_id)
             )
         ).scalar_one_or_none()
-
-    async def mark_not_required(self, file_id: UUID) -> None:
-        await self.session.execute(
-            update(DatastoreFile)
-            .where(DatastoreFile.id == file_id)
-            .values(status=FileStatus.NOT_REQUIRED.value, indexed_at=None)
-        )
-
-    async def claim_for_processing(
-        self, file_id: UUID, *, content_sha256: str | None
-    ) -> int | None:
-        """Atomically claim one content identity and return its attempt token."""
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PENDING.value,
-                _content_identity_matches(content_sha256),
-            )
-            .values(
-                status=FileStatus.PROCESSING.value,
-                processing_attempts=DatastoreFile.processing_attempts + 1,
-            )
-            .returning(DatastoreFile.processing_attempts)
-        )
-        return result.scalar_one_or_none()
-
-    async def is_processing_claim_current(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-    ) -> bool:
-        return bool(
-            await self.session.scalar(
-                select(DatastoreFile.id).where(
-                    DatastoreFile.id == file_id,
-                    DatastoreFile.status == FileStatus.PROCESSING.value,
-                    _content_identity_matches(content_sha256),
-                    DatastoreFile.processing_attempts == processing_attempt,
-                )
-            )
-        )
-
-    async def mark_completed(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-        file_metadata: dict,
-    ) -> bool:
-        """Complete only the exact content identity and processing claim."""
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.COMPLETED.value,
-                indexed_at=datetime.now(timezone.utc),
-                last_processing_error=None,
-                processing_attempts=0,
-                file_metadata=file_metadata,
-            )
-        )
-        return result.rowcount > 0
-
-    async def mark_failed(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-        error: str,
-    ) -> bool:
-        """Fail only the exact content identity and processing claim."""
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.FAILED.value,
-                last_processing_error=error,
-            )
-        )
-        return result.rowcount > 0
-
-    async def release_claim(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-    ) -> bool:
-        """Return a claim to PENDING *without* spending an attempt.
-
-        For infrastructure backpressure — the extractor is down, overloaded, or
-        the circuit is open — the document itself is fine and nothing about it
-        was learned. ``claim_for_processing`` incremented ``processing_attempts``
-        on the way in, and the recovery cron terminally fails a file once that
-        counter reaches ``datastore_recovery_max_attempts`` (3). Without this,
-        three extractor blips are enough to mark a perfectly good user document
-        FAILED_PERMANENT.
-
-        So this decrements the counter back to its pre-claim value, which is what
-        distinguishes "we could not reach the extractor" from "this document
-        cannot be processed". Document-level failures keep using ``mark_failed``
-        and do spend their attempt.
-
-        Fenced on the same (status, content identity, attempt) triple as every
-        other transition, so a stale worker cannot release a newer claim.
-        """
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.PENDING.value,
-                processing_attempts=DatastoreFile.processing_attempts - 1,
-            )
-        )
-        return result.rowcount > 0
-
-    async def mark_missing_original(
-        self,
-        file_id: UUID,
-        *,
-        content_sha256: str | None,
-        processing_attempt: int,
-        error: str,
-    ) -> bool:
-        result = await self.session.execute(
-            update(DatastoreFile)
-            .where(
-                DatastoreFile.id == file_id,
-                DatastoreFile.status == FileStatus.PROCESSING.value,
-                _content_identity_matches(content_sha256),
-                DatastoreFile.processing_attempts == processing_attempt,
-            )
-            .values(
-                status=FileStatus.FAILED_PERMANENT.value,
-                last_processing_error=error,
-            )
-        )
-        return result.rowcount > 0
 
     async def update(self, entity: DatastoreFileEntity) -> DatastoreFileEntity:
         result = await self.session.execute(
@@ -556,19 +396,39 @@ class DatastoreFileRepository(
         *,
         previous_prefix: str,
         new_prefix: str,
+        expected: int,
     ) -> int:
         """Repoint every path under a renamed folder; see `repoint_descendants`.
 
         This was a `SELECT` plus an `UPDATE` per descendant -- `update()` reads
         the row before writing it -- so renaming a folder of five hundred files
         issued a thousand statements inside the request transaction.
+
+        ``expected`` is how many descendants the copy plan was built from, and
+        the count this returns has to match it. The plan is taken before the
+        storage phase and the bytes are copied from it, so a file that appeared
+        under the folder in between would be repointed here with nothing at its
+        new key -- a row naming an object nobody wrote. A file that vanished is
+        the same disagreement facing the other way.
+
+        Refusing is the answer rather than repairing: the transaction rolls back,
+        the rename is reported as failed, and the caller retries against a tree
+        that has stopped moving. The old per-row loop re-read the descendants
+        after the copies and repointed the late file just the same, silently.
         """
         result = await self.session.execute(
             repoint_descendants(
                 pod_id, previous_prefix=previous_prefix, new_prefix=new_prefix
             )
         )
-        return int(result.rowcount or 0)
+        moved = int(result.rowcount or 0)
+        if moved != expected:
+            raise DatastoreConflictError(
+                f"{new_prefix} changed while it was being renamed: "
+                f"{expected} entries were staged and {moved} were found. "
+                "Nothing was moved; try again."
+            )
+        return moved
 
 
 def _file_payload_unset(entity: DatastoreFileEntity) -> dict:

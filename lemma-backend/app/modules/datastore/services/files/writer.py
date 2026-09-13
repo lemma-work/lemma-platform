@@ -141,7 +141,7 @@ class FileWriter(FolderCreationMixin):
             has_content=has_content,
         )
         rename_moved = not has_content and bool(storage_moves)
-        artifact_moves = plan_artifact_moves(
+        artifacts = plan_artifact_moves(
             file_entity=file_entity,
             descendants=descendants,
             previous_path=previous_path,
@@ -163,10 +163,14 @@ class FileWriter(FolderCreationMixin):
             has_content=has_content,
             rename_moved=rename_moved,
             storage_moves=tuple(storage_moves),
-            artifact_moves=tuple(artifact_moves),
+            artifact_moves=artifacts.moves,
             renamed_descendants=tuple(descendants),
             should_sync=should_sync,
             requester_user_id=requester_user_id,
+            # Seeded before the storage phase runs, which then adds whatever its
+            # copies could not manage. Both mean the same thing to the persist
+            # phase: this file has no usable artifacts and must make new ones.
+            artifacts_to_regenerate=set(artifacts.invalidated),
         )
 
     def _normalize_update_paths(
@@ -243,8 +247,10 @@ class FileWriter(FolderCreationMixin):
         artifacts byte-identical to the ones the same operation had just
         deleted. The artifacts now travel with the file, and the only rename
         that still invalidates them -- one that changes the name, and so how the
-        bytes are read -- is refused a move by `plan_artifact_moves` and lands
-        in `artifacts_left_behind`, which the persist phase marks individually.
+        bytes are read -- is reported by `plan_artifact_moves` as invalidated
+        and marked per file by the persist phase, not here: this answers for the
+        whole update, and a folder rename invalidates nothing while the one file
+        inside it that was also renamed does.
         """
         search_changed = (
             update_entity.search_enabled is not None
@@ -276,12 +282,13 @@ class FileWriter(FolderCreationMixin):
     async def persist_update_file(self, plan: _UpdatePlan) -> DatastoreFileEntity:
         """Persist the mutated row (+ folder descendant paths) — DB only."""
         file_entity = plan.file_entity
-        # `should_sync` is about the update; `artifacts_left_behind` is about
-        # what the storage phase managed. Either one means this file's derived
-        # artifacts no longer describe it, and a rename that kept its name and
-        # carried its artifacts means neither.
+        # `should_sync` is about the update; `artifacts_to_regenerate` is about
+        # this file's artifacts specifically -- voided by a new name, or left
+        # behind by a copy that failed. Either means it has no usable converted
+        # output, and a rename that kept its name and carried its artifacts
+        # means neither.
         needs_reprocessing = (
-            plan.should_sync or file_entity.id in plan.artifacts_left_behind
+            plan.should_sync or file_entity.id in plan.artifacts_to_regenerate
         )
         if needs_reprocessing and self.paths._should_sync_projections(
             True,
@@ -464,14 +471,22 @@ class FileWriter(FolderCreationMixin):
         what a file says, and its derived artifacts travelled with it; the
         exceptions are the files whose artifacts did not go, and only those are
         marked.
+
+        The count is checked against the plan, because one statement over a
+        prefix will happily repoint a row the storage phase never copied.
         """
         await self.file_repository.rewrite_descendant_paths(
             folder_entity.pod_id,
             previous_prefix=plan.previous_path,
             new_prefix=folder_entity.path,
+            # The bytes were copied from `renamed_descendants`; anything else
+            # under the folder now would be repointed with nothing at its new
+            # key. See `rewrite_descendant_paths` for why this refuses rather
+            # than repairs.
+            expected=len(plan.renamed_descendants),
         )
         for descendant in plan.renamed_descendants:
-            if descendant.id not in plan.artifacts_left_behind:
+            if descendant.id not in plan.artifacts_to_regenerate:
                 continue
             suffix = descendant.path.removeprefix(plan.previous_path)
             descendant.path = f"{folder_entity.path}{suffix}"

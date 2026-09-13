@@ -11959,9 +11959,30 @@ var LemmaClient = (() => {
         body: payload
       });
     }
-    /** This app's release history, newest first. */
-    releases(name) {
-      return this.client.request(() => AppsService.appReleaseList(this.podId(), name));
+    /** One page of this app's release history, newest first. */
+    releases(name, options) {
+      return this.client.request(
+        () => AppsService.appReleaseList(this.podId(), name, options == null ? void 0 : options.limit, options == null ? void 0 : options.pageToken)
+      );
+    }
+    /**
+     * Every release this app has had, newest first, paged to exhaustion.
+     *
+     * The endpoint answers a page now, and retention keeps a pruned release's row
+     * -- so an app deployed daily has history past the first page, and a live
+     * release can itself be on a later one. Anything that has to be complete
+     * wants this rather than `releases`.
+     */
+    async allReleases(name, pageSize = 200) {
+      var _a;
+      const items = [];
+      let pageToken;
+      for (; ; ) {
+        const page = await this.releases(name, { limit: pageSize, pageToken });
+        items.push(...(_a = page.items) != null ? _a : []);
+        pageToken = page.next_page_token;
+        if (typeof pageToken !== "string" || !pageToken) return items;
+      }
     }
     /**
      * Make an existing release the one this app serves. `releaseRef` is the
@@ -12953,8 +12974,27 @@ var LemmaClient = (() => {
         replace: (name, payload) => this.client.request(() => FunctionsService.functionPermissionsReplace(this.podId(), name, payload))
       });
       __publicField(this, "revisions", {
-        /** This function's built revisions, newest first. */
-        list: (name) => this.client.request(() => FunctionsService.functionRevisionList(this.podId(), name)),
+        /** One page of this function's built revisions, newest first. */
+        list: (name, options) => this.client.request(
+          () => FunctionsService.functionRevisionList(
+            this.podId(),
+            name,
+            options == null ? void 0 : options.limit,
+            options == null ? void 0 : options.pageToken
+          )
+        ),
+        /** Every revision, newest first, paged to exhaustion. See `apps.allReleases`. */
+        listAll: async (name, pageSize = 200) => {
+          var _a;
+          const items = [];
+          let pageToken;
+          for (; ; ) {
+            const page = await this.revisions.list(name, { limit: pageSize, pageToken });
+            items.push(...(_a = page.items) != null ? _a : []);
+            pageToken = page.next_page_token;
+            if (typeof pageToken !== "string" || !pageToken) return items;
+          }
+        },
         /** One revision, with its source and the schemas its code implements. */
         get: (name, revisionRef) => this.client.request(() => FunctionsService.functionRevisionGet(this.podId(), name, revisionRef)),
         /**

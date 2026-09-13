@@ -129,6 +129,7 @@ class DatastoreFileRepositoryPort(Protocol):
         *,
         previous_prefix: str,
         new_prefix: str,
+        expected: int,
     ) -> int: ...
 
     async def get_direct_children(
@@ -411,7 +412,7 @@ class DatastoreStoragePort(Protocol):
 
     async def delete_prefix(self, prefix: str) -> int: ...
 
-    async def move_prefix(self, source_prefix: str, destination_prefix: str) -> int: ...
+    async def copy_prefix(self, source_prefix: str, destination_prefix: str) -> int: ...
 
 
 class DocumentProcessorPort(Protocol):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from ..openapi_client.api.apps import (
     app_create,
@@ -72,9 +73,43 @@ class PodApps(BoundResource):
             )
         return AppBundleUploadResponse.from_dict(response.json())
 
-    def list_releases(self, name: str) -> AppReleaseListResponse:
-        """This app's release history, newest first."""
-        return self._call(app_release_list, self._pod_uuid(), name)
+    def list_releases(
+        self,
+        name: str,
+        *,
+        limit: int = 50,
+        page_token: str | None = None,
+    ) -> AppReleaseListResponse:
+        """One page of this app's release history, newest first.
+
+        Paged. A response whose ``next_page_token`` is set has more -- pass it
+        back as ``page_token``, or use :meth:`list_all_releases`, which does
+        that for you.
+        """
+        return self._call(
+            app_release_list,
+            self._pod_uuid(),
+            name,
+            limit=limit,
+            page_token=page_token,
+        )
+
+    def list_all_releases(self, name: str, *, page_size: int = 200) -> list[Any]:
+        """Every release this app has had, newest first, paged to exhaustion.
+
+        Retention keeps a pruned release's row, so an app deployed daily has
+        history past the first page -- and because the live release is never
+        pruned, a long-lived one can itself be on a later page. Anything that
+        has to be complete wants this rather than :meth:`list_releases`.
+        """
+        items: list[Any] = []
+        token: str | None = None
+        while True:
+            page = self.list_releases(name, limit=page_size, page_token=token)
+            items.extend(getattr(page, "items", None) or [])
+            token = getattr(page, "next_page_token", None)
+            if not isinstance(token, str) or not token:
+                return items
 
     def promote_release(self, name: str, release_ref: str) -> AppDetailResponse:
         """Make an existing release the one this app serves.

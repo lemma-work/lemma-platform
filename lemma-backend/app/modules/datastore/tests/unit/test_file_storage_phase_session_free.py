@@ -36,8 +36,8 @@ class _RecordingStorage:
         self.uploaded: dict[str, bytes] = {}
         self.deleted: list[str] = []
         self.deleted_prefixes: list[str] = []
-        self.moved_prefixes: list[tuple[str, str]] = []
-        self.unmovable_prefixes: set[str] = set()
+        self.copied_prefixes: list[tuple[str, str]] = []
+        self.uncopyable_prefixes: set[str] = set()
 
     async def upload_file(self, key: str, content: bytes) -> None:
         self.uploaded[key] = content
@@ -57,10 +57,10 @@ class _RecordingStorage:
     async def delete_prefix(self, prefix: str) -> None:
         self.deleted_prefixes.append(prefix)
 
-    async def move_prefix(self, source: str, destination: str) -> int:
-        if source in self.unmovable_prefixes:
-            raise DatastoreInfrastructureError("cannot move")
-        self.moved_prefixes.append((source, destination))
+    async def copy_prefix(self, source: str, destination: str) -> int:
+        if source in self.uncopyable_prefixes:
+            raise DatastoreInfrastructureError("cannot copy")
+        self.copied_prefixes.append((source, destination))
         return 1
 
 
@@ -288,14 +288,12 @@ def _renamed_folder_plan(pod_id, descendants, *, previous="/docs", now="/papers"
         has_content=False,
         rename_moved=True,
         storage_moves=(),
-        artifact_moves=tuple(
-            plan_artifact_moves(
-                file_entity=folder,
-                descendants=list(descendants),
-                previous_path=previous,
-                has_content=False,
-            )
-        ),
+        artifact_moves=plan_artifact_moves(
+            file_entity=folder,
+            descendants=list(descendants),
+            previous_path=previous,
+            has_content=False,
+        ).moves,
         renamed_descendants=tuple(descendants),
         should_sync=False,
         requester_user_id=uuid4(),
@@ -321,57 +319,65 @@ async def test_a_rename_carries_derived_artifacts_instead_of_deleting_them():
 
     await sp.write_update(plan, SimpleNamespace(content=None))
 
-    assert storage.moved_prefixes == [
+    assert storage.copied_prefixes == [
         (
             f"pods/{pod_id}/files/docs/.report.pdf/",
             f"pods/{pod_id}/files/papers/.report.pdf/",
         )
     ]
-    assert plan.artifacts_left_behind == set()
+    assert plan.artifacts_to_regenerate == set()
+    assert storage.deleted_prefixes == [], (
+        "the source is dropped after the row commits, not before it"
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_rename_that_changes_the_name_still_regenerates():
+async def test_a_rename_that_changes_the_name_schedules_a_replacement():
     """Artifacts describe bytes read through a filename, so a new name voids them.
 
     `report.pdf` becoming `report.txt` is a different document to every reader
-    downstream. The move is refused, the old container is swept, and the file is
-    marked -- which is what the old code did to every rename, including the ones
-    that changed nothing about how the bytes are read.
+    downstream, and the old container is swept after the commit -- so refusing
+    the move is only half an answer. The other half is saying so: without it the
+    file keeps a COMPLETED status with no converted output at either path, and
+    nothing has any reason to produce it again.
+
+    Asserted on `artifacts_to_regenerate` rather than on the move list, because
+    an empty move list is also what a file with no artifacts looks like.
     """
     pod_id = uuid4()
-    original = _file_entity("/docs/report.pdf", uuid4())
-    original.pod_id = pod_id
-    renamed = _file_entity("/docs/report.txt", original.id)
+    renamed = _file_entity("/docs/report.txt", uuid4())
     renamed.pod_id = pod_id
 
-    moves = plan_artifact_moves(
+    planned = plan_artifact_moves(
         file_entity=renamed,
         descendants=[],
         previous_path="/docs/report.pdf",
         has_content=False,
     )
 
-    assert moves == []
+    assert planned.moves == ()
+    assert planned.invalidated == {renamed.id}
 
 
 @pytest.mark.asyncio
 async def test_a_content_update_never_carries_artifacts():
     """New bytes genuinely need new artifacts; carrying them would serve stale ones."""
     entity = _file_entity("/docs/report.pdf", uuid4())
-    assert (
-        plan_artifact_moves(
-            file_entity=entity,
-            descendants=[],
-            previous_path="/docs/report.pdf",
-            has_content=True,
-        )
-        == []
+    planned = plan_artifact_moves(
+        file_entity=entity,
+        descendants=[],
+        previous_path="/docs/report.pdf",
+        has_content=True,
+    )
+    assert planned.moves == ()
+    assert planned.invalidated == frozenset(), (
+        "`should_sync` already covers a content update; saying it twice would "
+        "mark files a folder rename never touched"
     )
 
 
 @pytest.mark.asyncio
-async def test_a_container_that_will_not_move_is_recorded_for_reprocessing():
+async def test_a_container_that_will_not_copy_is_recorded_for_reprocessing():
     """Best-effort, with the fallback named rather than assumed.
 
     A derived artifact is regenerable and the file's own bytes are not, so a
@@ -384,12 +390,12 @@ async def test_a_container_that_will_not_move_is_recorded_for_reprocessing():
     sp = _storage_phase(storage, _FakeSearch())
     report = _file_entity("/docs/report.pdf", uuid4())
     report.pod_id = pod_id
-    storage.unmovable_prefixes = {f"pods/{pod_id}/files/docs/.report.pdf/"}
+    storage.uncopyable_prefixes = {f"pods/{pod_id}/files/docs/.report.pdf/"}
     plan = _renamed_folder_plan(pod_id, [report])
 
     await sp.write_update(plan, SimpleNamespace(content=None))
 
-    assert plan.artifacts_left_behind == {report.id}
+    assert plan.artifacts_to_regenerate == {report.id}
 
 
 @pytest.mark.asyncio
@@ -416,6 +422,34 @@ async def test_finalize_tells_the_index_where_every_descendant_went():
         report.id: "/papers/report.pdf",
         notes.id: "/papers/sub/notes.md",
     }
+    assert storage.deleted_prefixes == [
+        f"pods/{pod_id}/files/docs/.report.pdf/",
+        f"pods/{pod_id}/files/docs/sub/.notes.md/",
+    ], "the old containers are dropped once the row naming the new one is committed"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_persist_leaves_the_artifacts_where_the_row_still_points():
+    """The ordering that makes a rolled-back rename survivable.
+
+    The storage phase runs before the row is written, so anything it destroys is
+    destroyed on the strength of a transaction that has not committed. Copying
+    and sweeping later means a persistence failure -- a concurrent create taking
+    the destination path, say -- rolls the path back to a file whose converted
+    output is still where that path expects it.
+    """
+    pod_id = uuid4()
+    storage = _RecordingStorage()
+    sp = _storage_phase(storage, _FakeSearch())
+    report = _file_entity("/docs/report.pdf", uuid4())
+    report.pod_id = pod_id
+    plan = _renamed_folder_plan(pod_id, [report])
+
+    await sp.write_update(plan, SimpleNamespace(content=None))
+    # The persist would fail here; finalize never runs.
+    await sp.cleanup_uncommitted_update(plan)
+
     assert storage.deleted_prefixes == [], (
-        "the containers moved, so nothing should have been swept"
+        "the old container was dropped before anything committed"
     )
+    assert storage.copied_prefixes, "the copy is the part that may happen early"

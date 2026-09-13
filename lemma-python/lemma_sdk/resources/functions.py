@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from ..openapi_client.api.functions import (
     function_create,
     function_delete,
@@ -112,9 +114,41 @@ class PodFunctions(BoundResource):
             body=request,
         )
 
-    def revisions(self, name: str) -> FunctionRevisionListResponse:
-        """This function's built revisions, newest first."""
-        return self._call(function_revision_list, self._pod_uuid(), name)
+    def revisions(
+        self,
+        name: str,
+        *,
+        limit: int = 50,
+        page_token: str | None = None,
+    ) -> FunctionRevisionListResponse:
+        """One page of this function's built revisions, newest first.
+
+        Paged. A response whose ``next_page_token`` is set has more -- pass it
+        back as ``page_token``, or use :meth:`all_revisions`.
+        """
+        return self._call(
+            function_revision_list,
+            self._pod_uuid(),
+            name,
+            limit=limit,
+            page_token=page_token,
+        )
+
+    def all_revisions(self, name: str, *, page_size: int = 200) -> list[Any]:
+        """Every revision, newest first, paged to exhaustion.
+
+        See :meth:`AppsResource.list_all_releases` for why a history has pages:
+        retention stamps these rows rather than removing them, and the live one
+        is never stamped at all.
+        """
+        items: list[Any] = []
+        token: str | None = None
+        while True:
+            page = self.revisions(name, limit=page_size, page_token=token)
+            items.extend(getattr(page, "items", None) or [])
+            token = getattr(page, "next_page_token", None)
+            if not isinstance(token, str) or not token:
+                return items
 
     def revision(self, name: str, revision_ref: str) -> FunctionRevisionResponse:
         """One revision, with its source and the schemas its code implements."""

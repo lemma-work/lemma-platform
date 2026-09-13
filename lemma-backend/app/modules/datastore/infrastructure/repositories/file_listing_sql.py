@@ -79,11 +79,17 @@ def repoint_descendants(
     after the old prefix, put the new one in front of it. `substring` is
     1-indexed, which is why the offset is the prefix length plus one.
 
-    Bounded by the prefix rather than by a list of ids, which is also why it
-    needs no staleness fence. It acts on whatever is under the old path at the
-    moment it runs -- so a file created there while the storage phase was
-    working is repointed too, where an id list gathered earlier would have left
-    it stranded under a folder that no longer exists.
+    Bounded by the prefix rather than by a list of ids, which is what makes it
+    one statement -- and is also why the caller has to check the count it
+    returns. It acts on whatever is under the old path at the moment it runs,
+    and the copy plan was taken before the storage phase: a file uploaded into
+    the folder in between is repointed here without its bytes having been
+    copied, leaving a row that names an object nobody wrote.
+
+    Narrowing this to the planned ids does not fix that. It would leave the late
+    file under a folder that no longer exists, which is the same corruption
+    facing the other way. The row count is the fence, and `rewrite_descendant_paths`
+    is where it is checked.
     """
     return (
         update(DatastoreFile)
