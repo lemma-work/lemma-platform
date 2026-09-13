@@ -95,27 +95,28 @@ async def test_discover_operations_returns_structured_summary():
             )
         )
     )
-    operation_repository = AsyncMock()
-    operation_repository.list_by_connector.return_value = [
-        ConnectorOperationEntity(
-            id="gmail:send_message",
-            connector_id="gmail",
-            name="send_message",
-            provider_operation_name="send_message",
-            description="Send an email message to one or more recipients.",
-            input_schema={"type": "object"},
-            output_schema={"type": "object"},
-        ),
-        ConnectorOperationEntity(
-            id="gmail:list_messages",
-            connector_id="gmail",
-            name="list_messages",
-            provider_operation_name="list_messages",
-            description="List messages from the mailbox.",
-            input_schema={"type": "object"},
-            output_schema={"type": "object"},
-        ),
-    ]
+    operation_repository = _catalog_double(
+        [
+            ConnectorOperationEntity(
+                id="gmail:send_message",
+                connector_id="gmail",
+                name="send_message",
+                provider_operation_name="send_message",
+                description="Send an email message to one or more recipients.",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            ),
+            ConnectorOperationEntity(
+                id="gmail:list_messages",
+                connector_id="gmail",
+                name="list_messages",
+                provider_operation_name="list_messages",
+                description="List messages from the mailbox.",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            ),
+        ]
+    )
 
     service = ConnectorOperationService(
         connector_repository=connector_repository,
@@ -206,28 +207,56 @@ async def test_discover_operations_uses_repository_search_for_queries():
     operation_repository.count_by_connector.assert_awaited_once_with("gmail", kind=None)
 
 
+def _catalog_double(operations):
+    """An `AsyncMock` answering the catalog reads the service actually makes.
+
+    Derived from one list so a test still describes the connector in one place.
+    Answering `list_by_connector` alone would let a caller that reads every row
+    to pick two of them keep passing -- which is the shape these tests exist to
+    hold shut.
+    """
+    repository = AsyncMock()
+    repository.list_by_connector.side_effect = lambda connector_id, **kwargs: list(
+        operations
+    )[: kwargs.get("limit") or None]
+    repository.count_by_connector.return_value = len(operations)
+
+    async def _by_names(connector_id, names, *, kind=None):
+        wanted = {name.strip().lower() for name in names}
+        return [
+            operation
+            for operation in operations
+            if operation.name.strip().lower() in wanted
+            or (operation.provider_operation_name or "").strip().lower() in wanted
+        ]
+
+    repository.list_by_connector_and_names.side_effect = _by_names
+    return repository
+
+
 async def test_get_operation_details_batch_returns_all_when_names_omitted():
-    operation_repository = AsyncMock()
-    operation_repository.list_by_connector.return_value = [
-        ConnectorOperationEntity(
-            id="slack:channels_list",
-            connector_id="slack",
-            name="channels_list",
-            provider_operation_name="channels_list",
-            description="List channels.",
-            input_schema={"type": "object"},
-            output_schema={"type": "object"},
-        ),
-        ConnectorOperationEntity(
-            id="slack:messages_post",
-            connector_id="slack",
-            name="messages_post",
-            provider_operation_name="messages_post",
-            description="Post a message.",
-            input_schema={"type": "object"},
-            output_schema={"type": "object"},
-        ),
-    ]
+    operation_repository = _catalog_double(
+        [
+            ConnectorOperationEntity(
+                id="slack:channels_list",
+                connector_id="slack",
+                name="channels_list",
+                provider_operation_name="channels_list",
+                description="List channels.",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            ),
+            ConnectorOperationEntity(
+                id="slack:messages_post",
+                connector_id="slack",
+                name="messages_post",
+                provider_operation_name="messages_post",
+                description="Post a message.",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            ),
+        ]
+    )
 
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
@@ -259,18 +288,19 @@ async def test_an_unnamed_details_batch_is_capped_and_says_so():
     JSON assembled in memory -- and the request schema documented that as the
     intended usage. `total_operations` is what tells the caller it was capped;
     without it the cap would be a silent truncation."""
-    operation_repository = AsyncMock()
-    operation_repository.list_by_connector.return_value = [
-        ConnectorOperationEntity(
-            id=f"slack:op_{index}",
-            connector_id="slack",
-            name=f"op_{index}",
-            provider_operation_name=f"op_{index}",
-            input_schema={"type": "object"},
-            output_schema={"type": "object"},
-        )
-        for index in range(5)
-    ]
+    operation_repository = _catalog_double(
+        [
+            ConnectorOperationEntity(
+                id=f"slack:op_{index}",
+                connector_id="slack",
+                name=f"op_{index}",
+                provider_operation_name=f"op_{index}",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            )
+            for index in range(5)
+        ]
+    )
 
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
@@ -295,18 +325,19 @@ async def test_an_unnamed_details_batch_is_capped_and_says_so():
 async def test_naming_operations_still_returns_exactly_those():
     """The cap applies only to the unnamed case: a caller who names 300
     operations asked for 300, and the request schema bounds that list itself."""
-    operation_repository = AsyncMock()
-    operation_repository.list_by_connector.return_value = [
-        ConnectorOperationEntity(
-            id=f"slack:op_{index}",
-            connector_id="slack",
-            name=f"op_{index}",
-            provider_operation_name=f"op_{index}",
-            input_schema={"type": "object"},
-            output_schema={"type": "object"},
-        )
-        for index in range(5)
-    ]
+    operation_repository = _catalog_double(
+        [
+            ConnectorOperationEntity(
+                id=f"slack:op_{index}",
+                connector_id="slack",
+                name=f"op_{index}",
+                provider_operation_name=f"op_{index}",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            )
+            for index in range(5)
+        ]
+    )
 
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
@@ -330,18 +361,19 @@ async def test_naming_operations_still_returns_exactly_those():
 
 
 async def test_get_operation_details_batch_matches_names_case_insensitively():
-    operation_repository = AsyncMock()
-    operation_repository.list_by_connector.return_value = [
-        ConnectorOperationEntity(
-            id="excel:EXCEL_CREATE_WORKBOOK",
-            connector_id="excel",
-            name="EXCEL_CREATE_WORKBOOK",
-            provider_operation_name="EXCEL_CREATE_WORKBOOK",
-            description="Create a workbook.",
-            input_schema={"type": "object"},
-            output_schema={"type": "object"},
-        ),
-    ]
+    operation_repository = _catalog_double(
+        [
+            ConnectorOperationEntity(
+                id="excel:EXCEL_CREATE_WORKBOOK",
+                connector_id="excel",
+                name="EXCEL_CREATE_WORKBOOK",
+                provider_operation_name="EXCEL_CREATE_WORKBOOK",
+                description="Create a workbook.",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            ),
+        ]
+    )
 
     service = ConnectorOperationService(
         connector_repository=AsyncMock(
@@ -662,3 +694,49 @@ async def test_execute_operation_normalizes_pydantic_binary_results():
         "media_type": "text/plain",
         "size_bytes": 5,
     }
+
+
+async def test_naming_one_operation_does_not_read_the_connector_catalog():
+    """Asking for one schema cost the whole connector's schemas.
+
+    `get_operation_details_batch` read every operation with its input and output
+    schema, built two dictionaries out of them, and then picked the one asked
+    for. On a connector the size of Jira that is tens of megabytes of JSON
+    assembled in memory to answer a question about a single name -- the exact
+    cost this endpoint's own docstring warns about, paid on the named path too.
+
+    Asserted on the calls rather than the result, because the result was always
+    right. That is what made it invisible.
+    """
+    operation_repository = _catalog_double(
+        [
+            ConnectorOperationEntity(
+                id=f"jira:op_{index}",
+                connector_id="jira",
+                name=f"op_{index}",
+                provider_operation_name=f"op_{index}",
+                input_schema={"type": "object"},
+                output_schema={"type": "object"},
+            )
+            for index in range(200)
+        ]
+    )
+    service = ConnectorOperationService(
+        connector_repository=AsyncMock(
+            get=AsyncMock(
+                return_value=ConnectorEntity(id="jira", auth_kind=ConnectorKind.HTTP)
+            )
+        ),
+        operation_repository=operation_repository,
+        operation_gateway=AsyncMock(),
+        account_resolution_service=AsyncMock(),
+    )
+
+    response = await service.get_operation_details_batch(
+        "jira", operation_names=["op_7"]
+    )
+
+    assert [item.name for item in response.items] == ["op_7"]
+    assert response.total_operations == 200
+    operation_repository.list_by_connector.assert_not_awaited()
+    operation_repository.list_by_connector_and_names.assert_awaited_once()

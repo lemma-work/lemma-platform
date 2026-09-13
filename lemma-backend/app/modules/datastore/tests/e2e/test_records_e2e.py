@@ -1142,3 +1142,33 @@ class TestPagingOverANonUniqueSortIsStable:
             "paging over a sort column whose values all tie repeated a row and "
             "dropped another; the page boundary has to be total"
         )
+
+    @pytest.mark.asyncio
+    async def test_a_page_past_the_end_reports_the_table_not_the_offset(
+        self,
+        project_workspace: DatastoreApi,
+    ):
+        """`total` is what the caller sizes the table by, so it cannot be a guess.
+
+        The count is elided when a page comes back short, because `OFFSET` only
+        returns a row when that many precede it -- so a non-empty short page
+        proves its own offset. An empty one proves nothing, and the arithmetic
+        then reported the offset itself: two records, `offset=100`, "100".
+
+        Reachable without doing anything strange: a hand-picked offset, a token
+        gone stale behind a delete, or paging a filter has outrun.
+        """
+        pod_api = project_workspace
+        await pod_api.bulk_create(
+            "projects",
+            [{"name": f"only {index}", "status": "active"} for index in range(2)],
+        )
+
+        past_the_end = await pod_api.list_records("projects", limit=50, offset=100)
+        assert past_the_end["items"] == []
+        assert past_the_end["total"] == 2, (
+            "an empty page reported its own offset as the table's size"
+        )
+
+        # An empty table at offset zero still answers without a second query.
+        assert (await pod_api.list_records("snapshots", limit=50))["total"] == 0

@@ -69,33 +69,30 @@ class SkillsOverlay:
             ctx=ctx,
         )
 
-    async def _visible_pod_items_under_system_skills(
+    async def _visible_subtree(
         self,
         *,
         pod_id: UUID,
+        root_path: str,
         requester_user_id: UUID,
         ctx: Context,
     ) -> list[DatastoreFileEntity]:
-        # Ask for the subtree, not the pod. This used to load every file row in
-        # the pod, hydrate an entity for each, and then keep the ones whose path
-        # starts with `/skills` -- and it decided that by running
-        # `normalize_datastore_path` over every path, which walks the string
-        # character by character doing two `unicodedata` calls each.
-        #
-        # Measured here: 3.8us per path to normalise against 0.02us for the
-        # prefix test, and 2.35us to build each entity. On a 20k-file pod that
-        # is ~123ms of Python per listing request, for a `/skills` folder that
-        # usually holds a handful of files.
-        #
-        # `ix_datastore_file_pod_path_prefix` -- `(pod_id, path text_pattern_ops)`,
-        # created in the baseline migration -- has existed since the beginning
-        # and no listing path had ever used it. Against 40k rows in one pod it
-        # turns 40,085 buffer hits into 99.
-        skills_items = await self.file_repository.get_descendants(
-            pod_id, self.system_skill_files.root_path
-        )
+        """The root and everything under it, for one skill rather than all of them.
+
+        A tree rooted at `/skills/one-skill` used to read the whole `/skills`
+        subtree and then keep the rows whose path began with the root -- so
+        opening one skill's tree read every file of every other skill in the
+        pod, and got slower as unrelated skills were added.
+
+        The root row comes with them because `get_descendants` matches what is
+        *under* a prefix; the tree needs the node it is rooted at.
+        """
+        items = [
+            *await self.file_repository.get_by_paths(pod_id, [root_path]),
+            *await self.file_repository.get_descendants(pod_id, root_path),
+        ]
         return await self._visible_pod_items(
-            skills_items,
+            items,
             pod_id=pod_id,
             requester_user_id=requester_user_id,
             ctx=ctx,
@@ -169,9 +166,18 @@ class SkillsOverlay:
         ctx: Context,
     ) -> dict[str, Any]:
         normalized_root = self.paths._normalize_path(root_path)
-        system_items = self.system_skill_files.all_entities(pod_id)
-        db_items = await self._visible_pod_items_under_system_skills(
+        # Both sides narrowed to the requested root. The system entities are
+        # in memory so filtering them is free; the pod's are a query, and
+        # reading `/skills` to render one skill is what this used to cost.
+        system_items = [
+            item
+            for item in self.system_skill_files.all_entities(pod_id)
+            if item.path == normalized_root
+            or item.path.startswith(f"{normalized_root}/")
+        ]
+        db_items = await self._visible_subtree(
             pod_id=pod_id,
+            root_path=normalized_root,
             requester_user_id=requester_user_id,
             ctx=ctx,
         )

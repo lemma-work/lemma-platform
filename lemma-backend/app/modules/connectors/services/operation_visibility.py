@@ -23,6 +23,11 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.modules.connectors.domain.errors import OperationNotFoundError
+from app.modules.connectors.services.operation_ranking import (
+    normalized_operation_name,
+)
+
 
 async def list_operations_for_install(
     *,
@@ -84,6 +89,52 @@ async def count_operations_for_install(
         auth_config_id, connector_id=connector_id, kind=kind
     )
     return catalog_total + discovered - shadowed
+
+
+async def named_operations(
+    *,
+    catalog_repository: Any,
+    install_repository: Any | None,
+    connector_id: str,
+    operation_names: list[str],
+    kind: str | None = None,
+    auth_config_id: UUID | None = None,
+) -> list[Any]:
+    """The operations these names address, in the order they were asked for.
+
+    Read by name rather than picked out of the whole catalog. Install
+    precedence is the same rule every other listing path applies: an
+    install's own operation wins over a catalog one of the same name,
+    because where both exist the install describes the server actually
+    being called.
+    """
+    by_name: dict[str, Any] = {}
+    catalog = await catalog_repository.list_by_connector_and_names(
+        connector_id, operation_names, kind=kind
+    )
+    installed: list[Any] = []
+    if auth_config_id is not None and install_repository:
+        installed = list(
+            await install_repository.list_by_auth_config_and_names(
+                auth_config_id, operation_names
+            )
+        )
+    # Catalog first so the install overwrites it, not the other way round.
+    for operation in (*catalog, *installed):
+        by_name[normalized_operation_name(operation.name)] = operation
+        if operation.provider_operation_name:
+            by_name.setdefault(
+                normalized_operation_name(operation.provider_operation_name),
+                operation,
+            )
+
+    selected: list[Any] = []
+    for operation_name in operation_names:
+        operation = by_name.get(normalized_operation_name(operation_name))
+        if not operation:
+            raise OperationNotFoundError(operation_name)
+        selected.append(operation)
+    return selected
 
 
 async def merge_install_and_catalog_operations(

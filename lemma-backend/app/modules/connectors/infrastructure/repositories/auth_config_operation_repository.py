@@ -55,6 +55,28 @@ class AuthConfigOperationRepository:
         result = await self.session.execute(stmt)
         return [row.to_entity() for row in result.scalars().all()]
 
+    async def list_by_auth_config_and_names(
+        self,
+        auth_config_id: UUID,
+        names: Sequence[str],
+    ) -> list[InstallOperationEntity]:
+        """The named operations this install discovered; see the catalog twin."""
+        normalized = {name.strip().lower() for name in names if name and name.strip()}
+        if not normalized:
+            return []
+        result = await self.session.execute(
+            select(AuthConfigOperation).where(
+                AuthConfigOperation.auth_config_id == auth_config_id,
+                or_(
+                    func.lower(AuthConfigOperation.name).in_(normalized),
+                    func.lower(
+                        func.coalesce(AuthConfigOperation.provider_operation_name, "")
+                    ).in_(normalized),
+                ),
+            )
+        )
+        return [row.to_entity() for row in result.scalars().all()]
+
     async def count_with_catalog_overlap(
         self,
         auth_config_id: UUID,

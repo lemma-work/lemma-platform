@@ -2208,3 +2208,59 @@ async def test_a_webhook_source_nothing_delivers_is_refused_at_create_and_update
     )
     assert rejected_update.status_code == 422, rejected_update.text
     assert rejected_update.json()["code"] == "SCHEDULE_VALIDATION_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_the_event_operation_narrows_in_sql_not_in_python(
+    authenticated_client: AsyncClient,
+    db_session,
+    fixed_test_org,
+):
+    """Every datastore write asks this, so what it reads is what a write costs.
+
+    It used to load every active datastore schedule on the pod and table,
+    hydrate each one, and then ask whether its operations included the event's
+    -- so a table watched by one schedule per operation did three times the work
+    on every insert, twice of it to reach `continue`.
+
+    Asserted on the rows the repository returns, including the case the SQL has
+    to get right on its own: the stored array is whatever the caller wrote, and
+    normalization happens when the entity is built, so a lower-case `"insert"`
+    is a match and the predicate has to say so.
+    """
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.schedule.domain.value_objects import DatastoreOperation
+    from app.modules.schedule.repositories.schedule_repository import (
+        ScheduleRepository,
+    )
+
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    table = f"ops_{uuid4().hex[:8]}"
+    await _create_datastore_table(authenticated_client, pod_id, table)
+    agent = await _create_agent(authenticated_client, pod_id)
+
+    for operations in (["INSERT"], ["update"], ["DELETE", "UPDATE"]):
+        await _create_schedule(
+            authenticated_client,
+            pod_id,
+            schedule_type=ScheduleType.DATASTORE.value,
+            agent_name=agent["name"],
+            config={"table_name": table, "operations": operations},
+        )
+
+    repository = ScheduleRepository(SqlAlchemyUnitOfWork(db_session))
+    for operation, expected in (
+        (DatastoreOperation.INSERT, 1),
+        (DatastoreOperation.UPDATE, 2),
+        (DatastoreOperation.DELETE, 1),
+    ):
+        matched = await repository.find_by_pod_table_event(
+            UUID(pod_id), table, operation
+        )
+        assert len(matched) == expected, (
+            f"{operation.value} matched {[s.config for s in matched]}"
+        )
+        assert all(
+            operation in (schedule.datastore_config.operations or [])
+            for schedule in matched
+        )
