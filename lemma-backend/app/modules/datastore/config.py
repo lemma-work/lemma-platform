@@ -14,6 +14,8 @@ from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.modules.datastore.renamed_settings import warn_about_renamed_env_vars
 from app.core.settings_env import dotenv_path
 
 
@@ -588,3 +590,4 @@ class DatastoreSettings(BaseSettings):
 
 
 datastore_settings = DatastoreSettings()
+warn_about_renamed_env_vars()

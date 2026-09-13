@@ -160,8 +160,15 @@ async def test_the_workspace_predicate_reaches_the_database(
 
     reads = [text for text in statements if "agent_surfaces" in text]
     assert len(reads) == 1, f"expected one read, got {len(reads)}"
-    assert "external_workspace_id" in reads[0], (
-        f"the workspace never reached the database: {reads[0]}"
+    # The WHERE half, not the statement. `select(AgentSurface)` projects every
+    # column, so the name appears in the SELECT list whether or not it is a
+    # predicate -- the first version of this assertion looked for it anywhere
+    # and would have passed with the filter still in Python, which is the one
+    # thing it exists to rule out.
+    _, _, predicate = reads[0].partition("WHERE")
+    assert predicate, f"no WHERE clause at all: {reads[0]}"
+    assert "external_workspace_id" in predicate, (
+        f"the workspace never reached the database as a filter: {predicate}"
     )
 
 

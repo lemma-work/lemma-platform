@@ -375,10 +375,18 @@ class AppRepository(AppRepositoryPort):
     ) -> tuple[list[AppReleaseEntity], UUID | None]:
         """One page of an app's history, newest first, plus the next cursor.
 
-        Keyset on the id, which is also the ordering: these rows key on uuid7,
-        so id order *is* creation order -- the same invariant `select_prunable`
-        relies on to call the prunable set a suffix of the ranking. That is what
-        lets a bare-UUID page token, the house contract, order by time.
+        Keyset on the id, which is also the ordering: these rows key on uuid7, whose
+        timestamp is millisecond-granular -- so id order is creation order to
+        the millisecond, and two rows recorded inside one millisecond order
+        arbitrarily but stably. One release per deploy makes that collision
+        theoretical; the page token stays correct either way, since a keyset
+        over immutable ids cannot skip or repeat a row whatever the order is.
+
+        That is what lets a bare-UUID page token, the house contract, order by
+        time. `select_prunable` leans on the same property for its "suffix of
+        the ranking" reasoning, and leans on it less hard: it sorts on
+        `created_at` first, which is microsecond-granular, and reaches for the
+        id only to break an exact tie.
 
         `list_releases` stays for deletion, which needs every row by definition.
         """
@@ -407,6 +415,15 @@ class AppRepository(AppRepositoryPort):
         Which matters because retention runs after every deploy and these rows
         are never deleted -- so the plan's input grew with the app's whole
         lifetime while the set it can choose from stays at `max_keep`.
+
+        Not bounded, and the number this returns is `max_keep` plus however
+        many prunes have been stamped but not yet carried out. In the steady
+        state that second term is zero: a prune and its delete happen in the
+        same request. It grows only while object-storage deletes are failing,
+        which is its own alarm. A `LIMIT` here would be the wrong fix -- the
+        rows past it are what `_prunable_source_paths` reads to decide a blob
+        is still referenced, and truncating that set is exactly how a live
+        release's source gets deleted.
         """
         statement = (
             select(AppReleaseModel)

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.domain.message_bus import MessageBus
@@ -32,6 +32,9 @@ from app.modules.schedule.domain.value_objects import (
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.repositories.schedule_filters import list_filters
 from app.core.log.log import get_logger
+from app.modules.schedule.repositories.schedule_config_sql import (
+    datastore_operations_array,
+)
 
 logger = get_logger(__name__)
 
@@ -503,15 +506,14 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         # `upper(btrim(...))` is `parse_datastore_operation` in SQL: the stored
         # array is whatever the caller wrote, and normalization happens when the
         # entity is built rather than when the row is saved.
-        operation_element = func.jsonb_array_elements_text(
-            func.jsonb_extract_path(Schedule.config, "operations")
-        ).column_valued("operation")
-        operation_match = and_(
-            func.jsonb_typeof(func.jsonb_extract_path(Schedule.config, "operations"))
-            == "array",
+        operations = datastore_operations_array(Schedule.config)
+        operation_element = func.jsonb_array_elements_text(operations).column_valued(
+            "operation"
+        )
+        operation_match = (
             select(1)
             .where(func.upper(func.btrim(operation_element)) == operation_value.value)
-            .exists(),
+            .exists()
         )
 
         stmt = select(Schedule).where(

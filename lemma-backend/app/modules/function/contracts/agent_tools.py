@@ -16,6 +16,10 @@ repository and application layers.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
 from uuid import UUID
 
 from app.modules.function.domain.entities import FunctionEntity, FunctionRunEntity
@@ -33,7 +37,9 @@ async def get_function_by_id(uow, function_id: UUID) -> FunctionEntity | None:
     return await FunctionRepository(uow).get(function_id)
 
 
-async def get_functions_by_ids(uow, function_ids) -> dict[UUID, FunctionEntity]:
+async def get_functions_by_ids(
+    uow: SqlAlchemyUnitOfWork, function_ids: Iterable[UUID | None]
+) -> dict[UUID, FunctionEntity]:
     """Several functions at once, keyed by id.
 
     Building an agent's toolset resolves every granted function, and asking per

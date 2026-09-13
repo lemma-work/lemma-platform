@@ -17,7 +17,14 @@ The existing `uq_function_revision_active_hash` looks like it would do, and does
 not: it is partial on `pruned_at IS NULL`, while ref resolution has to see
 pruned rows so it can tell "removed by retention" from "never existed".
 
-The accounting, in the terms 0018 set: two added, one dropped.
+Two more come with the pagination the same change added. `page_releases` and
+`page_revisions` keyset on the id -- `WHERE owner = :id AND id < :cursor ORDER
+BY id DESC` -- and the existing `(owner, created_at DESC)` indexes serve the
+filter and not the order, so a bounded page still sorted the whole history to
+return fifty rows. That is the cost pagination was meant to remove, moved
+rather than paid.
+
+The accounting, in the terms 0018 set: four added, one dropped.
 `ix_app_release_app_id` pays for one of them. It indexes `app_id` alone, which
 already leads `ix_app_release_app_created`, `uq_app_release_number` and now the
 new prefix index, so every lookup it served is served by a composite that was
@@ -31,6 +38,7 @@ Revision ID: 0034_ref_prefix_indexes
 Revises: 0033_datastore_signed_links
 """
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "0034_ref_prefix_indexes"
@@ -52,11 +60,25 @@ def upgrade() -> None:
         ["function_id", "revision_hash"],
         postgresql_ops={"revision_hash": "text_pattern_ops"},
     )
+    op.create_index(
+        "ix_app_release_app_id_desc",
+        "app_releases",
+        ["app_id", sa.text("id DESC")],
+    )
+    op.create_index(
+        "ix_function_revision_function_id_desc",
+        "function_revisions",
+        ["function_id", sa.text("id DESC")],
+    )
     op.drop_index("ix_app_release_app_id", table_name="app_releases")
 
 
 def downgrade() -> None:
     op.create_index("ix_app_release_app_id", "app_releases", ["app_id"], unique=False)
+    op.drop_index(
+        "ix_function_revision_function_id_desc", table_name="function_revisions"
+    )
+    op.drop_index("ix_app_release_app_id_desc", table_name="app_releases")
     op.drop_index(
         "ix_function_revision_function_hash_prefix", table_name="function_revisions"
     )

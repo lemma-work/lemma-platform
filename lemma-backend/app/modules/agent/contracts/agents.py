@@ -16,6 +16,10 @@ the caller is about to do with the agent.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from uuid import UUID
 
 from sqlalchemy import select
@@ -55,7 +59,9 @@ async def agent_name_for_id(session, agent_id: UUID) -> str | None:
     ).scalar_one_or_none()
 
 
-async def agent_names_for_ids(session, agent_ids) -> dict[UUID, str]:
+async def agent_names_for_ids(
+    session: AsyncSession, agent_ids: Iterable[UUID | None]
+) -> dict[UUID, str]:
     """Display names for many agents at once, keyed by id.
 
     A listing labels every row with its agent's name, and asking per row is one

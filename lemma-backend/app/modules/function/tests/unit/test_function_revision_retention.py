@@ -169,3 +169,38 @@ async def test_a_sweep_never_issues_a_bare_prefix_delete():
     await retention.execute(plan)
 
     assert all(call.args[0] for call in storage.delete_prefix.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_a_shared_source_directory_is_not_deleted_out_from_under_a_live_revision():
+    """Redeploying identical bytes gives two revisions one directory.
+
+    `code_path` is `revisions/<content hash>/function.py`, and `record_revision`
+    allows a new unpruned revision to carry a hash an older pruned one already
+    has. Pruning the old row deleted the directory, which is the live
+    revision's source -- and a *retried* prune of a long-pruned row does it to
+    whatever shares the hash now.
+
+    The apps twin has guarded exactly this since it was written, with a comment
+    saying legacy releases may share a source path. This side computed the
+    prefix straight off every doomed row.
+    """
+    function_id = uuid4()
+    shared = "abc"  # hex, so it satisfies the revision-hash pattern
+    old = _revision(function_id, 1, seed=shared, age_days=400)
+    old.pruned_at = NOW - timedelta(days=1)
+    live = _revision(function_id, 2, seed=shared, age_days=0)
+    assert old.code_path == live.code_path, "the fixture is not sharing a directory"
+
+    function = _function(id=function_id, revision_hash=live.revision_hash)
+    retention, _, _ = _retention(function, [old, live])
+
+    plan = await retention.plan(function, policy=_TIGHT, now=NOW)
+
+    assert old.id in plan.version_ids, (
+        "the pruned revision is still the one being cleaned up"
+    )
+    assert plan.source_prefixes == (), (
+        "the live revision's source directory was scheduled for deletion "
+        "because a pruned revision happened to share its content hash"
+    )

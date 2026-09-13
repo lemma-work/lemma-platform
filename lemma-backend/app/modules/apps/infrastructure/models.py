@@ -66,6 +66,11 @@ class AppReleaseModel(UUIDCreatedBase):
             "version",
             postgresql_ops={"version": "text_pattern_ops"},
         ),
+        # The keyset the history endpoint pages on. `app_created` cannot serve
+        # it: the page filters and orders by `id`, so without this the bounded
+        # page still sorts the app's whole history to return fifty rows -- the
+        # cost the pagination was added to remove, moved rather than paid.
+        Index("ix_app_release_app_id_desc", "app_id", text("id DESC")),
     )
 
     app_id: Mapped[UUID] = mapped_column(ForeignKey("apps.id", ondelete="CASCADE"))

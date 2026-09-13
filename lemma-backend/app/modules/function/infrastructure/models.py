@@ -106,6 +106,9 @@ class FunctionRevisionModel(UUIDCreatedBase):
             "revision_hash",
             postgresql_ops={"revision_hash": "text_pattern_ops"},
         ),
+        # The keyset the history endpoint pages on; see the apps twin for why
+        # the `created` index below cannot serve it.
+        Index("ix_function_revision_function_id_desc", "function_id", text("id DESC")),
         Index(
             "ix_function_revision_function_created",
             "function_id",

@@ -1243,6 +1243,13 @@ class TestSignedUrlRecoveryAndPaging:
             )
             assert page.status_code == status.HTTP_200_OK, page.text
             body = page.json()
+            # A token promises a next page, so every page a token leads to has
+            # to have something on it. Emitting one whenever the page came back
+            # full breaks that on the exact boundary -- five links at a limit of
+            # five hands out a token to an empty page, and "no links" is the
+            # answer someone revoking a share acts on. The read probes one past
+            # the page so a full page and a last page are distinguishable.
+            assert body["links"], "a page token led to an empty page"
             seen.extend(link["code"] for link in body["links"])
             token = body["next_page_token"]
             if not token:
@@ -1251,6 +1258,18 @@ class TestSignedUrlRecoveryAndPaging:
         assert token is None, "pagination did not terminate"
         assert len(seen) >= 5, seen
         assert len(seen) == len(set(seen)), "a page repeated a row"
+
+        # The exact-boundary case the loop above only reaches by luck: ask for
+        # exactly as many as exist.
+        exact = await pod_api.request(
+            "GET",
+            FILES.format(pod_id=pod_api.pod_id) + "/signed-urls",
+            params={"limit": len(seen)},
+        )
+        assert exact.status_code == status.HTTP_200_OK, exact.text
+        assert exact.json()["next_page_token"] is None, (
+            "a page holding every remaining link still promised another one"
+        )
 
     @pytest.mark.asyncio
     async def test_a_malformed_page_token_is_rejected_rather_than_ignored(

@@ -2080,6 +2080,28 @@ async def test_matcher_skips_invalid_or_empty_operations(
     )
     assert matched == []
 
+    # `operations` that is not an array at all. This is the shape that can make
+    # the query *raise* rather than return nothing: `jsonb_array_elements_text`
+    # errors on a scalar, so the type guard has to be reached before the call.
+    # Written as a sibling `AND` conjunct that only held because the planner
+    # happened to evaluate it first -- SQL promises no order between them --
+    # which is why the guard now substitutes an empty array inside the
+    # function's own argument.
+    for malformed in ('"INSERT"', '{"INSERT": true}', "42", "null"):
+        await db_session.execute(
+            sa_text(
+                "UPDATE schedules SET config = "
+                f'\'{{"table_name": "corrupt_records", "operations": {malformed}}}\' '
+                "WHERE id = :id"
+            ),
+            {"id": schedule["id"]},
+        )
+        await db_session.commit()
+        matched = await repo.find_by_pod_table_event(
+            pod_id=UUID(pod_id), table_name="corrupt_records", operation="INSERT"
+        )
+        assert matched == [], f"a non-array operations value matched: {malformed}"
+
 
 @pytest.mark.asyncio
 async def test_a_zoned_cron_is_armed_at_the_right_utc_instant(

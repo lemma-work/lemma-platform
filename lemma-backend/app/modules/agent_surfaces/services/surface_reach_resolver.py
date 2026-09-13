@@ -7,8 +7,14 @@ or the connected account / email address for email surfaces.
 Resolution is **lazy write-through**: the first read that needs a live call
 (Slack/Teams/Telegram) fetches the value once and persists it onto the surface's
 ``surface_identity_username`` column, so every later read reuses the stored value
-with no external call. Everything here is best-effort — a GET must always
-succeed, so failures degrade to a fallback handle (or None) and never raise.
+with no external call.
+
+Everything here is best-effort with one stated exception: a GET must always
+succeed, so a failed platform call, an undecryptable credential or a
+write-through that does not land all degrade to a fallback handle (or None).
+A *database* error does not, because it takes the caller's session with it --
+continuing past one only produces more failures, later, with no error naming
+the first.
 """
 
 from __future__ import annotations
@@ -19,6 +25,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent_surfaces.platforms.common import (
     PLATFORM_TRANSPORT_ERRORS,
@@ -173,12 +181,36 @@ class SurfaceReachResolver:
         Separated so it can run in series while the calls it feeds run
         concurrently. ``None`` means there is nothing to look up -- no
         resolver, or a platform whose handle needs no credentials.
+
+        The two kinds of failure here are not the same and are not treated the
+        same. A database error leaves the session unusable for everyone after
+        it, so swallowing one turns a single failure into a page of them with
+        nothing to show for it; it propagates. Anything else -- a secret that
+        will not decrypt, a provider whose config is malformed -- belongs to
+        one surface, and a listing that fails because one bot's credentials
+        went bad is worse than a listing that shows that bot without a handle.
+
+        An earlier version of this had no split: the whole thing was inside the
+        same broad catch as the platform call, and then briefly had no guard at
+        all, which made one undecryptable secret a 500 for the whole page.
         """
         if credential_resolver is None:
             return None
         if surface.surface_type not in _CREDENTIALLED_PLATFORMS:
             return None
-        return await credential_resolver.for_surface(surface)
+        try:
+            return await credential_resolver.for_surface(surface)
+        except SQLAlchemyError:
+            raise
+        except Exception:
+            logger.warning(
+                "agent_surfaces.surface_reach_resolver.credentials_unavailable",
+                surface_type=getattr(
+                    surface.surface_type, "value", surface.surface_type
+                ),
+                exc_info=True,
+            )
+            return None
 
     async def _live_handle(
         self,

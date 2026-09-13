@@ -204,8 +204,12 @@ class FunctionRevisionRepositoryMixin:
         """One page of a function's history, newest first, plus the next cursor.
 
         Keyset on the id rather than on `revision_number`, so the page token is
-        the bare UUID the house contract uses everywhere else; these rows key on
-        uuid7, so id order is creation order and therefore revision order.
+        the bare UUID the house contract uses everywhere else; these rows key on uuid7, whose
+        timestamp is millisecond-granular -- so id order is creation order to
+        the millisecond, and two rows recorded inside one millisecond order
+        arbitrarily but stably. One release per deploy makes that collision
+        theoretical; the page token stays correct either way, since a keyset
+        over immutable ids cannot skip or repeat a row whatever the order is.
         """
         statement = select(FunctionRevisionModel).where(
             FunctionRevisionModel.function_id == function_id
@@ -237,6 +241,14 @@ class FunctionRevisionRepositoryMixin:
         are never deleted -- so the plan's input grew with the function's whole
         lifetime while the set it can choose from stays at `max_keep`. This is
         that bound made real rather than assumed.
+
+        Not bounded: this is `max_keep` plus the prunes that have been stamped
+        and not yet carried out, which is zero in the steady state and grows
+        only while storage deletes are failing. A `LIMIT` would be the wrong
+        fix -- the rows past it are what decides whether a doomed revision's
+        source directory is still referenced by a live one, and truncating
+        that is how the shared-digest deletion this module guards against
+        comes back.
         """
         statement = (
             select(FunctionRevisionModel)

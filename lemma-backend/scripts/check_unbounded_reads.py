@@ -42,8 +42,25 @@ seventy-two and rendered them perfectly.
     somebody else calls ``.all()`` on it does not change what it asks the
     database for.
 
-What this rule cannot see, and does not pretend to: whether the thing being
-read is *small*. Plenty of baselined entries below are reads of a bounded set
+Two holes worth naming, because a green run does not mean what it looks like.
+
+A method whose ``limit`` is *optional* reads as bounded, and its callers are
+never consulted -- ``visible_file_ids`` takes one, and the caller that widens
+a search deliberately passes none. The rule sees the statement, not the call.
+
+A helper that delegates is invisible the same way: the ``select`` and the
+``.all()`` are in the callee, and the caller is three lines with neither. The
+``unbounded-statement`` rule closes this only for the shape that annotates
+``-> Select``.
+
+Neither is a bug to be fixed by widening the rule. Following an optional
+argument to its call sites is interprocedural analysis, and this is an AST
+pass; widening it would cost the precision that makes a ratchet worth having.
+They are recorded here so the next person does not read a passing run as proof
+of something it never claimed.
+
+What this rule also cannot see, and does not pretend to: whether the thing
+being read is *small*. Plenty of baselined entries below are reads of a bounded set
 that happens to have no `LIMIT` -- one pod's surfaces, an org's connectors.
 That is why this is a ratchet rather than a verifier. It is not asking "is this
 wrong", it is asking "did somebody add another one", and the answer to the
@@ -76,7 +93,8 @@ SCAN_ROOT = ROOT / "app"
 EXCLUDED_PARTS = ("tests", "test_support")
 
 #: Ways a statement is already bounded. Any one of them and the read is not
-#: this rule's business.
+#: this rule's business. ``fetch`` is SQLAlchemy's spelling of the SQL-standard
+#: ``FETCH FIRST n ROWS``, which is a limit by another name.
 BOUNDING_CALLS = frozenset({"limit", "in_", "fetch"})
 
 #: Aggregates return one row however many they read. Several of the fixes this

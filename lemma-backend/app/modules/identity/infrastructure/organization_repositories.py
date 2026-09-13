@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
@@ -106,7 +108,9 @@ class OrganizationRepository(OrganizationRepositoryPort):
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
-    async def get_many(self, ids) -> dict[UUID, OrganizationEntity]:
+    async def get_many(
+        self, ids: Iterable[UUID | None]
+    ) -> dict[UUID, OrganizationEntity]:
         """Several organizations at once, keyed by id.
 
         A listing labels every row with its organization's name, and every row

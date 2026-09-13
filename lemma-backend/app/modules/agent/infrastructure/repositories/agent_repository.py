@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from uuid import UUID
 
 from sqlalchemy import select
@@ -116,12 +118,20 @@ class AgentRepository:
             entity.allowed_actions = list(allowed_actions)
         return entity
 
-    async def get_many(self, agent_ids) -> dict[UUID, AgentEntity]:
+    async def get_many(
+        self, agent_ids: Iterable[UUID | None]
+    ) -> dict[UUID, AgentEntity]:
         """Several agents in one statement, keyed by id.
 
         No authorization variant, for the same reason the function twin has
         none: the caller is turning an agent's own sub-agent grants into tools,
         and the grant is the decision.
+
+        ``UUID | None`` because the callers hold optional ids -- a child
+        conversation may have no agent, a surface may name none -- and the
+        filter below has always been there for them. The parameter was untyped,
+        so writing ``Iterable[UUID]`` looked right and made a caller that was
+        always correct fail to check.
         """
         wanted = {agent_id for agent_id in agent_ids if agent_id is not None}
         if not wanted:

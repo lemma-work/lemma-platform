@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -479,3 +481,52 @@ async def test_a_stored_handle_still_costs_no_call_inside_a_page():
     assert [reach.handle for reach in reaches] == ["@already-known", None], (
         "the answers came back in a different order than the surfaces went in"
     )
+
+
+async def test_one_bad_credential_does_not_take_the_page_with_it():
+    """A listing shows the other surfaces, and the bad one without a handle.
+
+    Credential resolution briefly had no guard at all: an undecryptable secret
+    or a malformed provider config raised out of the list comprehension and the
+    whole surfaces page answered 500. One bot's credentials going bad is not a
+    reason to stop showing a pod its other bots.
+    """
+    good = _surface(surface_identity_username="@already-known")
+    bad = _surface(surface_type=SurfacePlatform.SLACK)
+
+    class _BrokenCredentials:
+        async def for_surface(self, surface, **kwargs):
+            raise ValueError("secret did not decrypt")
+
+    reaches = await SurfaceReachResolver().resolve_many(
+        [good, bad],
+        credential_resolver=_BrokenCredentials(),
+        find_account=_account_named("Fallback Account"),
+    )
+
+    assert [reach.handle for reach in reaches] == [
+        "@already-known",
+        "Fallback Account",
+    ], "a surface whose credentials failed should fall back, not raise"
+
+
+async def test_a_database_failure_is_not_swallowed_into_a_blank_handle():
+    """The other half: a broken session must not read as "no handle".
+
+    A failed statement leaves the session unusable for everything after it, so
+    degrading past one turns a single failure into a page of them -- every
+    later surface falling back for a reason nothing records. It propagates, and
+    the request fails while there is still something to say about why.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    class _BrokenSession:
+        async def for_surface(self, surface, **kwargs):
+            raise OperationalError("SELECT 1", {}, Exception("connection gone"))
+
+    with pytest.raises(OperationalError):
+        await SurfaceReachResolver().resolve_many(
+            [_surface(surface_type=SurfacePlatform.SLACK)],
+            credential_resolver=_BrokenSession(),
+            find_account=_account_named(),
+        )
