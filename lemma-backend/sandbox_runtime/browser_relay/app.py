@@ -8,11 +8,12 @@ else, which is precisely what happened the first time this was built. A small
 process baked into the image runs wherever the image runs: Docker, E2B, the
 desktop guest, and anything later that can start a container.
 
-Why not have the backend speak CDP directly through a forwarded port: on E2B
-every port is a public name, so that would put raw Chrome debugging protocol --
-which reads every cookie and evaluates arbitrary script -- behind nothing but a
-traffic token. Here the protocol a viewer speaks is four message types, and this
-process is what turns them into the handful of CDP calls they correspond to.
+Why not publish the browser's own ports and let a viewer reach them directly: on
+E2B every port is a public name, so a forwarded CDP port would put raw Chrome
+debugging protocol -- which reads every cookie and evaluates arbitrary script --
+behind nothing but a traffic token, and `agent-browser`'s stream server has no
+authentication of its own at all. Everything it serves is reached *through* this
+process instead, which is the thing holding the delivered token.
 
 The token is read from a file the backend places through the provider's own
 secret-delivery path, and re-read on every request so a resumed sandbox can be
@@ -37,16 +38,17 @@ from sandbox_runtime.tasks import create_background_task
 
 from .chrome import (
     BrowserNotRunning,
+    DEFAULT_SESSION,
     is_safe_session,
-    CdpConnection,
     ensure_port,
     keepalive,
     live_port,
     open_url,
-    page_socket_url,
     page_targets,
+    stream_port,
+    stream_socket_url,
 )
-from .screencast import CONTROL, VIEW, ScreencastSession, pump
+from .stream_proxy import CONTROL, VIEW, pump
 from .state import (
     StateOperationFailed,
     clear_session,
@@ -61,9 +63,13 @@ TOKEN_PATH = Path(os.environ.get("LEMMA_RELAY_TOKEN_FILE", "/tmp/lemma-relay/tok
 
 DEFAULT_PORT = int(os.environ.get("LEMMA_BROWSER_RELAY_PORT", "4850"))
 
-#: The session the agent's own browsing uses, and the one a viewer watches when
-#: no particular login is named.
-DEFAULT_SESSION = os.environ.get("AGENT_BROWSER_SESSION", "workspace")
+#: The session a viewer watches when no particular one is named.
+#:
+#: Taken from `chrome.py` rather than re-read from `AGENT_BROWSER_SESSION`: the
+#: agent's browser script exports that name into its conversation's shell, the
+#: shell is persistent, and this process is started by an exec into the same
+#: sandbox -- so reading it here meant one conversation could rename "the
+#: default" for everybody. See the note on `chrome.DEFAULT_SESSION`.
 
 #: How often to touch the browser while somebody is watching. Comfortably inside
 #: agent-browser's two-minute idle timeout, which counts *commands* -- and
@@ -71,15 +77,52 @@ DEFAULT_SESSION = os.environ.get("AGENT_BROWSER_SESSION", "workspace")
 #: is reading the page.
 _KEEPALIVE_SECONDS = 45.0
 
-#: A CDP frame from Chrome. Bounded so a page cannot make one viewer's socket
-#: into this process's memory problem.
-_MAX_CDP_FRAME_BYTES = 8 * 1024 * 1024
+#: A frame from the stream server. Bounded so a page cannot make one viewer's
+#: socket into this process's memory problem.
+_MAX_STREAM_FRAME_BYTES = 8 * 1024 * 1024
+
+#: The ceiling this relay asks the stream for. A person watching a browser is
+#: reading a page, not watching a film; past this the bytes buy nothing and a
+#: phone pays for them. A client may ask for fewer with a `config` message.
+_MAX_FPS = 15
 
 CLOSE_UNAUTHENTICATED = 4401
 CLOSE_NO_BROWSER = 4409
 CLOSE_UPSTREAM_GONE = 1011
 
 _log = logging.getLogger(__name__)
+
+
+async def _refuse(websocket: WebSocket, code: int, reason: str) -> None:
+    """Close so that the caller is told which refusal this was.
+
+    A close sent *before* `accept()` is not a close: ASGI turns it into a
+    rejected handshake, and a rejected handshake carries an HTTP status and no
+    close frame at all. Every refusal below then reached the API as one
+    indistinguishable `InvalidStatus`, which it reported to the pane as 1011 --
+    "the connection dropped" -- and the pane retried, for ever, because 1011 is
+    the code it is right to retry.
+
+    So the ordinary resting state of an idle workspace ("the browser is not
+    running", which is not a failure) was shown to the person as a fault, on a
+    loop. The same mistake, for the same reason, as the one written out at
+    length in `browser_view_controller._refuse`; this is the sandbox half of it.
+
+    Accepting a socket in order to close it is backwards, and is correct anyway
+    because nothing is sent in between: the caller gets an open, a close frame
+    carrying the reason, and no bytes.
+    """
+    # Logged on the way out, every time. A close code is four digits reaching
+    # somebody through two processes and a fabric proxy; without a line here
+    # saying which branch produced it, diagnosing one means adding this line.
+    _log.warning("refusing a viewer: %s (%d)", reason, code)
+    # Suppressed rather than checked: the caller may have gone between the
+    # handshake and here, and a refusal that cannot be delivered must not become
+    # a traceback of its own.
+    with suppress(RuntimeError):
+        await websocket.accept()
+    with suppress(RuntimeError):
+        await websocket.close(code=code)
 
 
 class EnsureRequest(BaseModel):
@@ -274,54 +317,71 @@ def create_app() -> FastAPI:
     ) -> None:
         """One viewer, watching or driving one page.
 
-        Refused before `accept()` where it can be: a socket that is opened and
-        then closed looks to a browser like a connection that dropped, and the
-        person is told the wrong thing about why.
+        Every refusal goes through `_refuse`, which accepts the socket before
+        closing it -- that is the only way the reason survives as a close code
+        rather than as an HTTP status nobody downstream can read.
         """
         if not _authenticate(websocket.headers.get("x-lemma-relay-token", "")):
-            await websocket.close(code=CLOSE_UNAUTHENTICATED)
+            await _refuse(
+                websocket, CLOSE_UNAUTHENTICATED, "no token, or the wrong one"
+            )
             return
         if mode not in (VIEW, CONTROL):
-            await websocket.close(code=CLOSE_UNAUTHENTICATED)
+            await _refuse(websocket, CLOSE_UNAUTHENTICATED, f"{mode!r} is not a mode")
             return
 
         session_name = session or DEFAULT_SESSION
         if session_name != DEFAULT_SESSION and not is_safe_session(session_name):
-            # Before `accept()`: a socket opened and then closed looks to a
-            # browser like a connection that dropped.
-            await websocket.close(code=CLOSE_UNAUTHENTICATED)
+            await _refuse(
+                websocket, CLOSE_UNAUTHENTICATED, f"{session_name!r} is not a session"
+            )
             return
         try:
             port = await live_port(session_name)
             open_targets = await page_targets(port=port)
-        except BrowserNotRunning:
-            await websocket.close(code=CLOSE_NO_BROWSER)
+        except BrowserNotRunning as exc:
+            await _refuse(
+                websocket, CLOSE_NO_BROWSER, f"no browser in {session_name!r}: {exc}"
+            )
             return
 
         # A target id only means anything against the Chrome that minted it.
         # Sessions are separate browsers on separate ports, so a caller that
         # worked out the session one way and the target another produces an id
-        # this browser has never heard of -- and attaching anyway fails deep in
-        # the CDP handshake, which reaches the person as "the connection
-        # dropped" and a reconnect loop. Checked here so the answer is "that
-        # page is not open" while we still know which question was asked.
+        # this browser has never heard of. The stream itself would not notice:
+        # it is session-scoped and follows that session's active tab, so a
+        # mismatched target would stream somebody a *different browser* and look
+        # entirely healthy doing it. That is the bug this feature shipped with,
+        # and this is the check that makes it impossible: the two halves of the
+        # answer have to agree here, or nobody is attached at all.
+        #
+        # What it is not is a selector. The stream shows the active tab, and
+        # there is no inbound message that changes which one that is.
         known = {found["id"] for found in open_targets}
         if target and target not in known:
-            _log.warning(
-                "the viewer asked for target %s, which is not open in session %s",
-                target,
-                session_name,
+            await _refuse(
+                websocket,
+                CLOSE_NO_BROWSER,
+                f"target {target} is not open in {session_name!r}",
             )
-            await websocket.close(code=CLOSE_NO_BROWSER)
             return
 
-        target_id = target or _first_target_id(open_targets)
-        if not target_id:
-            await websocket.close(code=CLOSE_NO_BROWSER)
+        if not (target or _first_target_id(open_targets)):
+            await _refuse(
+                websocket, CLOSE_NO_BROWSER, f"no page open in {session_name!r}"
+            )
+            return
+
+        try:
+            stream = await stream_port(session=session_name)
+        except BrowserNotRunning as exc:
+            await _refuse(
+                websocket, CLOSE_NO_BROWSER, f"no stream in {session_name!r}: {exc}"
+            )
             return
 
         await websocket.accept()
-        await websocket.send_json({"t": "status", "state": "attached"})
+        await websocket.send_json({"type": "status", "state": "attached"})
 
         # Background: the keepalive outlives no request and belongs to the
         # browser rather than to whoever opened this socket.
@@ -329,21 +389,15 @@ def create_app() -> FastAPI:
         driving = _take_the_wheel(session_name) if mode == CONTROL else None
         try:
             async with websockets.connect(
-                page_socket_url(target_id, port=port),
-                max_size=_MAX_CDP_FRAME_BYTES,
-            ) as cdp_socket:
-                cdp = CdpConnection(cdp_socket)
-                viewer = ScreencastSession(cdp, mode=mode)
-                await viewer.start()
-                try:
-                    await pump(
-                        cdp_socket,
-                        viewer,
-                        send_json=websocket.send_json,
-                        receive_text=_receiver(websocket),
-                    )
-                finally:
-                    await viewer.stop()
+                stream_socket_url(stream, max_fps=_MAX_FPS),
+                max_size=_MAX_STREAM_FRAME_BYTES,
+            ) as stream_socket:
+                await pump(
+                    stream_socket,
+                    mode=mode,
+                    send_text=websocket.send_text,
+                    receive_text=_receiver(websocket),
+                )
         except OSError, websockets.exceptions.WebSocketException:
             with suppress(RuntimeError):
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)

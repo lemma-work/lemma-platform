@@ -133,13 +133,17 @@ next run asks the person again.
 ### PS-BROWSER-030 — A person can watch, and drive, their own browser
 **Status:** gap
 
-> **Gap:** watching is proved; driving is not. The only scenario naming this
-> promise asserts that *asking* about the browser starts nothing, which is the
-> opposite end of it. Input is unit-tested either side of the wire -- the
-> coordinate and key translations, the relay's dispatch, and the lease that
-> stops an agent typing into a page somebody is holding -- but no test drives a
-> real browser from a real socket, so "a person can drive it" rests on having
-> been tried by hand.
+> **Gap:** proved, but not here. Watching and driving are now covered end to
+> end by `test_a_person_watches_the_agents_browser_and_then_drives_it` in the
+> workspace e2e suite: the agent's own tool opens a page, a socket carries a
+> real JPEG of it back, input from a watching socket is refused, and a click
+> from a driving one navigates the page. That needs a real browser in a real
+> container, which this suite has no way to stand up -- the same reason the
+> sign-in flow lives there, noted at the top of `test_saved_logins.py`. The
+> only scenario naming this promise asserts that *asking* about the browser
+> starts nothing, which is one true corner of it; until the promise can be
+> proved black-box over the shipped API, it is recorded as a gap here rather
+> than claimed.
 
 - The system shall let a person see what the browser in their own workspace is
   doing, and shall not start a paused workspace merely to answer whether it can.

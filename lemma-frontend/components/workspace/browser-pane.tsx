@@ -12,7 +12,7 @@ import {
     type ViewerState,
     keyEventFor,
     openBrowserView,
-    toPagePoint,
+    toFramePoint,
     wheelEventFor,
 } from '@/lib/workspace/browser-view';
 import { cn } from '@/lib/utils';
@@ -50,8 +50,13 @@ export function BrowserPane({
         frameRef.current = frame;
         const canvas = canvasRef.current;
         if (!canvas) return;
-        canvas.width = frame.pageWidth;
-        canvas.height = frame.pageHeight;
+        // Sized to the *picture*, not to the page it is of. The stream encodes
+        // within the image's caps, so the JPEG is routinely smaller than the
+        // viewport -- and a canvas sized to the viewport left the picture in
+        // one corner of it with the rest transparent, which `object-contain`
+        // then letterboxed as though the empty part were part of the shot.
+        canvas.width = frame.pictureWidth;
+        canvas.height = frame.pictureHeight;
         canvas.getContext('2d')?.drawImage(frame.bitmap, 0, 0);
     }, []);
 
@@ -72,15 +77,18 @@ export function BrowserPane({
         };
     }, [controlling, origin, accessToken, conversationId, paint, onNavigated]);
 
+    // Sent as-is: these already are `agent-browser` stream messages, and the
+    // relay forwards them rather than translating. It refuses input outright
+    // when the socket is in view mode, so "watching" is not enforced here.
     const sendInput = useCallback((event: Record<string, unknown>) => {
-        viewerRef.current?.send({ t: 'input', event });
+        viewerRef.current?.send(event);
     }, []);
 
     const pointFor = useCallback((event: { clientX: number; clientY: number }) => {
         const canvas = canvasRef.current;
         const frame = frameRef.current;
         if (!canvas || !frame) return { x: 0, y: 0 };
-        return toPagePoint(canvas.getBoundingClientRect(), frame, event);
+        return toFramePoint(canvas.getBoundingClientRect(), frame, event);
     }, []);
 
     const onMouse = useCallback(
@@ -89,8 +97,8 @@ export function BrowserPane({
                 if (!controlling) return;
                 const point = pointFor(event);
                 sendInput({
-                    kind: 'mouse',
-                    type,
+                    type: 'input_mouse',
+                    eventType: type,
                     x: point.x,
                     y: point.y,
                     button: ['left', 'middle', 'right'][event.button] ?? 'left',
@@ -127,7 +135,10 @@ export function BrowserPane({
     const typeText = useCallback(
         (text: string) => {
             if (!text) return;
-            sendInput({ kind: 'text', text });
+            // A phone's keyboard reports no usable key events, so the text bar
+            // sends the string itself. `char` is the stream's way of saying
+            // "this text was typed" without inventing key codes for it.
+            sendInput({ type: 'input_keyboard', eventType: 'char', text });
         },
         [sendInput],
     );

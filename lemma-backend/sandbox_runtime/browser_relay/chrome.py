@@ -1,11 +1,21 @@
 """Finding, starting, and steering the Chrome this sandbox runs.
 
-A live, *drivable* browser view needs Chrome's own protocol: the dashboard
-`agent-browser` ships streams viewports and activity but has no input path, so
-watching is all it can ever offer.
+What this does *not* do any more is speak CDP over a socket. A live, drivable
+view used to mean driving `Page.startScreencast` and `Input.dispatch*`
+ourselves; `agent-browser` runs a session-scoped stream server that does the
+same job and more, and `stream_proxy.py` carries a viewer to it. `stream_port`
+below is how that port is found.
 
-Three things make this awkward, and all three are handled here rather than by
-whoever calls it.
+An earlier version of this docstring said the browser's own dashboard "has no
+input path, so watching is all it can ever offer". That was wrong twice over:
+the dashboard offers an address bar, tabs, a console and a cookie panel, and
+the stream underneath it takes mouse, keyboard and touch. The dashboard's
+*viewport* does not forward clicks -- which is a choice in its UI, not a limit
+of the protocol.
+
+What is left here is the lifecycle: where Chrome is, whether it is up, and how
+to point it at a page. Three things make that awkward, and all three are
+handled here rather than by whoever calls it.
 
 **The port is not fixed.** Chrome writes it to ``DevToolsActivePort`` in the
 profile directory on every launch. Forcing a fixed ``--remote-debugging-port``
@@ -22,10 +32,10 @@ which surfaced as a 500 and, to the person clicking, as an unexplained failure.
 Hence: the recorded port is a candidate, and it is not believed until something
 answers on it.
 
-**The port is not reachable from outside.** Chrome binds loopback, so CDP is
-only ever reached *through* this process -- which is also the right answer for
-safety, because it puts a place to stand between a viewer and full control of
-the session.
+**Nothing here is reachable from outside.** Chrome binds loopback and so does
+the stream server, so both are only ever reached *through* this process -- which
+is also the right answer for safety, because it puts a place to stand between a
+viewer and the browser, and it means no new port is published.
 """
 
 from __future__ import annotations
@@ -51,7 +61,20 @@ _DEFAULT_PROFILE = "/tmp/lemma-browser/profile"
 
 #: The session the image's own tooling uses, and the one that owns the default
 #: profile directory.
-DEFAULT_SESSION = os.environ.get("AGENT_BROWSER_SESSION", "workspace")
+#:
+#: **Fixed, not read from `AGENT_BROWSER_SESSION`.** It used to be read from the
+#: environment, which is the same name the agent's browser script exports into
+#: its conversation's shell -- and that shell is persistent, so the export
+#: outlives the command. The relay is started by an exec into that sandbox and
+#: inherited it, whereupon it believed a *conversation's* session was the
+#: default one: `profile_for_session` returned `None` for it, the port file was
+#: read from the default profile, and every viewer was told "the browser is not
+#: running" about a browser that was running perfectly well a few lines above in
+#: the same log. One relay serves every conversation in a sandbox, so its idea
+#: of "the default" cannot be whichever conversation happened to start it. It
+#: matches `AGENT_BROWSER_SESSION` in `Dockerfile.workspace`, which is the
+#: image's own default and the session a bare `agent-browser` lands in.
+DEFAULT_SESSION = "workspace"
 
 
 #: A session name is a path segment before it is anything else, so what may be
@@ -124,13 +147,13 @@ def active_port_file(session: str | None = None) -> Path:
 _CDP_URL_PORT = re.compile(r"ws://127\.0\.0\.1:(\d+)/")
 
 #: A cold start writes the config, brings up Xvfb and launches Chrome. Measured
-#: at 18s in an idle container and over 90s in a sandbox that had just been
-#: provisioned -- the image is amd64, so on an arm64 host every one of those
-#: seconds is emulated, and the machine is busy with the rest of the sandbox at
-#: the same time. 90s was the first guess and it was too low: it expired while
-#: the browser was still coming up, so the viewer was told "not running" about a
-#: browser that appeared moments later. Generous on purpose -- this bound exists
-#: to stop a wedged start hanging forever, not to pace a healthy one.
+#: at 2.7s in a fresh container on a native image; it was over 90s when the
+#: image was built for amd64 and emulated, which is where the first guess of 90s
+#: came from and why it expired while the browser was still coming up -- the
+#: viewer was told "not running" about a browser that appeared moments later.
+#: Still generous, because this bound exists to stop a wedged start hanging for
+#: ever rather than to pace a healthy one, and a just-provisioned sandbox is
+#: busy with the rest of its own startup.
 _START_TIMEOUT_SECONDS = 240.0
 
 #: Spelled absolutely, because **this process's PATH is not the agent's PATH**.
@@ -155,10 +178,6 @@ _PROBE_TIMEOUT_SECONDS = 2.0
 #: the difference.
 _REAP_TIMEOUT_SECONDS = 5.0
 
-#: A CDP round trip on an already-open socket. Navigation itself is not waited
-#: for here -- only the acknowledgement that the command was accepted.
-_COMMAND_TIMEOUT_SECONDS = 30.0
-
 
 class BrowserNotRunning(RuntimeError):
     """Chrome is not up, so there is nothing to attach to."""
@@ -181,17 +200,44 @@ def agent_browser_argv(*args: str, session: str | None = None) -> list[str]:
     return [executable, *prefix, *args]
 
 
+def agent_browser_env(session: str | None = None) -> dict[str, str]:
+    """The environment to run the CLI in, with this session's names spelled out.
+
+    The flags above are not enough on their own. `/usr/local/bin/agent-browser`
+    is a wrapper that bootstraps a cold sandbox by running `start-browser`, and
+    that script reads `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PROFILE` from
+    its environment -- it never sees the flags. So a relay that inherited one
+    conversation's exports would hand the flags one session and bootstrap
+    Chrome in another's profile.
+
+    Overriding rather than clearing: everything else in the environment (DISPLAY,
+    the config path, the idle timeout, the stream's caps) is the image's, and is
+    what this is meant to run with.
+    """
+    profile = profile_for_session(session) or _DEFAULT_PROFILE
+    return {
+        **os.environ,
+        "AGENT_BROWSER_SESSION": session or DEFAULT_SESSION,
+        "AGENT_BROWSER_PROFILE": profile,
+    }
+
+
 def recorded_port(session: str | None = None) -> int:
     """The port Chrome last recorded, which it may well have left behind.
 
     Never use this without probing it -- see the module docstring. It is public
     only because "what does the file claim" is worth being able to ask.
     """
+    path = active_port_file(session)
     try:
-        first_line = active_port_file(session).read_text().splitlines()[0].strip()
+        first_line = path.read_text().splitlines()[0].strip()
         return int(first_line)
     except (OSError, IndexError, ValueError) as exc:
-        raise BrowserNotRunning("the browser is not running") from exc
+        # Named, because "the browser is not running" covers two very different
+        # facts -- never started, and started somewhere this cannot see -- and
+        # they reach a person as the same four-digit close code. The distinction
+        # is only ever visible in this sentence.
+        raise BrowserNotRunning(f"no port recorded at {path} ({exc!r})") from exc
 
 
 async def _answers_on(port: int) -> bool:
@@ -220,7 +266,7 @@ async def live_port(session: str | None = None) -> int:
     """
     port = recorded_port(session)
     if not await _answers_on(port):
-        raise BrowserNotRunning("the browser is not running")
+        raise BrowserNotRunning(f"nothing answers on the recorded port {port}")
     return port
 
 
@@ -242,6 +288,7 @@ async def ensure_port(*, session: str | None = None) -> int:
     try:
         process = await asyncio.create_subprocess_exec(
             *agent_browser_argv("get", "cdp-url", session=session),
+            env=agent_browser_env(session),
             stdout=asyncio.subprocess.PIPE,
             # Merged rather than a second pipe: one stream cannot deadlock
             # against the other filling its buffer, and when a start fails the
@@ -271,6 +318,89 @@ async def ensure_port(*, session: str | None = None) -> int:
         if process.returncode is None:
             with suppress(ProcessLookupError):
                 process.kill()
+
+
+async def stream_port(*, session: str | None = None) -> int:
+    """Where this session's live stream is listening.
+
+    `agent-browser` runs a **session-scoped** WebSocket stream server -- one per
+    session, on its own OS-assigned port, always enabled. It speaks frames out
+    and mouse, keyboard and touch in, and it is what the browser's own dashboard
+    renders. We proxy it rather than driving CDP ourselves: see
+    `stream_proxy.py` for why that is safe here and was not for CDP.
+
+    Asked per session rather than read from `AGENT_BROWSER_STREAM_PORT`, because
+    that variable names one port and a sandbox runs several sessions at once --
+    a conversation's browser and a sign-in's are different browsers.
+
+    The browser has to be up first; `ensure_port` is what starts it.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *agent_browser_argv("stream", "status", "--json", session=session),
+            env=agent_browser_env(session),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except OSError as exc:
+        logging.getLogger(__name__).warning("could not run the browser CLI: %r", exc)
+        raise BrowserNotRunning("the browser stream could not be reached") from exc
+
+    try:
+        return await asyncio.wait_for(
+            _read_stream_port(process), timeout=_START_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError as exc:
+        raise BrowserNotRunning("the browser stream could not be reached") from exc
+    finally:
+        with suppress(ProcessLookupError, asyncio.TimeoutError):
+            await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_SECONDS)
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+
+
+async def _read_stream_port(process: asyncio.subprocess.Process) -> int:
+    """The port out of `stream status --json`, read line by line.
+
+    Same rule as `_read_port`, for the same reason: the daemon inherits this
+    pipe, so anything that waits for EOF waits for ever.
+    """
+    assert process.stdout is not None
+    while True:
+        raw = await process.stdout.readline()
+        if not raw:
+            break
+        line = raw.decode("utf-8", "replace").strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            continue
+        port = (reply.get("data") or {}).get("port")
+        if isinstance(port, int) and port > 0:
+            return port
+        # A well-formed answer that carries no port means the stream is not
+        # up -- `success: false` with Chrome's own complaint, usually.
+        raise BrowserNotRunning(
+            str(reply.get("error") or "the browser stream is not running")
+        )
+    raise BrowserNotRunning("the browser stream is not running")
+
+
+def stream_socket_url(port: int, *, max_fps: int) -> str:
+    """Where to attach for one viewer.
+
+    `pacing=ack` and `maxFps` go on the URL rather than in a `config` message
+    because the CLI's own help says that is the only way to cover the opening
+    frame -- a config sent after connecting arrives too late to pace the first
+    one.
+
+    Ack pacing rather than push: one frame in flight at a time, so a viewer that
+    stalls is given fewer frames instead of draining a backlog of stale ones.
+    """
+    return f"ws://127.0.0.1:{port}/?pacing=ack&maxFps={max_fps}"
 
 
 async def _read_port(process: asyncio.subprocess.Process) -> int:
@@ -374,11 +504,6 @@ async def page_targets(*, port: int) -> list[dict[str, str]]:
     ]
 
 
-def page_socket_url(target_id: str, *, port: int) -> str:
-    """Where to attach for one page."""
-    return f"ws://127.0.0.1:{port}/devtools/page/{target_id}"
-
-
 async def open_url(url: str, *, session: str | None = None) -> None:
     """Point the browser at a page, starting it if it is not up.
 
@@ -395,6 +520,7 @@ async def open_url(url: str, *, session: str | None = None) -> None:
     try:
         process = await asyncio.create_subprocess_exec(
             *agent_browser_argv("open", url, session=session),
+            env=agent_browser_env(session),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -427,49 +553,8 @@ async def keepalive(*, session: str | None = None) -> None:
     with suppress(OSError, asyncio.TimeoutError):
         process = await asyncio.create_subprocess_exec(
             *agent_browser_argv("get", "url", session=session),
+            env=agent_browser_env(session),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_SECONDS)
-
-
-class CdpConnection:
-    """One CDP socket, with ids handed out and replies matched to them.
-
-    Thin on purpose. The relay speaks a fixed handful of methods and never
-    exposes this to a viewer, so there is no need for the full client every
-    automation library ships.
-    """
-
-    def __init__(self, socket) -> None:
-        self._socket = socket
-        self._next_id = 0
-
-    async def call(self, method: str, params: dict | None = None) -> dict:
-        self._next_id += 1
-        message_id = self._next_id
-        await self._socket.send(
-            json.dumps({"id": message_id, "method": method, "params": params or {}})
-        )
-        while True:
-            raw = await asyncio.wait_for(
-                self._socket.recv(), timeout=_COMMAND_TIMEOUT_SECONDS
-            )
-            if isinstance(raw, bytes):
-                continue
-            message = json.loads(raw)
-            if message.get("id") == message_id:
-                if "error" in message:
-                    raise BrowserNotRunning(f"{method} was refused: {message['error']}")
-                return message.get("result") or {}
-
-    async def send(self, method: str, params: dict | None = None) -> None:
-        """Fire a command without waiting for its reply.
-
-        For input and frame acknowledgements, where a round trip per keystroke
-        would cost more than the reply is worth.
-        """
-        self._next_id += 1
-        await self._socket.send(
-            json.dumps({"id": self._next_id, "method": method, "params": params or {}})
-        )

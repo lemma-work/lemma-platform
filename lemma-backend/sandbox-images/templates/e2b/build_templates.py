@@ -304,6 +304,12 @@ def workspace_template():
                 # long idle, which is what keeps a finished research session
                 # from holding the sandbox's whole memory budget.
                 "AGENT_BROWSER_IDLE_TIMEOUT_MS": "120000",
+                # See Dockerfile.workspace: what the live view costs on the
+                # wire. Capped where the frames are encoded, so a small pane is
+                # never sent pixels it cannot draw.
+                "AGENT_BROWSER_STREAM_QUALITY": "60",
+                "AGENT_BROWSER_STREAM_MAX_WIDTH": "1280",
+                "AGENT_BROWSER_STREAM_MAX_HEIGHT": "800",
                 "LEMMA_BROWSER_RELAY_PORT": "4850",
                 "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
                 # Where the credential bridge writes gh's config.

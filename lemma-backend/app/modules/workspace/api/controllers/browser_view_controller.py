@@ -333,6 +333,15 @@ async def browser_view(
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
             await bridge(websocket, upstream, name="workspace.browser_view")
+        # The relay refuses with these same 44xx codes, and they mean the same
+        # things on both sides of the sandbox wall -- so pass the reason on
+        # rather than replacing it with 1011. Told 1011, the pane says "the
+        # connection dropped" and reconnects for ever; told 4409 it says the
+        # browser is not running, which is the truth and is not a failure.
+        if (code := getattr(upstream, "close_code", None)) and 4400 <= code <= 4499:
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=code)
+            return
     except (OSError, _ws_error()) as exc:
         # The sandbox side dropped. Not a bug on this side, and the person is
         # told the connection dropped rather than that something failed.

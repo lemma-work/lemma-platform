@@ -1,17 +1,18 @@
 /**
  * Watching, and driving, the browser inside your own sandbox.
  *
- * The socket carries four message types each way; it is not the Chrome
- * debugging protocol. That means this file is where a click becomes a pair of
- * coordinates and a keystroke becomes a key event, and those two translations
- * are the whole of it.
+ * The wire is `agent-browser`'s own stream protocol, proxied by the relay: JPEG
+ * frames out, `input_mouse` / `input_keyboard` / `input_touch` in. We used to
+ * drive CDP ourselves and invent a protocol for it; the CLI ships a
+ * session-scoped stream server that does the same and more, so this file is now
+ * only the translation from a DOM event into one of those messages.
  *
- * Both are easy to get subtly wrong in ways nothing fails on. A previous
- * version mapped clicks against the canvas element's box while the image inside
- * it was letterboxed, so every click landed off-target; sent Enter in a form
- * that never submitted; scrolled pages the wrong way; and leaked a socket
- * whenever it was closed while still connecting. There are tests for each of
- * those below this file's own directory.
+ * That translation is easy to get subtly wrong in ways nothing fails on. A
+ * previous version mapped clicks against the canvas element's box while the
+ * image inside it was letterboxed, so every click landed off-target; sent Enter
+ * in a form that never submitted; scrolled pages the wrong way; and leaked a
+ * socket whenever it was closed while still connecting. There are tests for
+ * each of those below this file's own directory.
  */
 
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
@@ -26,9 +27,22 @@ export type ViewerState =
     | 'lost';
 
 export interface ViewerFrame {
-    /** The page's own pixel size, which is what input coordinates are in. */
-    pageWidth: number;
-    pageHeight: number;
+    /**
+     * The picture's own pixels. Three things are in this space and nothing is
+     * in any other: the canvas, the hit-testing, and the coordinates of every
+     * input message sent back.
+     *
+     * Not the size of the page. A frame carries `metadata.deviceWidth` /
+     * `deviceHeight` as well, and they are a different pair of numbers --
+     * measured, a 1280x720 device arrives as a 985x800 JPEG, because the stream
+     * encodes within the caps the image sets (`AGENT_BROWSER_STREAM_MAX_WIDTH`
+     * / `_MAX_HEIGHT`). The stream server scales input back out of the frame's
+     * space itself, so sending it page coordinates puts the pointer off the
+     * right of the picture and nothing is clicked at all. That metadata is not
+     * used here, and this comment is why.
+     */
+    pictureWidth: number;
+    pictureHeight: number;
     bitmap: HTMLImageElement;
 }
 
@@ -50,32 +64,42 @@ const NON_TEXT_KEYS = new Set([
 ]);
 
 /**
- * Where a click on the canvas lands on the page.
+ * Where a click on the canvas lands on the picture.
  *
- * The canvas is drawn with `object-fit: contain`, so the image is letterboxed
+ * The canvas is drawn with `object-fit: contain`, so the picture is letterboxed
  * inside the element whenever their aspect ratios differ — and the element's
  * box is therefore not the picture's box. Mapping against the element is the
  * bug that made every click land near, but not on, what was aimed at.
+ *
+ * The result is in the picture's pixels, which is what the stream server
+ * expects: it knows how it scaled the frame and scales input back the same way.
+ * Sending the page's coordinates instead — which the frame's metadata also
+ * carries, and which are larger — puts the pointer past the picture's right
+ * edge, where it hits nothing. That failed silently: a click that lands on no
+ * element looks exactly like input that never arrived.
  */
-export const toPagePoint = (
+export const toFramePoint = (
     rect: { left: number; top: number; width: number; height: number },
-    frame: { pageWidth: number; pageHeight: number },
+    frame: { pictureWidth: number; pictureHeight: number },
     event: { clientX: number; clientY: number },
 ): { x: number; y: number } => {
-    if (!rect.width || !rect.height || !frame.pageWidth || !frame.pageHeight) {
+    if (!rect.width || !rect.height || !frame.pictureWidth || !frame.pictureHeight) {
         return { x: 0, y: 0 };
     }
-    const scale = Math.min(rect.width / frame.pageWidth, rect.height / frame.pageHeight);
-    const drawnWidth = frame.pageWidth * scale;
-    const drawnHeight = frame.pageHeight * scale;
+    const scale = Math.min(
+        rect.width / frame.pictureWidth,
+        rect.height / frame.pictureHeight,
+    );
+    const drawnWidth = frame.pictureWidth * scale;
+    const drawnHeight = frame.pictureHeight * scale;
     const offsetX = (rect.width - drawnWidth) / 2;
     const offsetY = (rect.height - drawnHeight) / 2;
 
     const x = (event.clientX - rect.left - offsetX) / scale;
     const y = (event.clientY - rect.top - offsetY) / scale;
     return {
-        x: Math.max(0, Math.min(frame.pageWidth, Math.round(x))),
-        y: Math.max(0, Math.min(frame.pageHeight, Math.round(y))),
+        x: Math.max(0, Math.min(frame.pictureWidth, Math.round(x))),
+        y: Math.max(0, Math.min(frame.pictureHeight, Math.round(y))),
     };
 };
 
@@ -107,8 +131,8 @@ export const keyEventFor = (event: {
     if (!isUp && event.key === 'Enter') text = '\r';
 
     return {
-        kind: 'key',
-        type: isUp ? 'keyUp' : text !== undefined ? 'keyDown' : 'rawKeyDown',
+        type: 'input_keyboard',
+        eventType: isUp ? 'keyUp' : text !== undefined ? 'keyDown' : 'rawKeyDown',
         key: event.key,
         code: event.code,
         ...(text !== undefined ? { text } : {}),
@@ -130,8 +154,8 @@ export const wheelEventFor = (
     point: { x: number; y: number },
     event: { deltaX: number; deltaY: number; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
 ): Record<string, unknown> => ({
-    kind: 'wheel',
-    type: 'mouseWheel',
+    type: 'input_mouse',
+    eventType: 'mouseWheel',
     x: point.x,
     y: point.y,
     deltaX: event.deltaX,
@@ -195,7 +219,7 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
     let closed = false;
     let attempt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let latest: { pageWidth: number; pageHeight: number } | null = null;
+    let latest: Omit<ViewerFrame, 'bitmap'> | null = null;
 
     const send = (message: Record<string, unknown>) => {
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -222,27 +246,44 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
             } catch {
                 return;
             }
-            if (message.t === 'frame') {
+            // agent-browser's own stream protocol. We proxy its session-scoped
+            // stream rather than driving CDP, so these are its message names.
+            if (message.type === 'frame') {
+                // Acknowledged on arrival, not once painted. The socket asks
+                // for `pacing=ack`, so the server holds the next frame until
+                // this is sent — and acking from the decode callback put a
+                // JPEG decode *and* a round trip between every pair of frames,
+                // which caps the rate at one frame per round trip however much
+                // bandwidth there is. On a 150ms mobile path that is six
+                // frames a second no matter what, which is the whole of the
+                // "laggy" complaint. The frame is already in hand here, so
+                // asking for the next one while this one decodes cannot make
+                // anything stale: the server sends the newest it has.
+                send({ type: 'ack', seq: message.seq });
                 const bitmap = new Image();
                 bitmap.onload = () => {
                     latest = {
-                        pageWidth: Number(message.w) || bitmap.width,
-                        pageHeight: Number(message.h) || bitmap.height,
+                        pictureWidth: bitmap.naturalWidth || bitmap.width,
+                        pictureHeight: bitmap.naturalHeight || bitmap.height,
                     };
                     options.onFrame({ ...latest, bitmap });
-                    // Acknowledged only once it is painted, so a slow viewer
-                    // gets fewer frames rather than a growing backlog.
-                    send({ t: 'ack', seq: message.seq });
+                    // Live when there is a picture, not when there is a socket.
+                    // The stream sends its opening frame to every client that
+                    // connects, including one joining a page that has been
+                    // still for an hour, so this always arrives — and saying
+                    // "live" before it would uncover an empty canvas.
+                    options.onState('live');
                 };
                 bitmap.src = `data:image/jpeg;base64,${String(message.data)}`;
                 return;
             }
-            if (message.t === 'status' && message.state === 'attached') {
+            if (message.type === 'status') {
+                // Not a picture, so not yet "live" — but proof the connection
+                // works, which is what the backoff counts.
                 attempt = 0;
-                options.onState('live');
                 return;
             }
-            if (message.t === 'navigated' && options.onNavigated) {
+            if (message.type === 'url' && options.onNavigated) {
                 options.onNavigated(String(message.url ?? ''));
             }
         };
@@ -280,6 +321,8 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
 }
 
 export const currentFrameSize = (frame: ViewerFrame | null) =>
-    frame ? { pageWidth: frame.pageWidth, pageHeight: frame.pageHeight } : null;
+    frame
+        ? { pictureWidth: frame.pictureWidth, pictureHeight: frame.pictureHeight }
+        : null;
 
 export { NON_TEXT_KEYS, modifiersOf };

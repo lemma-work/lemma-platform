@@ -114,6 +114,14 @@ ENV PYTHONUNBUFFERED=1 \
     # sheds the browser before anything else decides what to do with it, and a
     # research batch mid-flight never sees it: every capture is a command.
     AGENT_BROWSER_IDLE_TIMEOUT_MS=120000 \
+    # What the live view costs on the wire. The stream server caps frames at
+    # these before they leave the sandbox, so a phone is not sent a 1600px
+    # picture to draw into a 400px pane -- the saving is in pixels never
+    # encoded, not in bytes dropped later. A viewer can ask for fewer frames
+    # still with a `config` message; it cannot ask for more than this.
+    AGENT_BROWSER_STREAM_QUALITY=60 \
+    AGENT_BROWSER_STREAM_MAX_WIDTH=1280 \
+    AGENT_BROWSER_STREAM_MAX_HEIGHT=800 \
     LEMMA_RUNTIME_TOKEN_FILE=/run/lemma-bootstrap/token \
     LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated \
     GH_CONFIG_DIR=/tmp/lemma-gh \

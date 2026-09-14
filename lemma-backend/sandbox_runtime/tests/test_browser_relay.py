@@ -9,7 +9,6 @@ are mostly about what happened rather than about what came back.
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 from pathlib import Path
 
@@ -17,10 +16,10 @@ import pytest
 
 from sandbox_runtime.browser_relay import chrome, state
 from sandbox_runtime.browser_relay.app import TOKEN_PATH, create_app
-from sandbox_runtime.browser_relay.screencast import (
+from sandbox_runtime.browser_relay.stream_proxy import (
     CONTROL,
     VIEW,
-    ScreencastSession,
+    viewer_message_allowed,
 )
 
 # No module-level `pytest.mark.asyncio`: pytest-asyncio runs in auto mode here,
@@ -146,148 +145,79 @@ async def test_the_absolute_wrapper_is_preferred_over_the_bare_name(
 
 
 # ---------------------------------------------------------------------------
-# The viewer protocol
+# What a viewer may send
 # ---------------------------------------------------------------------------
+#
+# The frame protocol itself is `agent-browser`'s, not ours -- we proxy its
+# session-scoped stream rather than driving CDP. What is still ours, and so
+# what is tested here, is the one rule the stream server does not know about:
+# a viewer who asked to watch may not type.
 
 
-class _RecordingCdp:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict]] = []
-
-    async def call(self, method: str, params: dict | None = None) -> dict:
-        self.calls.append((method, params or {}))
-        return {}
-
-    async def send(self, method: str, params: dict | None = None) -> None:
-        self.calls.append((method, params or {}))
-
-    def methods(self) -> list[str]:
-        return [method for method, _ in self.calls]
+def _allowed(message: dict, *, mode: str) -> bool:
+    ok, _ = viewer_message_allowed(json.dumps(message), mode=mode)
+    return ok
 
 
-def _frame(session_id: int) -> str:
-    return json.dumps(
-        {
-            "method": "Page.screencastFrame",
-            "params": {
-                "sessionId": session_id,
-                "data": base64.b64encode(b"jpeg").decode(),
-                "metadata": {"deviceWidth": 1440, "deviceHeight": 960},
-            },
-        }
-    )
+def _refusal(message: dict, *, mode: str) -> dict | None:
+    _, refusal = viewer_message_allowed(json.dumps(message), mode=mode)
+    return refusal
 
 
-async def test_a_newer_frame_acknowledges_the_one_it_supersedes() -> None:
-    """Chrome stops sending until a frame is acknowledged.
+def test_watching_cannot_type() -> None:
+    """The stream server takes input from whoever connects.
 
-    Acknowledging on arrival would pile frames into a slow viewer's socket;
-    acknowledging only on the viewer's ack stalls the picture behind one
-    dropped message. Latest-wins is what makes a slow link degrade instead of
-    freeze.
+    It has no notion of a read-only viewer, so `view` mode is enforced here --
+    the only place that knows which mode was asked for. Without it, "watch"
+    and "drive" would be the same socket with a different label.
     """
-    cdp = _RecordingCdp()
-    viewer = ScreencastSession(cdp, mode=VIEW)
-
-    first = await viewer.handle_cdp_event(_frame(1))
-    assert first is not None and first["t"] == "frame"
-    assert "Page.screencastFrameAck" not in cdp.methods()
-
-    await viewer.handle_cdp_event(_frame(2))
-    acks = [p for m, p in cdp.calls if m == "Page.screencastFrameAck"]
-    assert acks == [{"sessionId": 1}], "the superseded frame must be released"
+    for kind in ("input_mouse", "input_keyboard", "input_touch"):
+        assert _allowed({"type": kind}, mode=VIEW) is False
+        assert _refusal({"type": kind}, mode=VIEW)["code"] == "read_only"
 
 
-async def test_a_viewer_ack_releases_the_frame_it_names() -> None:
-    cdp = _RecordingCdp()
-    viewer = ScreencastSession(cdp, mode=VIEW)
-    await viewer.handle_cdp_event(_frame(7))
-
-    await viewer.handle_viewer_message(json.dumps({"t": "ack", "seq": 7}))
-    assert ("Page.screencastFrameAck", {"sessionId": 7}) in cdp.calls
-
-    # A repeated ack must not release a frame that is no longer outstanding.
-    cdp.calls.clear()
-    await viewer.handle_viewer_message(json.dumps({"t": "ack", "seq": 7}))
-    assert cdp.calls == []
+def test_driving_can_type_and_touch() -> None:
+    """Touch included: it is what makes a sign-in work on a phone, and it is
+    something the hand-rolled screencast never had."""
+    for kind in ("input_mouse", "input_keyboard", "input_touch"):
+        assert _allowed({"type": kind}, mode=CONTROL) is True
 
 
-async def test_a_watching_viewer_cannot_type() -> None:
-    cdp = _RecordingCdp()
-    viewer = ScreencastSession(cdp, mode=VIEW)
-    reply = await viewer.handle_viewer_message(
-        json.dumps({"t": "input", "event": {"kind": "key", "text": "a"}})
-    )
-    assert reply is not None and reply["code"] == "read_only"
-    assert cdp.calls == [], "nothing reached the browser"
+def test_pacing_and_acks_are_allowed_to_a_watcher() -> None:
+    """Capping your own frame rate is not driving the page."""
+    for kind in ("config", "ack", "screencast_start", "screencast_stop"):
+        assert _allowed({"type": kind}, mode=VIEW) is True
 
 
-async def test_a_driving_viewer_can_type_and_click() -> None:
-    cdp = _RecordingCdp()
-    viewer = ScreencastSession(cdp, mode=CONTROL)
-    await viewer.handle_viewer_message(
-        json.dumps(
-            {"t": "input", "event": {"kind": "key", "type": "keyDown", "text": "a"}}
-        )
-    )
-    await viewer.handle_viewer_message(
-        json.dumps(
-            {"t": "input", "event": {"kind": "mouse", "type": "mousePressed", "x": 4}}
-        )
-    )
-    assert cdp.methods() == [
-        "Input.dispatchKeyEvent",
-        "Input.dispatchMouseEvent",
-    ]
+def test_anything_outside_the_vocabulary_is_refused_in_words() -> None:
+    """Matched against a set, not a prefix.
 
-
-async def test_the_viewer_protocol_cannot_express_anything_else() -> None:
-    """The reason this is not a CDP allowlist.
-
-    A viewer has four verbs. There is no `Runtime.evaluate` to forget to refuse,
-    no `Page.navigate` to leave off a list, and no `Network.getAllCookies` that
-    a future Chrome release quietly renames past a prefix match.
+    `input_*` as a prefix test would silently admit whatever the next release
+    of the CLI adds under that name. And a message dropped in silence looks to
+    a client exactly like a browser that has stopped.
     """
-    cdp = _RecordingCdp()
-    viewer = ScreencastSession(cdp, mode=CONTROL)
-
-    for attempt in (
-        {"t": "input", "event": {"kind": "evaluate", "expression": "document.cookie"}},
-        {"t": "cdp", "method": "Runtime.evaluate"},
-        {"t": "input", "event": {"kind": "navigate", "url": "http://evil.test"}},
-    ):
-        reply = await viewer.handle_viewer_message(json.dumps(attempt))
-        assert reply is not None and reply["t"] == "error"
-    assert cdp.calls == [], "nothing reached the browser"
-
-
-async def test_an_unreadable_message_is_answered_not_dropped() -> None:
-    viewer = ScreencastSession(_RecordingCdp(), mode=CONTROL)
-    reply = await viewer.handle_viewer_message("{not json")
-    assert reply is not None and reply["code"] == "unreadable"
-
-
-async def test_only_the_top_frame_counts_as_navigation() -> None:
-    """An ad iframe navigating is not the person's sign-in completing."""
-    viewer = ScreencastSession(_RecordingCdp(), mode=VIEW)
-    child = json.dumps(
-        {
-            "method": "Page.frameNavigated",
-            "params": {"frame": {"url": "http://ads.test", "parentId": "1"}},
-        }
+    assert _allowed({"type": "input_something_new"}, mode=CONTROL) is False
+    assert _refusal({"type": "Runtime.evaluate"}, mode=CONTROL)["code"] == (
+        "unknown_message"
     )
-    assert await viewer.handle_cdp_event(child) is None
 
-    top = json.dumps(
-        {
-            "method": "Page.frameNavigated",
-            "params": {"frame": {"url": "https://app.example.com/home"}},
-        }
-    )
-    assert await viewer.handle_cdp_event(top) == {
-        "t": "navigated",
-        "url": "https://app.example.com/home",
-    }
+
+def test_unreadable_messages_are_never_forwarded() -> None:
+    ok, refusal = viewer_message_allowed("{not json", mode=CONTROL)
+    assert ok is False
+    assert refusal["code"] == "unreadable"
+    ok, _ = viewer_message_allowed('"a string"', mode=CONTROL)
+    assert ok is False
+
+
+def test_the_stream_url_paces_from_the_opening_frame() -> None:
+    """`pacing` and `maxFps` go on the URL because the CLI's own help says that
+    is the only way to cover the first frame; a config message arrives too
+    late to pace it."""
+    url = chrome.stream_socket_url(41234, max_fps=15)
+    assert url.startswith("ws://127.0.0.1:41234/?")
+    assert "pacing=ack" in url
+    assert "maxFps=15" in url
 
 
 # ---------------------------------------------------------------------------
@@ -574,46 +504,163 @@ def test_the_same_session_always_gets_the_same_profile() -> None:
     )
 
 
-async def test_an_input_that_cannot_reach_chrome_is_reported_not_swallowed() -> None:
-    """A person typing into a picture must be told, not left guessing.
+async def test_input_for_a_dead_stream_ends_the_socket_rather_than_vanishing() -> None:
+    """A person typing into a picture has to be told.
 
-    This was `suppress(Exception)`: with the socket to Chrome gone, clicks and
-    keystrokes vanished with nothing on screen and nothing in the log, which is
-    indistinguishable from a page that simply ignores clicks.
+    The old CDP path wrapped its dispatch in `suppress(Exception)`: with the
+    socket to Chrome gone, clicks and keystrokes vanished with nothing on screen
+    and nothing in the log. Forwarding to a dead stream now raises out of the
+    pump, the viewer's socket closes, and the pane says the connection dropped
+    and reconnects -- which is the truth.
     """
-    from sandbox_runtime.browser_relay.screencast import CONTROL, ScreencastSession
+    from sandbox_runtime.browser_relay.stream_proxy import pump
 
-    class _DeadCdp:
-        async def send(self, method, params=None):
-            raise ConnectionResetError("chrome went away")
+    class _DeadStream:
+        def __aiter__(self):
+            return self
 
-    viewer = ScreencastSession(_DeadCdp(), mode=CONTROL)
+        async def __anext__(self):
+            await asyncio.sleep(3600)
 
-    reply = await viewer.handle_viewer_message(
-        json.dumps(
-            {"t": "input", "event": {"kind": "key", "type": "keyDown", "key": "a"}}
-        )
+        async def send(self, _raw):
+            raise ConnectionResetError("the stream went away")
+
+    sent: list[str] = []
+    incoming = [json.dumps({"type": "input_mouse", "eventType": "mousePressed"})]
+
+    async def receive_text():
+        return incoming.pop(0) if incoming else None
+
+    await pump(
+        _DeadStream(), mode=CONTROL, send_text=sent.append, receive_text=receive_text
     )
 
-    assert reply is not None
-    assert reply["code"] == "input_failed"
+    # The pump returned rather than hanging: the caller closes the socket, and
+    # nothing was quietly dropped on the floor.
+    assert sent == []
 
 
-async def test_input_that_reaches_chrome_says_nothing() -> None:
-    """Success is silent -- a reply per keystroke would be its own problem."""
-    from sandbox_runtime.browser_relay.screencast import CONTROL, ScreencastSession
+async def test_a_refusal_reaches_the_viewer_without_touching_the_stream() -> None:
+    """Refused input is answered, not dropped."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump
 
-    sent: list[tuple[str, dict]] = []
+    forwarded: list[str] = []
 
-    class _LiveCdp:
-        async def send(self, method, params=None):
-            sent.append((method, params or {}))
+    class _Stream:
+        def __aiter__(self):
+            return self
 
-    viewer = ScreencastSession(_LiveCdp(), mode=CONTROL)
+        async def __anext__(self):
+            raise StopAsyncIteration
 
-    reply = await viewer.handle_viewer_message(
-        json.dumps({"t": "input", "event": {"kind": "text", "text": "hello"}})
+        async def send(self, raw):
+            forwarded.append(raw)
+
+    sent: list[str] = []
+    incoming = [json.dumps({"type": "input_keyboard", "eventType": "keyDown"})]
+
+    async def receive_text():
+        return incoming.pop(0) if incoming else None
+
+    await pump(_Stream(), mode=VIEW, send_text=sent.append, receive_text=receive_text)
+
+    assert forwarded == []
+    assert json.loads(sent[0])["code"] == "read_only"
+
+
+def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) -> None:
+    """The close code has to survive the sandbox wall, or the pane loops.
+
+    A close sent before `accept()` is not a close -- ASGI turns it into a
+    rejected handshake, which carries an HTTP status and no close frame. Every
+    refusal here then reached the API as one indistinguishable failure, was
+    passed on as 1011, and the pane read 1011 as "dropped, retry" and retried
+    for ever. Including for "the browser is not running", which is the ordinary
+    resting state of an idle workspace and not a failure at all.
+
+    This asserts the shape rather than the sentence: the handshake *succeeds*,
+    and the code arrives in the close frame.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
+
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/session?session=../../etc",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_viewer_without_the_token_is_refused_the_same_way(
+    monkeypatch, tmp_path
+) -> None:
+    """The socket is the one route a browser opens, so it is the one that has to
+    refuse in a code rather than in a status nobody can read."""
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
+
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect("/session") as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_conversation_cannot_rename_the_default_session(monkeypatch) -> None:
+    """One relay serves every conversation, so none of them owns "the default".
+
+    The agent's browser script puts its session in the environment with
+    `export`, and the shell it runs in is persistent -- so the name outlives the
+    command, and the relay, started by an exec into the same sandbox, inherited
+    it. It then treated a *conversation's* session as the default one: no
+    profile of its own, the port read from the default profile, and every viewer
+    told the browser was not running about a browser the line above had just
+    talked to.
+
+    Imported fresh under a poisoned environment, because the failure was at
+    import time and a constant that is already bound would pass either way.
+    """
+    import importlib
+
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "conv-deadbeef")
+    chrome = importlib.reload(
+        importlib.import_module("sandbox_runtime.browser_relay.chrome")
+    )
+    try:
+        assert chrome.DEFAULT_SESSION == "workspace"
+        # The consequence, not just the constant: a session with a name of its
+        # own must get a profile of its own, or its port file is read from
+        # somebody else's browser.
+        assert chrome.profile_for_session("conv-deadbeef") is not None
+    finally:
+        monkeypatch.undo()
+        importlib.reload(chrome)
+
+
+def test_the_cli_is_told_its_session_in_the_environment_too(monkeypatch) -> None:
+    """The flags do not reach the part that starts a cold browser.
+
+    `/usr/local/bin/agent-browser` is a wrapper that runs `start-browser` when
+    nothing is up yet, and that script reads `AGENT_BROWSER_SESSION` and
+    `AGENT_BROWSER_PROFILE` -- it never sees `--session`. So a relay holding an
+    inherited value would pass the flags one session and bootstrap Chrome in
+    another's profile.
+    """
+    from sandbox_runtime.browser_relay.chrome import (
+        agent_browser_env,
+        profile_for_session,
     )
 
-    assert reply is None
-    assert sent == [("Input.insertText", {"text": "hello"})]
+    monkeypatch.setenv("AGENT_BROWSER_SESSION", "conv-somebody-else")
+    monkeypatch.setenv("AGENT_BROWSER_PROFILE", "/tmp/lemma-browser/profile-wrong")
+
+    env = agent_browser_env("login-app.example.com")
+    assert env["AGENT_BROWSER_SESSION"] == "login-app.example.com"
+    assert env["AGENT_BROWSER_PROFILE"] == profile_for_session("login-app.example.com")
+    # The rest of the image's environment is what this is meant to run with.
+    assert "PATH" in env
