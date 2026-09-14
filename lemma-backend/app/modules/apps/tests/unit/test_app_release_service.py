@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid7
 
 import pytest
 
@@ -25,8 +25,10 @@ _NOW = datetime(2026, 8, 13, tzinfo=timezone.utc)
 
 
 def _release(app_id, number, *, version=None, pruned=False, source="source/aa/a.zip"):
+    # uuid7, not uuid4: the paging statement orders by id because these rows key
+    # on uuid7, so id order IS creation order.
     return AppReleaseEntity(
-        id=uuid4(),
+        id=uuid7(),
         app_id=app_id,
         # A realistic digest: hex, and not a run of leading zeros that would make
         # a short prefix look like a release number.
@@ -52,7 +54,49 @@ def _service(app, releases):
         return next((r for r in releases if r.release_number == number), None)
 
     repo.get_release_by_number.side_effect = by_number
+    repo.find_releases_by_digest_prefix.side_effect = _digest_prefix_oracle(releases)
+
+    # The double pages the way the statement does, so a test that asks for a
+    # page gets one -- a fixed list here would let an unpaginated caller keep
+    # passing.
+    async def page(_app_id, *, limit, cursor):
+        ordered = sorted(releases, key=lambda r: r.id, reverse=True)
+        if cursor is not None:
+            ordered = [item for item in ordered if item.id < cursor]
+        window = ordered[: limit + 1]
+        next_cursor = window[limit - 1].id if len(window) > limit else None
+        return window[:limit], next_cursor
+
+    repo.page_releases.side_effect = page
     return AppReleaseService(repo), repo
+
+
+def _digest_prefix_oracle(releases):
+    """The Python the SQL replaced, kept here to stand in for the repository.
+
+    These tests are about the resolver: which release a ref names, and when it
+    refuses. Running the old list-and-filter as the double keeps them that way,
+    and leaves "the statement agrees with this" to
+    ``test_app_release_ref_lookup_e2e.py``, which runs both against a real table.
+
+    Ordering the surviving versions lexicographically mirrors the statement's
+    ``ORDER BY version``. It only decides *which* two of three-or-more come
+    back, which the resolver has already refused by then.
+    """
+
+    async def find(_app_id, prefix):
+        if not prefix:
+            return []
+        matches = sorted(
+            (item for item in releases if item.version.startswith(prefix)),
+            key=lambda item: (item.is_pruned, -(item.release_number or 0)),
+        )
+        best: dict[str, object] = {}
+        for item in matches:
+            best.setdefault(item.version, item)
+        return [best[version] for version in sorted(best)][:2]
+
+    return find
 
 
 def _app(**overrides):
@@ -148,17 +192,54 @@ async def test_pruned_release_is_refused_but_still_listable():
 @pytest.mark.asyncio
 async def test_list_marks_the_live_release():
     app = _app()
+    # Built in the order they were deployed; see the twin in
+    # `test_function_revision_service` for why that matters to paging.
+    older = _release(app.id, 1)
     live = _release(app.id, 2)
     app.current_release_id = live.id
-    service, _ = _service(app, [_release(app.id, 1), live])
+    service, _ = _service(app, [older, live])
 
-    history = await service.list_releases(app.pod_id, "orders", ctx=allow_all_context())
+    history = await service.list_releases(
+        app.pod_id, "orders", ctx=allow_all_context(), limit=50, cursor=None
+    )
 
     assert history.app_public_slug == "orders"
     assert [(e.release.release_number, e.is_live) for e in history.items] == [
         (2, True),
         (1, False),
     ]
+    assert history.next_page_token is None
+
+
+@pytest.mark.asyncio
+async def test_a_long_history_pages_rather_than_arriving_whole():
+    """`PS-DATA-011`: publish a maximum and page beyond it.
+
+    This was the only unpaginated list in the module, on a table retention
+    stamps rather than empties -- so an app deployed daily for a year answered
+    with every one of those releases, every time somebody opened its history.
+    """
+    app = _app()
+    releases = [_release(app.id, number) for number in range(1, 8)]
+    service, _ = _service(app, releases)
+
+    first = await service.list_releases(
+        app.pod_id, "orders", ctx=allow_all_context(), limit=3, cursor=None
+    )
+    assert len(first.items) == 3
+    assert first.next_page_token is not None
+
+    second = await service.list_releases(
+        app.pod_id,
+        "orders",
+        ctx=allow_all_context(),
+        limit=3,
+        cursor=UUID(first.next_page_token),
+    )
+    assert len(second.items) == 3
+    assert {entry.release.id for entry in first.items}.isdisjoint(
+        {entry.release.id for entry in second.items}
+    ), "a page must not repeat what the one before it returned"
 
 
 @pytest.mark.asyncio

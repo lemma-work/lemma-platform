@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.api.uploads import (
     upload_source_has_content,
     upload_source_sha256,
@@ -335,17 +336,23 @@ class FileTransactionWriter:
             message="Only pod editors and admins can detach markdown from shared pod files",
             ctx=ctx,
         )
-        try:
-            await self.storage.delete_file(
-                build_datastore_child_user_markdown_key(pod_id, entity.path)
-            )
-        except DatastoreObjectNotFoundError:
-            pass
-        except Exception:
-            logger.debug(
-                "datastore.transaction_writer.delete_user_markdown_s_s.diagnostic",
-                exc_info=True,
-            )
+        # Nothing has been written yet -- the two calls above are a read and an
+        # authorization check -- so the connection genuinely goes back for the
+        # object-storage delete. The row update below re-acquires it, which is
+        # the shape `connection_released` is for: a slow call with database work
+        # on both sides of it.
+        async with connection_released(getattr(self.file_repository, "session", None)):
+            try:
+                await self.storage.delete_file(
+                    build_datastore_child_user_markdown_key(pod_id, entity.path)
+                )
+            except DatastoreObjectNotFoundError:
+                pass
+            except Exception:
+                logger.debug(
+                    "datastore.transaction_writer.delete_user_markdown_s_s.diagnostic",
+                    exc_info=True,
+                )
         metadata = dict(entity.metadata or {})
         had_flag = metadata.pop(_MARKDOWN_SOURCE_KEY, None) is not None
         metadata.pop(_MARKDOWN_ASSET_NAMES_KEY, None)

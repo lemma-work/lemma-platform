@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from datetime import datetime
 from typing import ClassVar
 from uuid import UUID
@@ -252,3 +254,28 @@ class AgentRun(Entity):
 
     def ordered_messages(self) -> list[Message]:
         return sorted(self.messages, key=lambda message: message.sequence)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeHistoryWindow:
+    """The runs a prompt can carry, and the two facts a window cannot answer itself.
+
+    A windowed list does not know what it was cut from, and the notice telling
+    the model that older exchanges exist is built from exactly that -- so the
+    total comes back with it. And the run being resumed may be older than the
+    window: the runner needs it either way, and refusing it would turn a missing
+    notice into a failed run.
+
+    See ``infrastructure/runtime_history_window`` for the statements.
+    """
+
+    #: The newest runs, oldest-first -- the order every trim downstream assumes.
+    runs: list["AgentRun"]
+    #: Every run the conversation has, windowed or not.
+    total_runs: int
+    #: The run being resumed, whether or not it survived the window.
+    current_run: "AgentRun | None"
+
+    @property
+    def dropped_by_window(self) -> int:
+        return self.total_runs - len(self.runs)

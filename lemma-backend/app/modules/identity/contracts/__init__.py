@@ -1,5 +1,6 @@
 """Stable identity DTOs and ports shared with other modules."""
 
+from collections.abc import Collection
 from typing import Protocol
 from uuid import UUID
 
@@ -25,6 +26,8 @@ class AuthenticatedUser(Protocol):
 
 class UserReader(Protocol):
     async def get(self, user_id: UUID) -> AuthenticatedUser | None: ...
+
+    async def existing_ids(self, user_ids: Collection[UUID]) -> set[UUID]: ...
 
 
 __all__ = [

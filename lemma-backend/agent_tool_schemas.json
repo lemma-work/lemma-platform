@@ -1653,7 +1653,7 @@
         "expires_seconds": {
           "anyOf": [
             {
-              "maximum": 86400,
+              "maximum": 604800,
               "minimum": 1,
               "type": "integer"
             },
@@ -1662,12 +1662,12 @@
             }
           ],
           "default": null,
-          "description": "Link lifetime. Default ~1h for 'app', 3h for 'public' (max 24h)."
+          "description": "Link lifetime. Default ~1h for 'app', 24h for 'public' (max 7d)."
         },
         "max_hits": {
           "anyOf": [
             {
-              "maximum": 100,
+              "maximum": 1000,
               "minimum": 1,
               "type": "integer"
             },
@@ -1676,7 +1676,7 @@
             }
           ],
           "default": null,
-          "description": "'public' only: downloads before the link dies (default 50)."
+          "description": "'public' only: downloads before the link dies (default 200)."
         }
       },
       "required": [

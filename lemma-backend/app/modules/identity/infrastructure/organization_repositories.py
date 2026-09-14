@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
@@ -105,6 +107,25 @@ class OrganizationRepository(OrganizationRepositoryPort):
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
+
+    async def get_many(
+        self, ids: Iterable[UUID | None]
+    ) -> dict[UUID, OrganizationEntity]:
+        """Several organizations at once, keyed by id.
+
+        A listing labels every row with its organization's name, and every row
+        in one listing has the same organization -- so asking per row read the
+        same tenant a hundred times to print one string.
+        """
+        wanted = {id for id in ids if id is not None}
+        if not wanted:
+            return {}
+        result = await self.session.execute(
+            select(Organization).where(Organization.id.in_(wanted))
+        )
+        return {
+            instance.id: instance.to_entity() for instance in result.scalars().all()
+        }
 
     async def get_by_slug(self, slug: str) -> Optional[OrganizationEntity]:
         stmt = select(Organization).where(Organization.slug == slug)

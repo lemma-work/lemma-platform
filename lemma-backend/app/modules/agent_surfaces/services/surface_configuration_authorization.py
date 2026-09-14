@@ -26,18 +26,14 @@ from app.modules.agent_surfaces.domain.entities import (
 
 class SurfaceConfigurationAuthorizationMixin:
     async def _configuration_surface_candidates(self, request, *, tenant_id, platform):
-        candidates = await self.surface_repository.list_active_by_type(platform)
-        receiver_surface_ids = getattr(request, "receiver_surface_ids", None)
-        receiver_ids = set(receiver_surface_ids or [])
-        if receiver_surface_ids is not None:
-            candidates = [s for s in candidates if s.id in receiver_ids]
-        if tenant_id:
-            candidates = [
-                surface
-                for surface in candidates
-                if str(surface.external_workspace_id or "") == str(tenant_id)
-            ]
-        return candidates
+        # Both predicates used to run in Python over every surface of the
+        # platform in the deployment, and each candidate that survived then paid
+        # for an authorization context of its own.
+        return await self.surface_repository.list_active_for_routing(
+            platform,
+            surface_ids=getattr(request, "receiver_surface_ids", None),
+            external_workspace_id=str(tenant_id) if tenant_id else None,
+        )
 
     async def _resolve_configuration_actor(
         self, *, candidates, actor_external_user_id: str | None, adapter

@@ -420,6 +420,9 @@ _NAME_TO_MODULE = {
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
+    'SignedUrlListResponse': 'signed_url_list_response',
+    'SignedUrlRevokeResponse': 'signed_url_revoke_response',
+    'SignedUrlSummary': 'signed_url_summary',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -955,6 +958,9 @@ if TYPE_CHECKING:
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
+    from .signed_url_list_response import SignedUrlListResponse
+    from .signed_url_revoke_response import SignedUrlRevokeResponse
+    from .signed_url_summary import SignedUrlSummary
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1503,6 +1509,9 @@ __all__ = [
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',
+    'SignedUrlListResponse',
+    'SignedUrlRevokeResponse',
+    'SignedUrlSummary',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',

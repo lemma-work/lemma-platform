@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -142,13 +143,46 @@ def file_repository_mock() -> AsyncMock:
     # contains through ``get_all_by_datastore``.
     async def _visible_file_ids(**kwargs) -> set:
         items = await repository.get_all_by_datastore(kwargs["pod_id"])
-        return {item.id for item in items}
+        ids = {item.id for item in items}
+        # Both narrowings are honoured, because both are how the caller reads
+        # the answer. `among` is the authorization of a search's candidate
+        # rows -- a double that ignored it would authorize ids the pod does
+        # not have. `limit` is how the caller decides whether the readable set
+        # is small enough to send: ignoring it makes every pod look small and
+        # the unnarrowed branch unreachable from a unit test.
+        among = kwargs.get("among")
+        if among is not None:
+            ids &= set(among)
+        limit = kwargs.get("limit")
+        if limit is not None:
+            ids = set(sorted(ids, key=str)[:limit])
+        return ids
 
-    async def _visibility_split(**kwargs) -> tuple[set, set]:
-        return await _visible_file_ids(**kwargs), set()
+    # Derived from the same stub, so a test still describes the pod in one
+    # place. Without this, the callers that moved from `get_all_by_datastore` to
+    # `get_descendants` would reach an unstubbed `AsyncMock` attribute, get a
+    # `MagicMock` back and iterate it -- the test would fail for a reason that
+    # has nothing to do with what it is checking. Positional, because
+    # `writer.py` calls it that way.
+    async def _descendants(pod_id, path_prefix) -> list:
+        items = await repository.get_all_by_datastore(pod_id)
+        return [item for item in items if item.path.startswith(f"{path_prefix}/")]
+
+    # Derived the same way, and narrowed the same way the statement is: one
+    # directory's own entries, not the tree beneath it. A double that returned
+    # descendants here would let a caller that had not been narrowed keep
+    # passing.
+    async def _direct_children(pod_id, directory_path) -> list:
+        prefix = "/" if directory_path == "/" else f"{directory_path}/"
+        return [
+            item
+            for item in await _descendants(pod_id, directory_path.rstrip("/"))
+            if "/" not in item.path[len(prefix) :]
+        ]
 
     repository.visible_file_ids.side_effect = _visible_file_ids
-    repository.file_visibility_split.side_effect = _visibility_split
+    repository.get_descendants.side_effect = _descendants
+    repository.get_direct_children.side_effect = _direct_children
     return repository
 
 
@@ -356,6 +390,46 @@ async def test_content_update_overwrites_canonical_path_and_updates_hash(
         "ae907ab9a383483e5c37beee966723544b9e6f12148a7dcd56ceea7ad44c5a7b"
     )
     assert updated.status == FileStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_resolve_update_leaves_the_hash_to_the_storage_phase(
+    file_service: DatastoreFileService,
+    file_repository_mock: AsyncMock,
+):
+    """Where the digest is computed, not just that it arrives.
+
+    Hashing an upload is CPU proportional to the file, and ``resolve_update_file``
+    runs inside the caller's unit of work -- computing it there pinned a pooled
+    connection for the length of every large upload. The stale digest below must
+    survive the DB phase untouched and be replaced by the storage phase, so this
+    fails both if hashing moves back and if it stops happening at all.
+    """
+    user_id = uuid4()
+    pod_id = uuid4()
+    stale = "a" * 64
+    existing = _make_file(
+        pod_id=pod_id,
+        name="guide.txt",
+        owner_user_id=user_id,
+        visibility="PERSONAL",
+    )
+    existing.content_sha256 = stale
+    file_repository_mock.get_by_path.return_value = existing
+
+    update_entity = DatastoreFileUpdateEntity(path=existing.path, content=b"new body")
+    plan = await file_service.resolve_update_file(
+        pod_id, update_entity, ctx=_ctx(user_id)
+    )
+
+    assert plan.file_entity.content_sha256 == stale
+    # Size is len(), not a digest -- it stays in the DB phase, and its presence
+    # here is what shows the content branch ran at all.
+    assert plan.file_entity.size_bytes == len(b"new body")
+
+    await file_service.write_update_storage(plan, update_entity)
+
+    assert plan.file_entity.content_sha256 == sha256(b"new body").hexdigest()
 
 
 @pytest.mark.asyncio
@@ -985,7 +1059,7 @@ async def test_tree_root_includes_me_and_skills_nodes(
         visibility="PERSONAL",
         parent_path=f"/{requester_user_id}",
     )
-    file_repository_mock.get_all_by_datastore.return_value = [team_file, personal_note]
+    file_repository_mock.get_tree_items.return_value = [team_file, personal_note]
     file_repository_mock.get_by_paths.return_value = []
     file_repository_mock.get_by_path.return_value = None
 
@@ -1018,7 +1092,7 @@ async def test_tree_me_resolves_to_personal_root_not_pod_root(
     pod_file = _make_file(
         pod_id=pod_id, name="shared.txt", owner_user_id=uuid4(), visibility="POD"
     )
-    file_repository_mock.get_all_by_datastore.return_value = [personal_note, pod_file]
+    file_repository_mock.get_tree_items.return_value = [personal_note, pod_file]
     file_repository_mock.get_by_paths.return_value = []
     file_repository_mock.get_by_path.return_value = None
 
@@ -1113,11 +1187,15 @@ async def test_search_files_excludes_private_or_private_ancestor_results_for_non
     )
 
     assert [result.file_id for result in results] == [pod_root_id]
-    visibility = seen_search_kwargs["visibility"]
-    assert visibility.known_file_ids == {pod_root_id}
-    assert not visibility.allows(pod_child_id), (
+    file_scope = seen_search_kwargs["file_scope"]
+    assert file_scope.enumerated and file_scope.file_ids == frozenset({pod_root_id}), (
+        "a readable set this small is sent to the pod database as an exact "
+        "filter rather than being applied after the fact"
+    )
+    assert pod_child_id not in file_scope.file_ids, (
         "a chunk whose file row the pod no longer has must not survive the "
-        "filter, whichever direction was pushed down"
+        "filter -- the scope is built from the file table, so a row that is "
+        "not there cannot be in it"
     )
 
 
@@ -1154,12 +1232,19 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
     )
 
     file_repository_mock.get_by_path.return_value = root_folder
+    # This test names the descendants directly rather than deriving them from
+    # the pod contents, so the fixture's derived side effect has to step aside:
+    # on a Mock, `side_effect` wins over `return_value`.
+    file_repository_mock.get_descendants.side_effect = None
     file_repository_mock.get_descendants.return_value = [
         nested_folder,
         nested_file,
         sibling_file,
     ]
-    file_repository_mock.delete_entity.return_value = True
+    # The double answers the way the statement does: how many rows went.
+    file_repository_mock.delete_entities.side_effect = lambda entities: len(
+        list(entities)
+    )
 
     search_service = AsyncMock()
     search_service.engine = None
@@ -1182,7 +1267,68 @@ async def test_delete_path_by_path_removes_folder_descendants_from_storage_and_s
         f"pods/{pod_id}/files/research/notes/draft.md",
         f"pods/{pod_id}/files/research/summary.md",
     }
-    assert search_service.remove_file.await_count == 2
-    deleted_ids = {call.args[0] for call in search_service.remove_file.await_args_list}
-    assert deleted_ids == {nested_file.id, sibling_file.id}
-    assert file_repository_mock.delete_entity.await_count == 4
+    # One purge for the folder, not one per file: the per-file call opened its
+    # own session and committed, so deleting a folder of five hundred opened
+    # five hundred.
+    search_service.remove_files.assert_awaited_once()
+    assert set(search_service.remove_files.await_args.args[0]) == {
+        nested_file.id,
+        sibling_file.id,
+    }
+    # Four rows, one statement -- it was a `SELECT` plus a `DELETE` each.
+    file_repository_mock.delete_entities.assert_awaited_once()
+    assert len(file_repository_mock.delete_entities.await_args.args[0]) == 4
+
+
+@pytest.mark.asyncio
+async def test_the_skills_overlay_asks_for_the_subtree_not_the_pod(
+    file_service: DatastoreFileService,
+    file_repository_mock: AsyncMock,
+    tmp_path,
+):
+    """Listing `/skills` must not load every file row in the pod.
+
+    It used to: fetch the whole pod, hydrate an entity per row, then keep the
+    ones whose path is under `/skills` -- deciding that by normalising every
+    path character by character through two `unicodedata` calls each. Measured
+    at 3.8us to normalise one path against 0.02us for the prefix test, and
+    2.35us to build one entity, which is ~123ms of Python per request on a
+    20k-file pod.
+
+    The assertion that matters is the negative one: the whole-pod call is gone.
+    """
+    skills_root = tmp_path / "lemma-skills"
+    (skills_root / "builtin-skill").mkdir(parents=True)
+    (skills_root / "builtin-skill" / "SKILL.md").write_text(
+        "---\nname: builtin-skill\n---\n", encoding="utf-8"
+    )
+    file_service.system_skill_files.skills_root = skills_root
+
+    requester_user_id = uuid4()
+    pod_id = uuid4()
+    custom = _make_folder(
+        pod_id=pod_id, name="custom-skill", parent_path="/skills", visibility="POD"
+    )
+    custom.owner_user_id = None
+    # Stubbed directly rather than through the fixture's derived side effect,
+    # which reads `get_all_by_datastore` itself -- the negative assertion below
+    # is the point of the test and that helper would satisfy it spuriously.
+    file_repository_mock.get_direct_children.side_effect = None
+    file_repository_mock.get_direct_children.return_value = [custom]
+    file_repository_mock.visible_file_ids.side_effect = None
+    file_repository_mock.visible_file_ids.return_value = {custom.id}
+
+    items, _ = await file_service.list_files(
+        pod_id,
+        _ctx(requester_user_id),
+        directory_path="/skills",
+    )
+
+    assert "custom-skill" in {item.name for item in items}
+    # Narrower than the subtree it used to ask for, which is `PS-DATA-031`:
+    # listing one folder does not load the tree under it. Both negatives matter
+    # -- the pod read and the subtree read are each a thing this must not do.
+    file_repository_mock.get_direct_children.assert_awaited()
+    assert file_repository_mock.get_direct_children.await_args.args[1] == "/skills"
+    file_repository_mock.get_descendants.assert_not_awaited()
+    file_repository_mock.get_tree_items.assert_not_awaited()

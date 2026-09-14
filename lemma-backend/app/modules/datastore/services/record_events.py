@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.modules.datastore.domain.events import (
     DatastoreRecordEvent,
     DatastoreRecordOperation,
@@ -28,8 +29,12 @@ class RecordEventCoordinator:
         self,
         *,
         dispatcher: Callable[[], Awaitable[int]] | None,
+        platform_session: object | None = None,
     ) -> None:
         self.dispatcher = dispatcher
+        # Held only to be handed back; see `dispatch`. `None` is a no-op, so a
+        # caller that supplies no session still works.
+        self._platform_session = platform_session
 
     def build(
         self,
@@ -104,5 +109,15 @@ class RecordEventCoordinator:
         making record-write latency depend on Redis or per-event acknowledgement
         writes.
         """
-        if self.dispatcher is not None:
+        if self.dispatcher is None:
+            return
+        # Inside the guard, so the common case pays nothing: releasing and
+        # re-acquiring a connection for a callback that is not there would be a
+        # cost with no benefit.
+        #
+        # When one *is* wired it is a Redis round trip, and the caller reaches
+        # here holding the **platform** connection -- record writes went to the
+        # datastore database, a different pool, so the platform session has only
+        # read and `safe_to_release` genuinely releases.
+        async with connection_released(self._platform_session):
             await self.dispatcher()

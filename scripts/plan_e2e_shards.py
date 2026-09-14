@@ -571,17 +571,36 @@ def _collectors(path: str, shards: list[dict]) -> list[str]:
     return hits
 
 
-# The two lanes that are not shards. Both are kept byte-identical to the
-# workflow step that owns them, and `test_the_two_non_shard_lanes_match_their_workflows`
-# is what holds that -- the same discipline FAST_MARKERS is under, for the same
+# The lanes that are not shards. Each is kept byte-identical to the workflow
+# step that owns it, and `test_the_non_shard_lanes_match_their_workflows` is
+# what holds that -- the same discipline FAST_MARKERS is under, for the same
 # reason: this file decides whether a test counts as covered, so a stale copy
 # here would report coverage that CI does not provide.
 PROTECTED_MARKERS = (
-    "e2e and (slow or workspace or indexing or local_cli "
-    "or protected) and not provider"
+    "e2e and (slow or workspace or indexing "
+    "or protected) and not provider and not benchmark"
 )
 SMOKE_PATH = "app/modules/agent_surfaces/tests/e2e/test_surface_live_smoke_e2e.py"
 SMOKE_MARKERS = "surface_live"
+
+# Two lanes that run one file each, by path rather than by marker, because each
+# needs something built first that no marker filter can conjure.
+#
+# `Desktop contracts` in ci.yml builds `lemma-agent-host` with cargo, and for
+# the browser half the TypeScript SDK and a Playwright browser too, then runs
+# this file in two passes split on `agent_host_browser`. It is where the
+# `local_cli` tests live now; the protected lane used to select them and supply
+# none of it, so every one of them asserted "Build lemma-agent-host first".
+DESKTOP_CONTRACT_PATH = "app/modules/agent/tests/e2e/test_agent_host_process_e2e.py"
+DESKTOP_CONTRACT_MARKERS = "local_cli"
+
+# `sandbox-function-benchmark.yml` runs the function benchmark nightly on
+# Docker and weekly on E2B, with the 1800s timeout and tuned environment its
+# wall-clock budgets were written for. Those budgets are a trend, not a gate:
+# on a shared runner they fail without a defect, which is why the protected
+# lane -- the one every Desktop release waits on -- says `not benchmark`.
+BENCHMARK_PATH = "app/modules/function/tests/perf/test_function_execution_benchmark.py"
+BENCHMARK_MARKERS = "benchmark"
 
 # Collected in the subprocess below and read back here. `pytest_collection_finish`
 # rather than `pytest_collection_modifyitems`, so it cannot race the root
@@ -655,6 +674,8 @@ def _compile_lanes(shards: list[dict]) -> dict[str, object]:
     lanes = {shard["name"]: Expression.compile(shard["markers"]) for shard in shards}
     lanes["protected"] = Expression.compile(PROTECTED_MARKERS)
     lanes["surface-live-smoke"] = Expression.compile(SMOKE_MARKERS)
+    lanes["desktop-contract"] = Expression.compile(DESKTOP_CONTRACT_MARKERS)
+    lanes["sandbox-function-benchmark"] = Expression.compile(BENCHMARK_MARKERS)
     return lanes
 
 
@@ -672,10 +693,13 @@ def _lanes_for(
     ]
     if compiled["protected"].evaluate(marks.__contains__):
         lanes.append("protected")
-    if path == SMOKE_PATH and compiled["surface-live-smoke"].evaluate(
-        marks.__contains__
+    for lane, owned_path in (
+        ("surface-live-smoke", SMOKE_PATH),
+        ("desktop-contract", DESKTOP_CONTRACT_PATH),
+        ("sandbox-function-benchmark", BENCHMARK_PATH),
     ):
-        lanes.append("surface-live-smoke")
+        if path == owned_path and compiled[lane].evaluate(marks.__contains__):
+            lanes.append(lane)
     return lanes
 
 
@@ -692,9 +716,11 @@ def verify() -> int:
 
     So the check is now the claim: collect the suite once, ask each lane's real
     marker filter about each test, and require exactly one PR lane per test --
-    or the protected lane, or the labelled smoke job. `provider` tests are the
-    one accepted gap: they need live third-party credentials, no lane can
-    supply them, and saying so here is better than a proxy that never noticed.
+    or the protected lane, or one of the three lanes that own a single file:
+    the labelled smoke job, `Desktop contracts`, and the nightly sandbox
+    function benchmark. `provider` tests are the one accepted gap: they need
+    live third-party credentials, no lane can supply them, and saying so here is
+    better than a proxy that never noticed.
 
     Collection costs about ten seconds, which is why this is worth naming: the
     cheap version of this check was the reason nobody knew.
@@ -756,16 +782,19 @@ def verify() -> int:
         print(f"::error::{nodeid} is selected by {', '.join(lanes)}; expected one")
     if nowhere or twice:
         print(
-            "\nA test runs in a PR shard, in the protected lane, or in the "
-            "labelled smoke job. If its markers put it outside all three, that "
-            "is the bug -- adding a marker to a filter to hide it is how the "
-            "last two got lost."
+            "\nA test runs in a PR shard, in the protected lane, or in one of "
+            "the lanes that own a file outright -- the labelled smoke job, "
+            "`Desktop contracts`, the nightly sandbox function benchmark. If "
+            "its markers put it outside all of them, that is the bug -- adding "
+            "a marker to a filter to hide it is how the last two got lost."
         )
         return 1
     print(
         f"{covered} e2e tests each run in exactly one of {len(shards)} PR "
-        f"shards, the protected lane, or the smoke job; {provider_only} "
-        f"`provider` tests need live credentials and run in none."
+        f"shards, the protected lane, or a lane that owns a file (the smoke "
+        f"job, Desktop contracts, the sandbox function benchmark); "
+        f"{provider_only} `provider` tests need live credentials and run in "
+        f"none."
     )
     return 0
 

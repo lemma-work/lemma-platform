@@ -1,6 +1,15 @@
 name: Release Lemma TypeScript SDK
 
 on:
+  # The tag, not the release. A release created by a workflow runs as the
+  # default GITHUB_TOKEN, and GitHub will not start a new workflow run from an
+  # event that token raised -- so `release: published` fires only when a person
+  # cuts the release by hand. v0.7.1 was cut by a person and this ran; v0.7.2
+  # was cut by release-local-images.yml and this never ran at all, which is why
+  # npm sat a release behind for ten days with nothing saying so.
+  push:
+    tags:
+      - "v*"
   release:
     types:
       - published
@@ -19,7 +28,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: release-lemma-typescript-${{ github.event.release.tag_name || inputs.version }}
+  group: release-lemma-typescript-${{ github.event.release.tag_name || inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -31,14 +40,21 @@ jobs:
         working-directory: lemma-typescript
 
     steps:
+      # Build the tag, not whatever the default branch happens to be. Without a
+      # ref a workflow_dispatch checks out main and the version input only
+      # rewrites the version string, so a dispatch run after an unrelated merge
+      # would publish a different tree under this release's name -- and a
+      # package version cannot be re-cut once it is on an index.
       - name: Checkout
         uses: actions/checkout@v7
-
-      - name: Require fresh backend protected E2E
-        uses: ./.github/actions/require-backend-protected-e2e
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          sha: ${{ github.sha }}
+          ref: ${{ github.event.release.tag_name || inputs.version || github.ref }}
+
+      # The protected backend suite is not a gate on this artifact. It exercises
+      # the real Docker runtime, the document processors and the Rust agent
+      # host; none of the three is in the package published here, and the job
+      # already builds and tests exactly what it uploads. The desktop release
+      # keeps the gate, which is what it was written for.
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -67,14 +83,14 @@ jobs:
       - name: Check version consistency across components
         working-directory: .
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
         run: python3 scripts/check_version_consistency.py --expect "$RELEASE_VERSION"
 
       - name: Set package version from release tag
         id: version
         shell: bash
         env:
-          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version || github.ref_name }}
         run: |
           version="${RELEASE_VERSION#v}"
           if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then

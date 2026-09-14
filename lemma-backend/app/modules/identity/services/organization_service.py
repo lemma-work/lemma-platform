@@ -24,6 +24,9 @@ from app.modules.identity.domain.organization_identity import (
     assign_organization_identity,
     resolve_email_domain_for_policy,
 )
+from app.modules.identity.services.invitation_display import (
+    enrich_invitation_display_fields,
+)
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -67,29 +70,16 @@ class OrganizationService:
     async def _enrich_invitation_display_fields(
         self, invitation: OrganizationInvitationEntity
     ) -> OrganizationInvitationEntity:
-        organization = await self.organization_repository.get(
-            invitation.organization_id
-        )
-        if organization:
-            invitation.organization_name = organization.name
-
-        if invitation.pod_id is not None and self.pod_membership_port is not None:
-            pod_details = await self.pod_membership_port.get_pod_invitation_details(
-                invitation.pod_id
-            )
-            if pod_details:
-                invitation.pod_name = pod_details[0]
-                invitation.pod_description = pod_details[1]
-
-        return invitation
+        return (await self._enrich_invitation_list_display_fields([invitation]))[0]
 
     async def _enrich_invitation_list_display_fields(
         self, invitations: Sequence[OrganizationInvitationEntity]
     ) -> list[OrganizationInvitationEntity]:
-        return [
-            await self._enrich_invitation_display_fields(invitation)
-            for invitation in invitations
-        ]
+        return await enrich_invitation_display_fields(
+            invitations,
+            organization_repository=self.organization_repository,
+            pod_membership_port=self.pod_membership_port,
+        )
 
     async def _require_member(
         self,

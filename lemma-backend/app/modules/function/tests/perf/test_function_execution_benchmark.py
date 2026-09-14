@@ -17,10 +17,21 @@ from load_tests.function_execution import (
 )
 
 
+# `benchmark` says who owns this: `sandbox-function-benchmark.yml`, nightly on
+# Docker and weekly on E2B, at the 1800s timeout and the tuned environment
+# `make benchmark-functions-docker` supplies, keeping the report and telling
+# Slack when a budget moves. Everything below asserts a wall-clock p95 on a
+# shared runner, so a red here is as often the runner as the code -- the
+# protected lane failed on 2026-09-09 with "platform overhead p95 3.502s exceeds
+# 2.000s" and passed on 2026-09-10, and the only change to function execution
+# between the two runs was one deleted dead line. That is a trend to watch, not
+# a gate: the marker is what keeps it out of `backend-protected-e2e.yml`, which
+# every Desktop release waits on.
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,
     pytest.mark.real_sandbox,
+    pytest.mark.benchmark,
 ]
 
 

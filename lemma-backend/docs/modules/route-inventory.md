@@ -134,6 +134,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/datastore/files/by-path` | `file.delete` | Delete File Or Folder |
 | DELETE | `/pods/{pod_id}/datastore/files/by-path/markdown` | `file.markdown.detach` | Detach Document Markdown |
+| DELETE | `/pods/{pod_id}/datastore/files/signed-urls/{code}` | `file.signed_url.revoke` | Revoke a public signed URL |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.delete` | Delete Table |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/columns/{column_name}` | `table.column.remove` | Remove Column |
 | DELETE | `/pods/{pod_id}/datastore/tables/{table_name}/records/{record_id}` | `record.delete` | Delete Record |
@@ -142,6 +143,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/files/children` | `file.children.list` | List a document's derived child files |
 | GET | `/pods/{pod_id}/datastore/files/children/content` | `file.child.get` | Fetch a document's child artifact by path |
 | GET | `/pods/{pod_id}/datastore/files/download` | `file.download` | Download File |
+| GET | `/pods/{pod_id}/datastore/files/signed-urls` | `file.signed_url.list` | List this pod's public signed URLs |
 | GET | `/pods/{pod_id}/datastore/files/tree` | `file.tree` | Get Directory Tree |
 | GET | `/pods/{pod_id}/datastore/files/url` | `file.url` | Get a short-lived URL for a file |
 | GET | `/pods/{pod_id}/datastore/files/{file_id}` | `file.get_by_id` | Get File by ID |

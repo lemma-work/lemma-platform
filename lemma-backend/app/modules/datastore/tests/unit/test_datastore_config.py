@@ -39,9 +39,9 @@ EXPECTED = [
     ("datastore_query_max_cost", "DATASTORE_QUERY_MAX_COST", 1_000_000.0),
     ("datastore_query_max_plan_rows", "DATASTORE_QUERY_MAX_PLAN_ROWS", 5_000_000),
     (
-        "datastore_search_visibility_id_soft_limit",
-        "DATASTORE_SEARCH_VISIBILITY_ID_SOFT_LIMIT",
-        20_000,
+        "datastore_search_readable_id_pushdown_limit",
+        "DATASTORE_SEARCH_READABLE_ID_PUSHDOWN_LIMIT",
+        5_000,
     ),
     ("document_processing_max_concurrency", "DOCUMENT_PROCESSING_MAX_CONCURRENCY", 2),
     (
@@ -96,19 +96,29 @@ EXPECTED = [
     (
         "datastore_signed_url_default_expiry_seconds",
         "DATASTORE_SIGNED_URL_DEFAULT_EXPIRY_SECONDS",
-        10800,
+        86400,
     ),
     (
         "datastore_signed_url_max_expiry_seconds",
         "DATASTORE_SIGNED_URL_MAX_EXPIRY_SECONDS",
-        86400,
+        604800,
     ),
     (
         "datastore_signed_url_default_max_hits",
         "DATASTORE_SIGNED_URL_DEFAULT_MAX_HITS",
-        50,
+        200,
     ),
-    ("datastore_signed_url_max_hits", "DATASTORE_SIGNED_URL_MAX_HITS", 100),
+    ("datastore_signed_url_max_hits", "DATASTORE_SIGNED_URL_MAX_HITS", 1000),
+    (
+        "datastore_signed_url_max_active_per_user",
+        "DATASTORE_SIGNED_URL_MAX_ACTIVE_PER_USER",
+        500,
+    ),
+    (
+        "datastore_signed_url_row_retention_seconds",
+        "DATASTORE_SIGNED_URL_ROW_RETENTION_SECONDS",
+        604800,
+    ),
     ("datastore_signed_url_code_bytes", "DATASTORE_SIGNED_URL_CODE_BYTES", 9),
 ]
 

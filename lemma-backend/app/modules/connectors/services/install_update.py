@@ -35,7 +35,6 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from app.core.log.log import get_logger
-from app.modules.connectors.domain.account import AccountStatus
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
     AuthConfigStatus,
@@ -279,15 +278,7 @@ async def mark_accounts_for_reauth(
     a schedule, a surface, a pod-bundle variable -- still resolves, and the
     reconnect updates the row in place rather than creating a second one.
     """
-    accounts = await account_repository.list_by_auth_config(auth_config_id)
-    marked = 0
-    for account in accounts:
-        if account.status != AccountStatus.CONNECTED:
-            continue
-        account.status = AccountStatus.REAUTH_REQUIRED
-        await account_repository.update(account)
-        marked += 1
-    return marked
+    return await account_repository.mark_connected_for_reauth(auth_config_id)
 
 
 async def _clear_default_install(

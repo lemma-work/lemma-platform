@@ -1932,12 +1932,15 @@ quality:
 	@echo "→ I/O hygiene…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-io-hygiene
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-unbounded-reads
 	@echo "→ Import-bound defaults…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-import-bound-defaults
 	@echo "→ Typed surfaces…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-controller-types
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ Migration order…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-migration-order
 	@echo "→ In-subject test doubles…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-test-doubles
 	@echo "→ Import budget…"

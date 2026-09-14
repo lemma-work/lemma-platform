@@ -150,8 +150,14 @@ class AgentCallableToolFactory:
                 )
             function_ids, agent_ids = grants.function_ids, grants.agent_ids
 
+            # One read for the granted functions and one for the child agents,
+            # rather than one per grant. This assembles the toolset before every
+            # agent turn, so an agent with twenty grants paid twenty round trips
+            # to learn what it is allowed to call -- each of them an id it
+            # already held.
+            functions = await function_tools.get_functions_by_ids(uow, function_ids)
             for function_id in function_ids:
-                function = await function_tools.get_function_by_id(uow, function_id)
+                function = functions.get(function_id)
                 if function is None or function.status != FunctionStatus.READY:
                     continue
                 with suppress(Exception):
@@ -163,8 +169,9 @@ class AgentCallableToolFactory:
             # top-level runs (depth=1). Child sub-agent runs keep their function
             # tools but cannot launch further agents.
             if allow_subagents:
+                child_agents = await agent_repo.get_many(agent_ids)
                 for child_agent_id in agent_ids:
-                    child_agent = await agent_repo.get(child_agent_id)
+                    child_agent = child_agents.get(child_agent_id)
                     if child_agent is None:
                         continue
                     tools.append(

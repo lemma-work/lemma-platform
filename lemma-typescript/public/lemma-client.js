@@ -11849,16 +11849,22 @@ var LemmaClient = (() => {
      * List App Releases
      * @param podId
      * @param appName
+     * @param limit Max releases to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns AppReleaseListResponse Successful Response
      * @throws ApiError
      */
-    static appReleaseList(podId, appName) {
+    static appReleaseList(podId, appName, limit = 50, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/apps/{app_name}/releases",
         path: {
           "pod_id": podId,
           "app_name": appName
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
         },
         errors: {
           422: `Validation Error`
@@ -11953,9 +11959,30 @@ var LemmaClient = (() => {
         body: payload
       });
     }
-    /** This app's release history, newest first. */
-    releases(name) {
-      return this.client.request(() => AppsService.appReleaseList(this.podId(), name));
+    /** One page of this app's release history, newest first. */
+    releases(name, options) {
+      return this.client.request(
+        () => AppsService.appReleaseList(this.podId(), name, options == null ? void 0 : options.limit, options == null ? void 0 : options.pageToken)
+      );
+    }
+    /**
+     * Every release this app has had, newest first, paged to exhaustion.
+     *
+     * The endpoint answers a page now, and retention keeps a pruned release's row
+     * -- so an app deployed daily has history past the first page, and a live
+     * release can itself be on a later one. Anything that has to be complete
+     * wants this rather than `releases`.
+     */
+    async allReleases(name, pageSize = 200) {
+      var _a;
+      const items = [];
+      let pageToken;
+      for (; ; ) {
+        const page = await this.releases(name, { limit: pageSize, pageToken });
+        items.push(...(_a = page.items) != null ? _a : []);
+        pageToken = page.next_page_token;
+        if (typeof pageToken !== "string" || !pageToken) return items;
+      }
     }
     /**
      * Make an existing release the one this app serves. `releaseRef` is the
@@ -12266,6 +12293,57 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * List this pod's public signed URLs
+     * @param podId
+     * @param includeDead Also list links that have expired or been revoked.
+     * @param limit Links per page.
+     * @param pageToken `next_page_token` from the previous page.
+     * @returns SignedUrlListResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlList(podId, includeDead = false, limit = 100, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/files/signed-urls",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "include_dead": includeDead,
+          "limit": limit,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Revoke a public signed URL
+     * Kill a link now rather than waiting out its expiry.
+     *
+     * Answers 200 either way: a code that is already dead, or was never this
+     * pod's, is reported as ``revoked: false`` rather than 404, so that a caller
+     * cleaning up cannot use this endpoint to discover which codes exist.
+     * @param podId
+     * @param code
+     * @returns SignedUrlRevokeResponse Successful Response
+     * @throws ApiError
+     */
+    static fileSignedUrlRevoke(podId, code) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/files/signed-urls/{code}",
+        path: {
+          "pod_id": podId,
+          "code": code
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Get Directory Tree
      * @param podId
      * @param rootPath
@@ -12471,9 +12549,10 @@ var LemmaClient = (() => {
     }
     /**
      * Mint a public, hit-capped short signed URL (no login needed to open).
-     * Expires after `expiresSeconds` (default 3h, max 24h) and serves the file
-     * at most `maxHits` times (default 50, max 100); both bounds are clamped
-     * server-side. Use it to share a file outside the pod without unbounded egress.
+     * Expires after `expiresSeconds` (default 24h, max 7d) and serves the file
+     * at most `maxHits` times (default 200, max 1000); a value outside either
+     * range is rejected with a 422. Use it to share a file outside the pod
+     * without unbounded egress.
      */
     createSignedUrl(path, options = {}) {
       const body = {
@@ -12481,6 +12560,37 @@ var LemmaClient = (() => {
         max_hits: options.maxHits
       };
       return this.client.request(() => FilesService.fileSignedUrl(this.podId(), path, body));
+    }
+    /**
+     * The public signed URLs *you* minted and may still read, newest first —
+     * scoped to the caller rather than the pod, because each row carries the
+     * `code`, which is the whole capability.
+     *
+     * Paged: a response with `next_cursor` set has more, so pass it back as
+     * `cursor` and keep going until it is null. A link you do not list is one you
+     * cannot revoke. `includeDead` also returns expired, revoked and spent links,
+     * which are kept for a grace period.
+     */
+    listSignedUrls(options = {}) {
+      return this.client.request(
+        () => {
+          var _a, _b, _c;
+          return FilesService.fileSignedUrlList(
+            this.podId(),
+            (_a = options.includeDead) != null ? _a : false,
+            (_b = options.limit) != null ? _b : 100,
+            (_c = options.cursor) != null ? _c : null
+          );
+        }
+      );
+    }
+    /**
+     * Kill a public signed URL now rather than waiting out its expiry. `revoked`
+     * is false when the code was already dead or was never this pod's — reported
+     * rather than thrown, so a cleanup pass cannot use this to discover codes.
+     */
+    revokeSignedUrl(code) {
+      return this.client.request(() => FilesService.fileSignedUrlRevoke(this.podId(), code));
     }
     delete(path) {
       return this.client.request(() => FilesService.fileDelete(this.podId(), path));
@@ -12710,16 +12820,22 @@ var LemmaClient = (() => {
      * List the built revisions of a function, newest first.
      * @param podId
      * @param functionName
+     * @param limit Max revisions to return, up to 200. Page beyond that with `page_token`.
+     * @param pageToken `next_page_token` from the previous page.
      * @returns FunctionRevisionListResponse Successful Response
      * @throws ApiError
      */
-    static functionRevisionList(podId, functionName) {
+    static functionRevisionList(podId, functionName, limit = 50, pageToken) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/functions/{function_name}/revisions",
         path: {
           "pod_id": podId,
           "function_name": functionName
+        },
+        query: {
+          "limit": limit,
+          "page_token": pageToken
         },
         errors: {
           422: `Validation Error`
@@ -12858,8 +12974,27 @@ var LemmaClient = (() => {
         replace: (name, payload) => this.client.request(() => FunctionsService.functionPermissionsReplace(this.podId(), name, payload))
       });
       __publicField(this, "revisions", {
-        /** This function's built revisions, newest first. */
-        list: (name) => this.client.request(() => FunctionsService.functionRevisionList(this.podId(), name)),
+        /** One page of this function's built revisions, newest first. */
+        list: (name, options) => this.client.request(
+          () => FunctionsService.functionRevisionList(
+            this.podId(),
+            name,
+            options == null ? void 0 : options.limit,
+            options == null ? void 0 : options.pageToken
+          )
+        ),
+        /** Every revision, newest first, paged to exhaustion. See `apps.allReleases`. */
+        listAll: async (name, pageSize = 200) => {
+          var _a;
+          const items = [];
+          let pageToken;
+          for (; ; ) {
+            const page = await this.revisions.list(name, { limit: pageSize, pageToken });
+            items.push(...(_a = page.items) != null ? _a : []);
+            pageToken = page.next_page_token;
+            if (typeof pageToken !== "string" || !pageToken) return items;
+          }
+        },
         /** One revision, with its source and the schemas its code implements. */
         get: (name, revisionRef) => this.client.request(() => FunctionsService.functionRevisionGet(this.podId(), name, revisionRef)),
         /**

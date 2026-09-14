@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -9,8 +10,12 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+from app.core.log.log import get_logger
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.telegram.client import TelegramClient
 from app.modules.apps.contracts import get_ready_pod_app_by_name
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -66,17 +71,31 @@ async def resolve_telegram_mini_app(
     )
 
 
-async def sync_telegram_mini_app(
+@dataclass(frozen=True, slots=True)
+class TelegramMiniAppSync:
+    """What the two Telegram calls need, resolved while the session is open."""
+
+    credentials: dict[str, object]
+    menu_button: dict[str, object]
+
+
+async def prepare_telegram_mini_app_sync(
     *,
     surface: AgentSurfaceEntity,
     credential_resolver,
     uow,
-) -> None:
+) -> TelegramMiniAppSync | None:
+    """The database half, and the one failure a user can act on.
+
+    Raising here still aborts the surface write, which is the behaviour worth
+    keeping: "your bot token is missing" is the caller's problem to fix, and a
+    surface created without one is not useful.
+    """
     if (
         surface.surface_type is not SurfacePlatform.TELEGRAM
         or credential_resolver is None
     ):
-        return
+        return None
     credentials = await credential_resolver.for_surface(surface)
     if not str(credentials.get("bot_token") or "").strip():
         raise AgentSurfaceValidationError("Telegram bot credentials are unavailable")
@@ -92,7 +111,24 @@ async def sync_telegram_mini_app(
             "text": f"Open {mini_app.label}"[:64],
             "web_app": {"url": mini_app.url},
         }
-    client = TelegramClient.from_credentials(credentials, timeout=20)
+    return TelegramMiniAppSync(credentials=credentials, menu_button=menu_button)
+
+
+async def apply_telegram_mini_app_sync(
+    plan: TelegramMiniAppSync,
+    *,
+    client_factory: Callable[..., TelegramClient] | None = None,
+) -> None:
+    """The two Telegram round trips. No database work, so nothing to hold.
+
+    ``client_factory`` is injected rather than patched so a test can supply a
+    client that fails without reaching inside this module. Defaulted to ``None``
+    and resolved here, because a default argument bound to the imported name
+    would capture it at import and a test could never replace it anyway -- which
+    is what `check_import_bound_defaults` exists to stop.
+    """
+    factory = client_factory or TelegramClient.from_credentials
+    client = factory(plan.credentials, timeout=20)
     await client.call(
         "setMyCommands",
         {
@@ -102,4 +138,64 @@ async def sync_telegram_mini_app(
             ]
         },
     )
-    await client.call("setChatMenuButton", {"menu_button": menu_button})
+    await client.call("setChatMenuButton", {"menu_button": plan.menu_button})
+
+
+async def apply_mini_app_sync_absorbing_outages(
+    plan: TelegramMiniAppSync,
+    *,
+    surface_id: UUID,
+    client_factory: Callable[..., TelegramClient] | None = None,
+) -> None:
+    """Run the Telegram half, treating an outage as degraded rather than fatal.
+
+    Named rather than inlined into the deferred closure so it can be called
+    directly: by the time this runs the surface is committed, and the difference
+    between absorbing and re-raising is the difference between a working surface
+    with an unset menu button and no surface at all.
+    """
+    try:
+        await apply_telegram_mini_app_sync(plan, client_factory=client_factory)
+    except PLATFORM_TRANSPORT_ERRORS:
+        logger.warning(
+            "agent_surfaces.telegram.mini_app_sync_failed.degraded",
+            surface_id=str(surface_id),
+            exc_info=True,
+        )
+
+
+async def sync_telegram_mini_app(
+    *,
+    surface: AgentSurfaceEntity,
+    credential_resolver,
+    uow,
+    client_factory: Callable[..., TelegramClient] | None = None,
+) -> None:
+    """Resolve under the session; talk to Telegram after the commit.
+
+    This used to do both with the transaction open, so a pooled connection was
+    held across two Telegram round trips on every surface create and update.
+
+    The split also changes what a Telegram outage costs, deliberately. Missing
+    credentials still abort the write, because that is the caller's to fix. A
+    failed `setMyCommands` no longer does: the surface is already committed and
+    works, only its command list and menu button are unset, and throwing away a
+    surface the user just configured because Telegram was briefly unavailable is
+    the worse outcome. It is reported as degraded so the failure is not silent.
+    """
+    plan = await prepare_telegram_mini_app_sync(
+        surface=surface, credential_resolver=credential_resolver, uow=uow
+    )
+    if plan is None:
+        return
+
+    async def _run() -> None:
+        await apply_mini_app_sync_absorbing_outages(
+            plan, surface_id=surface.id, client_factory=client_factory
+        )
+
+    after_commit = getattr(uow, "after_commit", None)
+    if callable(after_commit):
+        after_commit(_run)
+        return
+    await _run()

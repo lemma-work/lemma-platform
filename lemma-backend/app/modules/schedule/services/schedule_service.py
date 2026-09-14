@@ -1,5 +1,5 @@
 from typing import List, Optional
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.core.authorization.context import (
     Context,
@@ -48,6 +48,7 @@ from app.modules.schedule.services.schedule_target_policy import (
     validate_single_target,
     workflow_target_fields,
 )
+from app.modules.schedule.services.schedule_naming import schedule_name_for
 from app.modules.schedule.services.schedule_update_policy import (
     is_explicit_reactivation,
     validate_schedule_update_policies,
@@ -139,7 +140,7 @@ class ScheduleService:
 
         schedule_create = schedule_create.model_copy(
             update={
-                "name": self._normalize_or_generate_schedule_name(schedule_create),
+                "name": schedule_name_for(schedule_create),
             }
         )
         schedule_create = await self._resolve_create_target(schedule_create)
@@ -153,7 +154,9 @@ class ScheduleService:
         await self._require_target_execute(schedule_create, ctx=ctx)
         await self._require_datastore_table_update(schedule_create, ctx=ctx)
         if schedule_create.schedule_type == ScheduleType.TIME:
-            await validated_time_schedule_config(schedule_create.config)
+            await validated_time_schedule_config(
+                schedule_create.config, session=self.uow.session
+            )
         elif schedule_create.schedule_type == ScheduleType.WEBHOOK:
             validate_webhook_source(schedule_create, self.webhook_sources)
         schedule = ScheduleEntity(**schedule_create.model_dump())
@@ -386,27 +389,6 @@ class ScheduleService:
             if agent is None or agent.pod_id != schedule_create.pod_id:
                 raise ScheduleValidationError("Agent target not found in pod")
 
-    def _normalize_or_generate_schedule_name(
-        self, schedule_create: ScheduleCreateEntity
-    ) -> str | None:
-        if schedule_create.is_internal or schedule_create.pod_id is None:
-            return (
-                normalize_resource_name(schedule_create.name)
-                if schedule_create.name
-                else schedule_create.name
-            )
-        if schedule_create.name:
-            return normalize_resource_name(schedule_create.name)
-        target_name = (
-            schedule_create.workflow_name
-            or schedule_create.agent_name
-            or schedule_create.schedule_type.value.lower()
-        )
-        base = normalize_resource_name(
-            f"{target_name}_{schedule_create.schedule_type.value.lower()}_schedule"
-        )
-        return f"{base}_{uuid4().hex[:8]}"
-
     async def _validate_name_available(
         self,
         schedule_create: ScheduleCreateEntity,
@@ -440,6 +422,7 @@ class ScheduleService:
             existing,
             update_data,
             ctx=ctx,
+            session=self.uow.session,
             require_datastore_update=self._require_datastore_table_update,
         )
         if "name" in update_data and update_data["name"]:
