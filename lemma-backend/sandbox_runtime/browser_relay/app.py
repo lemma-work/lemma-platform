@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+import hashlib
 import hmac
 import logging
 import os
@@ -325,6 +326,7 @@ def create_app() -> FastAPI:
         # Background: the keepalive outlives no request and belongs to the
         # browser rather than to whoever opened this socket.
         keepalive_task = create_background_task(_keepalive_loop(session_name))
+        driving = _take_the_wheel(session_name) if mode == CONTROL else None
         try:
             async with websockets.connect(
                 page_socket_url(target_id, port=port),
@@ -346,6 +348,7 @@ def create_app() -> FastAPI:
             with suppress(RuntimeError):
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)
         finally:
+            _release_the_wheel(driving)
             keepalive_task.cancel()
             # Awaited, not just cancelled: a cancelled task is not finished
             # until it has been collected, and leaving it uncollected is how a
@@ -403,3 +406,47 @@ def _host_of(url: str) -> str:
     # `user:pass@host:port` -- the host is what is left after the last `@` and
     # before the first `:`.
     return authority.rpartition("@")[2].split(":")[0]
+
+
+#: Where a control session records that somebody is driving. Under the relay's
+#: own directory rather than the browser profile's, because `quiesce` deletes
+#: the profile and a lease that vanished with it would read as "nobody is
+#: driving" to the next command.
+_WHEEL_DIR = Path("/tmp/lemma-relay/wheel")
+
+
+def wheel_path(session: str) -> Path:
+    """The lease file for one session's browser."""
+    digest = hashlib.sha256(session.encode()).hexdigest()[:32]
+    return _WHEEL_DIR / digest
+
+
+def _take_the_wheel(session: str) -> Path | None:
+    """Mark this session as being driven by a person.
+
+    A file rather than state in this process, because the other party is not in
+    this process: the agent's commands run in a shell, and what has to see the
+    lease is the script they run. Both are in this sandbox, so the filesystem is
+    the one thing they share.
+
+    Named from a digest for the same reason the profile directory is -- a
+    session name is a caller's string and must not become a path.
+    """
+    path = wheel_path(session)
+    try:
+        _WHEEL_DIR.mkdir(parents=True, exist_ok=True)
+        path.write_text(session)
+        return path
+    except OSError:
+        # Not being able to take the lease must not stop somebody watching. The
+        # cost is that an agent command may land at the same time, which is what
+        # happened before this existed at all.
+        _log.warning("could not record the control lease for session %s", session)
+        return None
+
+
+def _release_the_wheel(path: Path | None) -> None:
+    if path is None:
+        return
+    with suppress(OSError):
+        path.unlink(missing_ok=True)

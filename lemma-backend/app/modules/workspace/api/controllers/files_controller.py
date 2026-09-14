@@ -106,6 +106,14 @@ class WorkspaceFileListResponse(BaseModel):
         default=False,
         description="True when the directory holds more entries than were returned.",
     )
+    next_after: str | None = Field(
+        default=None,
+        description=(
+            "Pass as `after` to get the next page. Null when this is the last "
+            "one. A directory with more entries than fit was previously a dead "
+            "end: the rest could be counted and never reached."
+        ),
+    )
     entries: list[WorkspaceFileEntry] = Field(default_factory=list)
 
 
@@ -213,6 +221,13 @@ async def list_workspace_files(
         default=False,
         description="Start the workspace if it is paused. Off by default.",
     ),
+    after: str | None = Query(
+        default=None,
+        max_length=4096,
+        description=(
+            "Continue after this entry's path, from a previous response's `next_after`."
+        ),
+    ),
 ) -> WorkspaceFileListResponse:
     target = _workspace_path(path)
     try:
@@ -238,10 +253,20 @@ async def list_workspace_files(
     finally:
         await service.close()
 
+    # Ordered by name so a page boundary means the same thing on the next
+    # request. The runtime returns a directory in whatever order it read it,
+    # and paging through an unstable order shows some entries twice and others
+    # never.
+    ordered = sorted(stats, key=lambda stat: str(getattr(stat, "path", "")))
+    if after:
+        ordered = [stat for stat in ordered if str(getattr(stat, "path", "")) > after]
+    page = ordered[:_MAX_ENTRIES]
+    more = len(ordered) > _MAX_ENTRIES
     return WorkspaceFileListResponse(
         path=target,
-        truncated=len(stats) > _MAX_ENTRIES,
-        entries=[_entry(stat) for stat in stats[:_MAX_ENTRIES]],
+        truncated=more,
+        next_after=str(getattr(page[-1], "path", "")) if more and page else None,
+        entries=[_entry(stat) for stat in page],
     )
 
 

@@ -18817,6 +18817,18 @@
             "title": "Entries",
             "type": "array"
           },
+          "next_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `after` to get the next page. Null when this is the last one. A directory with more entries than fit was previously a dead end: the rest could be counted and never reached.",
+            "title": "Next After"
+          },
           "path": {
             "description": "The directory that was listed.",
             "title": "Path",
@@ -37251,6 +37263,25 @@
               "title": "Wake",
               "type": "boolean"
             }
+          },
+          {
+            "description": "Continue after this entry's path, from a previous response's `next_after`.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Continue after this entry's path, from a previous response's `next_after`.",
+              "title": "After"
+            }
           }
         ],
         "responses": {
@@ -37281,7 +37312,7 @@
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": false,
+          "paginates": true,
           "resource": "workspace.files",
           "result": "collection",
           "verb": "list"

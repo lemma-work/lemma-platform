@@ -17,8 +17,8 @@ export const WORKSPACE_ROOT = '/workspace';
 export const conversationDirectory = (conversationId: string): string =>
     `${WORKSPACE_ROOT}/conversations/${conversationId}`;
 
-export const workspaceFilesQueryKey = (path: string, wake: boolean) =>
-    ['workspace-files', path, wake] as const;
+export const workspaceFilesQueryKey = (path: string, wake: boolean, after?: string) =>
+    ['workspace-files', path, wake, after ?? ''] as const;
 
 /**
  * A directory of the person's own sandbox.
@@ -27,10 +27,10 @@ export const workspaceFilesQueryKey = (path: string, wake: boolean) =>
  * `sleeping: true` rather than being started, so leaving this pane open does not
  * hold compute for as long as it is on screen.
  */
-export const useWorkspaceFiles = (path: string, wake: boolean) =>
+export const useWorkspaceFiles = (path: string, wake: boolean, after?: string) =>
     useQuery<WorkspaceFileListResponse>({
-        queryKey: workspaceFilesQueryKey(path, wake),
-        queryFn: () => getLemmaClient().workspace.listFiles({ path, wake }),
+        queryKey: workspaceFilesQueryKey(path, wake, after),
+        queryFn: () => getLemmaClient().workspace.listFiles({ path, wake, after }),
         // A sandbox the agent is working in changes under the reader, but not
         // fast enough to be worth polling while nobody is looking at it.
         staleTime: 5_000,

@@ -134,7 +134,7 @@ async def test_listing_a_paused_workspace_does_not_start_it() -> None:
     service = _FakeService(running=False)
 
     result = await controller.list_workspace_files(
-        _user(), service, path=None, wake=False
+        _user(), service, path=None, wake=False, after=None
     )
 
     assert result.sleeping is True
@@ -148,7 +148,7 @@ async def test_listing_wakes_the_workspace_when_asked() -> None:
     service = _FakeService(running=False, stats=[_stat("/workspace/a.md")])
 
     result = await controller.list_workspace_files(
-        _user(), service, path=None, wake=True
+        _user(), service, path=None, wake=True, after=None
     )
 
     assert result.sleeping is False
@@ -164,7 +164,7 @@ async def test_a_running_workspace_is_listed_without_being_asked_to_wake() -> No
     )
 
     result = await controller.list_workspace_files(
-        _user(), service, path=None, wake=False
+        _user(), service, path=None, wake=False, after=None
     )
 
     assert result.sleeping is False
@@ -180,7 +180,7 @@ async def test_a_directory_larger_than_one_page_says_so() -> None:
     service = _FakeService(running=True, stats=stats)
 
     result = await controller.list_workspace_files(
-        _user(), service, path=None, wake=False
+        _user(), service, path=None, wake=False, after=None
     )
 
     assert result.truncated is True
@@ -300,3 +300,48 @@ def test_a_path_that_merely_starts_with_the_root_name_is_refused() -> None:
     with pytest.raises(HTTPException) as raised:
         controller._inside_workspace(_stat("/workspace-other/secrets"))
     assert raised.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_a_big_directory_can_be_paged_through() -> None:
+    """A truncated listing used to be a dead end.
+
+    The response said how many were being shown and the rest could be counted
+    and never reached — `node_modules` is the ordinary case, not the
+    pathological one.
+    """
+    stats = [
+        _stat(f"/workspace/f{index:04d}")
+        for index in range(controller._MAX_ENTRIES + 5)
+    ]
+    service = _FakeService(running=True, stats=stats)
+
+    first = await controller.list_workspace_files(
+        _user(), service, path=None, wake=False, after=None
+    )
+
+    assert first.truncated is True
+    assert first.next_after == first.entries[-1].path
+
+    rest = await controller.list_workspace_files(
+        _user(), service, path=None, wake=False, after=first.next_after
+    )
+
+    assert rest.truncated is False
+    assert rest.next_after is None
+    assert len(rest.entries) == 5
+    # No overlap and nothing skipped between the pages.
+    seen = [entry.path for entry in first.entries] + [e.path for e in rest.entries]
+    assert len(seen) == len(set(seen)) == len(stats)
+
+
+@pytest.mark.asyncio
+async def test_a_listing_that_fits_offers_no_next_page() -> None:
+    service = _FakeService(running=True, stats=[_stat("/workspace/a.md")])
+
+    result = await controller.list_workspace_files(
+        _user(), service, path=None, wake=False, after=None
+    )
+
+    assert result.truncated is False
+    assert result.next_after is None

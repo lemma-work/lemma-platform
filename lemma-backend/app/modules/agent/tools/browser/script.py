@@ -38,6 +38,47 @@ def cli(argv: list[str]) -> str:
     return " ".join(["agent-browser", *(shlex.quote(part) for part in argv)])
 
 
+#: What the script prints, and exits with, when a person has the wheel. A code
+#: outside the CLI's own range so it cannot be confused with a page that failed.
+DRIVING_MARKER = "__LEMMA_PERSON_IS_DRIVING__"
+DRIVING_EXIT_CODE = 91
+
+#: Said to the agent when it happens. The remedy is to wait, not to retry
+#: harder: whatever the person is doing is the reason the browser exists.
+DRIVING_ADVICE = (
+    "The person has taken control of this browser and is using it right now. "
+    "Do not send browser commands while they are driving -- you would be typing "
+    "into the same page they are. Wait, or say what you were about to do and "
+    "let them finish."
+)
+
+
+def _yield_if_somebody_is_driving() -> str:
+    """Stop before touching a browser a person is holding.
+
+    Two parties drive one page: the agent through this script, and a person
+    through the relay's control socket. Nothing coordinated them, so a command
+    could land mid-keystroke while somebody was typing a password -- and the
+    person had no way to tell a site that ignored their click from an agent that
+    clicked something else.
+
+    The lease is a file the relay writes for as long as a control socket is
+    open. Read here rather than asked over HTTP because this script is already
+    making the round trip, and a second one to ask permission would double the
+    cost of every browser call for a condition that is almost never true.
+    """
+    # `${AGENT_BROWSER_SESSION:-workspace}` -- the same session these commands
+    # were exported into, so a person signing in to one site does not stop an
+    # agent browsing in another.
+    digest = 'printf %s "${AGENT_BROWSER_SESSION:-workspace}" | sha256sum | cut -c1-32'
+    return (
+        f'__lemma_wheel="/tmp/lemma-relay/wheel/$({digest})" ; '
+        f'if [ -e "$__lemma_wheel" ] ; then '
+        f"printf '%s\\n' {shlex.quote(DRIVING_MARKER)} ; "
+        f"exit {DRIVING_EXIT_CODE} ; fi"
+    )
+
+
 def session_exports(session: str | None) -> str:
     """Put a script in one browser session, as a shell prefix.
 
@@ -114,6 +155,7 @@ def build_script(
     marker = f"printf '\\n%s\\n' {shlex.quote(sentinel)}"
     action = " && ".join(action_commands) or "true"
     parts = [
+        _yield_if_somebody_is_driving(),
         f"{{ {action} ; }} 2>&1",
         "__lemma_rc=$?",
         marker,
@@ -202,6 +244,10 @@ def classify_browser_failure(*, return_code: int | None, output: str) -> str | N
     memory shed in particular is invisible — which is the failure
     `sandbox_runtime/workspace/browser_guard.py` was written from.
     """
+    # Checked first: somebody holding the wheel is not a failure of the browser,
+    # and telling the agent to retry would be exactly the wrong advice.
+    if return_code == DRIVING_EXIT_CODE or DRIVING_MARKER in (output or ""):
+        return DRIVING_ADVICE
     if return_code in _BROWSER_GONE_EXIT_CODES:
         return BROWSER_SHED_ADVICE
     lowered = (output or "").lower()

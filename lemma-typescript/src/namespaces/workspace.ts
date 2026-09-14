@@ -15,6 +15,8 @@ export interface WorkspaceFileListResponse {
   sleeping: boolean;
   /** The directory holds more entries than were returned. */
   truncated: boolean;
+  /** Pass back as `after` for the next page; null on the last one. */
+  next_after?: string | null;
   entries: WorkspaceFileEntry[];
 }
 
@@ -134,12 +136,15 @@ export class WorkspaceNamespace {
   constructor(private readonly http: HttpClient) {}
 
   listFiles(
-    options: { path?: string; wake?: boolean } = {},
+    options: { path?: string; wake?: boolean; after?: string } = {},
   ): Promise<WorkspaceFileListResponse> {
     return this.http.request<WorkspaceFileListResponse>("GET", "/workspace/files", {
       params: {
         ...(options.path ? { path: options.path } : {}),
         ...(options.wake ? { wake: true } : {}),
+        // From a previous response's `nextAfter`. A directory bigger than one
+        // page was otherwise a dead end.
+        ...(options.after ? { after: options.after } : {}),
       },
     });
   }

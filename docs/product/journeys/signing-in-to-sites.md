@@ -36,12 +36,15 @@ the cookies a browser would send back to it, and the storage it wrote itself.
 ### PS-BROWSER-010 — An agent that meets a login wall asks, and waits
 **Status:** gap
 
-> **Gap:** the pause is real -- the tool raises `AgentInputRequired`, the run
-> parks as WAITING, and finishing or declining now resolves it -- but nothing
-> builds or delivers the link. No surface renders a sign-in as something a
-> person can tap, and no code anywhere composes the `/sign-in-to-site/{id}`
-> URL. "Reach the person wherever they are" is therefore not met: today they
-> have to already be looking at the conversation.
+> **Gap:** the capability is there and the scenario suite does not prove it.
+> The whole journey -- ask, pause, sign in, capture, resume, reuse, remove --
+> runs against a real sandbox and a real browser in
+> `workspace/tests/e2e/test_signing_in_to_a_site_e2e.py`, and a paused sign-in
+> now reaches a surface as a link. But the only scenario naming this promise
+> asserts that somebody else's request is not found, which proves a refusal
+> rather than the promise, and the coverage gate cannot tell those apart. This
+> stays `gap` until a scenario proves it, rather than being marked covered by a
+> test that does not.
 
 - When an agent needs a site it has no working saved login for, the system shall
   ask the person to sign in themselves and shall put that site in front of them.
@@ -133,9 +136,10 @@ next run asks the person again.
 > **Gap:** watching is proved; driving is not. The only scenario naming this
 > promise asserts that *asking* about the browser starts nothing, which is the
 > opposite end of it. Input is unit-tested either side of the wire -- the
-> coordinate and key translations, and the relay's dispatch -- but no test
-> drives a real browser from a real socket, so "a person can drive it" rests on
-> having been tried by hand.
+> coordinate and key translations, the relay's dispatch, and the lease that
+> stops an agent typing into a page somebody is holding -- but no test drives a
+> real browser from a real socket, so "a person can drive it" rests on having
+> been tried by hand.
 
 - The system shall let a person see what the browser in their own workspace is
   doing, and shall not start a paused workspace merely to answer whether it can.

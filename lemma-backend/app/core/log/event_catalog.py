@@ -254,6 +254,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.ingress_service.surface_progress_no_egress_target.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.ingress_service.surface_progress_update_conversation_s.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
+    'agent_surfaces.ingress_service.surface_sign_in_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.ingress_service.surface_stream_text_conversation_s.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.ingress_service.surface_thread_title_set.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.ingress_service.surface_voice_note_fetch_conversation.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),

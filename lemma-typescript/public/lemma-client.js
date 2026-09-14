@@ -17366,7 +17366,10 @@ var LemmaClient = (() => {
       return this.http.request("GET", "/workspace/files", {
         params: {
           ...options.path ? { path: options.path } : {},
-          ...options.wake ? { wake: true } : {}
+          ...options.wake ? { wake: true } : {},
+          // From a previous response's `nextAfter`. A directory bigger than one
+          // page was otherwise a dead end.
+          ...options.after ? { after: options.after } : {}
         }
       });
     }

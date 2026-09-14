@@ -22,6 +22,10 @@ from uuid import UUID
 
 
 from app.core.infrastructure.db.transaction_locks import connection_released
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.infrastructure.adapters.registry import (
+    SurfacePlatformAdapterRegistry,
+)
 
 from app.modules.agent.contracts import (
     AskUserRequest,
@@ -76,6 +80,9 @@ from app.modules.agent_surfaces.services.free_text_answer import (
 from app.modules.agent_surfaces.services.surface_egress_target import (
     SurfaceEgressTargetMixin,
 )
+from app.modules.agent_surfaces.services.surface_sign_in import (
+    sign_in_prompt_envelope,
+)
 
 logger = get_logger(__name__)
 
@@ -100,6 +107,15 @@ def _approval_plan(
 
 
 class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
+    #: What the class this is mixed into supplies, declared so a type checker
+    #: can see it. Reaching for `self.uow` without saying so made every use an
+    #: error, and those sat in the baseline where a *new* mistake of the same
+    #: shape would have been indistinguishable. Optional to match the concrete
+    #: service, which takes either a unit of work or a factory. Annotations
+    #: only -- `__init__` still does the assigning.
+    uow: "SqlAlchemyUnitOfWork | None"
+    adapter_registry: SurfacePlatformAdapterRegistry
+
     async def open_cold_email_thread(
         self,
         *,
@@ -329,6 +345,42 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                     conversation_id=conversation_id,
                 ),
             ),
+            metadata=await self._egress_metadata_with_agent_name(target, None),
+            conversation_id=conversation_id,
+        )
+
+    async def send_sign_in_prompt_for_conversation(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_call_id: str | None = None,
+        narration: str | None = None,
+    ) -> bool:
+        """A link to the site their agent is stuck at. See `surface_sign_in`.
+
+        False when this conversation has no surface: a web-only one has the
+        browser pane beside it, so there is nothing to deliver.
+        """
+        target = await self._resolve_egress_target(conversation_id)
+        envelope = (
+            None
+            if target is None
+            else await sign_in_prompt_envelope(
+                self.uow,
+                conversation_id=conversation_id,
+                tool_call_id=tool_call_id,
+                narration=narration,
+            )
+        )
+        if target is None or envelope is None:
+            logger.debug(
+                "agent_surfaces.ingress_service.surface_sign_in_not_delivered.diagnostic",
+                conversation_id=conversation_id,
+            )
+            return False
+        return await self._deliver_envelope(
+            target,
+            envelope=envelope,
             metadata=await self._egress_metadata_with_agent_name(target, None),
             conversation_id=conversation_id,
         )

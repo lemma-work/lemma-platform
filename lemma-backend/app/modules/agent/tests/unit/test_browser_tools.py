@@ -446,3 +446,32 @@ async def test_two_conversations_do_not_share_a_browser() -> None:
     assert script.session_exports(f"conv-{first.hex}") != script.session_exports(
         f"conv-{second.hex}"
     )
+
+
+def test_a_browser_a_person_is_driving_is_left_alone() -> None:
+    """Two parties, one page, and nothing used to coordinate them.
+
+    The agent drives through this script and a person drives through the
+    relay's control socket. A command landing mid-keystroke types into the page
+    somebody is signing in to, and they cannot tell that from a site that
+    ignored their click.
+    """
+    rendered = script.build_script(
+        [script.cli(["click", "@e1"])], sentinel="SENT", snapshot_argv=None
+    )
+
+    # Checked before the action, or yielding is not yielding.
+    assert rendered.index("lemma-relay/wheel") < rendered.index("agent-browser click")
+    assert f"exit {script.DRIVING_EXIT_CODE}" in rendered
+    # Scoped to this conversation's session, so a person signing in to one site
+    # does not stop an agent browsing in another.
+    assert "AGENT_BROWSER_SESSION" in rendered
+
+
+def test_yielding_is_reported_as_yielding_not_as_a_broken_browser() -> None:
+    """ "Retry" is the wrong advice: what the person is doing is the point."""
+    advice = script.classify_browser_failure(
+        return_code=script.DRIVING_EXIT_CODE, output=script.DRIVING_MARKER
+    )
+    assert advice == script.DRIVING_ADVICE
+    assert advice != script.BROWSER_SHED_ADVICE

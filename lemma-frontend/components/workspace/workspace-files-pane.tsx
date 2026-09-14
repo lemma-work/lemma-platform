@@ -42,6 +42,29 @@ const segmentsOf = (path: string, from: string): { name: string; path: string }[
         }, []);
 };
 
+/**
+ * Save a workspace file to the reader's own machine.
+ *
+ * The blob is already here — the hook fetched it to decide whether it could be
+ * shown — so this costs nothing extra and is the only way out for the files the
+ * pane refuses to render: an archive, a binary, anything past the text ceiling.
+ * Without it those files could be listed and never opened.
+ */
+function DownloadLink({ blob, path }: { blob: Blob; path: string }) {
+    const href = useMemo(() => URL.createObjectURL(blob), [blob]);
+    useEffect(() => () => URL.revokeObjectURL(href), [href]);
+
+    return (
+        <a
+            href={href}
+            download={path.slice(path.lastIndexOf('/') + 1)}
+            className="text-xs underline text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+        >
+            Download
+        </a>
+    );
+}
+
 function FileBody({ path }: { path: string }) {
     const isImage = getDocumentPreviewType(path) === 'image';
     const { data, isPending, error } = useWorkspaceFile(path, isImage);
@@ -69,22 +92,35 @@ function FileBody({ path }: { path: string }) {
     }
     if (data?.tooLarge) {
         return (
-            <p className="p-4 text-sm text-[var(--text-tertiary)]">
-                {formatSize(data.sizeBytes)} is too large to show here. Ask the agent to
-                summarise it, or open the part you need.
-            </p>
+            <div className="flex flex-col items-start gap-2 p-4">
+                <p className="text-sm text-[var(--text-tertiary)]">
+                    {formatSize(data.sizeBytes)} is too large to show here. Download it, ask
+                    the agent to summarise it, or open the part you need.
+                </p>
+                <DownloadLink blob={data.blob} path={path} />
+            </div>
         );
     }
     if (imageUrl) {
-        // eslint-disable-next-line @next/next/no-img-element
-        return <img src={imageUrl} alt={path} className="max-w-full p-4" />;
+        return (
+            <div className="flex flex-col items-start gap-2 p-4">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={imageUrl} alt={path} className="max-w-full" />
+                <DownloadLink blob={data!.blob} path={path} />
+            </div>
+        );
     }
     if (!data?.text) return null;
 
     return (
-        <pre className="overflow-x-auto p-4 text-xs leading-5 text-[var(--text-secondary)]">
-            {data.text}
-        </pre>
+        <div className="flex min-h-0 flex-col">
+            <pre className="overflow-x-auto p-4 text-xs leading-5 text-[var(--text-secondary)]">
+                {data.text}
+            </pre>
+            <div className="px-4 pb-4">
+                <DownloadLink blob={data.blob} path={path} />
+            </div>
+        </div>
     );
 }
 
@@ -107,13 +143,21 @@ export function WorkspaceFilesPane({ conversationId }: { conversationId?: string
     const [directory, setDirectory] = useState(home);
     const [wake, setWake] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
+    // Where this page started. A directory bigger than one page was a dead end
+    // before: the response counted the rest and offered no way to reach them.
+    const [after, setAfter] = useState<string | undefined>(undefined);
 
-    const { data, isPending, error, refetch, isFetching } = useWorkspaceFiles(directory, wake);
+    const { data, isPending, error, refetch, isFetching } = useWorkspaceFiles(
+        directory,
+        wake,
+        after,
+    );
 
     const open = useCallback((path: string, isDirectory: boolean) => {
         if (isDirectory) {
             setDirectory(path);
             setSelected(null);
+            setAfter(undefined);
             return;
         }
         setSelected(path);
@@ -147,6 +191,7 @@ export function WorkspaceFilesPane({ conversationId }: { conversationId?: string
                     onClick={() => {
                         setDirectory(inHome ? home : WORKSPACE_ROOT);
                         setSelected(null);
+                        setAfter(undefined);
                     }}
                 >
                     {inHome && conversationId ? 'This conversation' : 'Whole computer'}
@@ -234,10 +279,26 @@ export function WorkspaceFilesPane({ conversationId }: { conversationId?: string
                                     </li>
                                 );
                             })}
-                            {data?.truncated ? (
-                                <li className="px-3 py-1.5 text-xs text-[var(--text-tertiary)]">
-                                    Showing the first {data.entries.length}. Narrow the path to see
-                                    the rest.
+                            {data?.truncated && data.next_after ? (
+                                <li className="px-3 py-1.5">
+                                    <Button
+                                        variant="quiet"
+                                        size="xs"
+                                        onClick={() => setAfter(data.next_after ?? undefined)}
+                                    >
+                                        Show more
+                                    </Button>
+                                </li>
+                            ) : null}
+                            {after ? (
+                                <li className="px-3 py-1.5">
+                                    <Button
+                                        variant="quiet"
+                                        size="xs"
+                                        onClick={() => setAfter(undefined)}
+                                    >
+                                        Back to the start
+                                    </Button>
                                 </li>
                             ) : null}
                             {!data?.entries.length && parent === null ? (
