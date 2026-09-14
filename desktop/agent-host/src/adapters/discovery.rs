@@ -101,16 +101,21 @@ pub(crate) fn resolve_executable_in(
     search_paths: impl IntoIterator<Item = PathBuf>,
 ) -> Option<PathBuf> {
     for directory in search_paths {
-        let candidate = directory.join(command);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
+        // Windows first. Node installs an extension-less `npm` shell script
+        // beside `npm.cmd`, and CreateProcess cannot run it: the adapter cache
+        // warm-up failed with "%1 is not a valid Win32 application" (os error
+        // 193) because the bare name matched before the launcher did. The same
+        // shape applies to any agent shipping a POSIX shim next to its .cmd.
         #[cfg(windows)]
         for extension in ["exe", "cmd", "bat"] {
             let candidate = directory.join(format!("{command}.{extension}"));
             if candidate.is_file() {
                 return Some(candidate);
             }
+        }
+        let candidate = directory.join(command);
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     None
