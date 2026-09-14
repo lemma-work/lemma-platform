@@ -14,6 +14,7 @@ def _get_kwargs(
     *,
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
+    after: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -26,6 +27,13 @@ def _get_kwargs(
     params["path"] = json_path
 
     params["wake"] = wake
+
+    json_after: None | str | Unset
+    if isinstance(after, Unset):
+        json_after = UNSET
+    else:
+        json_after = after
+    params["after"] = json_after
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -73,12 +81,15 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
+    after: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkspaceFileListResponse]:
     """List workspace files
 
     Args:
         path (None | str | Unset):
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
+        after (None | str | Unset): Continue after this entry's path, from a previous response's
+            `next_after`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -91,6 +102,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         path=path,
         wake=wake,
+        after=after,
     )
 
     response = client.get_httpx_client().request(
@@ -105,12 +117,15 @@ def sync(
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
+    after: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkspaceFileListResponse | None:
     """List workspace files
 
     Args:
         path (None | str | Unset):
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
+        after (None | str | Unset): Continue after this entry's path, from a previous response's
+            `next_after`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -124,6 +139,7 @@ def sync(
         client=client,
         path=path,
         wake=wake,
+        after=after,
     ).parsed
 
 
@@ -132,12 +148,15 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
+    after: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkspaceFileListResponse]:
     """List workspace files
 
     Args:
         path (None | str | Unset):
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
+        after (None | str | Unset): Continue after this entry's path, from a previous response's
+            `next_after`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -150,6 +169,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         path=path,
         wake=wake,
+        after=after,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -162,12 +182,15 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     path: None | str | Unset = UNSET,
     wake: bool | Unset = False,
+    after: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkspaceFileListResponse | None:
     """List workspace files
 
     Args:
         path (None | str | Unset):
         wake (bool | Unset): Start the workspace if it is paused. Off by default. Default: False.
+        after (None | str | Unset): Continue after this entry's path, from a previous response's
+            `next_after`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -182,5 +205,6 @@ async def asyncio(
             client=client,
             path=path,
             wake=wake,
+            after=after,
         )
     ).parsed
