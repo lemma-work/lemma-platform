@@ -46,7 +46,7 @@ def build_agent_surface_ingress_service(
     from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
         SqlAlchemySurfaceRoutingResolutionAdapter,
     )
-    from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    from app.modules.agent_surfaces.infrastructure.repositories.surface_conversation_link_repository import (
         SurfaceConversationLinkRepository,
     )
 
