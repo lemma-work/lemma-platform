@@ -47,7 +47,7 @@ from app.modules.agent.tools.browser.script import (
     screenshot_argv,
     session_exports,
 )
-from app.modules.workspace.domain.browser_context import agent_session
+from app.modules.workspace.contracts.browser import agent_session
 from app.modules.agent.tools.browser.models import (
     BrowserActRequest,
     BrowserOpenRequest,

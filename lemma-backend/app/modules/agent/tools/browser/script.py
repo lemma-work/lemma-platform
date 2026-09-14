@@ -70,9 +70,12 @@ def session_exports(session: str | None) -> str:
 def snapshot_argv_for(*, interactive_only: bool) -> list[str]:
     """`agent-browser snapshot`, machine-readable.
 
-    No link-URL flag: 0.32.3 has `-i` and `--json` and nothing that adds hrefs,
-    so offering the option would promise the agent something the CLI cannot do.
-    `browser_read(what="attr", attribute="href")` is how you get one.
+    Link hrefs are not asked for here, and that is now a choice rather than a
+    limit: 0.32.3 had no flag for them, and 0.37.1 added `-u/--urls`. Turning it
+    on unconditionally would put every href in every snapshot and spend the
+    agent's context on links it will not follow, so the per-link read
+    (`browser_read(what="attr", attribute="href")`) stays the way to get one.
+    Worth revisiting as a tool option if agents are seen paying for it.
     """
     argv = ["snapshot", "--json"]
     if interactive_only:

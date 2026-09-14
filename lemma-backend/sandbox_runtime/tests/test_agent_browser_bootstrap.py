@@ -246,3 +246,34 @@ def test_the_guard_is_set_for_the_nested_calls(tmp_path: Path) -> None:
     _run(environment, "open")
 
     assert Path(environment["_MARKER"]).read_text().strip() == "1"
+
+
+DOCKERFILE = Path(__file__).resolve().parents[2] / "sandbox-images/Dockerfile.workspace"
+
+
+def test_the_wrapper_is_found_before_the_raw_package_binary() -> None:
+    """Every test above drives the wrapper directly. The image has to reach it.
+
+    `/usr/local/bin` is where the `lemma-node-tool` wrappers are symlinked, and
+    `/opt/lemma-node/node_modules/.bin` is where npm puts the package's own
+    shim. With the npm directory first, a bare `agent-browser` -- what an agent
+    types, and what the skill's own examples show -- resolved to the shim, which
+    cannot bootstrap. The wrapper existed, was correct, was tested, and was
+    never reached: the two errors it was written to prevent both turned up in a
+    real transcript.
+
+    Asserted against the image rather than against a stub, because the ordering
+    is the part no wrapper test can see.
+    """
+    path_line = next(
+        line
+        for line in DOCKERFILE.read_text().splitlines()
+        if line.strip().startswith("PATH=")
+    )
+    entries = path_line.strip().removeprefix("PATH=").rstrip("\\").strip().split(":")
+
+    assert "/usr/local/bin" in entries, path_line
+    assert "/opt/lemma-node/node_modules/.bin" in entries, path_line
+    assert entries.index("/usr/local/bin") < entries.index(
+        "/opt/lemma-node/node_modules/.bin"
+    ), "the npm shim would win over the wrapper"

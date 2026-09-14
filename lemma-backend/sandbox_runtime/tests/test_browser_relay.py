@@ -572,3 +572,48 @@ def test_the_same_session_always_gets_the_same_profile() -> None:
     assert chrome.profile_for_session("login-a.test") != chrome.profile_for_session(
         "login-b.test"
     )
+
+
+async def test_an_input_that_cannot_reach_chrome_is_reported_not_swallowed() -> None:
+    """A person typing into a picture must be told, not left guessing.
+
+    This was `suppress(Exception)`: with the socket to Chrome gone, clicks and
+    keystrokes vanished with nothing on screen and nothing in the log, which is
+    indistinguishable from a page that simply ignores clicks.
+    """
+    from sandbox_runtime.browser_relay.screencast import CONTROL, ScreencastSession
+
+    class _DeadCdp:
+        async def send(self, method, params=None):
+            raise ConnectionResetError("chrome went away")
+
+    viewer = ScreencastSession(_DeadCdp(), mode=CONTROL)
+
+    reply = await viewer.handle_viewer_message(
+        json.dumps(
+            {"t": "input", "event": {"kind": "key", "type": "keyDown", "key": "a"}}
+        )
+    )
+
+    assert reply is not None
+    assert reply["code"] == "input_failed"
+
+
+async def test_input_that_reaches_chrome_says_nothing() -> None:
+    """Success is silent -- a reply per keystroke would be its own problem."""
+    from sandbox_runtime.browser_relay.screencast import CONTROL, ScreencastSession
+
+    sent: list[tuple[str, dict]] = []
+
+    class _LiveCdp:
+        async def send(self, method, params=None):
+            sent.append((method, params or {}))
+
+    viewer = ScreencastSession(_LiveCdp(), mode=CONTROL)
+
+    reply = await viewer.handle_viewer_message(
+        json.dumps({"t": "input", "event": {"kind": "text", "text": "hello"}})
+    )
+
+    assert reply is None
+    assert sent == [("Input.insertText", {"text": "hello"})]

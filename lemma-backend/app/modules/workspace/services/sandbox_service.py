@@ -552,6 +552,20 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
     # Helpers
     # ------------------------------------------------------------------
 
+    async def touch(self, sandbox_id: UUID) -> None:
+        """Say this sandbox is still wanted, so the idle sweep leaves it alone.
+
+        Public because "in use" is not only "a tool call is running". Somebody
+        watching their browser, or part-way through signing in to a site, is
+        using it just as much -- and the sweep measures idleness from the last
+        time a caller *asked* for the sandbox, so a long look at a live page
+        counted as fifteen minutes of nothing. Releasing runs quiesce, which
+        deletes the browser profile: a person signing in slowly had their
+        half-finished session thrown away, and the capture afterwards found an
+        empty browser.
+        """
+        await self._touch(sandbox_id)
+
     async def _touch(self, sandbox_id: UUID) -> None:
         async with self._uow_factory() as uow:
             await SandboxRepository(uow).touch(sandbox_id)

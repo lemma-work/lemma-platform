@@ -13,6 +13,7 @@ from the request and had to defend it.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from uuid import UUID
 
 
@@ -69,6 +70,33 @@ class BrowserViewService:
 
     async def close(self) -> None:
         await self._workspace.close()
+
+    async def keep_awake(self, user_id: UUID) -> None:
+        """Record that this person is still using their sandbox.
+
+        Called on a timer for as long as a view socket is open. Watching is not
+        a tool call, and the idle sweep measures from the last time somebody
+        asked for the sandbox -- so a person reading a page, or typing a
+        password slowly, looked idle the whole time and had their computer
+        stopped underneath them after `idle_release_seconds`. Releasing runs
+        quiesce, which deletes the browser profile, so what they lost was the
+        sign-in they were in the middle of.
+
+        Best effort: this keeps something alive, and failing to do so must not
+        take down the socket that was working.
+        """
+        from app.modules.workspace.services.sandbox_composition import (
+            get_sandbox_service,
+        )
+
+        with suppress(Exception):
+            service = get_sandbox_service()
+            sandbox = await service.resolve(
+                kind=SandboxKind.WORKSPACE,
+                owner_kind=SandboxOwnerKind.USER,
+                owner_id=user_id,
+            )
+            await service.touch(sandbox.id)
 
     async def _relay(self, user_id: UUID, *, start: bool) -> BrowserRelayClient:
         """The relay for this person's sandbox, with its token delivered.

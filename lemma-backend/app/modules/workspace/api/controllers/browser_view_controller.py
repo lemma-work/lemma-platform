@@ -17,6 +17,9 @@ session decides whose browser this is.
 
 from __future__ import annotations
 
+from uuid import UUID
+
+import asyncio
 import contextlib
 import httpx
 from typing import Annotated
@@ -28,6 +31,7 @@ from supertokens_python.recipe.session.asyncio import (
 )
 
 from app.core.api.dependencies import CurrentUser
+from app.core.request_context import create_inherited_task
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
@@ -176,6 +180,18 @@ async def _resolve_user_id(websocket: WebSocket):
     return session.get_user_id()
 
 
+#: How often to say the sandbox is still wanted. Comfortably inside the
+#: shortest idle window anyone runs, and cheap: one row update.
+_KEEP_AWAKE_SECONDS = 60.0
+
+
+async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
+    """Tell the idle sweep this person is still here, until the socket closes."""
+    while True:
+        await asyncio.sleep(_KEEP_AWAKE_SECONDS)
+        await service.keep_awake(user_id)
+
+
 def _session_for(conversation: str | None, origin: str | None) -> str | None:
     """Which session this viewer is joining.
 
@@ -183,8 +199,6 @@ def _session_for(conversation: str | None, origin: str | None) -> str | None:
     sign-in case. Raises `ValueError` for a conversation id that is not one,
     rather than falling back to somebody else's browser.
     """
-    from uuid import UUID
-
     from app.modules.workspace.domain.browser_context import agent_session
 
     if conversation:
@@ -272,8 +286,6 @@ async def browser_view(
         await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 
-    from uuid import UUID
-
     try:
         session = _session_for(conversation, origin)
     except ValueError:
@@ -309,6 +321,15 @@ async def browser_view(
         return
 
     await websocket.accept()
+    # Held awake for as long as somebody is looking. The idle sweep measures
+    # from the last time a caller asked for the sandbox, and watching is not a
+    # tool call -- so a person reading a page, or working through a sign-in,
+    # counted as idle and had their computer stopped underneath them. Releasing
+    # runs quiesce, which deletes the browser profile, so what a slow sign-in
+    # lost was the sign-in.
+    awake = create_inherited_task(
+        _keep_awake(service, UUID(user_id)), name="workspace.browser_view.keep_awake"
+    )
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
             await bridge(websocket, upstream, name="workspace.browser_view")
@@ -325,6 +346,12 @@ async def browser_view(
             # Already closed by the disconnect that brought us here.
             pass
     finally:
+        awake.cancel()
+        # Awaited, not merely cancelled: a cancelled task is not finished until
+        # it has been collected, and leaving it uncollected is how a task
+        # outlives the request that started it.
+        with contextlib.suppress(Exception):
+            await awake
         await service.close()
 
 

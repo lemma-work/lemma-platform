@@ -129,7 +129,21 @@ ENV PYTHONUNBUFFERED=1 \
     # survives to the next conversation.
     PNPM_HOME=/workspace/.pnpm \
     UV_CACHE_DIR=/workspace/.uv-cache \
-    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/opt/lemma-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    # `/usr/local/bin` before the npm bin directory, because that is where the
+    # `lemma-node-tool` wrappers live and being found is the whole of their job.
+    # With the npm directory first, a bare `agent-browser` resolved to the raw
+    # package shim, which cannot bootstrap -- so the wrapper written to stop
+    # exactly two errors,
+    #
+    #     ⚠ config file not found: /tmp/lemma-browser/config.json
+    #     Missing X server or $DISPLAY
+    #
+    # was unreachable for every caller that typed the bare name, which is every
+    # agent and the skill's own examples. `browser_relay/chrome.py` names this
+    # trap in a comment and works around it by spelling the path absolutely;
+    # the shell an agent gets had no such workaround, and reported both errors
+    # in a real transcript.
+    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \

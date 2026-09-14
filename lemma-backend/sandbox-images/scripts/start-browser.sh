@@ -30,6 +30,16 @@ rm -f \
   "$PROFILE_DIR/SingletonLock" \
   "$PROFILE_DIR/SingletonSocket" \
   "$PROFILE_DIR/DevToolsActivePort"
+# `--disable-blink-features=AutomationControlled` is the one that matters for
+# the journey this feature exists for. Chrome otherwise sets
+# `navigator.webdriver` and turns on the AutomationControlled blink feature,
+# and the login pages an agent meets are exactly the pages that look. Being
+# refused at a sign-in wall for wearing an automation badge is a failure with
+# no upside: the person is sitting there, signing in to their own account.
+#
+# The rest of the list is what makes Chromium run at all in a container without
+# a session bus or a large /dev/shm. `AGENT_BROWSER_ARGS` can extend this per
+# sandbox without editing the image.
 if [ ! -f "$CONFIG_PATH" ]; then
   mkdir -p "$(dirname "$CONFIG_PATH")"
   cat > "$CONFIG_PATH" <<EOF
@@ -37,7 +47,7 @@ if [ ! -f "$CONFIG_PATH" ]; then
   "headed": true,
   "profile": "$PROFILE_DIR",
   "executablePath": "$EXECUTABLE_PATH",
-  "args": "--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check"
+  "args": "--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
 }
 EOF
 fi

@@ -22,10 +22,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 import json
+import logging
 
 from sandbox_runtime.tasks import create_inherited_task
 
 from .chrome import CdpConnection
+
+_log = logging.getLogger(__name__)
 
 #: What a viewer may ask for. `view` sends no input at all -- the relay refuses
 #: it rather than trusting the client not to offer the affordance.
@@ -190,8 +193,19 @@ class ScreencastSession:
                 "message": f"{kind!r} is not an input this view accepts",
             }
         params = {k: v for k, v in event.items() if k != "kind"}
-        with suppress(Exception):
+        try:
             await self._cdp.send(method, params)
+        except Exception as exc:
+            # Said, not swallowed. This used to be `suppress(Exception)`: if the
+            # socket to Chrome had gone, a person clicked and typed into a
+            # picture and nothing happened -- no error on screen, nothing in the
+            # log, and no way to tell that from a page that ignores clicks.
+            _log.warning("input %s could not be dispatched: %r", method, exc)
+            return {
+                "t": "error",
+                "code": "input_failed",
+                "message": "the browser did not take that. It may have closed.",
+            }
         return None
 
 
