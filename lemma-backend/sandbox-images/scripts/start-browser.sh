@@ -47,11 +47,37 @@ if ! mkdir -p "$RUNTIME_DIR" 2>/dev/null || [ ! -w "$RUNTIME_DIR" ]; then
 fi
 export XDG_RUNTIME_DIR="$RUNTIME_DIR"
 
-if [ ! -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ]; then
-  rm -f "/tmp/.X${DISPLAY_NUMBER}-lock"
+# Ask for a live X server, not for the evidence that one used to be here.
+#
+# `/tmp/.X11-unix/X99` is a file in the container's writable layer, so it
+# survives a restart -- and restarting the container is exactly what resuming a
+# paused sandbox does. The Xvfb process does not survive. So a socket test alone
+# is satisfied by a stale file, Xvfb is never started, and from then on every
+# browser command in that sandbox dies with
+#
+#     ERROR:ui/ozone/platform/x11/ozone_platform_x11.cc: Missing X server or $DISPLAY
+#     ERROR:ui/aura/env.cc: The platform failed to initialize.  Exiting.
+#
+# for the life of the container -- the agent's commands and the relay behind a
+# person watching alike, with nothing in the sandbox to clear it. This is the
+# same trap `DevToolsActivePort` sets (see browser_relay/chrome.py) and it takes
+# the same answer: do not believe a file that outlives the process that made it.
+if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
+  # The socket goes too, not just the lock. Xvfb gates on the lock, but a stale
+  # socket left in place is what a client connects to and finds nobody behind.
+  rm -f "/tmp/.X${DISPLAY_NUMBER}-lock" "/tmp/.X11-unix/X${DISPLAY_NUMBER}"
   nohup Xvfb "$DISPLAY_VALUE" -screen 0 "$SCREEN" -ac +extension RANDR \
     >/tmp/lemma-xvfb.log 2>&1 &
-  sleep 0.4
+  # Waited for, not slept through. Xvfb binds in ~23ms on an idle native
+  # container, so 0.4s looked generous -- but it is a fixed guess either way,
+  # and on a loaded or emulated machine losing that guess costs a failed browser
+  # launch rather than a slower one. Five seconds is a ceiling for a hung start,
+  # not a pace: the common case leaves this loop in well under a tenth of one.
+  waited=0
+  while [ ! -S "/tmp/.X11-unix/X${DISPLAY_NUMBER}" ] && [ "$waited" -lt 100 ]; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
 fi
 
 # The relay is what the backend reaches; the dashboard is what a person could

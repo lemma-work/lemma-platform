@@ -17,6 +17,7 @@ session decides whose browser this is.
 
 from __future__ import annotations
 
+import contextlib
 import httpx
 from typing import Annotated
 
@@ -175,6 +176,38 @@ async def _resolve_user_id(websocket: WebSocket):
     return session.get_user_id()
 
 
+async def _refuse(websocket: WebSocket, code: int) -> None:
+    """Close with a code the person's browser will actually receive.
+
+    A close sent *before* `accept()` is not a close. ASGI turns it into a
+    rejected handshake -- uvicorn answers HTTP 403 -- and a rejected handshake
+    reaches page script as `code: 1006`, the anonymous "abnormal closure" a
+    browser reports when it never had a connection at all. The close code is
+    part of the WebSocket close *frame*, and there is no frame until the socket
+    has been accepted.
+
+    So every one of the five codes below arrived at the pane as the same 1006,
+    and two things followed from it. The person was told "The connection
+    dropped. Reconnecting." no matter what had really happened -- including
+    "the browser is not running", which is the ordinary resting state of an
+    idle workspace and not a failure at all. And the view retried, for ever,
+    because 1006 is the code it is right to retry: the client has explicit
+    logic to stop on a refusal that will never become an acceptance, and that
+    logic could never fire.
+
+    Accepting a socket in order to close it is backwards, and the reason it is
+    correct anyway is that nothing is sent between the two. A caller refused
+    here gets an open event, a close frame carrying the reason, and no bytes.
+    """
+    # Suppressed rather than checked: the client may have gone between the
+    # handshake and here, and a refusal that fails to be delivered must not
+    # become a traceback in its own right.
+    with contextlib.suppress(RuntimeError):
+        await websocket.accept()
+    with contextlib.suppress(RuntimeError):
+        await websocket.close(code=code)
+
+
 @router.websocket("/view")
 async def browser_view(
     websocket: WebSocket,
@@ -185,16 +218,16 @@ async def browser_view(
 ) -> None:
     """One person, watching or driving their own browser.
 
-    Refused before `accept()` wherever possible. A socket that is accepted and
-    then closed looks to a browser like a connection that dropped, so the person
-    is told the wrong thing about why.
+    Every refusal goes through `_refuse`, which accepts the socket before
+    closing it. That is the opposite of what it should be, and is the only way
+    a browser is ever told which refusal happened -- see `_refuse`.
     """
     if not origin_is_allowed(websocket.headers.get("origin"), allowed=origins):
         # Browsers do not apply same-origin to WebSockets but do send cookies,
         # so without this any page could open this socket as the signed-in
         # person and both watch their screen and type into it.
         logger.warning("workspace.browser_view.origin_refused.denied")
-        await websocket.close(code=CLOSE_ORIGIN_REFUSED)
+        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 
     try:
@@ -208,11 +241,11 @@ async def browser_view(
         logger.warning(
             "workspace.browser_view.session_unreadable.degraded", exc_info=True
         )
-        await websocket.close(code=CLOSE_UNAUTHENTICATED)
+        await _refuse(websocket, CLOSE_UNAUTHENTICATED)
         return
 
     if mode not in (MODE_VIEW, MODE_CONTROL):
-        await websocket.close(code=CLOSE_ORIGIN_REFUSED)
+        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 
     from uuid import UUID
@@ -223,12 +256,12 @@ async def browser_view(
         )
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")
-        await websocket.close(code=CLOSE_UNSUPPORTED)
+        await _refuse(websocket, CLOSE_UNSUPPORTED)
         await service.close()
         return
     except BrowserRelayUnavailable:
         logger.warning("workspace.browser_view.browser_start_failed.degraded")
-        await websocket.close(code=CLOSE_NO_BROWSER)
+        await _refuse(websocket, CLOSE_NO_BROWSER)
         await service.close()
         return
     except (OSError, httpx.HTTPError, _engine_error()) as exc:
@@ -240,7 +273,7 @@ async def browser_view(
             "workspace.browser_view.relay_absent.degraded",
             error_type=type(exc).__name__,
         )
-        await websocket.close(code=CLOSE_RELAY_ABSENT)
+        await _refuse(websocket, CLOSE_RELAY_ABSENT)
         await service.close()
         return
 

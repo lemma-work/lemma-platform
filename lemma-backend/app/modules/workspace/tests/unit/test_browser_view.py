@@ -7,7 +7,6 @@ open sockets.
 
 from __future__ import annotations
 
-import pytest
 
 from app.modules.workspace.api.controllers import browser_view_controller as view
 from app.modules.workspace.services.ws_bridge import (
@@ -96,23 +95,37 @@ def _client(service: _FakeService):
     return TestClient(app)
 
 
-def test_a_socket_from_a_foreign_origin_is_closed_before_it_is_accepted() -> None:
+def test_a_socket_from_a_foreign_origin_is_refused_with_its_own_code() -> None:
+    """Refused, and told which refusal it was.
+
+    These two used to assert only that *something* went wrong and that no
+    sandbox was touched, which both held while the pane was being lied to. A
+    close sent before `accept()` never carries its code: ASGI turns it into a
+    rejected handshake and page script sees 1006, the anonymous "abnormal
+    closure". So every refusal reached the person as "The connection dropped.
+    Reconnecting.", and the client retried refusals that could never succeed.
+
+    Asserting the delivered code is what makes that visible, so that is what
+    these assert now.
+    """
     service = _FakeService()
     client = _client(service)
-    with pytest.raises(Exception):  # noqa: B017 - any refusal, no accepted socket
-        with client.websocket_connect(
-            "/workspace/browser/view", headers={"Origin": "https://evil.test"}
-        ):
-            pass
+    with client.websocket_connect(
+        "/workspace/browser/view", headers={"Origin": "https://evil.test"}
+    ) as socket:
+        refusal = socket.receive()
+    assert refusal["type"] == "websocket.close"
+    assert refusal["code"] == view.CLOSE_ORIGIN_REFUSED
     assert service.opened == [], "nothing was reached for on a refused origin"
 
 
-def test_a_socket_with_no_session_is_closed_unauthenticated() -> None:
+def test_a_socket_with_no_session_is_refused_unauthenticated() -> None:
     service = _FakeService()
     client = _client(service)
-    with pytest.raises(Exception):
-        with client.websocket_connect("/workspace/browser/view"):
-            pass
+    with client.websocket_connect("/workspace/browser/view") as socket:
+        refusal = socket.receive()
+    assert refusal["type"] == "websocket.close"
+    assert refusal["code"] == view.CLOSE_UNAUTHENTICATED
     assert service.opened == [], "no sandbox was touched for an unauthenticated caller"
 
 

@@ -293,3 +293,83 @@ async def test_browser_process_and_signed_access_reach_the_sandbox(
     assert browser_payload["url"].startswith("http")
     assert "/workspace-ports/" in browser_payload["url"]
     assert browser_payload["expires_at"]
+
+
+async def test_the_browser_starts_again_after_its_x_server_dies_uncleanly(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """A socket file outlives the process that made it, and used to be believed.
+
+    Xvfb removes `/tmp/.X11-unix/X99` when it is asked to stop. When it is
+    killed instead, the file stays -- and that is the ordinary case, not the
+    exotic one: the container is stopped past its grace period, the Docker
+    daemon restarts, the host reboots, quiesce cannot reach the runtime, or the
+    fabric is E2B, which pauses a sandbox without running quiesce at all and
+    keeps `/tmp` across the pause.
+
+    `start-browser` used to test for that socket and take it as proof of a
+    running X server, so in any of those cases it skipped starting Xvfb and
+    every browser command in the sandbox died with
+
+        ERROR:ui/ozone/platform/x11/ozone_platform_x11.cc: Missing X server or $DISPLAY
+
+    for the life of the container -- the agent's commands and the relay behind a
+    person watching alike, with nothing in the sandbox able to clear it. A
+    person came back to an idle workspace, asked an agent to browse, and got a
+    browser that could never start again.
+
+    SIGKILL is how the state is reached here because it is the one way to leave
+    the socket behind on purpose; the bug is about the file, not about signals.
+    """
+    del configure_workspace_api_url
+    ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    first = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            cmd="start-browser https://example.com/ 2>&1 | tail -5",
+            timeout_seconds=120,
+            comment="Start the sandbox browser",
+        ),
+    )
+    assert first.success and "Example Domain" in (first.stdout or ""), first
+
+    # `-x`, not `-f`: a pattern match would name Xvfb in this very command line
+    # and kill the shell running it.
+    killed = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            cmd=(
+                "pkill -9 -x Xvfb; sleep 1; "
+                "test -S /tmp/.X11-unix/X99 && echo socket-kept || echo socket-gone; "
+                "pgrep -x Xvfb >/dev/null && echo xvfb-up || echo xvfb-down"
+            ),
+            timeout_seconds=60,
+            comment="Kill the X server without letting it clean up",
+        ),
+    )
+    # Asserted rather than assumed: if a future image made Xvfb clean up even on
+    # SIGKILL, this test would go on passing while testing nothing at all.
+    assert "socket-kept" in (killed.stdout or ""), killed
+    assert "xvfb-down" in (killed.stdout or ""), killed
+
+    again = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            cmd=(
+                "start-browser https://example.com/ 2>&1 | tail -5; "
+                "pgrep -x Xvfb >/dev/null && echo xvfb-up || echo xvfb-down"
+            ),
+            timeout_seconds=120,
+            comment="Start the browser again over the stale socket",
+        ),
+    )
+    assert again.success, again
+    assert "Example Domain" in (again.stdout or ""), again
+    assert "Missing X server" not in (again.stdout or ""), again
+    # The page alone would also be satisfied by a headless fallback that renders
+    # nothing a viewer could watch, so the X server is asserted separately.
+    assert "xvfb-up" in (again.stdout or ""), again
