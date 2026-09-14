@@ -7,6 +7,8 @@ open sockets.
 
 from __future__ import annotations
 
+import pytest
+
 
 from app.modules.workspace.api.controllers import browser_view_controller as view
 from app.modules.workspace.services.ws_bridge import (
@@ -151,3 +153,68 @@ def test_the_allowlisted_path_matches_the_route() -> None:
     assert view.BROWSER_VIEW_WS_PATH in EXCLUDED_PATHS
     routes = {getattr(r, "path", "") for r in view.router.routes}
     assert "/workspace/browser/view" in routes
+
+
+# ---------------------------------------------------------------------------
+# Where a session may be put
+# ---------------------------------------------------------------------------
+
+
+class _Relay:
+    """A relay whose address is on the internet, or is not."""
+
+    def __init__(self, *, public: bool) -> None:
+        self.public = public
+        self.loaded: list[dict] = []
+
+    async def endpoint_is_public(self) -> bool:
+        return self.public
+
+    async def load_state(self, state, *, domain) -> None:
+        self.loaded.append({"state": state, "domain": domain})
+
+
+async def test_a_saved_login_is_not_loaded_into_a_publicly_reachable_sandbox() -> None:
+    """On E2B every published port is a public name.
+
+    New sandboxes are created with public traffic off and answer 403 without a
+    token, but that is fixed at create -- one made before the flag existed stays
+    open for life. `reach_port` has always reported which kind it is and nothing
+    asked.
+
+    It matters here because of what else is in that sandbox: the agent-browser
+    dashboard on `0.0.0.0:4848` with nothing in front of it, and it is not the
+    passive viewer it was once described as -- it lists the browser's cookies
+    and evaluates script. Putting somebody's session behind that is handing
+    over their account.
+    """
+    from app.modules.workspace.services import browser_view_service as module
+
+    relay = _Relay(public=True)
+
+    with pytest.raises(module.BrowserRelayUnavailable) as refused:
+        await module._require_private(relay, doing="load a saved login")
+
+    assert "reachable from the internet" in str(refused.value)
+    assert relay.loaded == []
+
+
+async def test_a_private_sandbox_is_used_without_complaint() -> None:
+    from app.modules.workspace.services import browser_view_service as module
+
+    await module._require_private(_Relay(public=False), doing="load a saved login")
+
+
+async def test_a_relay_that_cannot_say_is_not_treated_as_public() -> None:
+    """Refusing on a failed probe would lock people out of a working sandbox.
+
+    The permissive answer is safe here only because the paths that could
+    actually leak run this same check when *they* run.
+    """
+    from app.modules.workspace.services import browser_view_service as module
+
+    class _Unreachable(_Relay):
+        async def endpoint_is_public(self) -> bool:
+            raise OSError("no route to the sandbox")
+
+    await module._require_private(_Unreachable(public=True), doing="sign in to a site")

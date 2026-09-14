@@ -86,7 +86,17 @@ class _FakeSession:
         return self._stats
 
     async def stat_file(self, path):
-        return self._stats[0]
+        """What the sandbox says about one path.
+
+        An entry if this names one, and otherwise the thing itself as a
+        directory -- which is what statting a directory returns. Returning the
+        first *entry* for every path, as this used to, meant a listing of an
+        empty directory had nothing to answer with.
+        """
+        for stat in self._stats:
+            if stat.path == path:
+                return stat
+        return _stat(path, kind="directory", size=0)
 
     async def read_file(self, path, *, offset=0, length=None):
         return b"hello"
@@ -250,3 +260,43 @@ async def test_a_missing_file_is_still_a_404() -> None:
     with pytest.raises(HTTPException) as raised:
         await controller.stat_workspace_file(_user(), service, path="nope.md")
     assert raised.value.status_code == 404
+
+
+# --- the boundary a symlink used to walk past --------------------------------
+
+
+def test_a_symlink_is_refused_rather_than_followed() -> None:
+    """The textual clamp knows nothing about links; the runtime follows them.
+
+    So a link planted under /workspace by the agent served whatever it pointed
+    at -- including `/tmp`, which the runtime allows on purpose and which is
+    where a staged git credential and the relay token live.
+    """
+    with pytest.raises(HTTPException) as raised:
+        controller._inside_workspace(_stat("/workspace/shortcut", kind="symlink"))
+    assert raised.value.status_code == 422
+
+
+def test_a_symlinked_parent_is_refused() -> None:
+    """The case a check on the final component alone misses.
+
+    `/workspace/x -> /tmp/lemma-relay` makes `/workspace/x/token` a perfectly
+    ordinary file whose *parent* is the link. The runtime resolves the parent
+    before reporting, so what comes back names `/tmp` and is refused on that.
+    """
+    with pytest.raises(HTTPException) as raised:
+        controller._inside_workspace(_stat("/tmp/lemma-relay/token"))
+    assert raised.value.status_code == 422
+
+
+def test_an_ordinary_workspace_file_is_allowed() -> None:
+    controller._inside_workspace(_stat("/workspace/notes/a.md"))
+    controller._inside_workspace(_stat("/workspace", kind="directory", size=0))
+
+
+def test_a_path_that_merely_starts_with_the_root_name_is_refused() -> None:
+    """`/workspace-other` is not inside `/workspace`, and a prefix test that
+    forgets the separator says it is."""
+    with pytest.raises(HTTPException) as raised:
+        controller._inside_workspace(_stat("/workspace-other/secrets"))
+    assert raised.value.status_code == 422

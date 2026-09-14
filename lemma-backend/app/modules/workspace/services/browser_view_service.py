@@ -187,6 +187,7 @@ class BrowserViewService:
         self, user_id: UUID, state: "BrowserState | dict[str, object]", *, domain: str
     ) -> None:
         relay = await self._relay(user_id, start=True)
+        await _require_private(relay, doing="load a saved login")
         await relay.load_state(state, domain=domain)
 
     async def clear_login_state(self, user_id: UUID, *, domain: str) -> None:
@@ -214,11 +215,51 @@ class BrowserViewService:
         question about it.
         """
         relay = await self._relay(user_id, start=True)
+        await _require_private(relay, doing="sign in to a site")
         # In the site's own session, which is the session `save_login_state`
         # reads. Opening it in the default one and capturing from the login one
         # means capturing from a browser nobody ever signed in to.
         landed = await relay.ensure_browser(origin=origin, domain=host_of(origin))
         return landed if report else None
+
+
+async def _require_private(relay, *, doing: str) -> None:
+    """Refuse to put anybody's session into a sandbox the internet can reach.
+
+    On E2B every published port is a public name. New sandboxes are created
+    with public traffic disabled and answer 403 without a per-sandbox token,
+    but that flag is set at create and cannot be changed afterwards -- so a
+    sandbox made before it existed stays open for its whole life. `reach_port`
+    already reports which kind it is; until now nothing asked.
+
+    It matters here more than anywhere else because of what is also in that
+    sandbox: the agent-browser dashboard, republished on `0.0.0.0:4848` with
+    nothing in front of it. It is not the passive viewer it was once described
+    as -- it has a Storage panel that lists the browser's cookies and a console
+    that evaluates script. Loading somebody's saved session into a browser
+    behind that is handing their account to whoever finds the address.
+
+    So the two paths that put a session into a browser refuse. Watching is not
+    refused: a viewer reaches the browser through this API over an
+    authenticated socket, and nothing about the sandbox's own address changes
+    what that person is already entitled to see.
+    """
+    try:
+        public = await relay.endpoint_is_public()
+    except OSError, httpx.HTTPError, ProviderGone, _engine_error():
+        # Cannot tell. Refusing on a failed probe would lock people out of a
+        # working sandbox; this is the one place the safe answer is the
+        # permissive one, because the *other* paths to this browser -- the ones
+        # that could leak -- are gated by the same check when they run.
+        return
+    if not public:
+        return
+    logger.warning("workspace.browser_view.public_sandbox_refused.denied")
+    raise BrowserRelayUnavailable(
+        f"this computer's ports are reachable from the internet, so it will "
+        f"not be used to {doing}. Restart it and try again -- a replacement is "
+        f"created closed."
+    )
 
 
 __all__ = ["MODE_CONTROL", "MODE_VIEW", "BrowserViewService"]

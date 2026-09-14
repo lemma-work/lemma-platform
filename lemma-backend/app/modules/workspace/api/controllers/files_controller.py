@@ -10,7 +10,15 @@ allows ``/tmp``, and deliberately so — it is where ``github_credential_bridge`
 stages a credential precisely because that directory dies with the sandbox. An
 HTTP read route over ``/tmp`` would publish those files to any request carrying
 the caller's session, which is a far wider surface than a shell inside the
-sandbox. The clamp is in :func:`_workspace_path`.
+sandbox — these endpoints are reachable from page script through the published
+JS client, which a shell is not.
+
+Two clamps, because one was not enough. :func:`_workspace_path` rejects a path
+that *spells* its way out. :func:`_inside_workspace` rejects one that
+**resolves** its way out: the textual check is `posixpath.normpath`, which knows
+nothing about symlinks, and the runtime follows them. A symlink planted under
+``/workspace`` by the agent therefore served ``/tmp`` — including the staged
+credential the paragraph above exists to keep out.
 
 Reads are **ambient by default**: listing does not wake a paused sandbox, because
 a file pane that boots a sandbox on every render is a cost bug against a 900s
@@ -36,6 +44,7 @@ from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
 from app.modules.workspace.session_support import sandbox_failure_types
+from sandbox_runtime.protocol import FileKind
 
 logger = get_logger(__name__)
 
@@ -125,6 +134,42 @@ def _workspace_path(path: str | None) -> str:
     return normalized
 
 
+def _inside_workspace(stat) -> None:
+    """Refuse anything that resolves outside ``/workspace``.
+
+    The runtime stats without following the final component and returns the
+    path with its *parent* already resolved. Those two facts together are the
+    whole check:
+
+    * ``kind is SYMLINK`` -- the thing asked for is itself a link. Refused
+      rather than followed, because where it points is not this endpoint's to
+      decide.
+    * the reported path is outside ``/workspace`` -- some ancestor was a link,
+      and resolving the parent is what made that visible. ``/workspace/x/token``
+      where ``x -> /tmp/lemma-relay`` comes back as ``/tmp/lemma-relay/token``
+      and is refused here.
+
+    Checked against what the sandbox reports, not against what was asked for.
+    A check on the request string is the one that was already there, and it is
+    the one a symlink walks straight past.
+
+    Honest limit: on E2B the file API goes through the provider SDK rather than
+    this runtime, and that SDK reports neither symlinks nor resolved paths, so
+    this cannot see them. The Docker and desktop fabrics are covered.
+    """
+    reported = str(getattr(stat, "path", "") or "")
+    if getattr(stat, "kind", None) == FileKind.SYMLINK:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Path must stay inside /workspace",
+        )
+    if reported and reported != _ROOT and not reported.startswith(f"{_ROOT}/"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Path must stay inside /workspace",
+        )
+
+
 #: What the runtime can report an entry as. Narrowed here rather than trusted,
 #: because the response says it is one of three things and a fourth arriving
 #: from a future runtime should be reported as a plain file rather than
@@ -177,6 +222,7 @@ async def list_workspace_files(
             user.id, pod_id=None, initial_cwd=_ROOT, close_on_exit=False
         )
         async with session:
+            _inside_workspace(await session.stat_file(target))
             stats = await session.list_files(target)
     except HTTPException:
         raise
@@ -217,6 +263,7 @@ async def stat_workspace_file(
         )
         async with session:
             stat = await session.stat_file(target)
+            _inside_workspace(stat)
     except HTTPException:
         raise
     except _READ_FAILURES as exc:
@@ -246,6 +293,10 @@ async def read_workspace_file(
             user.id, pod_id=None, initial_cwd=_ROOT, close_on_exit=False
         )
         await session.__aenter__()
+        # Statted before it is read. The extra round trip is what makes the
+        # boundary hold: reading straight from the path asked for is what
+        # followed a symlink out of /workspace.
+        _inside_workspace(await session.stat_file(target))
         content = await session.read_file(
             target, offset=offset, length=length or _MAX_CONTENT_BYTES
         )
