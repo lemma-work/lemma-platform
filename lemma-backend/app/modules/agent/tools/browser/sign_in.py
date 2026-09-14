@@ -62,7 +62,13 @@ async def sign_in_internal(
 
     service = SignInService(get_uow_factory())
     try:
-        loaded, detail = await service.try_saved_login(origin=site, auth_ctx=auth_ctx)
+        loaded, detail = await service.try_saved_login(
+            origin=site,
+            # Which browser to load it into. Without this the session goes to
+            # the site's login browser, which this run does not use.
+            conversation_id=deps.conversation_id,
+            auth_ctx=auth_ctx,
+        )
         if loaded:
             return BrowserSignInResponse(
                 success=True,

@@ -70,6 +70,19 @@ class ResumePause(Protocol):
 _WALL_HINTS = ("sign in", "signin", "log in", "login", "password")
 
 
+def _agent_browser(conversation_id: UUID | None) -> str | None:
+    """The browser session a conversation's agent works in, if one is named.
+
+    `None` leaves the relay to decide from the site, which is what a sign-in
+    wants and what everything else got by accident.
+    """
+    if conversation_id is None:
+        return None
+    from app.modules.workspace.contracts.browser import agent_session
+
+    return agent_session(conversation_id)
+
+
 class SignInService:
     def __init__(
         self,
@@ -113,13 +126,28 @@ class SignInService:
             await built.close()
 
     async def try_saved_login(
-        self, *, origin: str, auth_ctx: Context | None = None
+        self,
+        *,
+        origin: str,
+        conversation_id: UUID | None = None,
+        auth_ctx: Context | None = None,
     ) -> tuple[bool, str]:
-        """Load a stored session for this site, if there is a usable one.
+        """Load a stored session for this site into the browser that will use it.
 
         Returns whether the browser now holds one, and a sentence for the
         agent. A session that is present but marked dead is not tried: the
         point of marking it was to stop a run failing on it.
+
+        **`conversation_id` names the browser the agent works in**, and getting
+        that wrong was the whole feature failing quietly. A capture is taken
+        from `login-<host>` -- a separate Chrome, so that what is captured is
+        bounded by the site the person signed in to, and so that the agent
+        cannot drive the page while somebody types a password into it. But the
+        *load* has to land where the agent browses. It went to `login-<host>`
+        too: the cookies were injected into a browser nothing else opened, the
+        check that the site accepted them looked at that same browser and
+        passed, and the agent carried on signed out with "signed in with a
+        saved login" in its transcript.
         """
         owner = await resolve_owner(auth_ctx=auth_ctx)
         site = normalize_origin(origin)
@@ -144,6 +172,7 @@ class SignInService:
                 owner,
                 {"cookies": secret.cookies, "origins": secret.origins},
                 domain=domain,
+                session=_agent_browser(conversation_id),
             )
         except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
             await self._audit(
@@ -158,7 +187,7 @@ class SignInService:
         # call loaded the same dead state, and said "signed in" again. Nothing
         # in production ever marked a login dead -- the method for it existed
         # with no caller.
-        if not await self._site_accepted(owner, site):
+        if not await self._site_accepted(owner, site, conversation_id=conversation_id):
             await self.mark_saved_login_dead(origin=site, auth_ctx=auth_ctx)
             return False, "the saved login for this site has stopped working"
 
@@ -167,7 +196,9 @@ class SignInService:
         await self._audit(owner, site, action="inject", outcome="ok")
         return True, "signed in with a saved login"
 
-    async def _site_accepted(self, owner: UUID, site: str) -> bool:
+    async def _site_accepted(
+        self, owner: UUID, site: str, *, conversation_id: UUID | None = None
+    ) -> bool:
         """Whether the site let us in, judged by where the browser ended up.
 
         Open the page with the session loaded and look at what came back. A
@@ -185,7 +216,10 @@ class SignInService:
         """
         try:
             landed = await self._browser.ensure_for_sign_in(
-                owner, origin=site, report=True
+                owner,
+                origin=site,
+                report=True,
+                session=_agent_browser(conversation_id),
             )
         except _relay_unavailable(), SandboxCapabilityUnsupported:
             # The browser is not reachable, which says nothing either way about
@@ -309,6 +343,13 @@ class SignInService:
                         ),
                     )
                 saved = True
+                # Handed to the browser the run will resume into, here and not
+                # on the next run. The person signed in to `login-<host>`; the
+                # agent works in the conversation's own browser, and without
+                # this it resumes into one that has never seen the site. Saving
+                # and transferring are two steps because they are two browsers,
+                # and the whole point of the second one is that it is separate.
+                await self._hand_to_the_agent(user_id, request, scoped)
             else:
                 detail = detail or "nothing for this site was in the browser"
 
@@ -333,13 +374,48 @@ class SignInService:
     async def decline(self, *, request_id: UUID, user_id: UUID) -> SignInRequest:
         async with self._uow_factory() as uow:
             resolved = await SignInRequestRepository(uow.session).resolve(
-                request_id, user_id, status=SignInRequestStatus.DECLINED
+                request_id,
+                user_id,
+                status=SignInRequestStatus.DECLINED,
+                only_if_open=True,
             )
+        if resolved.status is not SignInRequestStatus.DECLINED:
+            # Already answered, and the answer stands.
+            return resolved
         await self._audit(
             user_id, resolved.origin, action="request", outcome="declined"
         )
         await self._tell_the_agent(resolved, approved=False)
         return resolved
+
+    async def _hand_to_the_agent(
+        self, owner: UUID, request: SignInRequest, scoped: BrowserState
+    ) -> None:
+        """Put the captured session into the browser the run resumes into.
+
+        Best effort, and deliberately not fatal: the login is already stored, so
+        a transfer that fails costs the run one more `browser_sign_in` -- which
+        will find the saved login and load it -- rather than losing what the
+        person just did.
+        """
+        session = _agent_browser(request.conversation_id)
+        if session is None:
+            return
+        try:
+            await self._browser.load_login_state(
+                owner,
+                {"cookies": scoped["cookies"], "origins": scoped["origins"]},
+                domain=host_of(request.origin),
+                session=session,
+            )
+        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
+            await self._audit(
+                owner,
+                request.origin,
+                action="inject",
+                outcome="failed",
+                detail=f"could not reach the agent's browser: {exc}",
+            )
 
     async def _tell_the_agent(self, request: SignInRequest, *, approved: bool) -> None:
         """Resolve the paused tool call this request was raised for.

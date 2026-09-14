@@ -70,6 +70,7 @@ class SignInRequestRepository:
         status: SignInRequestStatus,
         saved: bool = False,
         saved_detail: str | None = None,
+        only_if_open: bool = False,
     ) -> SignInRequest:
         row = await self._session.scalar(
             select(SignInRequestModel).where(
@@ -79,6 +80,13 @@ class SignInRequestRepository:
         )
         if row is None:
             raise SignInRequestNotFound(str(request_id))
+        if only_if_open and row.status != SignInRequestStatus.PENDING.value:
+            # A decline must not undo a sign-in that already happened. The page
+            # keeps both buttons on screen, a stale tab keeps them for as long
+            # as it is open, and a double submit is ordinary -- so "Can't right
+            # now" after a successful finish used to flip the row to DECLINED
+            # and clear `saved`, losing the record of a login that was kept.
+            return _to_entity(row)
         row.status = status.value
         row.saved = saved
         row.saved_detail = saved_detail[:500] if saved_detail else None

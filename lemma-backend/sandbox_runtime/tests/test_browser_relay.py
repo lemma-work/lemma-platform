@@ -664,3 +664,31 @@ def test_the_cli_is_told_its_session_in_the_environment_too(monkeypatch) -> None
     assert env["AGENT_BROWSER_PROFILE"] == profile_for_session("login-app.example.com")
     # The rest of the image's environment is what this is meant to run with.
     assert "PATH" in env
+
+
+def test_one_viewer_leaving_does_not_release_another_viewers_wheel(
+    monkeypatch, tmp_path
+) -> None:
+    """The lease says who holds it, not merely that somebody does.
+
+    Two people can have the same session open -- a second tab, a phone
+    alongside a laptop, a reconnect that overlaps its own close. The lease was
+    a file whose existence was the whole signal, so whichever socket closed
+    first deleted it, and the one still driving lost the wheel without being
+    told. The agent's script reads that file to decide whether to yield, so
+    what followed was a command typed into a page somebody was using.
+    """
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    monkeypatch.setattr(relay_app, "_WHEEL_DIR", tmp_path / "wheel")
+
+    first = relay_app._take_the_wheel("conv-abc")
+    second = relay_app._take_the_wheel("conv-abc")
+    assert first is not None and second is not None
+    assert first.token != second.token
+
+    relay_app._release_the_wheel(first)
+    assert relay_app.wheel_path("conv-abc").exists(), "the second viewer still holds it"
+
+    relay_app._release_the_wheel(second)
+    assert not relay_app.wheel_path("conv-abc").exists()

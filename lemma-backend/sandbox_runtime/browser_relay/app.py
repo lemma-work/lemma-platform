@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from dataclasses import dataclass
 import hashlib
 import hmac
+import secrets
 import logging
 import os
 from pathlib import Path
@@ -475,7 +477,15 @@ def wheel_path(session: str) -> Path:
     return _WHEEL_DIR / digest
 
 
-def _take_the_wheel(session: str) -> Path | None:
+@dataclass(frozen=True, slots=True)
+class _Wheel:
+    """One viewer's claim on a session, and the proof that it is theirs."""
+
+    path: Path
+    token: str
+
+
+def _take_the_wheel(session: str) -> "_Wheel | None":
     """Mark this session as being driven by a person.
 
     A file rather than state in this process, because the other party is not in
@@ -487,10 +497,16 @@ def _take_the_wheel(session: str) -> Path | None:
     session name is a caller's string and must not become a path.
     """
     path = wheel_path(session)
+    # A token of this holder's own, written into the file. Without one the
+    # lease was just "a file exists", so two people driving the same session
+    # meant whichever of them closed *first* released it -- and the one still
+    # holding the wheel silently lost it, with the agent free to type into the
+    # page they were using.
+    token = secrets.token_hex(16)
     try:
         _WHEEL_DIR.mkdir(parents=True, exist_ok=True)
-        path.write_text(session)
-        return path
+        path.write_text(token)
+        return _Wheel(path=path, token=token)
     except OSError:
         # Not being able to take the lease must not stop somebody watching. The
         # cost is that an agent command may land at the same time, which is what
@@ -499,8 +515,19 @@ def _take_the_wheel(session: str) -> Path | None:
         return None
 
 
-def _release_the_wheel(path: Path | None) -> None:
-    if path is None:
+def _release_the_wheel(held: "_Wheel | None") -> None:
+    """Give up the lease, but only if it is still ours.
+
+    A later viewer's token in the file means they took it after us, and it is
+    theirs to release. Read-then-unlink is not atomic and does not need to be:
+    the loser of that race releases a lease that was about to be re-taken, and
+    the next command re-reads the file rather than trusting a decision made
+    earlier.
+    """
+    if held is None:
         return
     with suppress(OSError):
-        path.unlink(missing_ok=True)
+        if held.path.read_text().strip() != held.token:
+            return
+    with suppress(OSError):
+        held.path.unlink(missing_ok=True)

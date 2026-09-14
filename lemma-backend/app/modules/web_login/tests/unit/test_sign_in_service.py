@@ -186,24 +186,31 @@ class _Browser:
         #: itself under a neutral title, i.e. "it let us in".
         self.landed = landed or {"url": "https://app.test/home", "title": "Home"}
         self.loaded: list[dict] = []
-        self.opened: list[str] = []
+        self.opened: list[dict] = []
+        self.saved_from: list[dict] = []
         self.closed = False
 
-    async def load_login_state(self, _user_id, state, *, domain):
+    # Every one of these records the *session* it was given, because which
+    # browser each call reached is the thing that was wrong: loads went to the
+    # site's login browser, which the agent does not use, and the check that
+    # the site accepted them looked at that same browser and passed.
+    async def load_login_state(self, _user_id, state, *, domain, session=None):
         if self.fails:
             raise self.fails
-        self.loaded.append({"state": state, "domain": domain})
+        self.loaded.append({"state": state, "domain": domain, "session": session})
 
-    async def save_login_state(self, _user_id, *, domain):
+    async def save_login_state(self, _user_id, *, domain, session=None):
         if self.fails:
             raise self.fails
-        del domain
+        self.saved_from.append({"domain": domain, "session": session})
         return self.state or {}
 
-    async def ensure_for_sign_in(self, _user_id, *, origin, report: bool = False):
+    async def ensure_for_sign_in(
+        self, _user_id, *, origin, report: bool = False, session=None
+    ):
         if self.fails:
             raise self.fails
-        self.opened.append(origin)
+        self.opened.append({"origin": origin, "session": session})
         # Where the browser ended up. `landed` lets a test say "the site sent
         # us to a login form" and so drive the dead-session path.
         return self.landed if report else None
@@ -333,7 +340,9 @@ async def test_an_unreachable_browser_does_not_condemn_a_working_login() -> None
     session = _Session(logins=[_saved_login()])
 
     class _CannotOpen(_Browser):
-        async def ensure_for_sign_in(self, _user_id, *, origin, report=False):
+        async def ensure_for_sign_in(
+            self, _user_id, *, origin, report=False, session=None
+        ):
             raise _relay_error()("no relay")
 
     loaded, _ = await _service(session, _CannotOpen()).try_saved_login(
@@ -384,7 +393,12 @@ async def test_opening_a_request_puts_the_site_in_front_of_them() -> None:
 
     assert session.requests[0].origin == SITE
     assert session.requests[0].tool_call_id == "call-1"
-    assert browser.opened == [SITE], "the person lands on the site, not a blank page"
+    assert [call["origin"] for call in browser.opened] == [SITE], (
+        "the person lands on the site, not a blank page"
+    )
+    assert browser.opened[0]["session"] is None, (
+        "a sign-in belongs in the site's own browser, which the relay names"
+    )
     assert ("request", "opened") in session.audit_trail
 
 
@@ -589,3 +603,75 @@ async def test_a_conversation_that_has_gone_does_not_fail_the_person() -> None:
 
     assert result.status is SignInRequestStatus.SIGNED_IN
     assert result.saved is True
+
+
+# ---------------------------------------------------------------------------
+# Which browser each half of the journey touches
+#
+# The feature has two browsers on purpose: the person signs in to the site's
+# own (`login-<host>`), so a capture is bounded by the site they signed in to
+# and the agent cannot drive the page while they type a password; the agent
+# works in the conversation's own. Every bug below was the same bug -- a call
+# that named the wrong one -- and the whole journey failed silently because of
+# it, with "signed in with a saved login" in the transcript of a run that was
+# signed out.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_saved_login_is_loaded_into_the_agents_browser() -> None:
+    """Not into the site's login browser, which this run does not use."""
+    conversation = uuid4()
+    session = _Session(logins=[_saved_login()])
+    browser = _Browser()
+
+    loaded, _ = await _service(session, browser).try_saved_login(
+        origin=SITE, conversation_id=conversation, auth_ctx=_Ctx(uuid4())
+    )
+
+    assert loaded is True
+    assert browser.loaded, "something was put into a browser"
+    assert browser.loaded[0]["session"] == f"conv-{conversation.hex}"
+
+
+async def test_the_browser_checked_is_the_browser_loaded() -> None:
+    """Verifying the wrong one is how a dead session read as a live one.
+
+    `_site_accepted` opens the site to see whether it bounced us to a login
+    form. Opening the *login* browser answered that question about a browser
+    the agent never uses -- and that browser had just had the cookies put into
+    it, so the answer was always yes.
+    """
+    conversation = uuid4()
+    session = _Session(logins=[_saved_login()])
+    browser = _Browser()
+
+    await _service(session, browser).try_saved_login(
+        origin=SITE, conversation_id=conversation, auth_ctx=_Ctx(uuid4())
+    )
+
+    assert browser.opened, "the site was opened to see whether it let us in"
+    assert browser.opened[0]["session"] == browser.loaded[0]["session"]
+
+
+async def test_finishing_hands_the_session_to_the_agents_browser() -> None:
+    """The run resumes into its own browser, and it has to be signed in.
+
+    Without this the person signs in, the capture is stored, the run resumes --
+    and browses signed out, because what they did happened in a different
+    Chrome. The next run would recover by loading the saved login, so the
+    symptom was one wasted run and an agent reporting a login wall immediately
+    after somebody had just got past one.
+    """
+    conversation = uuid4()
+    request = _pending_request()
+    request.conversation_id = conversation
+    session = _Session(requests=[request])
+    browser = _Browser(state={"cookies": COOKIES, "origins": []})
+
+    await _service(session, browser).finish(
+        request_id=request.id, user_id=request.user_id
+    )
+
+    handed = [call for call in browser.loaded if call["session"]]
+    assert handed, "the capture reached the agent's browser"
+    assert handed[-1]["session"] == f"conv-{conversation.hex}"

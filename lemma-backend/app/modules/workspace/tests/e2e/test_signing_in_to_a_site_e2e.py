@@ -80,7 +80,13 @@ class Site(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-http.server.HTTPServer(("127.0.0.1", PORT), Site).serve_forever()
+# Threading, and that is load-bearing rather than tidiness. Two browsers
+# reach this site now -- the one the person signs in to and the one the
+# agent works in -- and a single-threaded server serves one connection at a
+# time. A browser holding a keep-alive connection open therefore blocked the
+# other's request until the CLI gave up, which surfaced as "CDP command timed
+# out: Page.navigate" and reads exactly like a browser fault.
+http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Site).serve_forever()
 """
 
 
@@ -197,7 +203,9 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
 
     try:
         # 1. Nothing saved, so there is nothing to reuse.
-        loaded, detail = await service.try_saved_login(origin=SITE, auth_ctx=auth)
+        loaded, detail = await service.try_saved_login(
+            origin=SITE, conversation_id=ctx.conversation_id, auth_ctx=auth
+        )
         assert loaded is False, detail
 
         # 2. The ask. This opens the site in the session the capture will read,
@@ -214,15 +222,28 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         # 3. The person signs in. Driven here with the CLI in the *login*
         #    session -- the same browser `ensure_for_sign_in` opened and the same
         #    one `finish` reads. If those three ever disagree again, this fails.
-        from app.modules.workspace.domain.browser_context import login_session
+        from app.modules.workspace.domain.browser_context import (
+            agent_session,
+            login_session,
+        )
         from sandbox_runtime.browser_relay.chrome import profile_for_session
 
-        session = login_session("127.0.0.1")
-        profile = profile_for_session(session)
-        env = (
-            f"export AGENT_BROWSER_SESSION={shlex.quote(session)} "
-            f"AGENT_BROWSER_PROFILE={shlex.quote(profile or '')} ; "
-        )
+        def _in(session: str) -> str:
+            """Run the CLI in one named browser, the way each caller does."""
+            profile = profile_for_session(session)
+            return (
+                f"export AGENT_BROWSER_SESSION={shlex.quote(session)} "
+                f"AGENT_BROWSER_PROFILE={shlex.quote(profile or '')} ; "
+            )
+
+        #: Where the person signs in.
+        env = _in(login_session("127.0.0.1"))
+        #: Where the *agent* works -- a different Chrome with its own profile,
+        #: and the one every assertion about "is it signed in" has to use.
+        #: Checking the login browser instead is how this test passed while the
+        #: feature was broken: it proved the browser the person signed into was
+        #: signed in, which was never in doubt.
+        agent_env = _in(agent_session(ctx.conversation_id))
         signed = await _run(
             ctx,
             f"{env} agent-browser open {SITE}/ && "
@@ -237,18 +258,31 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         finished = await service.finish(request_id=request.id, user_id=user_id)
         assert finished.saved is True, finished.saved_detail
 
+        # 4b. And the run it resumes into is signed in *now*, in the agent's own
+        #     browser. Without the hand-over this is the assertion that fails:
+        #     the person signed in to one Chrome and the agent carried on in
+        #     another, which had never seen the site.
+        resumed = await _run(
+            ctx, f"{agent_env} agent-browser open {SITE}/ ; agent-browser get title"
+        )
+        assert "Account" in (resumed.stdout or ""), resumed.stdout
+
         # 5. A later run reuses it without asking. The browser is wiped first,
         #    so this cannot pass on cookies left lying in the profile -- it has
         #    to come from what was stored and injected.
         await _run(ctx, "pkill -x Xvfb || true ; rm -rf /tmp/lemma-browser* || true")
-        loaded, detail = await service.try_saved_login(origin=SITE, auth_ctx=auth)
+        loaded, detail = await service.try_saved_login(
+            origin=SITE, conversation_id=ctx.conversation_id, auth_ctx=auth
+        )
         assert loaded is True, detail
 
-        # 6. And the browser really is signed in, not merely loaded. This is the
-        #    step that used to report success for a session the site had
-        #    rejected.
+        # 6. And the *agent's* browser really is signed in, not merely loaded.
+        #    Two failures hide behind the wrong env here: a session the site had
+        #    rejected reported as working, and -- the one that made the whole
+        #    feature a no-op -- a session loaded into the login browser while
+        #    the agent worked in its own.
         landed = await _run(
-            ctx, f"{env} agent-browser open {SITE}/ ; agent-browser get title"
+            ctx, f"{agent_env} agent-browser open {SITE}/ ; agent-browser get title"
         )
         assert "Account" in (landed.stdout or ""), landed.stdout
 
@@ -259,7 +293,9 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
             await WebLoginRepository(uow.session).delete(user_id, request.origin)
             await uow.commit()
 
-        loaded, detail = await service.try_saved_login(origin=SITE, auth_ctx=auth)
+        loaded, detail = await service.try_saved_login(
+            origin=SITE, conversation_id=ctx.conversation_id, auth_ctx=auth
+        )
         assert loaded is False, detail
     finally:
         await service.close()

@@ -68,6 +68,18 @@ def relay_token(provider_id: str) -> str:
     ).hexdigest()
 
 
+def _state_target(*, domain: str, session: str | None) -> dict[str, str]:
+    """Which browser a capture is read from or written into.
+
+    The relay has always accepted either; this client only ever sent `domain`,
+    so every load went into the site's *login* session -- including the loads
+    meant for the browser the agent actually works in. That is the whole of the
+    bug where a person signed in, the state was kept, and the next run browsed
+    signed out: the cookies were in a Chrome nothing else opened.
+    """
+    return {"session": session} if session else {"domain": domain}
+
+
 class BrowserRelayClient:
     """One sandbox's relay, reached through whatever door its fabric has."""
 
@@ -218,21 +230,34 @@ class BrowserRelayClient:
             )
         return response.json()
 
-    async def save_state(self, *, domain: str) -> dict[str, object]:
-        """Whatever the login session for this site is signed in to."""
+    async def save_state(
+        self, *, domain: str, session: str | None = None
+    ) -> dict[str, object]:
+        """Read a browser session out, by name or by the site it belongs to.
+
+        `session` names one exactly; `domain` lets the relay name the site's own
+        login session. Both, because reading and writing are not symmetrical
+        here: a capture is taken from the browser the person signed in to, and
+        loaded into the browser the agent works in.
+        """
         response = await self._request(
-            "POST", "/state:save", json_body={"domain": domain}, timeout=120.0
+            "POST",
+            "/state:save",
+            json_body=_state_target(domain=domain, session=session),
+            timeout=120.0,
         )
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
         state = response.json().get("state")
         return state if isinstance(state, dict) else {}
 
-    async def load_state(self, state: dict[str, object], *, domain: str) -> None:
+    async def load_state(
+        self, state: dict[str, object], *, domain: str, session: str | None = None
+    ) -> None:
         response = await self._request(
             "POST",
             "/state:load",
-            json_body={"state": state, "domain": domain},
+            json_body={"state": state, **_state_target(domain=domain, session=session)},
             timeout=120.0,
         )
         if response.status_code not in (200, 204):

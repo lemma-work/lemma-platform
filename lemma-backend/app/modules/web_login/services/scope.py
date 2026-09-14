@@ -101,16 +101,62 @@ def scope_state(
     return {"cookies": cookies, "origins": origins}
 
 
+#: Cookie names that a site sets before anybody has signed in to anything.
+#:
+#: Not a security control and not trying to be: a site determined to look
+#: signed-in could name a cookie whatever it likes, and nothing here would be
+#: worse off than the check that came before, which was "is there any cookie at
+#: all". What this removes is the ordinary case that made that check useless --
+#: a consent banner sets one of these on the first page view, so pressing "I'm
+#: signed in" on a login page nobody had filled in captured a cookie, passed,
+#: and told the person their login was kept.
+_NOT_A_SESSION = (
+    "cookieconsent",
+    "cookie_consent",
+    "cookielawinfo",
+    "consent",
+    "gdpr",
+    "euconsent",
+    "csrf",
+    "xsrf",
+    "_ga",
+    "_gid",
+    "_gcl_au",
+    "_fbp",
+    "locale",
+    "lang",
+    "timezone",
+    "theme",
+)
+
+
+def _might_carry_a_session(cookie: object) -> bool:
+    """Whether one cookie could plausibly be what keeps somebody signed in."""
+    name = str(getattr(cookie, "name", "") or (cookie or {}).get("name", "")).lower()  # type: ignore[union-attr]
+    if not name:
+        return False
+    return not any(marker in name for marker in _NOT_A_SESSION)
+
+
 def looks_signed_in(state: BrowserState | dict[str, object], *, origin: str) -> bool:
-    """Whether a scoped capture actually carries anything for this site.
+    """Whether a scoped capture carries something that could be a session.
 
     A person who pressed "I'm signed in" on a page they had not signed in to
-    leaves an empty capture. Saving it would mean the next run loads nothing,
-    finds a login wall, and asks again -- with the person told it had been
-    saved. Better to say so at the moment they can still do something about it.
+    leaves a capture with nothing in it worth keeping. Saving it would mean the
+    next run loads nothing, finds a login wall, and asks again -- with the
+    person told it had been saved. Better to say so at the moment they can
+    still do something about it.
+
+    "Anything at all" was the first test and it does not survive contact with
+    the web: a cookie banner sets a cookie before the login form is even
+    filled in, so the capture was never empty and the check never fired. Local
+    storage for the origin still counts on its own -- a token kept there is a
+    real way to be signed in.
     """
     scoped = scope_state(state, origin=origin)
-    return bool(scoped["cookies"] or scoped["origins"])
+    if scoped["origins"]:
+        return True
+    return any(_might_carry_a_session(cookie) for cookie in scoped["cookies"])
 
 
 def _storage_key(origin: str) -> str:

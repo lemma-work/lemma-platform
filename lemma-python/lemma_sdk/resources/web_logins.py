@@ -12,8 +12,8 @@ from ..openapi_client.api.web_logins import (
 )
 from ..openapi_client.models.finish_sign_in_request import FinishSignInRequest
 from ..openapi_client.models.sign_in_request_response import SignInRequestResponse
-from ..openapi_client.models.web_login_audit_list_response import (
-    WebLoginAuditListResponse,
+from ..openapi_client.models.web_login_audit_response import (
+    WebLoginAuditResponse,
 )
 from ..openapi_client.models.web_login_list_response import WebLoginListResponse
 from ..openapi_client.models.web_login_response import WebLoginResponse
@@ -44,7 +44,7 @@ class WebLogins(Resource):
         """
         return self._call(web_login_delete, origin=origin)
 
-    def history(self, *, limit: int | None = None) -> WebLoginAuditListResponse:
+    def history(self, *, limit: int | None = None) -> WebLoginAuditResponse:
         """What has been done with your saved logins, and by which agent."""
         kwargs = {} if limit is None else {"limit": limit}
         return self._call(web_login_history, **kwargs)

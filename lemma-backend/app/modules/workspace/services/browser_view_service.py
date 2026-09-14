@@ -180,6 +180,12 @@ class BrowserViewService:
         reach a port at all.
         """
         relay = await self._relay(user_id, start=True)
+        # The same rule the state paths hold, on the path a person actually
+        # uses. `load_login_state` and `ensure_for_sign_in` both refused a
+        # sandbox the internet can reach; this one -- the socket somebody types
+        # a password into -- did not, so the guard was on the two doors nobody
+        # was walking through.
+        await _require_private(relay, doing="watch or drive this browser")
         # No session named and a site named means a sign-in: it belongs in that
         # site's own session, the one `save_login_state` later reads. The relay
         # names that session from `domain` and not from `origin`, so an origin
@@ -207,16 +213,23 @@ class BrowserViewService:
             target_id=target_id, mode=mode, session=attached
         )
 
-    async def save_login_state(self, user_id: UUID, *, domain: str) -> "BrowserState":
+    async def save_login_state(
+        self, user_id: UUID, *, domain: str, session: str | None = None
+    ) -> "BrowserState":
         relay = await self._relay(user_id, start=True)
-        return await relay.save_state(domain=domain)
+        return await relay.save_state(domain=domain, session=session)
 
     async def load_login_state(
-        self, user_id: UUID, state: "BrowserState | dict[str, object]", *, domain: str
+        self,
+        user_id: UUID,
+        state: "BrowserState | dict[str, object]",
+        *,
+        domain: str,
+        session: str | None = None,
     ) -> None:
         relay = await self._relay(user_id, start=True)
         await _require_private(relay, doing="load a saved login")
-        await relay.load_state(state, domain=domain)
+        await relay.load_state(state, domain=domain, session=session)
 
     async def clear_login_state(self, user_id: UUID, *, domain: str) -> None:
         try:
@@ -227,7 +240,12 @@ class BrowserViewService:
         await relay.clear_state(domain=domain)
 
     async def ensure_for_sign_in(
-        self, user_id: UUID, *, origin: str, report: bool = False
+        self,
+        user_id: UUID,
+        *,
+        origin: str,
+        report: bool = False,
+        session: str | None = None,
     ) -> dict[str, object] | None:
         """Put the site in front of the person before they arrive.
 
@@ -247,7 +265,16 @@ class BrowserViewService:
         # In the site's own session, which is the session `save_login_state`
         # reads. Opening it in the default one and capturing from the login one
         # means capturing from a browser nobody ever signed in to.
-        landed = await relay.ensure_browser(origin=origin, domain=host_of(origin))
+        #
+        # `session` overrides that for the one caller that is not opening a
+        # page for a person: checking whether a restored session still works
+        # has to look at the browser the *agent* will use, or it answers a
+        # question nobody asked.
+        landed = await relay.ensure_browser(
+            origin=origin,
+            session=session,
+            domain=None if session else host_of(origin),
+        )
         return landed if report else None
 
 

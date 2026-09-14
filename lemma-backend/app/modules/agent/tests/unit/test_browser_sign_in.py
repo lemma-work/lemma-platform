@@ -67,8 +67,14 @@ class _Service:
         self.tried: list[dict] = []
         self.closed = False
 
-    async def try_saved_login(self, *, origin, auth_ctx=None):
-        self.tried.append({"origin": origin, "auth_ctx": auth_ctx})
+    async def try_saved_login(self, *, origin, conversation_id=None, auth_ctx=None):
+        self.tried.append(
+            {
+                "origin": origin,
+                "conversation_id": conversation_id,
+                "auth_ctx": auth_ctx,
+            }
+        )
         return self._loaded, self._detail
 
     async def open_request(self, **kwargs):
@@ -235,3 +241,21 @@ def test_the_response_cannot_carry_a_secret_either() -> None:
     fields = set(BrowserSignInResponse.model_fields)
     for banned in ("password", "cookie", "token", "secret", "state"):
         assert not any(banned in f for f in fields), banned
+
+
+async def test_the_tool_names_the_browser_its_run_will_use(patched) -> None:
+    """A saved login has to land where this conversation browses.
+
+    Told nothing, the service loads it into the site's own login browser --
+    a separate Chrome that this run never opens. The agent then carries on
+    signed out, with "signed in with a saved login" in its transcript.
+    """
+    service = _Service(loaded=True, detail="signed in with a saved login")
+    patched(service)
+
+    await sign_in_internal(
+        _Deps(),
+        BrowserSignInRequest(origin="app.example.com", reason="pull invoices"),
+        tool_call_id="call-9",
+    )
+    assert service.tried[0]["conversation_id"] == _Deps.conversation_id

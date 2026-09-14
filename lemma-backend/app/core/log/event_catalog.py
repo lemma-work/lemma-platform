@@ -816,6 +816,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.browser_view.unreadable_conversation.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.unsupported.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.upstream.degraded': EventSpec('warning', frozenset({'error_type'})),
+    'workspace.e2b.path_not_resolved.degraded': EventSpec('warning', frozenset({'error_type', 'path'})),
     'workspace.e2b.profile_drift_tolerated': EventSpec('info', frozenset({'sandbox_id'})),
     'workspace.e2b.template_drift_replacing': EventSpec('info', frozenset({'configured', 'kind', 'recorded', 'sandbox_id'})),
     'workspace.files.read_failed.degraded': EventSpec('warning', frozenset()),

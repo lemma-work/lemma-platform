@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { use, useState } from 'react';
+import { use, useCallback, useState } from 'react';
 
 import { BrowserPane } from '@/components/workspace/browser-pane';
 import { Button } from '@/components/ui/button';
@@ -22,6 +22,21 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
  * The id in the URL grants nothing. Every call resolves it against the caller's
  * own session, so a forwarded link answers exactly as an invented one does.
  */
+/** A URL reduced to the host somebody would check before typing a password.
+ *
+ * Parsed rather than string-trimmed: `https://evil.test/#app.example.com` and
+ * `https://app.example.com@evil.test/` both end up reading as the wrong host
+ * under a naive prefix strip, and this is the one label on the page that a
+ * person is being asked to trust.
+ */
+const hostOf = (url: string): string => {
+    try {
+        return new URL(url).host;
+    } catch {
+        return url.replace(/^https?:\/\//, '').split('/')[0] ?? url;
+    }
+};
+
 export default function SignInToSitePage({
     params,
 }: {
@@ -30,6 +45,7 @@ export default function SignInToSitePage({
     const { requestId } = use(params);
     const queryClient = useQueryClient();
     const [forced, setForced] = useState(false);
+    const [liveUrl, setLiveUrl] = useState<string | null>(null);
 
     const request = useQuery({
         queryKey: ['sign-in-request', requestId],
@@ -66,8 +82,18 @@ export default function SignInToSitePage({
     }
 
     const data = request.data;
-    const host = data.origin.replace(/^https?:\/\//, '');
-    const secure = data.origin.startsWith('https://');
+    // Where the browser *is*, not where it was sent. A sign-in is a chain of
+    // redirects by design -- to an identity provider, to an MFA step, back --
+    // and a header fixed to the requested origin kept naming the first site,
+    // with its padlock, above a page served by another one. On the single page
+    // in this product whose whole job is "type your password here", that is a
+    // claim we cannot make and must not appear to.
+    const showing = liveUrl || data.origin;
+    const host = hostOf(showing);
+    const secure = showing.startsWith('https://');
+    // A redirect somewhere else is not a fault, and saying so plainly is worth
+    // more than hiding it: an SSO hop is what a real sign-in looks like.
+    const elsewhere = hostOf(showing) !== hostOf(data.origin);
 
     if (data.status === 'SIGNED_IN') {
         return (
@@ -109,13 +135,19 @@ export default function SignInToSitePage({
                             secure ? 'text-[var(--state-success)]' : 'text-[var(--state-warning)]'
                         }
                     />
-                    {/* The host, from the request the server holds — not from
-                        anything the page was handed. This is what somebody
-                        checks before they type a password. */}
+                    {/* The host the browser is on, reported by the stream
+                        itself. This is what somebody checks before they type a
+                        password, so it has to track the page rather than the
+                        request that started it. */}
                     <h1 className="text-base font-medium">{host}</h1>
                     {!secure ? (
                         <span className="text-xs text-[var(--state-warning)]">
                             not a secure connection
+                        </span>
+                    ) : null}
+                    {elsewhere ? (
+                        <span className="text-xs text-[var(--text-tertiary)]">
+                            signing in to {hostOf(data.origin)}
                         </span>
                     ) : null}
                 </div>
@@ -131,7 +163,7 @@ export default function SignInToSitePage({
             </header>
 
             <div className="min-h-0 flex-1">
-                <BrowserPane origin={data.origin} autoControl />
+                <BrowserPane origin={data.origin} autoControl onNavigated={setLiveUrl} />
             </div>
 
             {finish.isError ? (
