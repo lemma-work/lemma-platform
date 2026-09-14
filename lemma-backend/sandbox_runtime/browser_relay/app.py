@@ -96,6 +96,10 @@ class EnsureRequest(BaseModel):
 class EnsureResponse(BaseModel):
     target_id: str
     url: str
+    #: What the page calls itself. Carried so a caller can tell a site that
+    #: accepted a restored session from one that bounced it to a login form,
+    #: without a second round trip to read the page.
+    title: str = ""
     started: bool
     #: The session this target actually lives in.
     #:
@@ -235,6 +239,7 @@ def create_app() -> FastAPI:
         return EnsureResponse(
             target_id=target["id"],
             url=target["url"],
+            title=target.get("title", ""),
             started=started,
             session=session,
         )

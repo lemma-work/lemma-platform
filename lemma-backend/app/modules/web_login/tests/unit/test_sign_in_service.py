@@ -173,9 +173,18 @@ class _Ctx:
 class _Browser:
     """The sandbox browser, or a refusal from it."""
 
-    def __init__(self, *, state=None, fails: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        state=None,
+        fails: Exception | None = None,
+        landed: dict | None = None,
+    ) -> None:
         self.state = state
         self.fails = fails
+        #: Where opening the site left the browser. The default is the site
+        #: itself under a neutral title, i.e. "it let us in".
+        self.landed = landed or {"url": "https://app.test/home", "title": "Home"}
         self.loaded: list[dict] = []
         self.opened: list[str] = []
         self.closed = False
@@ -191,10 +200,13 @@ class _Browser:
         del domain
         return self.state or {}
 
-    async def ensure_for_sign_in(self, _user_id, *, origin):
+    async def ensure_for_sign_in(self, _user_id, *, origin, report: bool = False):
         if self.fails:
             raise self.fails
         self.opened.append(origin)
+        # Where the browser ended up. `landed` lets a test say "the site sent
+        # us to a login form" and so drive the dead-session path.
+        return self.landed if report else None
 
     async def close(self):
         self.closed = True
@@ -267,6 +279,51 @@ async def test_a_working_login_is_loaded_and_recorded_as_used() -> None:
     assert browser.loaded[0]["state"]["cookies"] == COOKIES
     assert session.logins[0].last_used_at is not None
     assert ("inject", "ok") in session.audit_trail
+
+
+async def test_a_login_the_site_no_longer_accepts_is_marked_dead() -> None:
+    """Loading a session is not the same as the site honouring it.
+
+    This used to report success on the strength of the load alone, so a revoked
+    session read as "signed in" for ever. The tool's own advice -- call again
+    and say it failed -- came straight back here, loaded the same dead state,
+    and said "signed in" again. Nothing in production marked a login dead: the
+    method existed with no caller, and so did the wall detector.
+    """
+    session = _Session(logins=[_saved_login()])
+    browser = _Browser(
+        landed={"url": "https://app.example.com/login", "title": "Sign in"}
+    )
+
+    loaded, detail = await _service(session, browser).try_saved_login(
+        origin=SITE, auth_ctx=_Ctx(uuid4())
+    )
+
+    assert loaded is False
+    assert "stopped working" in detail
+    # Marked dead is what makes the *next* run ask the person rather than try
+    # the same dead session again.
+    assert session.logins[0].status == WebLoginStatus.DEAD.value
+
+
+async def test_an_unreachable_browser_does_not_condemn_a_working_login() -> None:
+    """Not being able to look is not evidence that the login is broken.
+
+    Marking one dead on a failed probe would make a flaky sandbox quietly throw
+    away logins the person would then be asked to redo.
+    """
+    session = _Session(logins=[_saved_login()])
+
+    class _CannotOpen(_Browser):
+        async def ensure_for_sign_in(self, _user_id, *, origin, report=False):
+            raise _relay_error()("no relay")
+
+    loaded, _ = await _service(session, _CannotOpen()).try_saved_login(
+        origin=SITE, auth_ctx=_Ctx(uuid4())
+    )
+
+    assert loaded is True
+    assert session.logins[0].status == WebLoginStatus.ACTIVE.value
 
 
 async def test_a_browser_that_refuses_is_reported_not_raised() -> None:

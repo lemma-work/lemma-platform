@@ -129,10 +129,52 @@ class SignInService:
             )
             return False, "the saved login could not be loaded into the browser"
 
+        # Loading a session is not the same as the site accepting it, and this
+        # used to report success on the strength of the load alone. A revoked
+        # or expired session then read as "signed in" for ever: the tool told
+        # the agent to call again if the page still asked for a login, the next
+        # call loaded the same dead state, and said "signed in" again. Nothing
+        # in production ever marked a login dead -- the method for it existed
+        # with no caller.
+        if not await self._site_accepted(owner, site):
+            await self.mark_saved_login_dead(origin=site, auth_ctx=auth_ctx)
+            return False, "the saved login for this site has stopped working"
+
         async with self._uow_factory() as uow:
             await WebLoginRepository(uow.session).mark_used(owner, site)
         await self._audit(owner, site, action="inject", outcome="ok")
         return True, "signed in with a saved login"
+
+    async def _site_accepted(self, owner: UUID, site: str) -> bool:
+        """Whether the site let us in, judged by where the browser ended up.
+
+        Open the page with the session loaded and look at what came back. A
+        site that rejected it sends the browser to a login form, and both the
+        address and the page's own title say so.
+
+        This reads the destination rather than the page body because the
+        destination is already in the reply -- no second round trip into the
+        sandbox for something that is true in the common case. It is not a
+        complete test, and is not claimed to be: a site that serves a login
+        form at the same address under a neutral title will pass it. What it
+        removes is the failure that mattered, which was reporting success
+        without looking at all. A run that gets past this and still meets a
+        wall has `browser_sign_in` to fall back to.
+        """
+        try:
+            landed = await self._browser.ensure_for_sign_in(
+                owner, origin=site, report=True
+            )
+        except _relay_unavailable(), SandboxCapabilityUnsupported:
+            # The browser is not reachable, which says nothing either way about
+            # the session. Treated as accepted so an unreachable sandbox does
+            # not mark a working login dead.
+            return True
+        if not isinstance(landed, dict):
+            return True
+        return not page_looks_like_a_login_wall(
+            f"{landed.get('url', '')} {landed.get('title', '')}"
+        )
 
     async def mark_saved_login_dead(
         self, *, origin: str, auth_ctx: Context | None = None
@@ -263,6 +305,7 @@ class SignInService:
             outcome="ok" if saved else "empty",
             detail=detail,
         )
+        await self._tell_the_agent(resolved, approved=True)
         return resolved
 
     async def decline(self, *, request_id: UUID, user_id: UUID) -> SignInRequest:
@@ -273,7 +316,61 @@ class SignInService:
         await self._audit(
             user_id, resolved.origin, action="request", outcome="declined"
         )
+        await self._tell_the_agent(resolved, approved=False)
         return resolved
+
+    async def _tell_the_agent(self, request: SignInRequest, *, approved: bool) -> None:
+        """Resolve the paused tool call this request was raised for.
+
+        Without this the row changed status, an audit line was written, and the
+        run stayed WAITING for ever -- while the page told the person "the agent
+        is carrying on". The only thing that could eventually close the pause
+        was the person sending another message, which *supersedes* it with an
+        auto-denial: sign in successfully, say anything, and the agent is told
+        you did not sign in.
+
+        `tool_call_id` is the approval id -- the row's own docstring says so --
+        so this goes through the same endpoint an approval button does. That
+        path is idempotent (the decision row is the double-submit lock) and
+        self-healing, which is what makes it safe to call from a retry.
+
+        Imported here rather than at module scope: `agent` already imports this
+        module's contracts, so naming it at the top would close a cycle.
+        """
+        if request.conversation_id is None or not request.tool_call_id:
+            # A sign-in asked for outside a run -- from the CLI, or a test.
+            # There is no pause to resolve and nothing has gone wrong.
+            return
+
+        from app.modules.agent.contracts.conversations_for_surfaces import (
+            AgentRunApprovalDecision,
+            resolve_pending_interaction,
+        )
+
+        async with self._uow_factory() as uow:
+            reached = await resolve_pending_interaction(
+                uow,
+                conversation_id=request.conversation_id,
+                approval_id=request.tool_call_id,
+                user_id=request.user_id,
+                # `APPROVE_ONCE`, never `APPROVE_FOR_SESSION`: signing in once
+                # is not standing consent to be asked nothing next time. What
+                # makes the next run quiet is the saved login, which the person
+                # can see and delete -- not a blanket approval they never gave.
+                decision=(
+                    AgentRunApprovalDecision.APPROVE_ONCE
+                    if approved
+                    else AgentRunApprovalDecision.DENY
+                ),
+            )
+        if not reached:
+            # The conversation is gone. The person still finished, and their
+            # login is still saved -- so this is worth a line, not an error
+            # thrown back at somebody who did what was asked of them.
+            logger.warning(
+                "web_login.sign_in.conversation_gone.degraded",
+                request_id=str(request.id),
+            )
 
     async def _audit(
         self,

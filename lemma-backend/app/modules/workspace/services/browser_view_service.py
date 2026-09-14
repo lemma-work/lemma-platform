@@ -197,19 +197,28 @@ class BrowserViewService:
             return
         await relay.clear_state(domain=domain)
 
-    async def ensure_for_sign_in(self, user_id: UUID, *, origin: str) -> None:  # noqa: D401
+    async def ensure_for_sign_in(
+        self, user_id: UUID, *, origin: str, report: bool = False
+    ) -> dict[str, object] | None:
         """Put the site in front of the person before they arrive.
 
         Called when a sign-in is asked for, not when the person opens the link:
         by the time they arrive the browser may have retired for idleness, so
         this is a best effort that the arrival repeats. What it buys is the
         common case where they click straight away.
+
+        `report` returns where the browser landed -- address and page title --
+        for the one caller that needs to know whether the site accepted a
+        restored session or bounced it to a login form. Off by default because
+        the other callers are opening a page for a person, not asking a
+        question about it.
         """
         relay = await self._relay(user_id, start=True)
         # In the site's own session, which is the session `save_login_state`
         # reads. Opening it in the default one and capturing from the login one
         # means capturing from a browser nobody ever signed in to.
-        await relay.ensure_browser(origin=origin, domain=host_of(origin))
+        landed = await relay.ensure_browser(origin=origin, domain=host_of(origin))
+        return landed if report else None
 
 
 __all__ = ["MODE_CONTROL", "MODE_VIEW", "BrowserViewService"]

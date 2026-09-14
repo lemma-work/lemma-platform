@@ -68,6 +68,7 @@ class ResumeToolReturnBuilder:
         response: dict[str, object],
         paused_agent_run_id: UUID,
         deliver_to_host: bool = True,
+        tool_call_id: str | None = None,
     ) -> tuple[str, object]:
         """Return ``(tool_name, tool_result)`` for the synthesized resume message."""
         from app.modules.agent.tools.user_interaction.models import (
@@ -97,7 +98,10 @@ class ResumeToolReturnBuilder:
 
         if kind == "browser_sign_in":
             return "browser_sign_in", await self._browser_sign_in_return(
-                user_id=user_id, tool_args=tool_args, decision=decision
+                user_id=user_id,
+                tool_args=tool_args,
+                decision=decision,
+                tool_call_id=tool_call_id,
             )
 
         host_permission = agent_host_permission_request(tool_args)
@@ -194,6 +198,7 @@ class ResumeToolReturnBuilder:
         user_id: UUID,
         tool_args: dict[str, object],
         decision: AgentRunApprovalDecision,
+        tool_call_id: str | None = None,
     ) -> dict[str, object]:
         """What the agent is told after somebody answered a sign-in request.
 
@@ -221,13 +226,21 @@ class ResumeToolReturnBuilder:
                 ),
             ).model_dump(mode="json")
 
+        # Looked up by the tool call this is resuming, not by scanning open
+        # requests for a matching origin. That scan could never match: `finish`
+        # has already moved the row out of PENDING by the time this runs, so
+        # `saved` stayed False and the agent was told the login had not been
+        # kept every single time -- including the times it had.
         saved = False
         detail: str | None = None
         repository = SignInRequestRepository(self.uow.session)
-        for request in await repository.open_for_user(user_id, limit=50):
-            if request.origin == origin:
-                saved, detail = request.saved, request.saved_detail
-                break
+        request = (
+            await repository.for_tool_call(user_id, tool_call_id)
+            if tool_call_id
+            else None
+        )
+        if request is not None:
+            saved, detail = request.saved, request.saved_detail
 
         kept = (
             "It has been kept, so the next run will not ask."

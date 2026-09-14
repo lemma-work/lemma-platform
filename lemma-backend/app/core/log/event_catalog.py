@@ -761,6 +761,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'usage.pricing.usage_pricing_not_registered_recording.observed': EventSpec('debug', frozenset()),
     'usage.request_accounting_gateway.request_not_priceable.degraded': EventSpec('warning', frozenset({'model', 'provider', 'rate_card_enforceable', 'refused', 'request_shape_priceable'})),
     'web_login.sign_in.browser_not_ready.degraded': EventSpec('warning', frozenset()),
+    'web_login.sign_in.conversation_gone.degraded': EventSpec('warning', frozenset({'request_id'})),
     'web_search.request.failed': EventSpec('debug', frozenset()),
     'worker.context.persist_failed': EventSpec('debug', frozenset({'error_type', 'job_id', 'task_name'})),
     'worker.crons.prune_failed.degraded': EventSpec('warning', frozenset({'queue'})),

@@ -86,6 +86,28 @@ class SignInRequestRepository:
         await self._session.flush()
         return _to_entity(row)
 
+    async def for_tool_call(
+        self, user_id: UUID, tool_call_id: str
+    ) -> SignInRequest | None:
+        """The request raised for one paused tool call, whatever became of it.
+
+        Deliberately not filtered by status. The resume path runs *after* the
+        request has been resolved, so looking only at open ones -- which is what
+        it used to do -- could never match, and the agent was told the login had
+        not been kept every single time, including when it had.
+
+        Keyed on the tool call rather than on the origin, because the origin is
+        not unique: a person asked to sign in to the same site twice has two
+        rows, and "the most recent open one" is a guess where the id is a fact.
+        """
+        row = await self._session.scalar(
+            select(SignInRequestModel).where(
+                SignInRequestModel.user_id == user_id,
+                SignInRequestModel.tool_call_id == tool_call_id,
+            )
+        )
+        return _to_entity(row) if row is not None else None
+
     async def open_for_user(
         self, user_id: UUID, limit: int = 20
     ) -> list[SignInRequest]:
