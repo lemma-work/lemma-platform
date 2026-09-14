@@ -197,6 +197,8 @@ async def test_create_surface(monkeypatch):
 
     repo.create.side_effect = lambda entity: entity
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
+    # Nothing else answers as this bot (`ensure_unique_platform_identity`).
+    repo.get_platform_identity_holder.return_value = None
 
     result = await service.create_surface(
         platform=SurfacePlatform.SLACK,
@@ -232,6 +234,8 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
     pod_id = uuid4()
     repo.create.side_effect = lambda entity: entity
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
+    # Nothing else answers as this bot (`ensure_unique_platform_identity`).
+    repo.get_platform_identity_holder.return_value = None
 
     # No surface with this name yet -> created; name defaults to the platform.
     repo.get_by_pod_and_name.return_value = None
@@ -770,6 +774,8 @@ async def test_update_surface_updates_account_metadata(monkeypatch):
     repo.get.return_value = entity
     repo.update.return_value = entity
     enricher.resolve_binding.return_value = (None, "T999", "U-BOT-NEW")
+    # Nothing else answers as this bot (`ensure_unique_platform_identity`).
+    repo.get_platform_identity_holder.return_value = None
     monkeypatch.setattr(
         "app.core.config.settings.api_url",
         "https://api.example.test",
