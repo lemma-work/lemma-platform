@@ -464,12 +464,26 @@ init:
 	@echo ""
 	@echo "Done. Run 'make dev' to start the stack."
 
+# Present is not the same as usable. The workspace image used to be built for
+# linux/amd64 whatever the machine, so anyone who ran this before that changed
+# has an emulated image sitting under the name this checks -- and a presence
+# test would keep it forever, which is a cold browser start of ~15s instead of
+# ~2s and browser tools timing out against their 90s budget. So the workspace
+# image is checked for the architecture it will actually run on. The function
+# image is deliberately amd64 everywhere (see SANDBOX_FUNCTION_PLATFORM), so it
+# is only checked for presence.
 _ensure-sandbox-images:
-	@if docker image inspect "$(DEV_WORKSPACE_IMAGE)" >/dev/null 2>&1 \
+	@host_arch="$$(docker version --format '{{.Server.Arch}}' 2>/dev/null || echo amd64)"; \
+	workspace_arch="$$(docker image inspect --format '{{.Architecture}}' "$(DEV_WORKSPACE_IMAGE)" 2>/dev/null || true)"; \
+	if [ "$$workspace_arch" = "$$host_arch" ] \
 		&& docker image inspect "$(DEV_FUNCTION_IMAGE)" >/dev/null 2>&1; then \
 		echo "  ✓ workspace/function sandbox images already present"; \
 	else \
-		echo "→ Building canonical workspace/function sandbox images…"; \
+		if [ -n "$$workspace_arch" ] && [ "$$workspace_arch" != "$$host_arch" ]; then \
+			echo "→ Rebuilding sandbox images: the workspace image is $$workspace_arch on a $$host_arch machine, so everything in it runs emulated…"; \
+		else \
+			echo "→ Building canonical workspace/function sandbox images…"; \
+		fi; \
 		$(MAKE) -C $(BACKEND_DIR) sandbox-image-workspace \
 			WORKSPACE_IMAGE="$(DEV_WORKSPACE_IMAGE_NAME)" \
 			SANDBOX_TAG="$(DEV_WORKSPACE_IMAGE_TAG)"; \
