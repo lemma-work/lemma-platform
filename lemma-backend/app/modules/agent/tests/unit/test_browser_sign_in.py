@@ -43,7 +43,20 @@ def test_the_pause_is_control_flow_and_must_not_be_swallowed() -> None:
 
 
 class _Deps:
+    """As much of an agent context as the tool actually reads."""
+
+    user_id = uuid4()
+    pod_id = uuid4()
+    workload_id = uuid4()
     conversation_id = uuid4()
+    agent_name = "assistant"
+    is_pod_default_agent = True
+
+
+#: What the tool's authorization builder is made to return, so a test can tell
+#: "the context this run carries" from `None` -- the difference the whole of
+#: `resolve_owner` turns on.
+_AUTHORITY = object()
 
 
 class _Service:
@@ -51,9 +64,11 @@ class _Service:
         self._loaded = loaded
         self._detail = detail
         self.requests: list[dict] = []
+        self.tried: list[dict] = []
         self.closed = False
 
     async def try_saved_login(self, *, origin, auth_ctx=None):
+        self.tried.append({"origin": origin, "auth_ctx": auth_ctx})
         return self._loaded, self._detail
 
     async def open_request(self, **kwargs):
@@ -62,6 +77,23 @@ class _Service:
 
     async def close(self):
         self.closed = True
+
+
+class _NoSession:
+    """Stands in for the unit of work the builder is opened inside.
+
+    The builder itself is replaced below, so nothing here is read; this exists
+    only so the tool's own `async with` has something to enter.
+    """
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_exc):
+        return False
 
 
 @pytest.fixture
@@ -74,8 +106,56 @@ def patched(monkeypatch):
             lambda *_a, **_k: service,
         )
         monkeypatch.setattr("app.core.api.dependencies.get_uow_factory", object)
+        monkeypatch.setattr(
+            "app.core.infrastructure.db.uow_factory.SessionUnitOfWorkFactory",
+            lambda *_a, **_k: _NoSession(),
+        )
+
+        async def _authority(_uow, _deps):
+            return _AUTHORITY
+
+        monkeypatch.setattr(
+            "app.modules.agent.tools.connectors.connector_access."
+            "build_delegated_context",
+            _authority,
+        )
 
     return _install
+
+
+async def test_the_run_brings_its_own_authority(patched) -> None:
+    """An agent run has no ambient authorization context, and used to send none.
+
+    `resolve_owner` falls back to the contextvar when it is handed nothing, and
+    that variable is set by an HTTP request dependency -- but a tool call comes
+    off a queue. So every sign-in from an agent was refused with "No
+    authorization context", and the agent reported, correctly and uselessly,
+    that it could not ask. The service double here accepts `auth_ctx=None`
+    happily, which is exactly why this asserts on what it was given.
+    """
+    service = _Service(loaded=True, detail="signed in with a saved login")
+    patched(service)
+
+    await sign_in_internal(
+        _Deps(),
+        BrowserSignInRequest(origin="app.example.com", reason="pull invoices"),
+        tool_call_id="call-1",
+    )
+    assert [call["auth_ctx"] for call in service.tried] == [_AUTHORITY]
+
+
+async def test_the_ask_carries_the_same_authority(patched) -> None:
+    """The pause writes a row owned by somebody, and it is the same somebody."""
+    service = _Service(loaded=False, detail="no saved login for this site")
+    patched(service)
+
+    with pytest.raises(AgentInputRequired):
+        await sign_in_internal(
+            _Deps(),
+            BrowserSignInRequest(origin="app.example.com", reason="pull invoices"),
+            tool_call_id="call-2",
+        )
+    assert service.requests[0]["auth_ctx"] is _AUTHORITY
 
 
 async def test_a_working_saved_login_does_not_ask_anybody(patched) -> None:

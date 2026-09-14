@@ -14,6 +14,15 @@ buttons on WhatsApp, Slack, Telegram and email.
 The model never sees a password and is never asked to type one. It names a site;
 the person signs in themselves in the browser; what comes back is whether that
 worked.
+
+Authorization is built here rather than inherited. `resolve_owner` reads the
+ambient context when it is given none, and an agent run has none: the contextvar
+is set by an HTTP request dependency, and a tool call comes off a queue. So
+every call from here was refused with "No authorization context" -- the agent
+did the right thing and reported that it could not ask, which is not a thing a
+person can act on. The delegated context is the same one the connector tools and
+the GitHub bridge build, so the rule about whose login a run may use has one
+implementation.
 """
 
 from __future__ import annotations
@@ -49,9 +58,11 @@ async def sign_in_internal(
             message=str(exc),
         )
 
+    auth_ctx = await _delegated_context(deps)
+
     service = SignInService(get_uow_factory())
     try:
-        loaded, detail = await service.try_saved_login(origin=site)
+        loaded, detail = await service.try_saved_login(origin=site, auth_ctx=auth_ctx)
         if loaded:
             return BrowserSignInResponse(
                 success=True,
@@ -80,6 +91,7 @@ async def sign_in_internal(
             reason=request.reason,
             conversation_id=deps.conversation_id,
             tool_call_id=tool_call_id,
+            auth_ctx=auth_ctx,
         )
     finally:
         await service.close()
@@ -88,6 +100,24 @@ async def sign_in_internal(
     # on whatever surface reached them -- starts a fresh run that replays this
     # call with a real outcome in place of this raise.
     raise AgentInputRequired(tool_call_id, SIGN_IN_TOOL_NAME)
+
+
+async def _delegated_context(deps: BaseAgentContext):
+    """The authority this run carries, in its own session.
+
+    A session of its own, and closed before the sign-in service opens one:
+    building the context is a handful of reads, and holding a pooled connection
+    across the browser work that follows is what the connector tools were
+    changed to stop doing.
+    """
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+    from app.modules.agent.tools.connectors.connector_access import (
+        build_delegated_context,
+    )
+
+    async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
+        return await build_delegated_context(uow, deps)
 
 
 __all__ = ["SIGN_IN_TOOL_NAME", "sign_in_internal"]

@@ -12,6 +12,7 @@ import {
     type ViewerState,
     keyEventFor,
     openBrowserView,
+    textAsCharEvents,
     toFramePoint,
     wheelEventFor,
 } from '@/lib/workspace/browser-view';
@@ -45,6 +46,13 @@ export function BrowserPane({
     const frameRef = useRef<ViewerFrame | null>(null);
     const [state, setState] = useState<ViewerState>('connecting');
     const [controlling, setControlling] = useState(autoControl);
+    // Whether keystrokes are actually going to the page. This is the canvas's
+    // DOM focus, and it is the whole difference between driving and appearing
+    // to drive: a person who takes control and types without clicking the
+    // picture first sends every keystroke to whatever had focus -- on the
+    // conversation screen, the message box. Nothing said so, so the browser
+    // looked broken while it was working.
+    const [keyboardIsHere, setKeyboardIsHere] = useState(false);
 
     const paint = useCallback((frame: ViewerFrame) => {
         frameRef.current = frame;
@@ -59,6 +67,16 @@ export function BrowserPane({
         canvas.height = frame.pictureHeight;
         canvas.getContext('2d')?.drawImage(frame.bitmap, 0, 0);
     }, []);
+
+    // Taking control points the keyboard at the page, without waiting for a
+    // click on it. Deliberate rather than incidental: "Take control" is a
+    // person saying they want to type here, and making them click the picture
+    // first to be heard is a rule nobody can see.
+    useEffect(() => {
+        if (!controlling) return;
+        const frame = requestAnimationFrame(() => canvasRef.current?.focus());
+        return () => cancelAnimationFrame(frame);
+    }, [controlling]);
 
     useEffect(() => {
         const viewer = openBrowserView({
@@ -131,25 +149,50 @@ export function BrowserPane({
         [controlling, sendInput],
     );
 
-    /** Sent as text rather than keystrokes: mobile keyboards do not report keys. */
+    /** Text the page receives, a character at a time.
+     *
+     * Used by the paste handler and by the text bar, whose own reason is that a
+     * phone's keyboard reports no usable key events to a canvas.
+     */
     const typeText = useCallback(
         (text: string) => {
-            if (!text) return;
-            // A phone's keyboard reports no usable key events, so the text bar
-            // sends the string itself. `char` is the stream's way of saying
-            // "this text was typed" without inventing key codes for it.
-            sendInput({ type: 'input_keyboard', eventType: 'char', text });
+            for (const message of textAsCharEvents(text)) sendInput(message);
         },
         [sendInput],
+    );
+
+    /** What the person pasted, as text the page receives.
+     *
+     * The sandbox has its own clipboard and it is empty, so forwarding ctrl-V
+     * as a key combination pastes nothing. This is the sign-in journey's most
+     * common single action -- almost nobody types a password by hand any more,
+     * they paste it out of a manager -- so it cannot be the one thing that does
+     * not work.
+     */
+    const onPaste = useCallback(
+        (event: React.ClipboardEvent<HTMLCanvasElement>) => {
+            if (!controlling) return;
+            const text = event.clipboardData.getData('text');
+            if (!text) return;
+            event.preventDefault();
+            typeText(text);
+        },
+        [controlling, typeText],
     );
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-2">
             <div className="flex items-center justify-between gap-2 px-1">
                 <span className="text-xs text-[var(--text-tertiary)]">
-                    {controlling
-                        ? 'You are driving. What you type goes to the site.'
-                        : 'Watching the agent’s browser.'}
+                    {/* Three states, not two. "You are driving" while the
+                        keyboard is somewhere else is the sentence that made
+                        this feel broken: it says the typing will arrive, and
+                        it does not. */}
+                    {!controlling
+                        ? 'Watching the agent’s browser.'
+                        : keyboardIsHere
+                          ? 'You are driving. What you type goes to the site.'
+                          : 'Click the page to type into it.'}
                 </span>
                 <Button
                     variant="quiet"
@@ -174,6 +217,14 @@ export function BrowserPane({
                     className={cn(
                         'h-full w-full object-contain outline-none',
                         controlling && 'cursor-crosshair',
+                        // A visible edge while the keyboard is pointed here.
+                        // `outline-none` above is deliberate -- the browser's
+                        // own focus ring is drawn around the *element*, which
+                        // includes the letterbox bars, so it sits away from the
+                        // picture on most pane shapes and reads as a bug.
+                        controlling &&
+                            keyboardIsHere &&
+                            'ring-2 ring-[var(--action-primary)] ring-inset',
                     )}
                     onMouseDown={(event) => {
                         canvasRef.current?.focus();
@@ -184,6 +235,9 @@ export function BrowserPane({
                     onWheel={onWheel}
                     onKeyDown={onKey}
                     onKeyUp={onKey}
+                    onPaste={onPaste}
+                    onFocus={() => setKeyboardIsHere(true)}
+                    onBlur={() => setKeyboardIsHere(false)}
                 />
 
                 {state !== 'live' ? (
@@ -209,6 +263,10 @@ export function BrowserPane({
                         if (input) {
                             typeText(input.value);
                             input.value = '';
+                            // Back to the page. Sending from the bar and then
+                            // finding that the next keystroke went nowhere is
+                            // the same silent failure in miniature.
+                            canvasRef.current?.focus();
                         }
                     }}
                 >

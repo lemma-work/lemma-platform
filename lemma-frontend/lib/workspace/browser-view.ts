@@ -103,6 +103,27 @@ export const toFramePoint = (
     };
 };
 
+/**
+ * A run of text as the stream will actually insert it: one message per
+ * character.
+ *
+ * `char` carries a single character, the way CDP's `Input.dispatchKeyEvent`
+ * does. Handed a whole string it inserts **nothing at all** — measured: one
+ * message of `"LONGSTRING"` left the field empty, seven messages spelling
+ * `"PERCHAR"` filled it. So the mobile text bar, whose entire job is to send a
+ * string, silently did nothing for any word longer than a letter, and a pasted
+ * password did the same.
+ *
+ * Split by code point rather than by UTF-16 unit, so an emoji or an astral
+ * character is one message instead of two halves of a surrogate pair.
+ */
+export const textAsCharEvents = (text: string): Record<string, unknown>[] =>
+    Array.from(text).map((character) => ({
+        type: 'input_keyboard',
+        eventType: 'char',
+        text: character,
+    }));
+
 const modifiersOf = (event: {
     altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean;
 }): number =>

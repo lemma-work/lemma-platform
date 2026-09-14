@@ -334,9 +334,14 @@ async def _resolve_github_credential(
     *,
     uow_factory: Callable[[], AbstractAsyncContextManager[SqlAlchemyUnitOfWork]]
     | None = None,
+    # Resolved at call time, not bound here. A default is evaluated once, at
+    # import, so a test that replaces `build_delegated_context` on its own
+    # module never reaches this -- and the test passes anyway, because the real
+    # collaborator failing looks like the fake one failing.
     delegated_context: Callable[
         [SqlAlchemyUnitOfWork, BaseAgentContext], Awaitable[Context]
-    ] = build_delegated_context,
+    ]
+    | None = None,
     account_resolution: Callable[[SqlAlchemyUnitOfWork], _AccountResolution]
     | None = None,
     refresh_credentials: Callable[
@@ -370,7 +375,7 @@ async def _resolve_github_credential(
     # never the right answer when the caller actually knows.
     account_id = ctx.workspace_repo.account_id if ctx.workspace_repo else None
     async with uow_factory() as uow:
-        auth_ctx = await delegated_context(uow, ctx)
+        auth_ctx = await (delegated_context or build_delegated_context)(uow, ctx)
         token = set_current_context(auth_ctx)
         try:
             resolution = account_resolution(uow)

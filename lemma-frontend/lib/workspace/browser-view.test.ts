@@ -15,6 +15,7 @@ import {
     closeCodeToState,
     keyEventFor,
     reconnectDelayMs,
+    textAsCharEvents,
     toFramePoint,
     wheelEventFor,
 } from './browser-view';
@@ -143,6 +144,32 @@ describe('keyboard', () => {
     it('combines modifiers', () => {
         const event = keyEventFor(key({ shiftKey: true, altKey: true }));
         expect(event.modifiers).toBe(9);
+    });
+});
+
+describe('text the page receives', () => {
+    it('sends one message per character, because `char` carries one', () => {
+        // Measured against the real stream server: one `char` message holding
+        // "LONGSTRING" left the field empty, seven messages spelling "PERCHAR"
+        // filled it. The text bar sent whole strings, so it did nothing at all
+        // for any word longer than a letter -- and it is the only way to type
+        // on a phone, where a canvas gets no key events.
+        const events = textAsCharEvents('hi!');
+        expect(events).toEqual([
+            { type: 'input_keyboard', eventType: 'char', text: 'h' },
+            { type: 'input_keyboard', eventType: 'char', text: 'i' },
+            { type: 'input_keyboard', eventType: 'char', text: '!' },
+        ]);
+    });
+
+    it('keeps an astral character whole', () => {
+        // Split by UTF-16 unit this would be two halves of a surrogate pair,
+        // and each half on its own is not a character anything can insert.
+        expect(textAsCharEvents('a😀').map((e) => e.text)).toEqual(['a', '😀']);
+    });
+
+    it('sends nothing for an empty string', () => {
+        expect(textAsCharEvents('')).toEqual([]);
     });
 });
 
