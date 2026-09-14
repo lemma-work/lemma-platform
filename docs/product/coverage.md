@@ -11,8 +11,8 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 165 |
-| `gap` | 0 |
+| `covered` | 163 |
+| `gap` | 2 |
 | `manual` | 8 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
@@ -233,13 +233,13 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-BROWSER-010` An agent that meets a login wall asks, and waits | `covered` | `test_somebody_elses_request_is_not_found` |
+| `PS-BROWSER-010` An agent that meets a login wall asks, and waits | `gap` | `test_somebody_elses_request_is_not_found` |
 | `PS-BROWSER-011` A person can tell what they are signing in to | `manual` | — |
 | `PS-BROWSER-012` Finishing resumes the run, and says whether it was kept | `covered` | `test_finishing_somebody_elses_request_is_refused` |
 | `PS-BROWSER-020` A saved login is the person's own | `covered` | `test_one_persons_logins_are_not_anothers` |
 | `PS-BROWSER-021` A login that has stopped working says so | `manual` | — |
 | `PS-BROWSER-022` A person sees and removes what is saved | `covered` | `test_nothing_saved_is_an_empty_list`, `test_removing_something_that_is_not_there_is_refused`, `test_history_is_answerable_to_its_owner` |
-| `PS-BROWSER-030` A person can watch, and drive, their own browser | `covered` | `test_asking_whether_a_browser_can_be_watched_starts_nothing` |
+| `PS-BROWSER-030` A person can watch, and drive, their own browser | `gap` | `test_asking_whether_a_browser_can_be_watched_starts_nothing` |
 
 ## [Surfaces and notifications](journeys/surfaces-and-notifications.md)
 

@@ -34,7 +34,14 @@ the cookies a browser would send back to it, and the storage it wrote itself.
 ## Capability: Get past a login wall
 
 ### PS-BROWSER-010 — An agent that meets a login wall asks, and waits
-**Status:** covered
+**Status:** gap
+
+> **Gap:** the pause is real -- the tool raises `AgentInputRequired`, the run
+> parks as WAITING, and finishing or declining now resolves it -- but nothing
+> builds or delivers the link. No surface renders a sign-in as something a
+> person can tap, and no code anywhere composes the `/sign-in-to-site/{id}`
+> URL. "Reach the person wherever they are" is therefore not met: today they
+> have to already be looking at the conversation.
 
 - When an agent needs a site it has no working saved login for, the system shall
   ask the person to sign in themselves and shall put that site in front of them.
@@ -121,7 +128,14 @@ next run asks the person again.
 ## Capability: Watch the agent's browser
 
 ### PS-BROWSER-030 — A person can watch, and drive, their own browser
-**Status:** covered
+**Status:** gap
+
+> **Gap:** watching is proved; driving is not. The only scenario naming this
+> promise asserts that *asking* about the browser starts nothing, which is the
+> opposite end of it. Input is unit-tested either side of the wire -- the
+> coordinate and key translations, and the relay's dispatch -- but no test
+> drives a real browser from a real socket, so "a person can drive it" rests on
+> having been tried by hand.
 
 - The system shall let a person see what the browser in their own workspace is
   doing, and shall not start a paused workspace merely to answer whether it can.

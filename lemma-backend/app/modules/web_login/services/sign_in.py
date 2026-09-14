@@ -18,7 +18,7 @@ authenticated request to the relay, which hands it straight to the browser.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -44,9 +44,25 @@ from app.modules.web_login.services.scope import (
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.workspace.contracts.browser import BrowserState
 
 logger = get_logger(__name__)
+
+
+class ResumePause(Protocol):
+    """How a finished sign-in reaches the run it paused."""
+
+    async def __call__(
+        self,
+        uow: "SqlAlchemyUnitOfWork",
+        *,
+        conversation_id: UUID,
+        tool_call_id: str,
+        user_id: UUID,
+        approved: bool,
+    ) -> bool: ...
+
 
 #: Words a page shows when it still wants a login. Crude on purpose: the
 #: alternative is asking a model, and a wrong answer here either asks a person
@@ -60,10 +76,16 @@ class SignInService:
         uow_factory: UnitOfWorkFactory,
         *,
         browser: object | None = None,
+        resume: "ResumePause | None" = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._browser_override = browser
         self._browser_built: object | None = None
+        #: How a finished sign-in reaches the run it paused. A named
+        #: collaborator rather than a call this reaches for inside itself, so a
+        #: test can stand in front of it -- a double placed *inside* the subject
+        #: would certify the half that was not written.
+        self._resume = resume or _resume_through_approvals
 
     @property
     def _browser(self):
@@ -334,34 +356,23 @@ class SignInService:
         path is idempotent (the decision row is the double-submit lock) and
         self-healing, which is what makes it safe to call from a retry.
 
-        Imported here rather than at module scope: `agent` already imports this
-        module's contracts, so naming it at the top would close a cycle.
+        `approved` maps to APPROVE_ONCE, never APPROVE_FOR_SESSION: signing in
+        once is not standing consent to be asked nothing next time. What makes
+        the next run quiet is the saved login, which the person can see and
+        delete -- not a blanket approval they never gave.
         """
         if request.conversation_id is None or not request.tool_call_id:
             # A sign-in asked for outside a run -- from the CLI, or a test.
             # There is no pause to resolve and nothing has gone wrong.
             return
 
-        from app.modules.agent.contracts.conversations_for_surfaces import (
-            AgentRunApprovalDecision,
-            resolve_pending_interaction,
-        )
-
         async with self._uow_factory() as uow:
-            reached = await resolve_pending_interaction(
+            reached = await self._resume(
                 uow,
                 conversation_id=request.conversation_id,
-                approval_id=request.tool_call_id,
+                tool_call_id=request.tool_call_id,
                 user_id=request.user_id,
-                # `APPROVE_ONCE`, never `APPROVE_FOR_SESSION`: signing in once
-                # is not standing consent to be asked nothing next time. What
-                # makes the next run quiet is the saved login, which the person
-                # can see and delete -- not a blanket approval they never gave.
-                decision=(
-                    AgentRunApprovalDecision.APPROVE_ONCE
-                    if approved
-                    else AgentRunApprovalDecision.DENY
-                ),
+                approved=approved,
             )
         if not reached:
             # The conversation is gone. The person still finished, and their
@@ -417,3 +428,36 @@ def page_looks_like_a_login_wall(text: str) -> bool:
 
 
 __all__ = ["NotSignedInYet", "SignInService", "page_looks_like_a_login_wall"]
+
+
+async def _resume_through_approvals(
+    uow: "SqlAlchemyUnitOfWork",
+    *,
+    conversation_id: UUID,
+    tool_call_id: str,
+    user_id: UUID,
+    approved: bool,
+) -> bool:
+    """Close a sign-in's pause through the endpoint an approval button uses.
+
+    Imported inside the function rather than at module scope: `agent` already
+    imports this module's contracts, so naming it at the top would close a
+    cycle. That path is idempotent -- the decision row is the double-submit
+    lock -- and self-healing, which is what makes it safe to call from a retry.
+    """
+    from app.modules.agent.contracts.conversations_for_surfaces import (
+        AgentRunApprovalDecision,
+        resolve_pending_interaction,
+    )
+
+    return await resolve_pending_interaction(
+        uow,
+        conversation_id=conversation_id,
+        approval_id=tool_call_id,
+        user_id=user_id,
+        decision=(
+            AgentRunApprovalDecision.APPROVE_ONCE
+            if approved
+            else AgentRunApprovalDecision.DENY
+        ),
+    )

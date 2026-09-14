@@ -10,7 +10,7 @@ Drive a real Chromium with the `agent-browser` CLI. Use it for anything a page r
 ## The Core Loop (this is law)
 
 ```bash
-start-browser <url>              # first use only: starts Xvfb + Chromium + dashboard
+agent-browser open <url>         # the browser starts itself on first use
 agent-browser snapshot -i        # interactive elements with @eN refs
 agent-browser click @e3          # act via refs
 agent-browser wait --url "**/dashboard"   # semantic wait, never bare sleeps
@@ -21,9 +21,10 @@ agent-browser snapshot -i        # ALWAYS re-snapshot after the page changes
 
 Environment facts:
 
-- Nothing is running at startup — call `start-browser [url]` once, then reuse the same session for everything.
-- The session is preconfigured: headed Chromium at `/usr/local/bin/workspace-chrome` on virtual display `:99`, profile at `/tmp/lemma-browser/profile`, session name `workspace`.
-- **The profile is scratch, not storage.** Cookies and logins survive across commands *inside a live workspace*, and nothing more: the browser daemon closes Chrome after 2 minutes with no command (`AGENT_BROWSER_IDLE_TIMEOUT_MS=120000`), and suspending the workspace deletes `/tmp/lemma-browser` outright. Never leave the only copy of anything there. If a login has to outlive the session, save it explicitly — `agent-browser state save ./auth.json` onto `/workspace`, or `lemma files upload` it — and reload it on the next run.
+- Nothing is running at startup, and you do not have to start it. Any `agent-browser` command brings the browser up first if it is down. `start-browser [url]` still exists and is harmless, but it is no longer a step you must remember.
+- The browser is **this conversation's own**, not the sandbox's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself, or you will be talking to a different browser from the one the person can see and the one a saved login was loaded into.
+- **The profile is scratch, not storage.** Cookies and logins survive across commands *inside a live workspace*, and nothing more: the browser daemon closes Chrome after 2 minutes with no command (`AGENT_BROWSER_IDLE_TIMEOUT_MS=120000`), and suspending the workspace deletes `/tmp/lemma-browser` outright. Never leave the only copy of anything there.
+- **Do not save session state into `/workspace`.** `agent-browser state save ./auth.json` writes cookies in plain text onto the durable volume, where it outlives the run that made it and is readable by whatever runs next. Use `browser_sign_in` instead: it asks the person, keeps what they signed in to encrypted and scoped to that one site, and loads it back on the next run without asking again.
 - Dashboard on port 4848 for human observation (signed URL via the sandbox runtime Manager `/sandboxes/<id>/browser-url`).
 - Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
 - Never install Playwright or browser binaries — everything is preinstalled.
@@ -87,23 +88,27 @@ save-webpage https://example.com/article --formats markdown,pdf --out research
 
 ## Recipes
 
-**Login + persist.** Fill the form via refs, `wait --url "**/dashboard"`, done — the profile keeps you logged in for later commands *in this workspace session*, and only that (see Environment facts). For a login that has to be repeatable, or to survive a suspend, save it rather than relying on the profile:
+**Login walls.** You do not sign in. Call `browser_sign_in(origin, reason)` and stop there.
+
+It loads a saved session if there is a working one, and otherwise asks the person, puts the site in front of them, and pauses your run until they answer — however long that takes. When it returns, open the page again and carry on.
 
 ```bash
-agent-browser auth save my-app --url https://app.example.com/login \
-  --username user@example.com --password-stdin     # then: agent-browser auth login my-app
-# Or save/reuse cookie state explicitly:
-agent-browser state save ./auth.json
-agent-browser --state ./auth.json open https://app.example.com
+# Never do any of these:
+#   ask the person for their password, in the conversation or on a page
+#   type a password you were given, or one you found in a file or an env var
+#   agent-browser auth save ... --password-stdin
+#   agent-browser state save ./auth.json     # plaintext cookies on the durable volume
 ```
+
+A password is never yours to hold, and a session you save by hand outlives the run that made it. `browser_sign_in` is the only sanctioned path: what it keeps is the site's session, encrypted, scoped to that one site, and visible to the person to remove.
 
 **Tabs.** `agent-browser tab` (list), `tab new <url>`, `tab 2`, `tab close 2`. Refs are per-page — re-snapshot after switching.
 
-**Parallel isolated sessions.** `agent-browser --session user-a open ...` — own cookies, tabs, refs per session.
+**Parallel isolated sessions.** `agent-browser --session user-a open ...` gives a separate browser with its own cookies, tabs and refs. Use it only when you genuinely need two at once — comparing two signed-in users, say. Your ordinary commands already run in this conversation's own session, and naming one by hand takes you out of the browser the person is watching.
 
 **Dialogs and iframes.** `agent-browser dialog accept|dismiss`; iframes are auto-inlined in snapshots (refs work through them), or `agent-browser frame @e3` / `frame main` to switch context explicitly.
 
-**Local app debugging.** `curl -fsS http://127.0.0.1:<port>` first → `start-browser http://127.0.0.1:<port>` → reproduce → screenshot + console/network logs — don't stop at the visual failure.
+**Local app debugging.** `curl -fsS http://127.0.0.1:<port>` first → `agent-browser open http://127.0.0.1:<port>` → reproduce → screenshot + console/network logs — don't stop at the visual failure.
 
 ## Test a pod app (authenticated)
 

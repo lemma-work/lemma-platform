@@ -212,7 +212,25 @@ class _Browser:
         self.closed = True
 
 
-def _service(session: _Session, browser: _Browser) -> SignInService:
+class _Resume:
+    """What the service uses to close the pause a sign-in was raised for.
+
+    Injected in front of the subject rather than patched inside it, so a rename
+    of the real collaborator fails these tests instead of slipping past them.
+    """
+
+    def __init__(self, *, reached: bool = True) -> None:
+        self.reached = reached
+        self.calls: list[dict] = []
+
+    async def __call__(self, _uow, **kwargs) -> bool:
+        self.calls.append(kwargs)
+        return self.reached
+
+
+def _service(
+    session: _Session, browser: _Browser, resume: "_Resume | None" = None
+) -> SignInService:
     """The real service, with a session that records instead of a database."""
 
     class _Uow:
@@ -231,7 +249,7 @@ def _service(session: _Session, browser: _Browser) -> SignInService:
 
         return _CM()
 
-    return SignInService(factory, browser=browser)
+    return SignInService(factory, browser=browser, resume=resume or _Resume())
 
 
 def _relay_error() -> type[Exception]:
@@ -490,3 +508,84 @@ def test_a_page_that_still_wants_a_login_is_recognised() -> None:
     assert page_looks_like_a_login_wall("Enter your Password") is True
     assert page_looks_like_a_login_wall("Your invoices for March") is False
     assert page_looks_like_a_login_wall("") is False
+
+
+# ---------------------------------------------------------------------------
+# Telling the agent
+# ---------------------------------------------------------------------------
+
+
+def _paused_request() -> SignInRequestModel:
+    """A request raised by a run that is waiting on it."""
+    row = _pending_request()
+    row.conversation_id = uuid4()
+    row.tool_call_id = "call_abc123"
+    return row
+
+
+async def test_finishing_resolves_the_pause_the_agent_is_waiting_on() -> None:
+    """The whole point, and it did not happen.
+
+    `finish` moved the row and wrote an audit line. Nothing told the run. It
+    stayed WAITING for ever while the page said "the agent is carrying on", and
+    the only thing that could eventually close the pause was the person sending
+    another message -- which *supersedes* it with an auto-denial. So signing in
+    and then saying anything told the agent you had not signed in.
+    """
+    request = _paused_request()
+    session = _Session(requests=[request])
+    resume = _Resume()
+
+    await _service(
+        session, _Browser(state={"cookies": COOKIES, "origins": []}), resume
+    ).finish(request_id=request.id, user_id=request.user_id)
+
+    assert len(resume.calls) == 1
+    call = resume.calls[0]
+    assert call["conversation_id"] == request.conversation_id
+    # The tool call is the approval id, which is what lets this go through the
+    # same idempotent path an approval button uses.
+    assert call["tool_call_id"] == "call_abc123"
+    assert call["approved"] is True
+
+
+async def test_declining_tells_the_agent_too() -> None:
+    """Or the run waits for ever on somebody who has already said no."""
+    request = _paused_request()
+    session = _Session(requests=[request])
+    resume = _Resume()
+
+    await _service(session, _Browser(), resume).decline(
+        request_id=request.id, user_id=request.user_id
+    )
+
+    assert [call["approved"] for call in resume.calls] == [False]
+
+
+async def test_a_sign_in_with_no_run_behind_it_resolves_nothing() -> None:
+    """Asked for from the CLI, or a test. There is no pause, and that is fine."""
+    request = _pending_request()  # no conversation, no tool call
+    session = _Session(requests=[request])
+    resume = _Resume()
+
+    await _service(
+        session, _Browser(state={"cookies": COOKIES, "origins": []}), resume
+    ).finish(request_id=request.id, user_id=request.user_id)
+
+    assert resume.calls == []
+
+
+async def test_a_conversation_that_has_gone_does_not_fail_the_person() -> None:
+    """They did what was asked. Losing the conversation is not their problem,
+    and the login is still saved."""
+    request = _paused_request()
+    session = _Session(requests=[request])
+
+    result = await _service(
+        session,
+        _Browser(state={"cookies": COOKIES, "origins": []}),
+        _Resume(reached=False),
+    ).finish(request_id=request.id, user_id=request.user_id)
+
+    assert result.status is SignInRequestStatus.SIGNED_IN
+    assert result.saved is True
