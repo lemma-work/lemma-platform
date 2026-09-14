@@ -27,11 +27,16 @@ import { cn } from '@/lib/utils';
 export function BrowserPane({
     origin,
     accessToken,
+    conversationId,
     autoControl = false,
     onNavigated,
 }: {
     origin?: string;
     accessToken?: string;
+    /** Whose browser this is. A conversation has its own, separate from every
+     *  other conversation this person runs; a sign-in page names an `origin`
+     *  instead and gets the session belonging to that site. */
+    conversationId?: string;
     autoControl?: boolean;
     onNavigated?: (url: string) => void;
 }) {
@@ -55,6 +60,7 @@ export function BrowserPane({
             mode: controlling ? 'control' : 'view',
             origin,
             accessToken,
+            conversationId,
             onFrame: paint,
             onState: setState,
             onNavigated,
@@ -64,7 +70,7 @@ export function BrowserPane({
             viewer.close();
             viewerRef.current = null;
         };
-    }, [controlling, origin, accessToken, paint, onNavigated]);
+    }, [controlling, origin, accessToken, conversationId, paint, onNavigated]);
 
     const sendInput = useCallback((event: Record<string, unknown>) => {
         viewerRef.current?.send({ t: 'input', event });

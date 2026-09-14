@@ -152,18 +152,29 @@ class BrowserViewService:
         reach a port at all.
         """
         relay = await self._relay(user_id, start=True)
+        # No session named and a site named means a sign-in: it belongs in that
+        # site's own session, the one `save_login_state` later reads. The relay
+        # names that session from `domain` and not from `origin`, so an origin
+        # on its own used to land in the default session -- the whole of the
+        # bug this pairing removes. `ensure_for_sign_in` already did this; the
+        # viewer did not, and they are the two halves of one journey.
+        if session is None and domain is None and origin:
+            domain = host_of(origin)
         found = await relay.ensure_browser(
             origin=origin, session=session, domain=domain
         )
         target_id = str(found.get("target_id") or "")
         if not target_id:
             raise BrowserRelayUnavailable("the browser has no page to show")
-        # The socket attaches to the same session the page was opened in.
-        # Attaching to the default one instead is how a person can sign in
-        # perfectly and have the capture read an empty browser.
-        attached = session or (
-            _login_session(host_of(origin)) if domain or origin else None
-        )
+        # The session the relay says it used, never one worked out again here.
+        #
+        # This used to re-derive `login-<host>` from the origin while the relay,
+        # given neither a session nor a domain, had opened the page in the
+        # default one. The socket then carried a target id from one browser to
+        # another, where it does not exist -- so the person watched a reconnect
+        # loop, and a capture afterwards read a browser nobody had signed in to.
+        # Two derivations of one fact is the bug; this is the one that knows.
+        attached = str(found.get("session") or "") or None
         return await relay.session_socket_url(
             target_id=target_id, mode=mode, session=attached
         )
@@ -199,13 +210,6 @@ class BrowserViewService:
         # reads. Opening it in the default one and capturing from the login one
         # means capturing from a browser nobody ever signed in to.
         await relay.ensure_browser(origin=origin, domain=host_of(origin))
-
-
-def _login_session(domain: str) -> str:
-    """Mirror of the relay's own naming, for addressing the same session."""
-    from sandbox_runtime.browser_relay.state import session_for_domain
-
-    return session_for_domain(domain)
 
 
 __all__ = ["MODE_CONTROL", "MODE_VIEW", "BrowserViewService"]

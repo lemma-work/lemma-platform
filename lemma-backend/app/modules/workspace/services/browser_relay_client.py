@@ -193,13 +193,17 @@ class BrowserRelayClient:
         session: str | None = None,
         domain: str | None = None,
     ) -> dict[str, object]:
-        await self.health(start=True)
         """Start the browser if needed, put it on `origin`, and say which page.
 
         The origin is what makes a person arriving at a link land on the site
         they were told about. Without it they get whatever the browser last had
         open, which after an idle retirement is a blank page.
+
+        The reply names the session the target belongs to. Callers must use
+        that rather than working the name out again: a target id is only
+        meaningful against the Chrome that minted it.
         """
+        await self.health(start=True)
         response = await self._request(
             "POST",
             "/browser:ensure",

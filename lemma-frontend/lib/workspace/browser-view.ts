@@ -162,17 +162,22 @@ export interface ViewerOptions {
     mode: 'view' | 'control';
     origin?: string;
     accessToken?: string;
+    conversationId?: string;
     onFrame: (frame: ViewerFrame) => void;
     onState: (state: ViewerState) => void;
     onNavigated?: (url: string) => void;
 }
 
 export const viewSocketUrl = (options: {
-    mode: string; origin?: string; accessToken?: string;
+    mode: string; origin?: string; accessToken?: string; conversationId?: string;
 }): string => {
     const base = getLemmaApiBaseUrl().replace(/^http/, 'ws').replace(/\/$/, '');
     const query = new URLSearchParams({ mode: options.mode });
     if (options.origin) query.set('origin', options.origin);
+    // Which browser to watch. A conversation has its own, so that two of this
+    // person's agents do not share cookies; naming it here is what stops every
+    // pane attaching to the sandbox's single default session.
+    if (options.conversationId) query.set('conversation', options.conversationId);
     // In the URL because a browser cannot set headers on a WebSocket handshake
     // — the same reason the datastore changes socket does it.
     if (options.accessToken) query.set('access_token', options.accessToken);
@@ -206,6 +211,7 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                 mode: options.mode,
                 origin: options.origin,
                 accessToken: options.accessToken,
+                conversationId: options.conversationId,
             }),
         );
 

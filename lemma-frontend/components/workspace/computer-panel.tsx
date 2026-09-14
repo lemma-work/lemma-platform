@@ -44,7 +44,13 @@ export function ComputerPanel({ conversationId }: { conversationId?: string }) {
                 {tab === 'files' ? (
                     <WorkspaceFilesPane conversationId={conversationId} />
                 ) : (
-                    <BrowserPane />
+                    /* Named, so the pane watches *this* conversation's browser.
+                       Without it every pane attached to the sandbox's default
+                       session, which is shared by every agent this person runs
+                       -- so one conversation's pane showed another's browsing,
+                       and a login granted for one task was visible to all of
+                       them. */
+                    <BrowserPane conversationId={conversationId} />
                 )}
             </div>
         </div>

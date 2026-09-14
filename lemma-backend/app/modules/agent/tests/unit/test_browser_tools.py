@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 import shlex
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic_ai.tools import RunContext
@@ -332,6 +333,19 @@ def _opener(result: dict) -> tuple[_Session, object]:
     return session, open_session
 
 
+@dataclass(frozen=True)
+class _Ctx:
+    """Just the part of a run context a browser script reads.
+
+    Which conversation this is decides which browser session the commands run
+    in, so a bare `object()` is no longer enough to stand in for one -- and
+    that is the point: the session is not optional decoration, it is what keeps
+    one conversation's agent out of another's cookies.
+    """
+
+    conversation_id: UUID
+
+
 async def test_a_timed_out_command_is_not_reported_as_success() -> None:
     """`exec_command` returns `completed: False` with whatever had been printed
     -- for a browser command, usually nothing. Reading only stdout is how a
@@ -343,7 +357,7 @@ async def test_a_timed_out_command_is_not_reported_as_success() -> None:
     )
 
     output, error = await module.run_browser_script(
-        object(), "snapshot", "snapshot", open_session=opener
+        _Ctx(uuid4()), "snapshot", "snapshot", open_session=opener
     )
 
     assert output is None
@@ -362,7 +376,7 @@ async def test_a_timed_out_command_clears_the_wedged_daemon() -> None:
     )
 
     await module.run_browser_script(
-        object(), "open https://slow.test", "open", open_session=opener
+        _Ctx(uuid4()), "open https://slow.test", "open", open_session=opener
     )
 
     assert any(c.startswith("pkill") for c in session.commands), session.commands
@@ -376,7 +390,7 @@ async def test_a_command_the_runtime_refused_is_reported() -> None:
     )
 
     output, error = await module.run_browser_script(
-        object(), "snapshot", "snapshot", open_session=opener
+        _Ctx(uuid4()), "snapshot", "snapshot", open_session=opener
     )
     assert output is None
     assert "no such session" in str(error)
@@ -390,7 +404,45 @@ async def test_a_command_that_finished_returns_its_output() -> None:
     )
 
     output, error = await module.run_browser_script(
-        object(), "get url", "read", open_session=opener
+        _Ctx(uuid4()), "get url", "read", open_session=opener
     )
     assert error is None
     assert "hello" in (output or "")
+
+
+async def test_every_command_runs_in_this_conversations_own_browser() -> None:
+    """A workspace sandbox is per person; the session is what separates agents.
+
+    Without this the tools ran in the image's default session, so one
+    conversation's agent inherited every cookie another's had picked up --
+    including a login the person had granted for a different task. It is also
+    the session a saved login is injected into, so "open the page again, it
+    should not ask now" only holds if these two agree.
+
+    The profile travels with it because `agent-browser` points every session at
+    one directory unless told otherwise, and the second browser to open a
+    profile Chrome already holds exits without saying why.
+    """
+    from app.modules.agent.tools.browser import browser as module
+
+    session, opener = _opener(
+        {"success": True, "completed": True, "stdout": "ok", "stderr": ""}
+    )
+    conversation = uuid4()
+
+    await module.run_browser_script(
+        _Ctx(conversation), "agent-browser get url", "read", open_session=opener
+    )
+
+    ran = session.commands[0]
+    assert f"AGENT_BROWSER_SESSION=conv-{conversation.hex}" in ran
+    assert "AGENT_BROWSER_PROFILE=" in ran
+    # Ahead of the command, or the command has already chosen a browser.
+    assert ran.index("AGENT_BROWSER_SESSION") < ran.index("agent-browser get url")
+
+
+async def test_two_conversations_do_not_share_a_browser() -> None:
+    first, second = uuid4(), uuid4()
+    assert script.session_exports(f"conv-{first.hex}") != script.session_exports(
+        f"conv-{second.hex}"
+    )

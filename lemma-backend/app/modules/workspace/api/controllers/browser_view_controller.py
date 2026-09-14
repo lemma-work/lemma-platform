@@ -176,6 +176,23 @@ async def _resolve_user_id(websocket: WebSocket):
     return session.get_user_id()
 
 
+def _session_for(conversation: str | None, origin: str | None) -> str | None:
+    """Which session this viewer is joining.
+
+    `None` means "the relay decides", which it does from the origin -- the
+    sign-in case. Raises `ValueError` for a conversation id that is not one,
+    rather than falling back to somebody else's browser.
+    """
+    from uuid import UUID
+
+    from app.modules.workspace.domain.browser_context import agent_session
+
+    if conversation:
+        return agent_session(UUID(conversation))
+    del origin  # the relay names the login session from it
+    return None
+
+
 async def _refuse(websocket: WebSocket, code: int) -> None:
     """Close with a code the person's browser will actually receive.
 
@@ -215,12 +232,19 @@ async def browser_view(
     origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
+    conversation: str | None = Query(default=None),
 ) -> None:
     """One person, watching or driving their own browser.
 
     Every refusal goes through `_refuse`, which accepts the socket before
     closing it. That is the opposite of what it should be, and is the only way
     a browser is ever told which refusal happened -- see `_refuse`.
+
+    A view joins a session, it never names a new one. `conversation` joins the
+    agent's, which is per conversation so two of them do not share cookies;
+    `origin` alone means a sign-in, which lives in a session named for the site.
+    Neither is trusted as a session name -- both are turned into one here, and
+    the relay's reply says which was actually used.
     """
     if not origin_is_allowed(websocket.headers.get("origin"), allowed=origins):
         # Browsers do not apply same-origin to WebSockets but do send cookies,
@@ -251,8 +275,15 @@ async def browser_view(
     from uuid import UUID
 
     try:
+        session = _session_for(conversation, origin)
+    except ValueError:
+        logger.warning("workspace.browser_view.unreadable_conversation.denied")
+        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
+        return
+
+    try:
         upstream_url, headers = await service.open_session(
-            UUID(user_id), mode=mode, origin=origin
+            UUID(user_id), mode=mode, origin=origin, session=session
         )
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")

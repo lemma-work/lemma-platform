@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 import hmac
+import logging
 import os
 from pathlib import Path
 
@@ -77,6 +78,8 @@ CLOSE_UNAUTHENTICATED = 4401
 CLOSE_NO_BROWSER = 4409
 CLOSE_UPSTREAM_GONE = 1011
 
+_log = logging.getLogger(__name__)
+
 
 class EnsureRequest(BaseModel):
     session: str | None = None
@@ -94,6 +97,16 @@ class EnsureResponse(BaseModel):
     target_id: str
     url: str
     started: bool
+    #: The session this target actually lives in.
+    #:
+    #: Returned rather than left for the caller to work out again, because a
+    #: target id is only meaningful against the Chrome that minted it -- every
+    #: session is a separate browser with its own profile and its own port. The
+    #: backend used to re-derive the name from the origin on its own and reach a
+    #: different answer from this one, so it attached a viewer to `login-<host>`
+    #: carrying a target id from `workspace`. Saying which session was used is
+    #: what makes the two sides unable to disagree.
+    session: str
 
 
 class StateSaveRequest(BaseModel):
@@ -220,7 +233,10 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=409, detail="the browser has no page")
         target = _best_target(found, request.origin)
         return EnsureResponse(
-            target_id=target["id"], url=target["url"], started=started
+            target_id=target["id"],
+            url=target["url"],
+            started=started,
+            session=session,
         )
 
     @app.post("/state:save", dependencies=[Depends(require_token)])
@@ -271,10 +287,29 @@ def create_app() -> FastAPI:
             return
         try:
             port = await live_port(session_name)
-            target_id = target or _first_target_id(await page_targets(port=port))
+            open_targets = await page_targets(port=port)
         except BrowserNotRunning:
             await websocket.close(code=CLOSE_NO_BROWSER)
             return
+
+        # A target id only means anything against the Chrome that minted it.
+        # Sessions are separate browsers on separate ports, so a caller that
+        # worked out the session one way and the target another produces an id
+        # this browser has never heard of -- and attaching anyway fails deep in
+        # the CDP handshake, which reaches the person as "the connection
+        # dropped" and a reconnect loop. Checked here so the answer is "that
+        # page is not open" while we still know which question was asked.
+        known = {found["id"] for found in open_targets}
+        if target and target not in known:
+            _log.warning(
+                "the viewer asked for target %s, which is not open in session %s",
+                target,
+                session_name,
+            )
+            await websocket.close(code=CLOSE_NO_BROWSER)
+            return
+
+        target_id = target or _first_target_id(open_targets)
         if not target_id:
             await websocket.close(code=CLOSE_NO_BROWSER)
             return
@@ -343,10 +378,23 @@ def _best_target(targets: list[dict[str, str]], origin: str | None) -> dict[str,
     "open the site, then attach" reliable when the browser already had other
     tabs open -- which it does, whenever the agent was working before it asked
     for help.
+
+    The comparison is on the parsed host, not on the URL as a string. A
+    substring test matched `https://attacker.test/#bank.com` for host
+    `bank.com`, which is the wrong tab to hand somebody who was told they are
+    signing in to their bank.
     """
     if origin:
-        host = origin.split("://")[-1].split("/")[0].lower()
+        host = _host_of(origin)
         for target in targets:
-            if host and host in target.get("url", "").lower():
+            if host and _host_of(target.get("url", "")) == host:
                 return target
     return targets[0]
+
+
+def _host_of(url: str) -> str:
+    """The host part of a URL, lowercased, without port or credentials."""
+    authority = url.split("://")[-1].split("/")[0].lower()
+    # `user:pass@host:port` -- the host is what is left after the last `@` and
+    # before the first `:`.
+    return authority.rpartition("@")[2].split(":")[0]

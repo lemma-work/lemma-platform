@@ -109,7 +109,7 @@ function PodConversationSurface({
         searchParams.get('presented'),
         podId,
     );
-    // The agent's computer, shown beside the conversation rather than at a route
+    // The person's computer, shown beside the conversation rather than at a route
     // of its own: a workspace is keyed to the person and only means anything in
     // the conversation that has been using it, so a URL you could navigate to
     // cold would be a page that cannot say whose files it is showing.
@@ -391,8 +391,8 @@ function PodConversationSurface({
                         size="icon"
                         onClick={() => setComputerOpen(!isComputerOpen)}
                         aria-pressed={isComputerOpen}
-                        aria-label={isComputerOpen ? "Hide this agent's computer" : "Show this agent's computer"}
-                        title={isComputerOpen ? "Hide this agent's computer" : "Show this agent's computer"}
+                        aria-label={isComputerOpen ? 'Hide your computer' : 'Show your computer'}
+                        title={isComputerOpen ? 'Hide your computer' : 'Show your computer'}
                         className="absolute right-3 top-2 z-10 size-8"
                     >
                         <Monitor className="size-4" />
@@ -440,7 +440,7 @@ function PodConversationSurface({
             <ConversationPresentationStage
                 podId={podId}
                 resourceHref=""
-                stageTitle="This agent's computer"
+                stageTitle="Your computer"
                 stageBodyOverride={
                     <ComputerPanel
                         conversationId={isNewConversation ? undefined : conversationId}

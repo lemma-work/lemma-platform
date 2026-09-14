@@ -45,7 +45,9 @@ from app.modules.agent.tools.browser.script import (
     parse_script_output,
     read_steps,
     screenshot_argv,
+    session_exports,
 )
+from app.modules.workspace.domain.browser_context import agent_session
 from app.modules.agent.tools.browser.models import (
     BrowserActRequest,
     BrowserOpenRequest,
@@ -128,6 +130,11 @@ async def run_browser_script(
     inside the subject certifies the half you did not write.
     """
     opener = open_session or _open_shell_session
+    # The conversation's own browser, not the sandbox's shared one. A workspace
+    # sandbox is per person and every agent that person runs shares it, so
+    # without this a run inherits whatever cookies another conversation's agent
+    # picked up -- including a login the person granted for a different task.
+    script = f"{session_exports(agent_session(ctx.conversation_id))}{script}"
     try:
         with run_phase("tool.browser.session"):
             session = await opener(ctx)

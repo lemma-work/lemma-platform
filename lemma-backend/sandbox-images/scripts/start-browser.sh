@@ -66,8 +66,16 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   # The socket goes too, not just the lock. Xvfb gates on the lock, but a stale
   # socket left in place is what a client connects to and finds nobody behind.
   rm -f "/tmp/.X${DISPLAY_NUMBER}-lock" "/tmp/.X11-unix/X${DISPLAY_NUMBER}"
-  nohup Xvfb "$DISPLAY_VALUE" -screen 0 "$SCREEN" -ac +extension RANDR \
-    >/tmp/lemma-xvfb.log 2>&1 &
+  # `setsid`, not just `nohup` -- the same reason `start-browser-relay` needs it.
+  # This script is usually reached from an `exec_command` the backend makes, and
+  # an exec's process group is torn down when the operation that owns it
+  # finishes. `nohup` blocks SIGHUP; it does nothing about the group being
+  # killed. So a merely-backgrounded Xvfb dies moments after start-browser
+  # returns "done", and the *next* command in the same sandbox reports "Missing
+  # X server or $DISPLAY" -- which reads like a broken image rather than like a
+  # server that was killed for being in the wrong process group.
+  setsid nohup Xvfb "$DISPLAY_VALUE" -screen 0 "$SCREEN" -ac +extension RANDR \
+    >/tmp/lemma-xvfb.log 2>&1 < /dev/null &
   # Waited for, not slept through. Xvfb binds in ~23ms on an idle native
   # container, so 0.4s looked generous -- but it is a fixed guess either way,
   # and on a loaded or emulated machine losing that guess costs a failed browser
@@ -87,9 +95,12 @@ start-browser-relay || true
 
 agent-browser dashboard start --port "$DASHBOARD_INTERNAL_PORT" >/tmp/agent-browser-dashboard.log 2>&1 || true
 if ! pgrep -f "socat.*TCP-LISTEN:${DASHBOARD_PORT}" >/dev/null 2>&1; then
-  nohup socat TCP-LISTEN:"$DASHBOARD_PORT",fork,reuseaddr,bind=0.0.0.0 \
+  # `setsid` for the same reason as Xvfb above: started from an exec, a merely
+  # backgrounded forwarder goes down with that exec's process group and the
+  # published port then refuses every connection.
+  setsid nohup socat TCP-LISTEN:"$DASHBOARD_PORT",fork,reuseaddr,bind=0.0.0.0 \
     TCP:127.0.0.1:"$DASHBOARD_INTERNAL_PORT" \
-    >/tmp/agent-browser-dashboard-forwarder.log 2>&1 &
+    >/tmp/agent-browser-dashboard-forwarder.log 2>&1 < /dev/null &
 fi
 
 if [ "$#" -gt 0 ]; then

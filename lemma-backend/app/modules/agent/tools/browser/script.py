@@ -38,6 +38,35 @@ def cli(argv: list[str]) -> str:
     return " ".join(["agent-browser", *(shlex.quote(part) for part in argv)])
 
 
+def session_exports(session: str | None) -> str:
+    """Put a script in one browser session, as a shell prefix.
+
+    Environment rather than a `--session` flag on each command, for two reasons.
+    Every `agent-browser` in a chained script picks it up from one line instead
+    of each call site remembering. And the wrapper on `PATH` runs
+    `start-browser` for a cold sandbox, which reads exactly these two variables
+    -- so the browser it bootstraps is the one the commands then talk to, rather
+    than the default one they would otherwise find themselves in.
+
+    The profile travels with the session because it has to: `agent-browser`
+    points every session at the image's single profile directory unless told
+    otherwise, and a second browser opening a profile Chrome has already locked
+    exits immediately, reporting only "Chrome exited early".
+    """
+    if not session:
+        return ""
+    # Deferred: this is the sandbox runtime's naming, and importing it at module
+    # scope would put the relay in the import graph of every process that merely
+    # registers an agent tool.
+    from sandbox_runtime.browser_relay.chrome import profile_for_session
+
+    assignments = [f"AGENT_BROWSER_SESSION={shlex.quote(session)}"]
+    profile = profile_for_session(session)
+    if profile:
+        assignments.append(f"AGENT_BROWSER_PROFILE={shlex.quote(profile)}")
+    return f"export {' '.join(assignments)} ; "
+
+
 def snapshot_argv_for(*, interactive_only: bool) -> list[str]:
     """`agent-browser snapshot`, machine-readable.
 
