@@ -6,6 +6,10 @@ import type { WorkspaceFileEntry } from './WorkspaceFileEntry.js';
 export type WorkspaceFileListResponse = {
     entries?: Array<WorkspaceFileEntry>;
     /**
+     * Pass as `after` to get the next page. Null when this is the last one. A directory with more entries than fit was previously a dead end: the rest could be counted and never reached.
+     */
+    next_after?: (string | null);
+    /**
      * The directory that was listed.
      */
     path: string;

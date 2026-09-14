@@ -12,12 +12,14 @@ export class WorkspaceService {
      * List workspace files
      * @param path
      * @param wake Start the workspace if it is paused. Off by default.
+     * @param after Continue after this entry's path, from a previous response's `next_after`.
      * @returns WorkspaceFileListResponse Successful Response
      * @throws ApiError
      */
     public static workspaceFilesList(
         path?: (string | null),
         wake: boolean = false,
+        after?: (string | null),
     ): CancelablePromise<WorkspaceFileListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -25,6 +27,7 @@ export class WorkspaceService {
             query: {
                 'path': path,
                 'wake': wake,
+                'after': after,
             },
             errors: {
                 422: `Validation Error`,
