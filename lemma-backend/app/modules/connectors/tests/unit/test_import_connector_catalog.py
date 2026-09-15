@@ -2059,3 +2059,49 @@ def test_a_managed_scheme_is_not_inferred_from_a_supported_one():
 
     assert importer._composio_managed_schemes(unmanaged, detail) == set()
     assert importer._composio_managed_schemes(managed, detail) == {"OAUTH2"}
+
+
+def test_an_org_credential_is_masked_even_when_composio_does_not_say_so():
+    """Twitter's auth-config form, which marks neither of its two secrets.
+
+    Composio sets `is_secret` on the fields an end user pastes and leaves it off
+    the ones an organization pastes, so a form built from that flag alone put an
+    OAuth client secret in a plain text input -- readable over a shoulder, and
+    captured by any screen share.
+
+    The bearer token is the case that needs the label as well as the key: its
+    field is called `generic_id`, which says nothing, and only its display name
+    "Application Bearer Token" gives it away.
+    """
+    schema = importer._composio_install_config_schema(
+        _toolkit_detail(
+            mode="OAUTH2",
+            auth_config_creation=SimpleNamespace(
+                required=[
+                    _composio_field("client_id"),
+                    _composio_field("client_secret"),
+                    _composio_field(
+                        "generic_id", display_name="Application Bearer Token"
+                    ),
+                ],
+                optional=[
+                    _composio_field("oauth_redirect_uri", required=False),
+                    _composio_field("scopes", required=False),
+                ],
+            ),
+        ),
+        AuthMethod.OAUTH2,
+        org_supplies=True,
+    )
+    masked = {
+        name
+        for name, prop in schema["properties"].items()
+        if prop.get("format") == "password"
+    }
+
+    assert masked == {"client_secret", "generic_id"}
+    # A client id is public by design, and masking the redirect URI or the
+    # scopes would hide the two fields a person most needs to read back.
+    assert "client_id" not in masked
+    assert "oauth_redirect_uri" not in masked
+    assert "scopes" not in masked

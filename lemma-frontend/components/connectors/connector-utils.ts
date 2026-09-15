@@ -521,6 +521,14 @@ export const describeConnectorError = (error: unknown, fallback: string): string
         const reason = typeof firstViolation.message === 'string' ? firstViolation.message : null;
         if (reason) return path && path !== '(root)' ? `${path}: ${reason}` : reason;
     }
+    // What the provider itself said, when the top-line message is ours and
+    // generic. A failed connect answers "Unable to initiate the OAuth flow."
+    // beside an `upstream_message` reading "Composio does not have managed
+    // credentials for this toolkit" — the whole explanation, one field away,
+    // and previously shown to nobody. Appended rather than substituted: ours
+    // says which step failed, theirs says why.
+    const upstream = typeof details?.upstream_message === 'string' ? details.upstream_message.trim() : '';
+    if (upstream) return `${message} ${upstream}`;
     return message;
 };
 

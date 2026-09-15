@@ -436,6 +436,18 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         );
     }, [accounts, connections]);
 
+    /**
+     * Connectors the org holds an install of. Distinct from `connectedAppIds`,
+     * which is about accounts: an install can exist with nobody connected
+     * through it yet, and for a connector whose setup is a form the org fills
+     * in that is exactly the state the catalog row has to stop offering "Set
+     * up" for.
+     */
+    const installedAppIds = useMemo(
+        () => new Set(activeConfigs.map((config) => config.connector_id)),
+        [activeConfigs],
+    );
+
     const connectedAppIds = useMemo(
         () => new Set((accounts || []).map((account) => account.connector_id)),
         [accounts],
@@ -1013,6 +1025,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                 <ConnectorGrid
                     connectors={filteredApps}
                     connectedAppIds={connectedAppIds}
+                    installedAppIds={installedAppIds}
                     busyAppId={busyAppId || pendingOAuth?.connectorId || null}
                     searchTerm={searchTerm}
                     onConnect={handleConnect}

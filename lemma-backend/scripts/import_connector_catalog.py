@@ -498,6 +498,38 @@ def _composio_field_json_type(field_type: object) -> str:
     return _COMPOSIO_FIELD_TYPE_TO_JSON.get(str(field_type).lower(), "string")
 
 
+#: Field names that are credentials whatever the toolkit says about them.
+#:
+#: Composio sets `is_secret` on the fields an end user pastes, and does not set
+#: it on the ones an organization pastes: Twitter's auth-config form marks
+#: neither `client_secret` nor its bearer token, so a form built from
+#: `is_secret` alone rendered an OAuth client secret as plain text, in the
+#: clear, on a screen somebody may well be sharing.
+_SECRET_FIELD_PARTS = (
+    "secret",
+    "token",
+    "password",
+    "api_key",
+    "apikey",
+    "private_key",
+)
+
+
+def _looks_secret(name: str, display_name: object = None) -> bool:
+    """Whether to mask this field, reading its label as well as its key.
+
+    Both, because either alone misses real credentials. Twitter's bearer token
+    is `generic_id` -- a name that says nothing -- and is identifiable only from
+    its label, "Application Bearer Token".
+    """
+    candidates = (name, str(display_name or ""))
+    return any(
+        part in candidate.lower()
+        for candidate in candidates
+        for part in _SECRET_FIELD_PARTS
+    )
+
+
 def _composio_auth_detail(toolkit_detail, auth_method: AuthMethod):
     """The toolkit's auth-config detail for this scheme, or the nearest one.
 
@@ -554,7 +586,9 @@ def _composio_fields_schema(fields_group) -> dict | None:
         default = getattr(field, "default", None)
         if default is not None:
             prop["default"] = default
-        if getattr(field, "is_secret", False):
+        if getattr(field, "is_secret", False) or _looks_secret(
+            name, getattr(field, "display_name", None)
+        ):
             prop["format"] = "password"
         properties[name] = prop
         if getattr(field, "required", False):

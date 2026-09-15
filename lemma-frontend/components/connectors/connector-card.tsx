@@ -27,6 +27,7 @@ import { StepLoader } from '@/components/brand/loader';
 export function ConnectorRow({
     app,
     isConnected,
+    isInstalled,
     isBusy,
     hasAdvanced,
     onConnect,
@@ -34,6 +35,16 @@ export function ConnectorRow({
 }: {
     app: Connector;
     isConnected: boolean;
+    /**
+     * The org already holds an install of this connector, even though nobody
+     * has connected an account through it yet.
+     *
+     * Only "Set up" needs this, and it needs it badly: setup is a thing you
+     * finish, and a row that still says "Set up" after you have is both wrong
+     * and a dead end — clicking it goes straight to sign-in and never shows the
+     * form again, so a mistyped client secret could not be corrected from here.
+     */
+    isInstalled: boolean;
     isBusy: boolean;
     hasAdvanced: boolean;
     onConnect: (app: Connector) => void;
@@ -45,7 +56,7 @@ export function ConnectorRow({
     // address, and a Composio toolkit Composio holds no credentials for needs
     // the app's own client. Every row said "Connect" regardless, so the catalog
     // promised something it could not do — for the unmanaged toolkits, a 500.
-    const needsSetup = !isConnected && requiresInstallConfig(capability);
+    const needsSetup = !isConnected && !isInstalled && requiresInstallConfig(capability);
     const label = app.title || app.name || app.id;
 
     return (
@@ -80,6 +91,7 @@ export function ConnectorRow({
                     className="h-8 shrink-0 px-2 text-xs text-[var(--text-tertiary)] opacity-0 transition-gentle group-hover:opacity-100 group-focus-within:opacity-100"
                     onClick={() => onAdvanced(app)}
                     disabled={isBusy}
+                    aria-label={`Advanced setup for ${label}`}
                 >
                     Advanced
                 </Button>
@@ -98,6 +110,11 @@ export function ConnectorRow({
                     className="h-8"
                     onClick={() => onConnect(app)}
                     disabled={isBusy}
+                    /* The visible label cannot carry the connector: it is one of
+                       three words repeated down a column of eighty rows, so a
+                       screen reader announced eighty buttons called "Connect"
+                       with nothing to tell them apart. */
+                    aria-label={`${isConnected ? 'Add another' : needsSetup ? 'Set up' : 'Connect'} ${label}`}
                 >
                     {isBusy ? (
                         <>

@@ -87,7 +87,7 @@ def test_a_wholly_masked_composio_config_survives_a_round_trip():
         "consumer_key": "also-a-credential",
     }
     merged = merged_install_config(
-        stored, {key: MASK for key in stored} | {"scopes": "read,write"}
+        stored, dict.fromkeys(stored, MASK) | {"scopes": "read,write"}
     )
 
     assert merged == stored | {"scopes": "read,write"}

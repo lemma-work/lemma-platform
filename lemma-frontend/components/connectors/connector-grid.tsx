@@ -12,6 +12,7 @@ import { hasAdvancedOptions } from './connector-utils';
 export function ConnectorGrid({
     connectors,
     connectedAppIds,
+    installedAppIds,
     busyAppId,
     searchTerm,
     onConnect,
@@ -19,6 +20,8 @@ export function ConnectorGrid({
 }: {
     connectors: Connector[];
     connectedAppIds: Set<string>;
+    /** Connectors the org has an install of, connected account or not. */
+    installedAppIds: Set<string>;
     busyAppId: string | null;
     searchTerm: string;
     onConnect: (app: Connector) => void;
@@ -54,6 +57,7 @@ export function ConnectorGrid({
                                 key={app.id}
                                 app={app}
                                 isConnected={connectedAppIds.has(app.id)}
+                                isInstalled={installedAppIds.has(app.id)}
                                 isBusy={busyAppId === app.id}
                                 hasAdvanced={hasAdvancedOptions(app)}
                                 onConnect={onConnect}
