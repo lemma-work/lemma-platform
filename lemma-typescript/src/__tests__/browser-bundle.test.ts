@@ -36,6 +36,11 @@ describe("browser bundle globals", () => {
     expect(g.LemmaClient.LEMMA_APP_THEME_MESSAGE_TYPE).toBe("lemma-app-theme");
     expect(typeof g.LemmaClient.getLemmaHostTheme).toBe("function");
     expect(typeof g.LemmaClient.subscribeLemmaHostTheme).toBe("function");
+    // The one thing a framed view may ask the host to do. Offers text to the
+    // conversation's composer; the person still sends it.
+    expect(g.LemmaClient.LEMMA_COMPOSE_MESSAGE_TYPE).toBe("lemma-compose");
+    expect(typeof g.LemmaClient.composeInConversation).toBe("function");
+    expect(typeof g.LemmaClient.canComposeInConversation).toBe("function");
     // Back-compat alias for widgets authored against `new Lemma.LemmaClient()`.
     expect(g.Lemma).toBeDefined();
     expect(g.Lemma.LemmaClient).toBe(g.LemmaClient.LemmaClient);

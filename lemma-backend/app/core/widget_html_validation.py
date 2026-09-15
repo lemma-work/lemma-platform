@@ -95,6 +95,12 @@ _EXCERPT_CHARACTERS = 80
 # and never reaches an <svg> (`"<!--" + "--><!--" * n`), and widget content comes
 # from the agent, so that is reachable.
 _SVG_ROOT = re.compile(r"\A<svg\b", re.IGNORECASE)
+# What actually opens a tag. "<" is only the start of one when an ASCII letter
+# (an element) or "!" (a comment) follows it; before anything else the parser
+# emits a literal "<" as text and carries on. Testing `startswith("<")` instead
+# read as the same rule and was not: `<<style>` satisfied it, shipped, and put a
+# bare "<" on the line above the view -- the exact thing the rule exists to stop.
+_TAG_OPEN = re.compile(r"<(?:[a-zA-Z]|!)")
 _UNRESOLVED_TEMPLATE_TOKEN = re.compile(r"__[A-Z][A-Z0-9_]*__")
 _RUNTIME_CONFIG_REFERENCE = re.compile(r"\b(?:window\.)?__LEMMA_CONFIG__\b")
 _API_URL_IDENTIFIER = re.compile(r"\bapiUrl\b")
@@ -286,15 +292,24 @@ def _leading_text_error(content: str) -> str | None:
     should be, which the empty-markup check above catches, and this, its
     half-measure, which nothing else does — the markup is all there, so every
     other rule passes and the stray line ships.
+
+    A single stray character is the same mistake and reads as nothing at all in
+    the source, which is why the test is "opens a tag" rather than "opens with
+    a bracket": `<<style>` begins with "<" and still puts a "<" on the line
+    above the view.
     """
-    if content.startswith("<"):
+    if _TAG_OPEN.match(content):
         return None
-    opening = content.split("<", 1)[0]
+    # Everything before the first thing that *does* open a tag. For prose that is
+    # the sentence; for `<<style>` it is the one character nobody meant to type.
+    first_tag = _TAG_OPEN.search(content)
+    opening = content[: first_tag.start()] if first_tag else content
     return (
-        f"Widget content must begin with markup, not text ({_excerpt(opening)}). "
-        "Text before the first tag renders as a bare line above the view, "
-        "unstyled and outside the fragment. Explanation belongs in your reply to "
-        "the person, not in `content`."
+        f"Widget content must begin with a tag, and this begins with "
+        f"{_excerpt(opening)}. Anything in front of the first tag renders as a "
+        "bare line above the view, unstyled and outside the fragment — a "
+        "sentence meant for the person, or a single stray character before "
+        "`<style>`. Explanation belongs in your reply, not in `content`."
     )
 
 
