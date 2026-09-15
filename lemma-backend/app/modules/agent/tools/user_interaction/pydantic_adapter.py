@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.core.config import settings
+from app.core.domain.errors import DomainError
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -25,6 +26,43 @@ from app.core.widget_html_validation import validate_widget_html
 from app.modules.workspace.contracts.tooling import WorkspaceSandboxService
 
 
+async def _widget_file_error(
+    ctx: RunContext[BaseAgentContext], path: str
+) -> str | None:
+    """Why this pod file cannot be the widget, or None when it can.
+
+    The whole point of a file-backed widget is that it can be fixed by editing
+    the file, so the checks that applied to an inline fragment apply here too --
+    and they are worth more here, because the author is still in the loop.
+    """
+    from app.modules.agent.tools.pod.pod_common import resolve_pod_path
+    from app.modules.agent.tools.pod.pod_data_access import pod_services
+
+    resolved = resolve_pod_path(ctx.deps, path)
+    try:
+        async with pod_services(ctx.deps) as services:
+            _, raw = await services.file.download_file_content_by_path(
+                services.ctx.pod_id, resolved, services.ctx
+            )
+    except DomainError as problem:
+        # Missing, or not this agent's to read. Both are things it can act on
+        # from here, which is the whole reason this check runs now and not at
+        # serve time. An infrastructure failure is neither, and propagates.
+        return (
+            f"No readable pod file at '{resolved}'. Write the widget's HTML "
+            "there with pod_write_file first "
+            f"({safe_described_error(problem)})."
+        )
+    try:
+        source = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"'{resolved}' is not text, so it cannot be a widget's source."
+    errors = validate_widget_html(source)
+    if errors:
+        return f"Invalid WIDGET source at '{resolved}': " + " ".join(errors)
+    return None
+
+
 async def display_resource(
     ctx: RunContext[BaseAgentContext],
     request: DisplayResourceRequest,
@@ -39,17 +77,23 @@ async def display_resource(
     Set `type` and, for most types, a `name` — omit `name` to show all resources
     of that type. FILE takes a pod `path`, so upload sandbox deliverables with
     `lemma files upload` first; a workspace path is not pod-visible. WIDGET takes
-    exactly one of `content` or `public_url`; load the `lemma-widget` skill before
-    your first widget. React, routing, or real state means an app.
+    exactly one of `path`, `content`, or `public_url`; load the `lemma-widget`
+    skill before your first widget. React, routing, or real state means an app.
 
     A WIDGET is a live view, not a picture: it reads pod data through the browser
     SDK, filters and opens records in place, and can offer the person their next
     question in the composer. It cannot send one — `ask_user` is for an answer
     this run needs.
 
+    Give a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`
+    (`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the
+    file says, so correcting one is an edit to the file. `content` inlines the
+    HTML instead and freezes it in this call.
+
     A display that succeeds is already in front of the person. Nothing here
     replaces or edits an earlier one, so calling again adds a second resource
-    below the first rather than correcting it.
+    below the first rather than correcting it — which is the other reason to
+    keep the HTML in a file.
 
     This tool displays. `ask_user` collects choices, `request_approval` collects
     permission.
@@ -68,6 +112,13 @@ async def display_resource(
                 success=False,
                 error="Invalid WIDGET content: " + " ".join(widget_errors),
             )
+
+    if request.type == DisplayResourceType.WIDGET and request.path:
+        # Read and check the file now rather than at serve time. The agent is
+        # here, and can fix it; the person opening the widget later is not.
+        source_error = await _widget_file_error(ctx, request.path)
+        if source_error is not None:
+            return DisplayResourceResponse(success=False, error=source_error)
 
     if request.type == DisplayResourceType.BROWSER:
         workspace_service = WorkspaceSandboxService()

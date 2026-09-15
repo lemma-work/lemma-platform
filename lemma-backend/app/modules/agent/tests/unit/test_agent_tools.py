@@ -461,15 +461,37 @@ def test_display_resource_validates_widget_form_and_table_payloads():
         is None
     )
 
-    # path is FILE-only now; WIDGET no longer accepts it.
-    assert "path is only valid for FILE" in _payload_error(
-        type=DisplayResourceType.WIDGET, path="/pod/widget.html"
+    # A WIDGET names a pod file holding its HTML -- the source the agent can go
+    # back and edit, which is why it is the preferred one.
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.WIDGET, path="/me/c/2026-09-15/pulse.html"
+            )
+        )
+        is None
     )
-    # Providing both widget payloads is rejected.
-    assert "exactly one of public_url or content" in _payload_error(
+    # A workspace path is still nobody else's to read, widget or file.
+    assert "sandbox path" in _payload_error(
+        type=DisplayResourceType.WIDGET, path="/workspace/c/pulse.html"
+    )
+    # Still exactly one source, now of three.
+    assert "exactly one of path, content, or public_url" in _payload_error(
         type=DisplayResourceType.WIDGET,
         public_url="https://example.com/widget",
         content="<div>chart</div>",
+    )
+    assert "exactly one of path, content, or public_url" in _payload_error(
+        type=DisplayResourceType.WIDGET,
+        path="/me/c/2026-09-15/pulse.html",
+        content="<div>chart</div>",
+    )
+    assert "exactly one of path, content, or public_url" in _payload_error(
+        type=DisplayResourceType.WIDGET
+    )
+    # And path still belongs to nothing else.
+    assert "only valid for FILE and WIDGET" in _payload_error(
+        type=DisplayResourceType.TABLE, name="expenses", path="/me/x.html"
     )
 
     # FORM has been removed: the enum no longer carries it, and user input is
