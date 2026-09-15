@@ -161,6 +161,7 @@ class AgentContextBriefBuilder:
         user_id: UUID,
         pod_id: UUID,
         toolsets: Collection[AgentToolset] = (),
+        run_source: str | None = None,
     ) -> str:
         # The pod default assistant runs with the user's permissions and sees the
         # whole pod; named agents see only what they're granted. This is the one
@@ -182,7 +183,9 @@ class AgentContextBriefBuilder:
             # per conversation, and the cache is deliberately not keyed by one.
             # Ahead of memory only so the volatile-most section still ends the
             # brief.
-            brief = with_run_framing(cached, conversation=conversation)
+            brief = with_run_framing(
+                cached, conversation=conversation, run_source=run_source
+            )
             return await self._with_memory(
                 brief, agent=agent, pod_id=pod_id, user_id=user_id, toolsets=toolsets
             )
@@ -241,7 +244,11 @@ class AgentContextBriefBuilder:
 
         lines.extend(
             await AgentSelfBriefBuilder(self.uow_factory).build(
-                agent=agent, pod=pod, pod_id=pod_id, is_default=is_default
+                agent=agent,
+                pod=pod,
+                pod_id=pod_id,
+                user_id=user_id,
+                is_default=is_default,
             )
         )
 
@@ -269,7 +276,7 @@ class AgentContextBriefBuilder:
         lines.extend(await self._table_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._agent_lines(pod_id=pod_id))
         lines.extend(await self._people_lines(pod_id=pod_id, user_id=user_id))
-        lines.extend(await self._workflow_lines(pod_id=pod_id))
+        lines.extend(await self._workflow_lines(pod_id=pod_id, user_id=user_id))
         lines.extend(await self._function_lines(pod_id=pod_id))
         lines.extend(await self._file_lines(pod_id=pod_id, user_id=user_id))
         return lines
@@ -350,15 +357,22 @@ class AgentContextBriefBuilder:
             )
         return lines
 
-    async def _workflow_lines(self, *, pod_id: UUID) -> list[str]:
+    async def _workflow_lines(self, *, pod_id: UUID, user_id: UUID) -> list[str]:
         """The one automation primitive the brief never named.
 
         An agent could see the functions and the schedules but not the processes
         wired between them, and proposed building one that already existed.
+
+        Filtered by the invoking user's context: a workflow carries its own
+        visibility and owner, so being in the pod is not the same as being able
+        to read every workflow in it.
         """
         async with self.uow_factory() as uow:
+            ctx = await create_authorization_data_service(uow).build_user_context(
+                user_id=user_id, pod_id=pod_id
+            )
             workflows, total = await AgentContextBriefRepository(uow).list_workflows(
-                pod_id=pod_id, limit=_MAX_RESOURCES
+                pod_id=pod_id, ctx=ctx, limit=_MAX_RESOURCES
             )
         if not workflows:
             return []

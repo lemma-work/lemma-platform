@@ -18,7 +18,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
-from app.core.authorization.context import ResourceType
+from app.core.authorization.context import Context, ResourceType
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.resource_names import resolve_resource_names_by_ids
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -28,7 +28,7 @@ from app.modules.agent_surfaces.contracts.pod_summaries import (
 )
 from app.modules.apps.contracts.pod_summaries import (
     PodAppSummary,
-    list_app_summaries_by_pod,
+    list_readable_app_summaries,
 )
 from app.modules.identity.contracts.profiles import user_profile
 from app.modules.pod.contracts.members import PodProfile, pod_name, pod_profile
@@ -58,6 +58,7 @@ class UserProfile:
 
 class AgentContextBriefRepository:
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
+        self._uow = uow
         self._session = uow.session
 
     async def get_pod_name(self, pod_id: UUID) -> str | None:
@@ -67,30 +68,23 @@ class AgentContextBriefRepository:
         return await pod_profile(self._session, pod_id)
 
     async def list_workflows(
-        self, *, pod_id: UUID, limit: int
+        self, *, pod_id: UUID, ctx: Context, limit: int
     ) -> tuple[list[PodWorkflowSummary], int]:
         return await list_workflow_summaries(
-            session=self._session, pod_id=pod_id, limit=limit
+            uow=self._uow, pod_id=pod_id, ctx=ctx, limit=limit
         )
 
     async def list_schedules(
-        self, *, pod_id: UUID, limit: int
+        self, *, pod_id: UUID, ctx: Context, limit: int
     ) -> tuple[list[PodScheduleSummary], int]:
         return await list_schedule_summaries(
-            session=self._session, pod_id=pod_id, limit=limit
+            session=self._session, pod_id=pod_id, ctx=ctx, limit=limit
         )
 
-    async def list_apps(self, *, pod_id: UUID) -> list[PodAppSummary]:
-        """This pod's apps.
-
-        The apps contract answers for many pods at once, because the page that
-        drove it needed that; one pod is the degenerate case rather than a
-        second query worth writing.
-        """
-        by_pod = await list_app_summaries_by_pod(
-            session=self._session, pod_ids=[pod_id]
+    async def list_apps(self, *, pod_id: UUID, ctx: Context) -> list[PodAppSummary]:
+        return await list_readable_app_summaries(
+            session=self._session, pod_id=pod_id, ctx=ctx
         )
-        return by_pod.get(pod_id, [])
 
     async def list_surfaces(
         self, *, pod_id: UUID, limit: int

@@ -28,6 +28,12 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services import agent_context_brief as brief_mod
+from app.modules.test_support.e2e_authz import (
+    add_pod_member,
+    auth_headers,
+    invite_org_member,
+    signup_user,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -207,3 +213,79 @@ async def test_an_empty_pod_still_renders_a_whole_brief(
         assert empty_section not in brief, (
             f"{empty_section} rendered as a heading over nothing"
         )
+
+
+@pytest.mark.asyncio
+async def test_a_members_brief_excludes_another_members_private_schedule(
+    authenticated_client, async_client, fixed_test_org
+):
+    """Being in a pod is not permission to read everything in it.
+
+    The first version of the schedule and workflow summaries selected on
+    ``pod_id`` alone. A schedule carries its own visibility and owner, and an
+    agent-targeting schedule created by a pod user defaults to **PERSONAL** --
+    so one member's private standing work, instruction text included, went into
+    another member's agent prompt.
+
+    Two real members and a real private schedule, because this is exactly the
+    check a stubbed repository cannot make.
+    """
+    created = await authenticated_client.post(
+        "/pods",
+        json={
+            "name": f"visibility-{uuid4().hex[:8]}",
+            "type": "HYBRID",
+            "organization_id": fixed_test_org["id"],
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    pod_id = created.json()["id"]
+
+    async def _member(slug: str) -> tuple[dict, dict[str, str]]:
+        user = await signup_user(async_client, slug)
+        org_member = await invite_org_member(
+            authenticated_client,
+            async_client,
+            org_id=fixed_test_org["id"],
+            user=user,
+        )
+        await add_pod_member(
+            authenticated_client,
+            pod_id=pod_id,
+            organization_member_id=org_member["id"],
+            role="POD_USER",
+            roles=["POD_USER"],
+        )
+        return user, auth_headers(user)
+
+    owner, owner_headers = await _member(f"brief-owner-{uuid4().hex[:6]}")
+    peer, _ = await _member(f"brief-peer-{uuid4().hex[:6]}")
+
+    private = await async_client.post(
+        f"/pods/{pod_id}/schedules",
+        json={
+            "name": "owners-private-sweep",
+            "schedule_type": "TIME",
+            "agent_name": "POD_DEFAULT",
+            "instruction": "SECRET-INSTRUCTION-DO-NOT-LEAK",
+            "config": {"cron": "0 9 * * 1-5"},
+        },
+        headers=owner_headers,
+    )
+    assert private.status_code in (
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ), private.text
+    assert private.json()["visibility"] == "PERSONAL", (
+        "only meaningful while an agent schedule defaults to PERSONAL"
+    )
+
+    owner_brief = await _teammate_brief(pod_id=pod_id, user_id=owner["id"])
+    assert "owners-private-sweep" in owner_brief, "the owner should see their own"
+
+    peer_brief = await _teammate_brief(pod_id=pod_id, user_id=peer["id"])
+    assert "owners-private-sweep" not in peer_brief
+    assert "SECRET-INSTRUCTION-DO-NOT-LEAK" not in peer_brief
+    # The count is filtered too: a total taken over everything would tell the
+    # reader how many schedules they are not allowed to see.
+    assert "more schedules not listed" not in peer_brief

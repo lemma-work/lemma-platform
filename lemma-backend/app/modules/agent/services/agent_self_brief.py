@@ -8,16 +8,25 @@ architecture gate allows.
 Everything it renders already existed and none of it reached the prompt. The
 agent did not know its own name -- which is the pod's name, because the pod is
 the teammate; it is stored as ``pod_default`` and neither string was in front of
-it. It did not know what it was allowed to do without asking, because
-``allowed_actions`` was authorization data and nothing else. It did not know its
-standing work, though a schedule is the closest thing an agent has to a job and
-its profile page has listed them under that heading for a while. And it knew
-only the one channel the current run arrived on, so it could not tell anybody
-where else to reach it.
+it. It did not know its standing work, though a schedule is the closest thing an
+agent has to a job. And it knew only the one channel the current run arrived on,
+so it could not tell anybody where else to reach it.
 
-Every read here is best-effort. A brief that cannot describe the agent is still
-worth rendering, and a self-description is never worth failing somebody's run
-over.
+What this deliberately does *not* render is ``Agent.allowed_actions``. That
+field reads like the agent's own authority and is the opposite: the repository
+computes it for ``ResourceType.AGENT``, so it holds the *caller's* permitted
+actions on the agent row -- read, execute, update, delete. Printing it as "what
+you may do without asking" would tell an agent it may delete, meaning somebody
+else may delete *it*. It is also empty on the ordinary path, because the
+conversation resolver loads the agent without a context. What the agent may
+actually do is its resource grants and the invoking user's permissions, which
+the inventory and the pod section already cover.
+
+Every read here is best-effort, and every one of them is filtered by the
+invoking user's authorization context: schedules, workflows and apps each carry
+their own visibility and owner, and a schedule's instruction is free text
+somebody wrote. A brief that cannot describe the agent is still worth rendering,
+and a self-description is never worth failing somebody's run over.
 """
 
 from __future__ import annotations
@@ -26,6 +35,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent
@@ -46,7 +56,6 @@ logger = get_logger(__name__)
 MAX_SCHEDULES = 12
 MAX_APPS = 12
 MAX_SURFACES = 8
-MAX_PERMITS = 50
 
 #: A database read that failed. Narrow rather than bare ``Exception`` so a bug
 #: in the rendering below still surfaces instead of reading as "the pod has no
@@ -88,7 +97,7 @@ def schedule_line(summary: PodScheduleSummary) -> str:
 
 
 def _identity_lines(*, agent: Agent, pod: PodProfile, is_default: bool) -> list[str]:
-    """Name, description, tenure and permits -- everything needing no read.
+    """Name, description and tenure -- everything needing no read.
 
     The pod's own agent is named by the **pod**, not by
     ``DEFAULT_RESPONDER_NAME``. That constant is the platform's word for
@@ -121,14 +130,6 @@ def _identity_lines(*, agent: Agent, pod: PodProfile, is_default: bool) -> list[
         lines.append(f"- How you are described: {agent.description.strip()}")
     if is_default and pod.created_at is not None:
         lines.append(f"- Here since {pod.created_at.date().isoformat()}.")
-    if agent.allowed_actions:
-        shown = sorted(agent.allowed_actions)[:MAX_PERMITS]
-        extra = len(agent.allowed_actions) - len(shown)
-        lines.append(
-            "- What you may do without stopping to ask: "
-            + ", ".join(shown)
-            + (f" (+{extra} more)" if extra > 0 else "")
-        )
     return lines
 
 
@@ -169,15 +170,23 @@ def _apps_line(apps: list[PodAppSummary]) -> list[str]:
         return []
     shown = apps[:MAX_APPS]
     extra = len(apps) - len(shown)
-    return [
-        "- Apps running in this pod: "
-        + ", ".join(
-            app.name + (f" [{app.status.lower()}]" if app.status else "")
-            for app in shown
-        )
-        + (f" (+{extra} more)" if extra > 0 else "")
-        + ". `lemma pods describe` does not list apps; `lemma apps list` does."
-    ]
+
+    # What an app is for, and where to open it -- not a status label on its own.
+    # `status` is how the app is configured, not evidence that it works, and a
+    # bare "[ready]" invites the agent to report it as working.
+    def _one(app: PodAppSummary) -> str:
+        line = f"  - {app.name}"
+        if app.description:
+            line += f" — {app.description}"
+        if app.url:
+            line += f" ({app.url})"
+        return line
+
+    lines = ["- Apps in this pod:", *(_one(app) for app in shown)]
+    if extra > 0:
+        lines.append(f"  - … and {extra} more")
+    lines.append("  `lemma pods describe` does not list apps; `lemma apps list` does.")
+    return lines
 
 
 class AgentSelfBriefBuilder:
@@ -187,17 +196,35 @@ class AgentSelfBriefBuilder:
         self.uow_factory = uow_factory
 
     async def build(
-        self, *, agent: Agent, pod: PodProfile, pod_id: UUID, is_default: bool
+        self,
+        *,
+        agent: Agent,
+        pod: PodProfile,
+        pod_id: UUID,
+        user_id: UUID,
+        is_default: bool,
     ) -> list[str]:
         lines = _identity_lines(agent=agent, pod=pod, is_default=is_default)
         try:
             async with self.uow_factory() as uow:
+                # The same authorization context every other read in the brief
+                # builds. Schedules, workflows and apps each carry their own
+                # visibility and owner, so pod membership does not entitle this
+                # user to all of them -- and a schedule's instruction is free
+                # text somebody wrote.
+                ctx = await create_authorization_data_service(uow).build_user_context(
+                    user_id=user_id, pod_id=pod_id
+                )
                 repo = AgentContextBriefRepository(uow)
                 schedules, schedule_total = await repo.list_schedules(
-                    pod_id=pod_id, limit=MAX_SCHEDULES
+                    pod_id=pod_id, ctx=ctx, limit=MAX_SCHEDULES
                 )
+                # Surfaces are pod-level channel configuration with no owner or
+                # visibility of their own, so there is nothing to filter them by.
                 surfaces = await repo.list_surfaces(pod_id=pod_id, limit=MAX_SURFACES)
-                apps = await repo.list_apps(pod_id=pod_id) if is_default else []
+                apps = (
+                    await repo.list_apps(pod_id=pod_id, ctx=ctx) if is_default else []
+                )
         except READ_FAILED:
             logger.warning(
                 "agent.self_brief.reads_unavailable.degraded",

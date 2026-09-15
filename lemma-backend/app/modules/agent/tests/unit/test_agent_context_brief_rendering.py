@@ -33,29 +33,47 @@ class TestATableLineSaysWhoCanSeeTheRows:
 
     The agent is told that anything with a status, an owner or a lifecycle
     belongs in a table row it creates and updates. Create one without a thought
-    about RLS and each member sees only their own rows -- so it builds the
-    team's ledger as one person's private notebook and reports that the team can
-    now see it. It could not even check afterwards, because the rendered line
-    dropped the flag.
+    about RLS and each member sees only their own rows — so it builds the team's
+    ledger as one person's private notebook and reports that the team can now
+    see it.
+
+    Row scope and table visibility are two different facts, and the first
+    version of this line ran them together: it said "everyone sees the same
+    rows" for any RLS-off table, which promises read access to a table that may
+    be RESTRICTED.
     """
 
-    def _table(self, *, enable_rls: bool):
+    def _table(self, *, enable_rls: bool, visibility: str | None = None):
         return SimpleNamespace(
             table_name="tickets",
             primary_key_column="id",
             enable_rls=enable_rls,
+            visibility=visibility,
             columns=[_column("id", "UUID")],
         )
 
-    def test_an_rls_table_says_each_member_sees_only_their_own(self):
+    def test_an_rls_table_says_rows_are_per_person(self):
         line = brief_lines.table_line(self._table(enable_rls=True))
         assert "RLS on" in line
-        assert "only their own" in line
+        assert "you see your own" in line
 
-    def test_a_shared_table_says_everyone_sees_the_same_rows(self):
+    def test_an_rls_table_does_not_claim_other_rows_do_not_exist(self):
+        """There is a permission-checked admin mode; the rows are not gone."""
+        line = brief_lines.table_line(self._table(enable_rls=True))
+        assert "admin mode" in line
+
+    def test_a_shared_table_scopes_its_promise_to_who_can_read_it(self):
         line = brief_lines.table_line(self._table(enable_rls=False))
         assert "RLS off" in line
-        assert "everyone sees the same rows" in line
+        assert "everyone who can read this table" in line
+
+    def test_visibility_is_stated_separately_from_row_scope(self):
+        """Turning RLS off does not make a RESTRICTED table readable."""
+        line = brief_lines.table_line(
+            self._table(enable_rls=False, visibility="RESTRICTED")
+        )
+        assert "visibility RESTRICTED" in line
+        assert "RLS off" in line
 
     def test_a_table_that_does_not_say_is_read_as_the_default(self):
         """Absent means on, because that is what the datastore does with it."""
@@ -103,18 +121,69 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
 
     A person typing, a message arriving from Slack and a schedule firing at six
     in the morning produced the same prompt. So an unattended run would call
-    ``ask_user`` and hang on an answer nobody was going to give, and would end
-    by addressing a reply to a reader who does not exist.
+    ``ask_user`` and hang on an answer nobody was going to give.
+
+    The first fix then introduced a second bug, which is what the rest of this
+    covers: it read the *conversation*, and a schedule stamps the conversation
+    once and forever.
     """
 
-    def test_a_scheduled_run_is_told_nobody_is_there(self):
-        conversation = SimpleNamespace(
-            metadata={"started_by": "SCHEDULE", "schedule_name": "daily-invoices"}
+    SCHEDULED = {"started_by": "SCHEDULE", "schedule_name": "daily-invoices"}
+
+    def test_a_scheduled_firing_is_told_nobody_is_watching(self):
+        framed = brief_lines.with_run_framing(
+            "BRIEF", conversation=SimpleNamespace(metadata=self.SCHEDULED)
         )
-        framed = brief_lines.with_run_framing("BRIEF", conversation=conversation)
         assert "daily-invoices" in framed
-        assert "Nobody is waiting on it" in framed
+        assert "Assume nobody is watching" in framed
         assert "ask_user" in framed
+
+    def test_a_person_typing_into_a_scheduled_conversation_is_not_ignored(self):
+        """The bug this class exists for.
+
+        ``started_by`` stays on the conversation. Somebody opening it the next
+        morning and asking a question starts a new run in it — and the agent was
+        being told nobody would read the reply, so it filed its answer and said
+        nothing to the person who had just asked.
+        """
+        framed = brief_lines.with_run_framing(
+            "BRIEF",
+            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+            run_source="user_message",
+        )
+        assert "Assume nobody is watching" not in framed
+        assert "a person is now asking" in framed
+
+    def test_queued_messages_also_count_as_a_person(self):
+        """A message queued behind a running turn is still somebody typing."""
+        framed = brief_lines.with_run_framing(
+            "BRIEF",
+            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+            run_source="queued_messages",
+        )
+        assert "Assume nobody is watching" not in framed
+
+    def test_an_unrecognised_run_source_does_not_count_as_a_person(self):
+        """One-sided on purpose.
+
+        A source this build does not know is not evidence somebody is there, so
+        the unattended framing stands — but a *recognised* human source always
+        wins, because wrongly claiming nobody is watching is the failure that
+        costs somebody an answer.
+        """
+        framed = brief_lines.with_run_framing(
+            "BRIEF",
+            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+            run_source="some_future_trigger",
+        )
+        assert "Assume nobody is watching" in framed
+
+    def test_the_unattended_wording_does_not_claim_the_reply_vanishes(self):
+        """Replies are persisted. Nobody reading it *now* is the honest claim."""
+        framed = brief_lines.with_run_framing(
+            "BRIEF", conversation=SimpleNamespace(metadata=self.SCHEDULED)
+        )
+        assert "still saved to this conversation" in framed
 
     def test_a_surface_run_is_told_where_the_person_is(self):
         conversation = SimpleNamespace(metadata={"surface_platform": "SLACK"})
@@ -122,11 +191,7 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         assert "arrived from slack" in framed
 
     def test_an_unmarked_run_is_told_nothing_rather_than_guessed_at(self):
-        """Somebody typing is the common case and needs no line at all.
-
-        Guessing the other way is exactly what was already doing the damage, so
-        an absent marker produces an absent section rather than a claim.
-        """
+        """Somebody typing is the common case and needs no line at all."""
         conversation = SimpleNamespace(metadata={})
         assert (
             brief_lines.with_run_framing("BRIEF", conversation=conversation) == "BRIEF"

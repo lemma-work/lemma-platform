@@ -87,13 +87,16 @@ class _FakeBriefRepo:
     async def get_pod_profile(self, pod_id):
         return PodProfile(name="Acme")
 
-    async def list_workflows(self, **kwargs):
+    async def list_workflows(self, *, pod_id, ctx, limit):
+        assert ctx is not None, "workflows must be filtered by the caller's context"
         return ([], 0)
 
-    async def list_schedules(self, **kwargs):
+    async def list_schedules(self, *, pod_id, ctx, limit):
+        assert ctx is not None, "schedules must be filtered by the caller's context"
         return ([], 0)
 
-    async def list_apps(self, **kwargs):
+    async def list_apps(self, *, pod_id, ctx):
+        assert ctx is not None, "apps must be filtered by the caller's context"
         return []
 
     async def list_surfaces(self, **kwargs):
@@ -152,6 +155,9 @@ def stubbed(monkeypatch):
     # `## You` is built in its own module off its own import of the repository,
     # so patching the brief module alone leaves the real one wired in behind it.
     monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _FakeBriefRepo)
+    monkeypatch.setattr(
+        self_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
+    )
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
     # `function`'s published operation, not a name bound in the subject: a
     # double inside the module under test certifies the half you did not write.
@@ -653,7 +659,7 @@ class TestTheAgentIsToldWhoItIs:
         )
 
         class _Repo(_FakeBriefRepo):
-            async def list_schedules(self, **kwargs):
+            async def list_schedules(self, *, pod_id, ctx, limit):
                 return ([mine, theirs], 2)
 
         monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)
@@ -676,7 +682,7 @@ class TestTheAgentIsToldWhoItIs:
         """A self-description is never worth failing somebody's run over."""
 
         class _Repo(_FakeBriefRepo):
-            async def list_schedules(self, **kwargs):
+            async def list_schedules(self, *, pod_id, ctx, limit):
                 raise OperationalError("select", {}, Exception("no connection"))
 
         monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)

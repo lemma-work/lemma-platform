@@ -46,41 +46,90 @@ def more_note(shown: int, total: object, noun: str) -> list[str]:
     ]
 
 
-def with_run_framing(brief: str, *, conversation) -> str:
-    """Say who started this run, and whether anybody is waiting on it.
+#: Run sources that mean a person typed something and is looking at the reply.
+#: Anything else -- a schedule firing, a workflow node, a table trigger -- may
+#: be unattended, and the conversation is what says which.
+HUMAN_RUN_SOURCES = frozenset({"user_message", "queued_messages"})
 
-    Every run read identically before this: a person typing in the web UI, a
-    message arriving from Slack, and a schedule firing at six in the morning all
-    produced the same prompt. So an unattended run would call `ask_user` and
-    hang on an answer nobody was going to give, and would end by addressing a
-    reply to a reader who does not exist.
 
-    Only what is actually stamped on the conversation is reported. A run with no
-    marker gets no line rather than a guess, because "a person is waiting" is
-    exactly the assumption that was already doing the damage -- and it is the
-    right default for the overwhelmingly common case of somebody typing.
+def run_source_of(agent_run) -> str | None:
+    """What kicked off this run, from its own metadata.
+
+    Lives here rather than with the runner because the only thing that reads it
+    is the framing below, and the pair is one fact: a schedule stamps the
+    *conversation* once, so the conversation cannot say whether a person is here
+    on this turn. Only the run can.
+    """
+    metadata = getattr(agent_run, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    source = metadata.get("source")
+    return str(source) if source else None
+
+
+def with_run_framing(brief: str, *, conversation, run_source: str | None = None) -> str:
+    """Say who started **this run**, and whether anybody is waiting on it.
+
+    Every run read identically before this: a person typing, a message from
+    Slack, and a schedule firing at six in the morning all produced the same
+    prompt, so an unattended run would call `ask_user` and hang on an answer
+    nobody was going to give.
+
+    The first version read only the conversation, and that was wrong in a way
+    worth spelling out. ``started_by`` is stamped on the *conversation* when a
+    schedule creates it, and it stays there. A person who opens that same
+    conversation the next morning and types a question starts a new run in it --
+    and the brief would still have told the agent that nobody was waiting, that
+    its reply would not be read, and that `ask_user` could not return. It would
+    then file its answer somewhere and say nothing to the person who asked.
+
+    So the conversation says how it *began* and ``run_source`` says what started
+    *this turn*, and only the two together justify the unattended claim. The
+    check is deliberately one-sided: an unrecognised source is not treated as a
+    person, but a recognised human source always wins, because wrongly claiming
+    nobody is there is the failure that actually costs somebody an answer.
     """
     metadata = getattr(conversation, "metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
+    a_person_typed = run_source in HUMAN_RUN_SOURCES
 
-    if str(metadata.get("started_by") or "").upper() == "SCHEDULE":
+    started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
+    if started_by_schedule and not a_person_typed:
         name = metadata.get("schedule_name")
         named = f" (`{name}`)" if name else ""
         return (
             f"{brief}\n\n## This run\n"
-            f"- A schedule{named} started this. **Nobody is waiting on it** — "
-            "`ask_user` has no one to ask and will not come back, and anything "
-            "you say only in a reply will not be read.\n"
-            "- Put what you did and what needs a person's decision somewhere "
-            "durable: a row, a file, or a message to whoever owns it."
+            f"- A schedule{named} started this, and nothing since has come from "
+            "a person. **Assume nobody is watching right now** — `ask_user` "
+            "pauses the run until somebody answers, which on an unattended "
+            "firing may be a long time.\n"
+            "- Your reply is still saved to this conversation and a person can "
+            "read it later. Put anything that needs a decision where its owner "
+            "will find it — a row, a file, or a message to them — rather than "
+            "only in the reply."
         )
 
     platform = metadata.get("surface_platform")
     if platform:
+        where = str(platform).lower()
+        if started_by_schedule:
+            # Began as a firing, but a person is in it now.
+            return (
+                f"{brief}\n\n## This run\n"
+                f"- This conversation was started by a schedule, and a person "
+                f"is now asking in it from {where}. Answer them here."
+            )
         return (
             f"{brief}\n\n## This run\n"
-            f"- This arrived from {str(platform).lower()}, and the person is "
-            "waiting there. Your reply goes back to the same conversation."
+            f"- This arrived from {where}, and the person is waiting there. "
+            "Your reply goes back to the same conversation."
+        )
+
+    if started_by_schedule and a_person_typed:
+        return (
+            f"{brief}\n\n## This run\n"
+            "- This conversation was started by a schedule, and a person is now "
+            "asking in it. Answer them here."
         )
     return brief
 
@@ -161,18 +210,24 @@ def table_line(table) -> str:
     suffix = (
         f" (+{hidden} more columns — describe the table to see them)" if hidden else ""
     )
-    # Who can see the rows, which is the fact the brief was most obviously
-    # missing: `enable_rls` defaults to on, so a table created without a thought
-    # about it is private per person. An agent told to land durable state in a
-    # table, and not told this, builds the team's ledger as somebody's private
-    # notebook and reports that the team can now see it.
-    scope = (
-        "per-user rows (RLS on — each member sees only their own)"
+    # Two separate facts, and the first version ran them together. `enable_rls`
+    # decides which *rows* you see inside a table you can already read;
+    # `visibility` decides whether you can read the table at all. "RLS off —
+    # everyone sees the same rows" promised access this line had not checked, on
+    # a table that may be RESTRICTED. And "another member's row does not exist
+    # for them" is not true either: RLS tables have an explicit, permission-
+    # checked admin mode.
+    rows = (
+        "rows are per-person (RLS on): you see your own; reading across "
+        "everyone needs the admin mode, which is permission-checked"
         if getattr(table, "enable_rls", True)
-        else "shared rows (RLS off — everyone sees the same rows)"
+        else "rows are shared (RLS off): everyone who can read this table sees "
+        "the same rows"
     )
+    visibility = str(getattr(table, "visibility", "") or "").upper()
+    who = f", visibility {visibility}" if visibility else ""
     return (
-        f"- {table.table_name} (pk: {table.primary_key_column}, {scope}): "
+        f"- {table.table_name} (pk: {table.primary_key_column}{who}; {rows}): "
         f"{columns}{suffix}"
     )
 
