@@ -16,6 +16,7 @@ import pytest
 
 from app.modules.connectors.domain.auth_config import (
     COMPOSIO_ORG_CUSTOM_REASON,
+    COMPOSIO_SYSTEM_DEFAULT_REASON,
     AuthConfigSource,
 )
 from app.modules.connectors.domain.connector import (
@@ -74,7 +75,7 @@ def _install(kind: ConnectorKind, config: dict | None = None) -> ResolvedInstall
 
 @pytest.mark.asyncio
 async def test_composio_installer_refuses_org_supplied_credentials():
-    """The second guard on "Composio uses Lemma's Composio account".
+    """The second guard on "a managed toolkit uses Lemma's Composio account".
 
     Not a duplicate of the service-layer check: this one also runs on the
     *update* path, which never reaches `_validate_auth_config_request`. It had
@@ -82,7 +83,7 @@ async def test_composio_installer_refuses_org_supplied_credentials():
     Composio spec advertised the opposite of what it enforces.
     """
     installer = _registry().get(ConnectorKind.COMPOSIO).installer
-    spec = ComposioKindSpec(toolkit_slug="gmail")
+    spec = ComposioKindSpec(toolkit_slug="gmail", system_default_available=True)
 
     with pytest.raises(ConnectorValidationError) as excinfo:
         await installer.validate_install(
@@ -97,6 +98,75 @@ async def test_composio_installer_refuses_org_supplied_credentials():
         )
         == {}
     )
+
+
+@pytest.mark.asyncio
+async def test_composio_installer_refuses_lemmas_defaults_for_an_unmanaged_toolkit():
+    """The mirror image, and the one that was missing entirely.
+
+    A SYSTEM_DEFAULT install of a toolkit Composio holds no credentials for is a
+    row that can only ever produce a 500 at connect time. Refusing it here means
+    the person is told what to supply while they are still in the dialog, rather
+    than after an install has been created and stranded.
+    """
+    installer = _registry().get(ConnectorKind.COMPOSIO).installer
+    spec = ComposioKindSpec(
+        toolkit_slug="metaads",
+        system_default_available=False,
+        supports_org_custom_oauth=True,
+        install_config_schema={
+            "type": "object",
+            "properties": {
+                "client_id": {"type": "string"},
+                "client_secret": {"type": "string"},
+            },
+            "required": ["client_id", "client_secret"],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(ConnectorValidationError) as excinfo:
+        await installer.validate_install(
+            spec=spec, config={}, config_source=AuthConfigSource.SYSTEM_DEFAULT
+        )
+    assert excinfo.value.details["reason"] == COMPOSIO_SYSTEM_DEFAULT_REASON
+
+    credentials = {"client_id": "abc", "client_secret": "shh"}
+    assert (
+        await installer.validate_install(
+            spec=spec, config=credentials, config_source=AuthConfigSource.ORG_CUSTOM
+        )
+        == credentials
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unmanaged_install_config_is_closed():
+    """The derived schema is enforced, not decorative.
+
+    An unknown key here would be stored and read back as a credential later, so
+    it is refused -- the same rule the tenant-configured kinds have had since
+    `additionalProperties: false` stopped being ignored.
+    """
+    installer = _registry().get(ConnectorKind.COMPOSIO).installer
+    spec = ComposioKindSpec(
+        toolkit_slug="metaads",
+        system_default_available=False,
+        supports_org_custom_oauth=True,
+        install_config_schema={
+            "type": "object",
+            "properties": {"client_id": {"type": "string"}},
+            "required": ["client_id"],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(ConnectorValidationError):
+        await installer.validate_install(
+            spec=spec,
+            config={"client_id": "abc", "composio_auth_config_id": "smuggled"},
+            config_source=AuthConfigSource.ORG_CUSTOM,
+        )
 
 
 @pytest.mark.parametrize("kind", ALL_KINDS, ids=lambda k: k.value)
