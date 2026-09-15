@@ -2507,6 +2507,26 @@
         "title": "AgentToolset",
         "type": "string"
       },
+      "AnswerSignInRequest": {
+        "properties": {
+          "force": {
+            "default": false,
+            "description": "Save whatever the browser holds even though it does not look signed in. For sites the check reads wrongly.",
+            "title": "Force",
+            "type": "boolean"
+          },
+          "signed_in": {
+            "description": "True when the person says they have signed in; false when they cannot right now.",
+            "title": "Signed In",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "signed_in"
+        ],
+        "title": "AnswerSignInRequest",
+        "type": "object"
+      },
       "AppBundleUploadRequest": {
         "properties": {
           "dist_archive": {
@@ -7035,18 +7055,6 @@
         "title": "FileUrlResponse",
         "type": "object"
       },
-      "FinishSignInRequest": {
-        "properties": {
-          "force": {
-            "default": false,
-            "description": "Save whatever the browser holds even though it does not look signed in. For sites the check reads wrongly.",
-            "title": "Force",
-            "type": "boolean"
-          }
-        },
-        "title": "FinishSignInRequest",
-        "type": "object"
-      },
       "ForeignKeySpec": {
         "description": "Specification for a foreign key constraint.",
         "properties": {
@@ -11050,6 +11058,30 @@
         "title": "PartialApplyResponse",
         "type": "object"
       },
+      "PendingSignInResponse": {
+        "description": "What the page needs to put a site in front of somebody.",
+        "properties": {
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_call_id",
+          "origin",
+          "reason"
+        ],
+        "title": "PendingSignInResponse",
+        "type": "object"
+      },
       "PlanStepResponse": {
         "properties": {
           "action": {
@@ -13572,24 +13604,10 @@
         "title": "SetDefaultSurfaceRequest",
         "type": "object"
       },
-      "SignInRequestResponse": {
+      "SignInOutcomeResponse": {
         "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
           "origin": {
             "title": "Origin",
-            "type": "string"
-          },
-          "reason": {
-            "title": "Reason",
             "type": "string"
           },
           "saved": {
@@ -13610,28 +13628,17 @@
             "description": "Why it was not kept, in words, when it was not.",
             "title": "Saved Detail"
           },
-          "status": {
-            "$ref": "#/components/schemas/SignInRequestStatus"
+          "signed_in": {
+            "title": "Signed In",
+            "type": "boolean"
           }
         },
         "required": [
-          "id",
           "origin",
-          "reason",
-          "status",
-          "created_at"
+          "signed_in"
         ],
-        "title": "SignInRequestResponse",
+        "title": "SignInOutcomeResponse",
         "type": "object"
-      },
-      "SignInRequestStatus": {
-        "enum": [
-          "PENDING",
-          "SIGNED_IN",
-          "DECLINED"
-        ],
-        "title": "SignInRequestStatus",
-        "type": "string"
       },
       "SignedUrlListResponse": {
         "properties": {
@@ -17301,25 +17308,9 @@
             "title": "Created At",
             "type": "string"
           },
-          "expires_hint_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expires Hint At"
-          },
           "id": {
             "format": "uuid",
             "title": "Id",
-            "type": "string"
-          },
-          "label": {
-            "title": "Label",
             "type": "string"
           },
           "last_used_at": {
@@ -17338,9 +17329,6 @@
             "title": "Origin",
             "type": "string"
           },
-          "status": {
-            "$ref": "#/components/schemas/WebLoginStatus"
-          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -17355,25 +17343,13 @@
         "required": [
           "id",
           "origin",
-          "label",
-          "status",
           "created_at",
           "updated_at",
           "last_used_at",
-          "expires_hint_at",
           "working"
         ],
         "title": "WebLoginResponse",
         "type": "object"
-      },
-      "WebLoginStatus": {
-        "description": "Whether the stored session is believed to still work.\n\n`DEAD` is set when an injection produced a page that still wanted a login.\nIt exists so a person is asked to sign in again *before* a run fails on it,\nwhich is the promise `PS-CONN-022` makes for connector credentials.",
-        "enum": [
-          "ACTIVE",
-          "DEAD"
-        ],
-        "title": "WebLoginStatus",
-        "type": "string"
       },
       "WebSearchRequest": {
         "description": "Request model for standard web search",
@@ -36998,17 +36974,26 @@
         }
       }
     },
-    "/web-logins/sign-in-requests/{request_id}": {
+    "/web-logins/sign-ins/{conversation_id}/{tool_call_id}": {
       "get": {
-        "operationId": "web_login.sign_in_request.get",
+        "operationId": "web_login.sign_in.pending",
         "parameters": [
           {
             "in": "path",
-            "name": "request_id",
+            "name": "conversation_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Request Id",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool_call_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Call Id",
               "type": "string"
             }
           }
@@ -37018,7 +37003,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SignInRequestResponse"
+                  "$ref": "#/components/schemas/PendingSignInResponse"
                 }
               }
             },
@@ -37035,84 +37020,40 @@
             "description": "Validation Error"
           }
         },
-        "summary": "What a sign-in request is asking for",
+        "summary": "What a sign-in link is asking for",
         "tags": [
           "Web Logins"
         ],
         "x-lemma": {
           "kind": "query",
           "paginates": false,
-          "resource": "web_login.sign_in_request",
+          "resource": "web_login.sign_in",
           "result": "entity",
-          "verb": "get"
+          "verb": "pending"
         }
       }
     },
-    "/web-logins/sign-in-requests/{request_id}:decline": {
+    "/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer": {
       "post": {
-        "operationId": "web_login.sign_in_request.decline",
+        "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run -- so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.\n\nOne route for both answers because it is one answer. Two routes meant two\nstatus writes with two different guards, and the weaker one let a stale tab\noverwrite a decision the agent had already been given.",
+        "operationId": "web_login.sign_in.answer",
         "parameters": [
           {
             "in": "path",
-            "name": "request_id",
+            "name": "conversation_id",
             "required": true,
             "schema": {
               "format": "uuid",
-              "title": "Request Id",
+              "title": "Conversation Id",
               "type": "string"
             }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SignInRequestResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
           },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Say you cannot sign in right now",
-        "tags": [
-          "Web Logins"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "web_login.sign_in_request"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "web_login.sign_in_request",
-          "result": "entity",
-          "verb": "decline"
-        }
-      }
-    },
-    "/web-logins/sign-in-requests/{request_id}:finish": {
-      "post": {
-        "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run \u2014 so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.",
-        "operationId": "web_login.sign_in_request.finish",
-        "parameters": [
           {
             "in": "path",
-            "name": "request_id",
+            "name": "tool_call_id",
             "required": true,
             "schema": {
-              "format": "uuid",
-              "title": "Request Id",
+              "title": "Tool Call Id",
               "type": "string"
             }
           }
@@ -37121,7 +37062,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/FinishSignInRequest"
+                "$ref": "#/components/schemas/AnswerSignInRequest"
               }
             }
           },
@@ -37132,7 +37073,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SignInRequestResponse"
+                  "$ref": "#/components/schemas/SignInOutcomeResponse"
                 }
               }
             },
@@ -37149,19 +37090,19 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Say you have signed in",
+        "summary": "Say whether you signed in",
         "tags": [
           "Web Logins"
         ],
         "x-lemma": {
           "invalidates": [
-            "web_login.sign_in_request"
+            "web_login.sign_in"
           ],
           "kind": "mutation",
           "paginates": false,
-          "resource": "web_login.sign_in_request",
+          "resource": "web_login.sign_in",
           "result": "entity",
-          "verb": "finish"
+          "verb": "answer"
         }
       }
     },

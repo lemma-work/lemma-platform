@@ -71,7 +71,6 @@ async def test_the_secret_is_encrypted_before_it_reaches_the_database() -> None:
     await repository.save(
         user_id=uuid4(),
         origin="https://app.example.com",
-        label="Example",
         secret=WebLoginSecret(cookies=COOKIES, origins=ORIGINS),
     )
 
@@ -143,12 +142,10 @@ async def test_saving_the_same_origin_twice_replaces_rather_than_adds() -> None:
     await repository.save(
         user_id=row.user_id,
         origin=row.origin,
-        label="new",
         secret=WebLoginSecret(cookies=COOKIES, origins=[]),
     )
 
     assert session.added == []
-    assert row.label == "new"
 
 
 @pytest.mark.asyncio

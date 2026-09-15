@@ -6,44 +6,60 @@ from typing import Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-from ..types import UNSET, Unset
-
-T = TypeVar("T", bound="FinishSignInRequest")
+T = TypeVar("T", bound="PendingSignInResponse")
 
 
 @_attrs_define
-class FinishSignInRequest:
-    """
+class PendingSignInResponse:
+    """What the page needs to put a site in front of somebody.
+
     Attributes:
-        force (bool | Unset): Save whatever the browser holds even though it does not look signed in. For sites the
-            check reads wrongly. Default: False.
+        origin (str):
+        reason (str):
+        tool_call_id (str):
     """
 
-    force: bool | Unset = False
+    origin: str
+    reason: str
+    tool_call_id: str
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        force = self.force
+        origin = self.origin
+
+        reason = self.reason
+
+        tool_call_id = self.tool_call_id
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update({})
-        if force is not UNSET:
-            field_dict["force"] = force
+        field_dict.update(
+            {
+                "origin": origin,
+                "reason": reason,
+                "tool_call_id": tool_call_id,
+            }
+        )
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        force = d.pop("force", UNSET)
+        origin = d.pop("origin")
 
-        finish_sign_in_request = cls(
-            force=force,
+        reason = d.pop("reason")
+
+        tool_call_id = d.pop("tool_call_id")
+
+        pending_sign_in_response = cls(
+            origin=origin,
+            reason=reason,
+            tool_call_id=tool_call_id,
         )
 
-        finish_sign_in_request.additional_properties = d
-        return finish_sign_in_request
+        pending_sign_in_response.additional_properties = d
+        return pending_sign_in_response
 
     @property
     def additional_keys(self) -> list[str]:

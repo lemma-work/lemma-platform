@@ -93,6 +93,7 @@ _NAME_TO_MODULE = {
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest': 'agent_surface_slack_manifest_response_agent_surface_slack_manifest',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
+    'AnswerSignInRequest': 'answer_sign_in_request',
     'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
     'AppDetailResponse': 'app_detail_response',
@@ -233,7 +234,6 @@ _NAME_TO_MODULE = {
     'FileSignedUrlResponse': 'file_signed_url_response',
     'FileSummaryResponse': 'file_summary_response',
     'FileUrlResponse': 'file_url_response',
-    'FinishSignInRequest': 'finish_sign_in_request',
     'ForeignKeySpec': 'foreign_key_spec',
     'FormNode': 'form_node',
     'FormNodeConfig': 'form_node_config',
@@ -342,6 +342,7 @@ _NAME_TO_MODULE = {
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
     'PartialApplyResponse': 'partial_apply_response',
+    'PendingSignInResponse': 'pending_sign_in_response',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
@@ -423,8 +424,7 @@ _NAME_TO_MODULE = {
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
-    'SignInRequestResponse': 'sign_in_request_response',
-    'SignInRequestStatus': 'sign_in_request_status',
+    'SignInOutcomeResponse': 'sign_in_outcome_response',
     'SignedUrlListResponse': 'signed_url_list_response',
     'SignedUrlRevokeResponse': 'signed_url_revoke_response',
     'SignedUrlSummary': 'signed_url_summary',
@@ -527,7 +527,6 @@ _NAME_TO_MODULE = {
     'WebLoginAuditResponse': 'web_login_audit_response',
     'WebLoginListResponse': 'web_login_list_response',
     'WebLoginResponse': 'web_login_response',
-    'WebLoginStatus': 'web_login_status',
     'WebSearchRequest': 'web_search_request',
     'WebSearchResponse': 'web_search_response',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
@@ -644,6 +643,7 @@ if TYPE_CHECKING:
     from .agent_surface_slack_manifest_response_agent_surface_slack_manifest import AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
+    from .answer_sign_in_request import AnswerSignInRequest
     from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
     from .app_detail_response import AppDetailResponse
@@ -784,7 +784,6 @@ if TYPE_CHECKING:
     from .file_signed_url_response import FileSignedUrlResponse
     from .file_summary_response import FileSummaryResponse
     from .file_url_response import FileUrlResponse
-    from .finish_sign_in_request import FinishSignInRequest
     from .foreign_key_spec import ForeignKeySpec
     from .form_node import FormNode
     from .form_node_config import FormNodeConfig
@@ -893,6 +892,7 @@ if TYPE_CHECKING:
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
     from .partial_apply_response import PartialApplyResponse
+    from .pending_sign_in_response import PendingSignInResponse
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
@@ -974,8 +974,7 @@ if TYPE_CHECKING:
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
-    from .sign_in_request_response import SignInRequestResponse
-    from .sign_in_request_status import SignInRequestStatus
+    from .sign_in_outcome_response import SignInOutcomeResponse
     from .signed_url_list_response import SignedUrlListResponse
     from .signed_url_revoke_response import SignedUrlRevokeResponse
     from .signed_url_summary import SignedUrlSummary
@@ -1078,7 +1077,6 @@ if TYPE_CHECKING:
     from .web_login_audit_response import WebLoginAuditResponse
     from .web_login_list_response import WebLoginListResponse
     from .web_login_response import WebLoginResponse
-    from .web_login_status import WebLoginStatus
     from .web_search_request import WebSearchRequest
     from .web_search_response import WebSearchResponse
     from .widget_embed_url_response import WidgetEmbedUrlResponse
@@ -1208,6 +1206,7 @@ __all__ = [
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest',
     'AgentSurfaceStatus',
     'AgentToolset',
+    'AnswerSignInRequest',
     'AppBundleUploadRequest',
     'AppBundleUploadResponse',
     'AppDetailResponse',
@@ -1348,7 +1347,6 @@ __all__ = [
     'FileSignedUrlResponse',
     'FileSummaryResponse',
     'FileUrlResponse',
-    'FinishSignInRequest',
     'ForeignKeySpec',
     'FormNode',
     'FormNodeConfig',
@@ -1457,6 +1455,7 @@ __all__ = [
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
     'PartialApplyResponse',
+    'PendingSignInResponse',
     'PlanStepResponse',
     'PlanStepResponseDetail',
     'PodConfig',
@@ -1538,8 +1537,7 @@ __all__ = [
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',
-    'SignInRequestResponse',
-    'SignInRequestStatus',
+    'SignInOutcomeResponse',
     'SignedUrlListResponse',
     'SignedUrlRevokeResponse',
     'SignedUrlSummary',
@@ -1642,7 +1640,6 @@ __all__ = [
     'WebLoginAuditResponse',
     'WebLoginListResponse',
     'WebLoginResponse',
-    'WebLoginStatus',
     'WebSearchRequest',
     'WebSearchResponse',
     'WidgetEmbedUrlResponse',

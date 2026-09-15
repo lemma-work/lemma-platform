@@ -18,12 +18,15 @@ place and nothing more.
   conversations do not read each other's cookies. The sandbox is per *person*,
   shared by every agent they run, and the session is the only thing between
   them.
-* `login_session` -- a person signing in to one site. Named for that site, so
-  what a later capture can possibly contain is decided by where the sign-in
-  happened rather than by a filter somebody has to remember to apply.
+A sign-in's browser is *not* named here. It is named for the site, and the
+relay is what names it (`browser_relay.state.session_for_domain`) because the
+relay is what has to find the profile on disk. Spelling it here as well was a
+second derivation of one name -- the exact thing this module exists to prevent
+-- and the copy had no production caller at all: everything passes the domain
+and lets the relay answer.
 
-Watching or driving names no session of its own: a viewer joins one of these
-two, and which one is the caller's to say.
+Watching or driving names no session of its own either: a viewer joins one of
+these, and which one is the caller's to say.
 
 The names are *policy* and live here. A `target_id` is *fact* and comes back
 from the relay, which is the only thing that knows what the browser has open.
@@ -55,19 +58,7 @@ def agent_session(conversation_id: UUID | None) -> str:
     return f"conv-{conversation_id.hex}"
 
 
-def login_session(domain: str) -> str:
-    """The session a sign-in to one site happens in.
-
-    Defined by the relay, because the relay is what names the profile directory
-    on disk; imported rather than re-spelled so the two cannot drift.
-    """
-    from sandbox_runtime.browser_relay.state import session_for_domain
-
-    return session_for_domain(domain)
-
-
 __all__ = [
     "DEFAULT_SESSION",
     "agent_session",
-    "login_session",
 ]

@@ -345,9 +345,16 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/browser:ensure",
         "/state:save",
         "/state:load",
-        "/state:clear",
         "/session",
     } <= served
+    # Asserted as an equality on the state routes, not a subset: `/state:clear`
+    # was here and nothing ever called it, all the way down through the client
+    # and the service to `clear_session`. A route into a signed-in browser that
+    # no product path uses is surface for free.
+    assert {p for p in served if p.startswith("/state")} == {
+        "/state:save",
+        "/state:load",
+    }
     assert not {p for p in served if p.startswith("/cdp")}
 
 
@@ -416,7 +423,6 @@ def test_every_state_route_is_behind_the_token(monkeypatch, tmp_path) -> None:
         ("/browser:ensure", {}),
         ("/state:save", {}),
         ("/state:load", {"state": {}}),
-        ("/state:clear", {}),
     ):
         assert client.post(path, json=body).status_code == 401, path
 

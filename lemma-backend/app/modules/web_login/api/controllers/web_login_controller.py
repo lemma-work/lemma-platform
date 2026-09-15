@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, UoWDep
-from app.modules.web_login.domain.entities import WebLogin, WebLoginStatus
+from app.modules.web_login.domain.entities import WebLogin
 from app.modules.web_login.infrastructure.repository import (
     WebLoginNotFound,
     WebLoginRepository,
@@ -41,12 +41,9 @@ RepositoryDep = Annotated[WebLoginRepository, Depends(get_repository)]
 class WebLoginResponse(BaseModel):
     id: UUID
     origin: str
-    label: str
-    status: WebLoginStatus
     created_at: datetime
     updated_at: datetime
     last_used_at: datetime | None
-    expires_hint_at: datetime | None
     working: bool = Field(
         description=(
             "Whether the stored session still signs you in. False means it "
@@ -76,12 +73,9 @@ def _view(login: WebLogin) -> WebLoginResponse:
     return WebLoginResponse(
         id=login.id,
         origin=login.origin,
-        label=login.label,
-        status=login.status,
         created_at=login.created_at,
         updated_at=login.updated_at,
         last_used_at=login.last_used_at,
-        expires_hint_at=login.expires_hint_at,
         working=login.is_usable,
     )
 

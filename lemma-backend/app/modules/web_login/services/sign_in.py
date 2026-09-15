@@ -18,22 +18,25 @@ authenticated request to the relay, which hands it straight to the browser.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.web_login.domain.entities import (
-    SignInRequest,
-    SignInRequestStatus,
+    PendingSignIn,
+    SignInOutcome,
     WebLoginSecret,
 )
 from app.modules.web_login.infrastructure.repository import WebLoginRepository
-from app.modules.web_login.infrastructure.sign_in_repository import (
-    SignInRequestRepository,
-)
 from app.modules.web_login.services.origin import normalize_origin
+from app.modules.web_login.services.pauses import (
+    ReadPause,
+    ResumePause,
+    pending_through_contracts,
+    resume_through_approvals,
+)
 from app.modules.web_login.services.resolution import resolve_owner
 from app.modules.web_login.services.scope import (
     BrowserState,
@@ -44,24 +47,9 @@ from app.modules.web_login.services.scope import (
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 if TYPE_CHECKING:
-    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.workspace.contracts.browser import BrowserState
 
 logger = get_logger(__name__)
-
-
-class ResumePause(Protocol):
-    """How a finished sign-in reaches the run it paused."""
-
-    async def __call__(
-        self,
-        uow: "SqlAlchemyUnitOfWork",
-        *,
-        conversation_id: UUID,
-        tool_call_id: str,
-        user_id: UUID,
-        approved: bool,
-    ) -> bool: ...
 
 
 #: Words a page shows when it still wants a login. Crude on purpose: the
@@ -90,6 +78,7 @@ class SignInService:
         *,
         browser: object | None = None,
         resume: "ResumePause | None" = None,
+        read_pause: "ReadPause | None" = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._browser_override = browser
@@ -98,7 +87,12 @@ class SignInService:
         #: collaborator rather than a call this reaches for inside itself, so a
         #: test can stand in front of it -- a double placed *inside* the subject
         #: would certify the half that was not written.
-        self._resume = resume or _resume_through_approvals
+        self._resume = resume or resume_through_approvals
+        #: How it learns what is being waited on. Named for the same reason,
+        #: and because it is the whole of what a sign-in request used to be: a
+        #: row holding an origin, a reason and a status is three facts the
+        #: paused tool call already has.
+        self._read_pause = read_pause or pending_through_contracts
 
     @property
     def _browser(self):
@@ -257,10 +251,14 @@ class SignInService:
         conversation_id: UUID | None,
         tool_call_id: str | None,
         auth_ctx: Context | None = None,
-    ) -> SignInRequest:
-        """Record that a person is being asked, and put the site in front of them.
+    ) -> str:
+        """Put the site in front of the person, and say which origin it is.
 
-        The browser is opened here rather than when they arrive so that the
+        Writes nothing. The ask is already recorded -- the tool call that paused
+        the run *is* the record, and it carries the origin and the reason. A row
+        here said the same three things in a second place, and the two drifted.
+
+        The browser is opened now rather than when they arrive so that the
         common case -- somebody who clicks straight away -- finds the site
         already loaded. It is best effort: by the time a person opens a link
         sent to their phone, the browser may well have retired for idleness,
@@ -268,15 +266,7 @@ class SignInService:
         """
         owner = await resolve_owner(auth_ctx=auth_ctx)
         site = normalize_origin(origin)
-
-        async with self._uow_factory() as uow:
-            request = await SignInRequestRepository(uow.session).create(
-                user_id=owner,
-                origin=site,
-                reason=reason,
-                conversation_id=conversation_id,
-                tool_call_id=tool_call_id,
-            )
+        del reason, tool_call_id  # carried by the pause, not by this call
 
         try:
             await self._browser.ensure_for_sign_in(owner, origin=site)
@@ -286,36 +276,82 @@ class SignInService:
             # cold is what explains the wait.
             logger.warning("web_login.sign_in.browser_not_ready.degraded")
 
-        await self._audit(owner, site, action="request", outcome="opened")
-        return request
+        await self._audit(
+            owner,
+            site,
+            action="request",
+            outcome="opened",
+            conversation_id=conversation_id,
+        )
+        return site
 
-    async def finish(
-        self,
-        *,
-        request_id: UUID,
-        user_id: UUID,
-        force: bool = False,
-    ) -> SignInRequest:
-        """Capture what the person signed in to, and close the request.
+    async def pending(
+        self, *, conversation_id: UUID, user_id: UUID
+    ) -> PendingSignIn | None:
+        """What a sign-in link is for, read from the pause itself.
 
-        Refuses when the browser holds nothing for this site, unless forced.
-        Saving an empty capture would mean telling somebody their login was
-        kept and then asking them again on the very next run.
+        There is no row to read. The paused tool call carries the origin and the
+        reason the agent gave, and its still being unresolved is what "waiting"
+        means -- so the three facts a sign-in page needs are the pause.
         """
         async with self._uow_factory() as uow:
-            repository = SignInRequestRepository(uow.session)
-            request = await repository.get_for_user(request_id, user_id)
-        if request is None:
-            from app.modules.web_login.infrastructure.sign_in_repository import (
-                SignInRequestNotFound,
+            paused = await self._read_pause(uow, conversation_id)
+        if paused is None:
+            return None
+        del user_id  # the caller has already matched the conversation's owner
+        origin = str(paused.tool_args.get("origin") or "")
+        if not origin:
+            return None
+        return PendingSignIn(
+            tool_call_id=paused.tool_call_id,
+            origin=normalize_origin(origin),
+            reason=str(paused.tool_args.get("reason") or ""),
+        )
+
+    async def answer(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_call_id: str,
+        user_id: UUID,
+        signed_in: bool,
+        force: bool = False,
+    ) -> SignInOutcome:
+        """Capture what the person did, and let the waiting run carry on.
+
+        One method for both answers because they are one answer: a person is
+        telling us whether they signed in. It used to be `finish` and `decline`
+        against a row with its own status, and the two drifted -- `decline`
+        guarded against overwriting a resolved request and `finish` did not, so
+        a stale tab could flip a declined sign-in to signed-in while the agent
+        had already been told otherwise.
+
+        Nothing guards that here because nothing can: the decision row is the
+        lock, first writer wins, and this resolves through the same endpoint an
+        approval button does.
+
+        Refuses when the browser holds nothing for this site, unless forced --
+        said while the person is still here and can do something about it,
+        rather than stored as a login that will not work.
+        """
+        found = await self.pending(conversation_id=conversation_id, user_id=user_id)
+        if found is None or found.tool_call_id != tool_call_id:
+            raise SignInNotPending(tool_call_id)
+
+        site = found.origin
+        if not signed_in:
+            await self._audit(user_id, site, action="request", outcome="declined")
+            await self._tell_the_agent(
+                conversation_id=conversation_id,
+                tool_call_id=tool_call_id,
+                user_id=user_id,
+                approved=False,
             )
+            return SignInOutcome(origin=site, signed_in=False, saved=False)
 
-            raise SignInRequestNotFound(str(request_id))
-
-        site = request.origin
-        domain = host_of(site)
         saved = False
         detail: str | None = None
+        domain = host_of(site)
 
         try:
             state: (
@@ -326,8 +362,6 @@ class SignInService:
             detail = f"the browser could not be read: {exc}"
 
         if state and not looks_signed_in(state, origin=site) and not force:
-            # Said as a refusal rather than stored, while they are still here
-            # and can do something about it.
             raise NotSignedInYet(site)
 
         if state:
@@ -337,7 +371,6 @@ class SignInService:
                     await WebLoginRepository(uow.session).save(
                         user_id=user_id,
                         origin=site,
-                        label=domain,
                         secret=WebLoginSecret(
                             cookies=scoped["cookies"], origins=scoped["origins"]
                         ),
@@ -349,47 +382,42 @@ class SignInService:
                 # this it resumes into one that has never seen the site. Saving
                 # and transferring are two steps because they are two browsers,
                 # and the whole point of the second one is that it is separate.
-                await self._hand_to_the_agent(user_id, request, scoped)
+                await self._hand_to_the_agent(
+                    user_id,
+                    origin=site,
+                    conversation_id=conversation_id,
+                    scoped=scoped,
+                )
             else:
                 detail = detail or "nothing for this site was in the browser"
 
-        async with self._uow_factory() as uow:
-            resolved = await SignInRequestRepository(uow.session).resolve(
-                request_id,
-                user_id,
-                status=SignInRequestStatus.SIGNED_IN,
-                saved=saved,
-                saved_detail=detail,
-            )
         await self._audit(
             user_id,
             site,
             action="capture",
             outcome="ok" if saved else "empty",
             detail=detail,
+            conversation_id=conversation_id,
         )
-        await self._tell_the_agent(resolved, approved=True)
-        return resolved
-
-    async def decline(self, *, request_id: UUID, user_id: UUID) -> SignInRequest:
-        async with self._uow_factory() as uow:
-            resolved = await SignInRequestRepository(uow.session).resolve(
-                request_id,
-                user_id,
-                status=SignInRequestStatus.DECLINED,
-                only_if_open=True,
-            )
-        if resolved.status is not SignInRequestStatus.DECLINED:
-            # Already answered, and the answer stands.
-            return resolved
-        await self._audit(
-            user_id, resolved.origin, action="request", outcome="declined"
+        await self._tell_the_agent(
+            conversation_id=conversation_id,
+            tool_call_id=tool_call_id,
+            user_id=user_id,
+            approved=True,
+            saved=saved,
+            saved_detail=detail,
         )
-        await self._tell_the_agent(resolved, approved=False)
-        return resolved
+        return SignInOutcome(
+            origin=site, signed_in=True, saved=saved, saved_detail=detail
+        )
 
     async def _hand_to_the_agent(
-        self, owner: UUID, request: SignInRequest, scoped: BrowserState
+        self,
+        owner: UUID,
+        *,
+        origin: str,
+        conversation_id: UUID | None,
+        scoped: BrowserState,
     ) -> None:
         """Put the captured session into the browser the run resumes into.
 
@@ -398,46 +426,54 @@ class SignInService:
         will find the saved login and load it -- rather than losing what the
         person just did.
         """
-        session = _agent_browser(request.conversation_id)
+        session = _agent_browser(conversation_id)
         if session is None:
             return
         try:
             await self._browser.load_login_state(
                 owner,
                 {"cookies": scoped["cookies"], "origins": scoped["origins"]},
-                domain=host_of(request.origin),
+                domain=host_of(origin),
                 session=session,
             )
         except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
             await self._audit(
                 owner,
-                request.origin,
+                origin,
                 action="inject",
                 outcome="failed",
                 detail=f"could not reach the agent's browser: {exc}",
+                conversation_id=conversation_id,
             )
 
-    async def _tell_the_agent(self, request: SignInRequest, *, approved: bool) -> None:
-        """Resolve the paused tool call this request was raised for.
+    async def _tell_the_agent(
+        self,
+        *,
+        conversation_id: UUID | None,
+        tool_call_id: str | None,
+        user_id: UUID,
+        approved: bool,
+        saved: bool = False,
+        saved_detail: str | None = None,
+    ) -> None:
+        """Resolve the paused tool call, carrying the outcome with it.
 
-        Without this the row changed status, an audit line was written, and the
-        run stayed WAITING for ever -- while the page told the person "the agent
-        is carrying on". The only thing that could eventually close the pause
-        was the person sending another message, which *supersedes* it with an
-        auto-denial: sign in successfully, say anything, and the agent is told
-        you did not sign in.
+        `tool_call_id` is the approval id, so this goes through the same
+        endpoint an approval button does -- idempotent, because the decision row
+        is the double-submit lock, and self-healing, which is what makes it safe
+        to call from a retry.
 
-        `tool_call_id` is the approval id -- the row's own docstring says so --
-        so this goes through the same endpoint an approval button does. That
-        path is idempotent (the decision row is the double-submit lock) and
-        self-healing, which is what makes it safe to call from a retry.
+        `saved` and `saved_detail` ride on the decision's `response`, which is
+        the channel `ask_user` already uses for its answers. They used to live in
+        a table of this feature's own, which the resume path then had to go and
+        read; two stores for two booleans, and they disagreed.
 
         `approved` maps to APPROVE_ONCE, never APPROVE_FOR_SESSION: signing in
         once is not standing consent to be asked nothing next time. What makes
         the next run quiet is the saved login, which the person can see and
         delete -- not a blanket approval they never gave.
         """
-        if request.conversation_id is None or not request.tool_call_id:
+        if conversation_id is None or not tool_call_id:
             # A sign-in asked for outside a run -- from the CLI, or a test.
             # There is no pause to resolve and nothing has gone wrong.
             return
@@ -445,10 +481,11 @@ class SignInService:
         async with self._uow_factory() as uow:
             reached = await self._resume(
                 uow,
-                conversation_id=request.conversation_id,
-                tool_call_id=request.tool_call_id,
-                user_id=request.user_id,
+                conversation_id=conversation_id,
+                tool_call_id=tool_call_id,
+                user_id=user_id,
                 approved=approved,
+                response={"saved": saved, "saved_detail": saved_detail},
             )
         if not reached:
             # The conversation is gone. The person still finished, and their
@@ -456,7 +493,7 @@ class SignInService:
             # thrown back at somebody who did what was asked of them.
             logger.warning(
                 "web_login.sign_in.conversation_gone.degraded",
-                request_id=str(request.id),
+                conversation_id=str(conversation_id),
             )
 
     async def _audit(
@@ -467,7 +504,14 @@ class SignInService:
         action: str,
         outcome: str,
         detail: str | None = None,
+        conversation_id: UUID | None = None,
     ) -> None:
+        """Append to the trail a person can read back.
+
+        `conversation_id` is passed because it is known here and the column
+        existed unwritten: a credential log that cannot say which run used a
+        login answers half the question it is for.
+        """
         async with self._uow_factory() as uow:
             await WebLoginRepository(uow.session).record(
                 user_id=user_id,
@@ -475,6 +519,7 @@ class SignInService:
                 action=action,
                 outcome=outcome,
                 detail=detail,
+                conversation_id=conversation_id,
             )
 
 
@@ -493,6 +538,19 @@ class NotSignedInYet(Exception):
     """The browser holds nothing for this site, so there is nothing to keep."""
 
 
+class SignInNotPending(Exception):
+    """Nothing is waiting on this answer.
+
+    Either the run was never paused for this site, or somebody already answered.
+    Both are the same fact from the page's side -- the link has been used -- and
+    both used to be a row lookup returning a resolved status.
+    """
+
+    def __init__(self, tool_call_id: str) -> None:
+        super().__init__(f"no sign-in is waiting on {tool_call_id}")
+        self.tool_call_id = tool_call_id
+
+
 def page_looks_like_a_login_wall(text: str) -> bool:
     """Whether a page still appears to want a login.
 
@@ -504,36 +562,3 @@ def page_looks_like_a_login_wall(text: str) -> bool:
 
 
 __all__ = ["NotSignedInYet", "SignInService", "page_looks_like_a_login_wall"]
-
-
-async def _resume_through_approvals(
-    uow: "SqlAlchemyUnitOfWork",
-    *,
-    conversation_id: UUID,
-    tool_call_id: str,
-    user_id: UUID,
-    approved: bool,
-) -> bool:
-    """Close a sign-in's pause through the endpoint an approval button uses.
-
-    Imported inside the function rather than at module scope: `agent` already
-    imports this module's contracts, so naming it at the top would close a
-    cycle. That path is idempotent -- the decision row is the double-submit
-    lock -- and self-healing, which is what makes it safe to call from a retry.
-    """
-    from app.modules.agent.contracts.conversations_for_surfaces import (
-        AgentRunApprovalDecision,
-        resolve_pending_interaction,
-    )
-
-    return await resolve_pending_interaction(
-        uow,
-        conversation_id=conversation_id,
-        approval_id=tool_call_id,
-        user_id=user_id,
-        decision=(
-            AgentRunApprovalDecision.APPROVE_ONCE
-            if approved
-            else AgentRunApprovalDecision.DENY
-        ),
-    )

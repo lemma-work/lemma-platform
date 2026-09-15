@@ -81,9 +81,7 @@ class WebLoginRepository:
         *,
         user_id: UUID,
         origin: str,
-        label: str,
         secret: WebLoginSecret,
-        expires_hint_at: datetime | None = None,
     ) -> WebLogin:
         """Store a login for an origin, replacing any the person already had.
 
@@ -102,19 +100,15 @@ class WebLoginRepository:
             row = WebLoginModel(
                 user_id=user_id,
                 origin=origin,
-                label=label,
                 status=WebLoginStatus.ACTIVE.value,
                 secret=encrypted,
-                expires_hint_at=expires_hint_at,
             )
             self._session.add(row)
         else:
-            row.label = label
             # A replacement is a working session by definition: somebody just
             # signed in. Anything previously marked dead is alive again.
             row.status = WebLoginStatus.ACTIVE.value
             row.secret = encrypted
-            row.expires_hint_at = expires_hint_at
         await self._session.flush()
         return _to_entity(row)
 
@@ -225,10 +219,8 @@ def _to_entity(row: WebLoginModel) -> WebLogin:
         id=row.id,
         user_id=row.user_id,
         origin=row.origin,
-        label=row.label,
         status=WebLoginStatus(row.status),
         created_at=row.created_at,
         updated_at=row.updated_at,
         last_used_at=row.last_used_at,
-        expires_hint_at=row.expires_hint_at,
     )

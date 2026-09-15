@@ -37,27 +37,34 @@ async def sign_in_prompt_envelope(
     """The message that sends somebody to sign in, or ``None`` if there is none.
 
     Keyed on the tool call, which is the durable link between the paused run and
-    the row. "The newest open request for this person" would hand somebody the
+    the pause. "The newest open request for this person" would hand somebody the
     wrong site whenever two runs are waiting at once.
     """
     if not tool_call_id:
         return None
 
-    from app.modules.web_login.contracts import SignInRequestRepository
-
     conversation = await agent_conversations.surface_conversation(uow, conversation_id)
     if conversation is None:
         return None
-    request = await SignInRequestRepository(uow.session).for_tool_call(
-        conversation.user_id, tool_call_id
-    )
-    if request is None:
+    waiting = await agent_conversations.pending_sign_in(uow, conversation_id)
+    if waiting is None or waiting.tool_call_id != tool_call_id:
         return None
 
-    lines = [f"I need you to sign in to {request.origin} so I can carry on."]
-    if request.reason:
-        lines.append(f"What I am doing: {sanitize_user_visible_text(request.reason)}")
-    lines.append(f"{settings.frontend_url.rstrip('/')}/sign-in-to-site/{request.id}")
+    origin = str(waiting.tool_args.get("origin") or "")
+    reason = str(waiting.tool_args.get("reason") or "")
+    if not origin:
+        return None
+
+    lines = [f"I need you to sign in to {origin} so I can carry on."]
+    if reason:
+        lines.append(f"What I am doing: {sanitize_user_visible_text(reason)}")
+    # Addressed by the pause it is for: the conversation and the tool call that
+    # is waiting. It used to be a row id, which meant a second record of what
+    # this link is about, kept in step by hand.
+    lines.append(
+        f"{settings.frontend_url.rstrip('/')}/sign-in-to-site"
+        f"/{conversation_id}/{tool_call_id}"
+    )
     lines.append(
         "The link opens the site in my browser for you. I will not ask for your "
         "password and I cannot see it."

@@ -295,6 +295,21 @@ async def pending_approval(
     )
 
 
+async def pending_sign_in(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> PendingInteraction | None:
+    """The oldest unresolved ``browser_sign_in``, or ``None``.
+
+    What a sign-in link needs, and all of it: `tool_args` carries the origin and
+    the reason the agent gave, and the pause existing at all is what "still
+    waiting" means. `web_login` used to keep a row saying the same three things,
+    and the row and the pause drifted apart.
+    """
+    return _pending(
+        await _service(uow).get_pending_sign_in(conversation_id=conversation_id)
+    )
+
+
 async def resolve_pending_interaction(
     uow: SqlAlchemyUnitOfWork,
     *,
@@ -454,6 +469,7 @@ __all__ = [
     "conversation_metadata_value",
     "open_surface_conversation",
     "pending_approval",
+    "pending_sign_in",
     "pending_interaction",
     "pending_question",
     "resolve_pending_interaction",

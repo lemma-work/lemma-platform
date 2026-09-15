@@ -98,10 +98,9 @@ class ResumeToolReturnBuilder:
 
         if kind == "browser_sign_in":
             return "browser_sign_in", await self._browser_sign_in_return(
-                user_id=user_id,
                 tool_args=tool_args,
                 decision=decision,
-                tool_call_id=tool_call_id,
+                response=response,
             )
 
         host_permission = agent_host_permission_request(tool_args)
@@ -195,10 +194,9 @@ class ResumeToolReturnBuilder:
     async def _browser_sign_in_return(
         self,
         *,
-        user_id: UUID,
         tool_args: dict[str, object],
         decision: AgentRunApprovalDecision,
-        tool_call_id: str | None = None,
+        response: dict[str, object],
     ) -> dict[str, object]:
         """What the agent is told after somebody answered a sign-in request.
 
@@ -210,7 +208,6 @@ class ResumeToolReturnBuilder:
         kept, and the agent is told exactly that.
         """
         from app.modules.agent.tools.browser.models import BrowserSignInResponse
-        from app.modules.web_login.contracts import SignInRequestRepository
 
         origin = str(tool_args.get("origin") or "")
 
@@ -226,21 +223,15 @@ class ResumeToolReturnBuilder:
                 ),
             ).model_dump(mode="json")
 
-        # Looked up by the tool call this is resuming, not by scanning open
-        # requests for a matching origin. That scan could never match: `finish`
-        # has already moved the row out of PENDING by the time this runs, so
-        # `saved` stayed False and the agent was told the login had not been
-        # kept every single time -- including the times it had.
-        saved = False
-        detail: str | None = None
-        repository = SignInRequestRepository(self.uow.session)
-        request = (
-            await repository.for_tool_call(user_id, tool_call_id)
-            if tool_call_id
-            else None
-        )
-        if request is not None:
-            saved, detail = request.saved, request.saved_detail
+        # Read from the decision's own payload, the way the `ask_user` branch
+        # above reads its answers. This used to query a table of this feature's
+        # own, keyed by the same tool call -- two stores for two values, and
+        # they drifted: the lookup filtered on a status the capture had already
+        # moved past, so the agent was told the login had not been kept every
+        # single time, including the times it had.
+        saved = bool(response.get("saved"))
+        detail = response.get("saved_detail")
+        detail = str(detail) if detail else None
 
         kept = (
             "It has been kept, so the next run will not ask."

@@ -231,14 +231,6 @@ class BrowserViewService:
         await _require_private(relay, doing="load a saved login")
         await relay.load_state(state, domain=domain, session=session)
 
-    async def clear_login_state(self, user_id: UUID, *, domain: str) -> None:
-        try:
-            relay = await self._relay(user_id, start=False)
-        except BrowserRelayUnavailable, SandboxCapabilityUnsupported:
-            # Nothing to clear: no sandbox, or one this fabric cannot reach.
-            return
-        await relay.clear_state(domain=domain)
-
     async def ensure_for_sign_in(
         self,
         user_id: UUID,

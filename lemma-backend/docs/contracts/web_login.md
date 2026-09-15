@@ -13,9 +13,8 @@ The table below is generated from the committed OpenAPI specification by `script
 | `web_login.delete` | DELETE | `/web-logins` | Remove a saved site login |
 | `web_login.history` | GET | `/web-logins/history` | What has been done with your saved logins |
 | `web_login.list` | GET | `/web-logins` | List saved site logins |
-| `web_login.sign_in_request.decline` | POST | `/web-logins/sign-in-requests/{request_id}:decline` | Say you cannot sign in right now |
-| `web_login.sign_in_request.finish` | POST | `/web-logins/sign-in-requests/{request_id}:finish` | Say you have signed in |
-| `web_login.sign_in_request.get` | GET | `/web-logins/sign-in-requests/{request_id}` | What a sign-in request is asking for |
+| `web_login.sign_in.answer` | POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer` | Say whether you signed in |
+| `web_login.sign_in.pending` | GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | What a sign-in link is asking for |
 
 <!-- /generated:operations -->
 

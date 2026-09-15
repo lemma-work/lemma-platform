@@ -304,9 +304,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/web-logins` | `web_login.delete` | Remove a saved site login |
 | GET | `/web-logins` | `web_login.list` | List saved site logins |
 | GET | `/web-logins/history` | `web_login.history` | What has been done with your saved logins |
-| GET | `/web-logins/sign-in-requests/{request_id}` | `web_login.sign_in_request.get` | What a sign-in request is asking for |
-| POST | `/web-logins/sign-in-requests/{request_id}:decline` | `web_login.sign_in_request.decline` | Say you cannot sign in right now |
-| POST | `/web-logins/sign-in-requests/{request_id}:finish` | `web_login.sign_in_request.finish` | Say you have signed in |
+| GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | `web_login.sign_in.pending` | What a sign-in link is asking for |
+| POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer` | `web_login.sign_in.answer` | Say whether you signed in |
 
 ## workflow
 

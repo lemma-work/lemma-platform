@@ -8,18 +8,20 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.sign_in_request_response import SignInRequestResponse
+from ...models.pending_sign_in_response import PendingSignInResponse
 from ...types import Response
 
 
 def _get_kwargs(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
-        "method": "post",
-        "url": "/web-logins/sign-in-requests/{request_id}:decline".format(
-            request_id=quote(str(request_id), safe=""),
+        "method": "get",
+        "url": "/web-logins/sign-ins/{conversation_id}/{tool_call_id}".format(
+            conversation_id=quote(str(conversation_id), safe=""),
+            tool_call_id=quote(str(tool_call_id), safe=""),
         ),
     }
 
@@ -28,9 +30,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | SignInRequestResponse | None:
+) -> ErrorResponse | PendingSignInResponse | None:
     if response.status_code == 200:
-        response_200 = SignInRequestResponse.from_dict(response.json())
+        response_200 = PendingSignInResponse.from_dict(response.json())
 
         return response_200
 
@@ -47,7 +49,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | SignInRequestResponse]:
+) -> Response[ErrorResponse | PendingSignInResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -57,25 +59,28 @@ def _build_response(
 
 
 def sync_detailed(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[ErrorResponse | SignInRequestResponse]:
-    """Say you cannot sign in right now
+) -> Response[ErrorResponse | PendingSignInResponse]:
+    """What a sign-in link is asking for
 
     Args:
-        request_id (UUID):
+        conversation_id (UUID):
+        tool_call_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | SignInRequestResponse]
+        Response[ErrorResponse | PendingSignInResponse]
     """
 
     kwargs = _get_kwargs(
-        request_id=request_id,
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id,
     )
 
     response = client.get_httpx_client().request(
@@ -86,49 +91,55 @@ def sync_detailed(
 
 
 def sync(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-) -> ErrorResponse | SignInRequestResponse | None:
-    """Say you cannot sign in right now
+) -> ErrorResponse | PendingSignInResponse | None:
+    """What a sign-in link is asking for
 
     Args:
-        request_id (UUID):
+        conversation_id (UUID):
+        tool_call_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | SignInRequestResponse
+        ErrorResponse | PendingSignInResponse
     """
 
     return sync_detailed(
-        request_id=request_id,
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id,
         client=client,
     ).parsed
 
 
 async def asyncio_detailed(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[ErrorResponse | SignInRequestResponse]:
-    """Say you cannot sign in right now
+) -> Response[ErrorResponse | PendingSignInResponse]:
+    """What a sign-in link is asking for
 
     Args:
-        request_id (UUID):
+        conversation_id (UUID):
+        tool_call_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | SignInRequestResponse]
+        Response[ErrorResponse | PendingSignInResponse]
     """
 
     kwargs = _get_kwargs(
-        request_id=request_id,
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -137,26 +148,29 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-) -> ErrorResponse | SignInRequestResponse | None:
-    """Say you cannot sign in right now
+) -> ErrorResponse | PendingSignInResponse | None:
+    """What a sign-in link is asking for
 
     Args:
-        request_id (UUID):
+        conversation_id (UUID):
+        tool_call_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | SignInRequestResponse
+        ErrorResponse | PendingSignInResponse
     """
 
     return (
         await asyncio_detailed(
-            request_id=request_id,
+            conversation_id=conversation_id,
+            tool_call_id=tool_call_id,
             client=client,
         )
     ).parsed

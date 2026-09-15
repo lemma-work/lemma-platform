@@ -31,7 +31,7 @@ import os
 from pathlib import Path
 import secrets
 
-from .chrome import BrowserNotRunning, agent_browser_argv
+from .chrome import agent_browser_argv
 
 #: Under /tmp, never /workspace. See the module docstring.
 _STATE_DIR = Path("/tmp/lemma-relay/state")
@@ -142,15 +142,3 @@ async def load_session(state: dict, *, session: str) -> None:
     finally:
         with suppress(OSError):
             path.unlink()
-
-
-async def clear_session(*, session: str) -> None:
-    """Close a login session and take its cookies with it.
-
-    Called when a run that was granted a saved login finishes. Without it the
-    session sits in the browser until the idle timer or a pause removes it --
-    and on the fabric where a pause keeps `/tmp`, that is until something
-    replaces the sandbox.
-    """
-    with suppress(StateOperationFailed, BrowserNotRunning, OSError):
-        await _run(agent_browser_argv("close", session=session))

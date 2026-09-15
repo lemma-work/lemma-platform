@@ -17333,32 +17333,30 @@ var LemmaClient = (() => {
         { params: { limit } }
       );
     }
-    /** What an agent is asking you to sign in to, and why. */
-    signInRequest(requestId) {
+    /** What a sign-in link is asking for, addressed by the pause it is for.
+     *
+     * The conversation and tool call are a lookup, not a credential: the server
+     * resolves both against the caller's own session, so a forwarded link answers
+     * exactly as an invented one does.
+     */
+    pendingSignIn(conversationId, toolCallId) {
       return this.http.request(
         "GET",
-        `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}`
+        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}`
       );
     }
     /**
-     * Say you have signed in, so the waiting run can carry on.
+     * Say whether you signed in, so the waiting run can carry on.
      *
-     * Refused with a 409 when the browser holds nothing for the site — which
-     * usually means the sign-in did not finish. `force` is for sites the check
+     * One call for both answers because it is one answer. `force` saves whatever
+     * the browser holds even when it does not look signed in, for sites the check
      * reads wrongly.
      */
-    finishSignIn(requestId, options = {}) {
+    answerSignIn(conversationId, toolCallId, options) {
       return this.http.request(
         "POST",
-        `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:finish`,
-        { body: { force: Boolean(options.force) } }
-      );
-    }
-    /** Say you cannot sign in, so the agent stops waiting and says so. */
-    declineSignIn(requestId) {
-      return this.http.request(
-        "POST",
-        `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:decline`
+        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}:answer`,
+        { body: { signed_in: options.signedIn, force: Boolean(options.force) } }
       );
     }
   };

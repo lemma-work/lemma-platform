@@ -2,12 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { SignInRequestStatus } from './SignInRequestStatus.js';
-export type SignInRequestResponse = {
-    created_at: string;
-    id: string;
+export type SignInOutcomeResponse = {
     origin: string;
-    reason: string;
     /**
      * Whether the login was kept for next time.
      */
@@ -16,5 +12,5 @@ export type SignInRequestResponse = {
      * Why it was not kept, in words, when it was not.
      */
     saved_detail?: (string | null);
-    status: SignInRequestStatus;
+    signed_in: boolean;
 };

@@ -75,7 +75,7 @@ async def test_history_is_answerable_to_its_owner(world) -> None:
 
 @scenario("A sign-in request opens only for the person it was made for")
 @proves("PS-BROWSER-010")
-@covers("web_login.sign_in_request.get")
+@covers("web_login.sign_in.pending")
 async def test_somebody_elses_request_is_not_found(world) -> None:
     """The link is safe to send because the id in it grants nothing.
 
@@ -84,26 +84,25 @@ async def test_somebody_elses_request_is_not_found(world) -> None:
     tell a holder of a guessed id that they had guessed right.
     """
     alice = await world.person("priya")
-    invented = uuid4()
     await alice.api.expect(
         "GET",
-        f"/web-logins/sign-in-requests/{invented}",
+        f"/web-logins/sign-ins/{uuid4()}/call_invented",
         status=404,
-        what="opening a sign-in request that is not yours",
+        what="opening a sign-in that is not yours",
     )
 
 
 @scenario("Signing in cannot be finished by somebody it was not asked of")
 @proves("PS-BROWSER-012")
-@covers("web_login.sign_in_request.finish")
+@covers("web_login.sign_in.answer")
 async def test_finishing_somebody_elses_request_is_refused(world) -> None:
     alice = await world.person("priya")
     await alice.api.expect(
         "POST",
-        f"/web-logins/sign-in-requests/{uuid4()}:finish",
-        json={"force": False},
+        f"/web-logins/sign-ins/{uuid4()}/call_invented:answer",
+        json={"signed_in": True, "force": False},
         status=404,
-        what="finishing a sign-in request that is not yours",
+        what="answering a sign-in that is not yours",
     )
 
 

@@ -6,12 +6,12 @@ from ..openapi_client.api.web_logins import (
     web_login_delete,
     web_login_history,
     web_login_list,
-    web_login_sign_in_request_decline,
-    web_login_sign_in_request_finish,
-    web_login_sign_in_request_get,
+    web_login_sign_in_answer,
+    web_login_sign_in_pending,
 )
-from ..openapi_client.models.finish_sign_in_request import FinishSignInRequest
-from ..openapi_client.models.sign_in_request_response import SignInRequestResponse
+from ..openapi_client.models.answer_sign_in_request import AnswerSignInRequest
+from ..openapi_client.models.pending_sign_in_response import PendingSignInResponse
+from ..openapi_client.models.sign_in_outcome_response import SignInOutcomeResponse
 from ..openapi_client.models.web_login_audit_response import (
     WebLoginAuditResponse,
 )
@@ -53,25 +53,37 @@ class WebLogins(Resource):
     # Sign-in requests
     # ------------------------------------------------------------------
 
-    def sign_in_request(self, request_id: str | UUID) -> SignInRequestResponse:
-        """What an agent is asking you to sign in to, and why."""
-        return self._call(web_login_sign_in_request_get, UUID(str(request_id)))
+    def pending_sign_in(
+        self, conversation_id: UUID | str, tool_call_id: str
+    ) -> PendingSignInResponse:
+        """What a sign-in link is asking for.
 
-    def finish_sign_in(
-        self, request_id: str | UUID, *, force: bool = False
-    ) -> SignInRequestResponse:
-        """Say you have signed in, so the waiting run can carry on.
-
-        Refused with a 409 when the browser holds nothing for the site, which
-        usually means the sign-in did not complete. `force` overrides that for
-        sites the check reads wrongly.
+        Addressed by the pause it belongs to -- the conversation and the tool
+        call that is waiting -- rather than by a row. There is no status to read:
+        a link nothing is waiting on is a 404.
         """
-        return self._call(
-            web_login_sign_in_request_finish,
-            UUID(str(request_id)),
-            body=FinishSignInRequest(force=force),
+        return self.generated(
+            web_login_sign_in_pending.sync_detailed,
+            conversation_id=str(conversation_id),
+            tool_call_id=tool_call_id,
         )
 
-    def decline_sign_in(self, request_id: str | UUID) -> SignInRequestResponse:
-        """Say you cannot sign in, so the agent stops waiting and says so."""
-        return self._call(web_login_sign_in_request_decline, UUID(str(request_id)))
+    def answer_sign_in(
+        self,
+        conversation_id: UUID | str,
+        tool_call_id: str,
+        *,
+        signed_in: bool,
+        force: bool = False,
+    ) -> SignInOutcomeResponse:
+        """Say whether you signed in, so the waiting run can carry on.
+
+        `force` saves whatever the browser holds even when it does not look
+        signed in, for sites the check reads wrongly.
+        """
+        return self.generated(
+            web_login_sign_in_answer.sync_detailed,
+            conversation_id=str(conversation_id),
+            tool_call_id=tool_call_id,
+            body=AnswerSignInRequest(signed_in=signed_in, force=force),
+        )

@@ -7,23 +7,25 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
+from ...models.answer_sign_in_request import AnswerSignInRequest
 from ...models.error_response import ErrorResponse
-from ...models.finish_sign_in_request import FinishSignInRequest
-from ...models.sign_in_request_response import SignInRequestResponse
+from ...models.sign_in_outcome_response import SignInOutcomeResponse
 from ...types import Response
 
 
 def _get_kwargs(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
-    body: FinishSignInRequest,
+    body: AnswerSignInRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/web-logins/sign-in-requests/{request_id}:finish".format(
-            request_id=quote(str(request_id), safe=""),
+        "url": "/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer".format(
+            conversation_id=quote(str(conversation_id), safe=""),
+            tool_call_id=quote(str(tool_call_id), safe=""),
         ),
     }
 
@@ -37,9 +39,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | SignInRequestResponse | None:
+) -> ErrorResponse | SignInOutcomeResponse | None:
     if response.status_code == 200:
-        response_200 = SignInRequestResponse.from_dict(response.json())
+        response_200 = SignInOutcomeResponse.from_dict(response.json())
 
         return response_200
 
@@ -56,7 +58,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | SignInRequestResponse]:
+) -> Response[ErrorResponse | SignInOutcomeResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -66,33 +68,40 @@ def _build_response(
 
 
 def sync_detailed(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-    body: FinishSignInRequest,
-) -> Response[ErrorResponse | SignInRequestResponse]:
-    r"""Say you have signed in
+    body: AnswerSignInRequest,
+) -> Response[ErrorResponse | SignInOutcomeResponse]:
+    r"""Say whether you signed in
 
      Capture what the browser now holds, and let the waiting run carry on.
 
     The capture happens here, while the person is still present, rather than
-    later in the resumed run — so that \"it did not work\" is something they can
+    later in the resumed run -- so that \"it did not work\" is something they can
     be told at the moment they can still fix it.
 
+    One route for both answers because it is one answer. Two routes meant two
+    status writes with two different guards, and the weaker one let a stale tab
+    overwrite a decision the agent had already been given.
+
     Args:
-        request_id (UUID):
-        body (FinishSignInRequest):
+        conversation_id (UUID):
+        tool_call_id (str):
+        body (AnswerSignInRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | SignInRequestResponse]
+        Response[ErrorResponse | SignInOutcomeResponse]
     """
 
     kwargs = _get_kwargs(
-        request_id=request_id,
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id,
         body=body,
     )
 
@@ -104,66 +113,80 @@ def sync_detailed(
 
 
 def sync(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-    body: FinishSignInRequest,
-) -> ErrorResponse | SignInRequestResponse | None:
-    r"""Say you have signed in
+    body: AnswerSignInRequest,
+) -> ErrorResponse | SignInOutcomeResponse | None:
+    r"""Say whether you signed in
 
      Capture what the browser now holds, and let the waiting run carry on.
 
     The capture happens here, while the person is still present, rather than
-    later in the resumed run — so that \"it did not work\" is something they can
+    later in the resumed run -- so that \"it did not work\" is something they can
     be told at the moment they can still fix it.
 
+    One route for both answers because it is one answer. Two routes meant two
+    status writes with two different guards, and the weaker one let a stale tab
+    overwrite a decision the agent had already been given.
+
     Args:
-        request_id (UUID):
-        body (FinishSignInRequest):
+        conversation_id (UUID):
+        tool_call_id (str):
+        body (AnswerSignInRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | SignInRequestResponse
+        ErrorResponse | SignInOutcomeResponse
     """
 
     return sync_detailed(
-        request_id=request_id,
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id,
         client=client,
         body=body,
     ).parsed
 
 
 async def asyncio_detailed(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-    body: FinishSignInRequest,
-) -> Response[ErrorResponse | SignInRequestResponse]:
-    r"""Say you have signed in
+    body: AnswerSignInRequest,
+) -> Response[ErrorResponse | SignInOutcomeResponse]:
+    r"""Say whether you signed in
 
      Capture what the browser now holds, and let the waiting run carry on.
 
     The capture happens here, while the person is still present, rather than
-    later in the resumed run — so that \"it did not work\" is something they can
+    later in the resumed run -- so that \"it did not work\" is something they can
     be told at the moment they can still fix it.
 
+    One route for both answers because it is one answer. Two routes meant two
+    status writes with two different guards, and the weaker one let a stale tab
+    overwrite a decision the agent had already been given.
+
     Args:
-        request_id (UUID):
-        body (FinishSignInRequest):
+        conversation_id (UUID):
+        tool_call_id (str):
+        body (AnswerSignInRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | SignInRequestResponse]
+        Response[ErrorResponse | SignInOutcomeResponse]
     """
 
     kwargs = _get_kwargs(
-        request_id=request_id,
+        conversation_id=conversation_id,
+        tool_call_id=tool_call_id,
         body=body,
     )
 
@@ -173,34 +196,41 @@ async def asyncio_detailed(
 
 
 async def asyncio(
-    request_id: UUID,
+    conversation_id: UUID,
+    tool_call_id: str,
     *,
     client: AuthenticatedClient | Client,
-    body: FinishSignInRequest,
-) -> ErrorResponse | SignInRequestResponse | None:
-    r"""Say you have signed in
+    body: AnswerSignInRequest,
+) -> ErrorResponse | SignInOutcomeResponse | None:
+    r"""Say whether you signed in
 
      Capture what the browser now holds, and let the waiting run carry on.
 
     The capture happens here, while the person is still present, rather than
-    later in the resumed run — so that \"it did not work\" is something they can
+    later in the resumed run -- so that \"it did not work\" is something they can
     be told at the moment they can still fix it.
 
+    One route for both answers because it is one answer. Two routes meant two
+    status writes with two different guards, and the weaker one let a stale tab
+    overwrite a decision the agent had already been given.
+
     Args:
-        request_id (UUID):
-        body (FinishSignInRequest):
+        conversation_id (UUID):
+        tool_call_id (str):
+        body (AnswerSignInRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | SignInRequestResponse
+        ErrorResponse | SignInOutcomeResponse
     """
 
     return (
         await asyncio_detailed(
-            request_id=request_id,
+            conversation_id=conversation_id,
+            tool_call_id=tool_call_id,
             client=client,
             body=body,
         )

@@ -2,8 +2,9 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { FinishSignInRequest } from '../models/FinishSignInRequest.js';
-import type { SignInRequestResponse } from '../models/SignInRequestResponse.js';
+import type { AnswerSignInRequest } from '../models/AnswerSignInRequest.js';
+import type { PendingSignInResponse } from '../models/PendingSignInResponse.js';
+import type { SignInOutcomeResponse } from '../models/SignInOutcomeResponse.js';
 import type { WebLoginAuditResponse } from '../models/WebLoginAuditResponse.js';
 import type { WebLoginListResponse } from '../models/WebLoginListResponse.js';
 import type { WebLoginResponse } from '../models/WebLoginResponse.js';
@@ -69,19 +70,22 @@ export class WebLoginsService {
         });
     }
     /**
-     * What a sign-in request is asking for
-     * @param requestId
-     * @returns SignInRequestResponse Successful Response
+     * What a sign-in link is asking for
+     * @param conversationId
+     * @param toolCallId
+     * @returns PendingSignInResponse Successful Response
      * @throws ApiError
      */
-    public static webLoginSignInRequestGet(
-        requestId: string,
-    ): CancelablePromise<SignInRequestResponse> {
+    public static webLoginSignInPending(
+        conversationId: string,
+        toolCallId: string,
+    ): CancelablePromise<PendingSignInResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/web-logins/sign-in-requests/{request_id}',
+            url: '/web-logins/sign-ins/{conversation_id}/{tool_call_id}',
             path: {
-                'request_id': requestId,
+                'conversation_id': conversationId,
+                'tool_call_id': toolCallId,
             },
             errors: {
                 422: `Validation Error`,
@@ -89,46 +93,33 @@ export class WebLoginsService {
         });
     }
     /**
-     * Say you cannot sign in right now
-     * @param requestId
-     * @returns SignInRequestResponse Successful Response
-     * @throws ApiError
-     */
-    public static webLoginSignInRequestDecline(
-        requestId: string,
-    ): CancelablePromise<SignInRequestResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/web-logins/sign-in-requests/{request_id}:decline',
-            path: {
-                'request_id': requestId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Say you have signed in
+     * Say whether you signed in
      * Capture what the browser now holds, and let the waiting run carry on.
      *
      * The capture happens here, while the person is still present, rather than
-     * later in the resumed run — so that "it did not work" is something they can
+     * later in the resumed run -- so that "it did not work" is something they can
      * be told at the moment they can still fix it.
-     * @param requestId
+     *
+     * One route for both answers because it is one answer. Two routes meant two
+     * status writes with two different guards, and the weaker one let a stale tab
+     * overwrite a decision the agent had already been given.
+     * @param conversationId
+     * @param toolCallId
      * @param requestBody
-     * @returns SignInRequestResponse Successful Response
+     * @returns SignInOutcomeResponse Successful Response
      * @throws ApiError
      */
-    public static webLoginSignInRequestFinish(
-        requestId: string,
-        requestBody: FinishSignInRequest,
-    ): CancelablePromise<SignInRequestResponse> {
+    public static webLoginSignInAnswer(
+        conversationId: string,
+        toolCallId: string,
+        requestBody: AnswerSignInRequest,
+    ): CancelablePromise<SignInOutcomeResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/web-logins/sign-in-requests/{request_id}:finish',
+            url: '/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer',
             path: {
-                'request_id': requestId,
+                'conversation_id': conversationId,
+                'tool_call_id': toolCallId,
             },
             body: requestBody,
             mediaType: 'application/json',

@@ -1,13 +1,14 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { use, useCallback, useState } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { use, useState } from 'react';
 
 import { BrowserPane } from '@/components/workspace/browser-pane';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/shared/empty-state';
 import { PageLoader } from '@/components/brand/loader';
 import { AlertTriangle, LockKeyhole } from '@/components/ui/icons';
+import type { SignInOutcome } from 'lemma-sdk';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
 /**
@@ -40,30 +41,29 @@ const hostOf = (url: string): string => {
 export default function SignInToSitePage({
     params,
 }: {
-    params: Promise<{ requestId: string }>;
+    // Addressed by the pause it is for. There is no request id because there is
+    // no request row: the paused tool call carries the origin and the reason,
+    // and whether it is still unresolved is what "waiting" means.
+    params: Promise<{ conversationId: string; toolCallId: string }>;
 }) {
-    const { requestId } = use(params);
-    const queryClient = useQueryClient();
+    const { conversationId, toolCallId } = use(params);
     const [forced, setForced] = useState(false);
     const [liveUrl, setLiveUrl] = useState<string | null>(null);
+    // What the person was told, kept here rather than re-read: the answer
+    // resolves the pause, so asking again returns nothing at all.
+    const [outcome, setOutcome] = useState<SignInOutcome | null>(null);
 
     const request = useQuery({
-        queryKey: ['sign-in-request', requestId],
-        queryFn: () => getLemmaClient().webLogins.signInRequest(requestId),
+        queryKey: ['pending-sign-in', conversationId, toolCallId],
+        queryFn: () =>
+            getLemmaClient().webLogins.pendingSignIn(conversationId, toolCallId),
         retry: false,
     });
 
-    const finish = useMutation({
-        mutationFn: (force: boolean) =>
-            getLemmaClient().webLogins.finishSignIn(requestId, { force }),
-        onSuccess: () =>
-            queryClient.invalidateQueries({ queryKey: ['sign-in-request', requestId] }),
-    });
-
-    const decline = useMutation({
-        mutationFn: () => getLemmaClient().webLogins.declineSignIn(requestId),
-        onSuccess: () =>
-            queryClient.invalidateQueries({ queryKey: ['sign-in-request', requestId] }),
+    const answer = useMutation({
+        mutationFn: (options: { signedIn: boolean; force?: boolean }) =>
+            getLemmaClient().webLogins.answerSignIn(conversationId, toolCallId, options),
+        onSuccess: setOutcome,
     });
 
     if (request.isPending) return <PageLoader />;
@@ -76,6 +76,27 @@ export default function SignInToSitePage({
                     icon={<AlertTriangle />}
                     title="This link is not for your account"
                     description="Ask the agent to send it again, to the account you are signed in to here."
+                />
+            </Centered>
+        );
+    }
+
+    if (outcome) {
+        return (
+            <Centered>
+                <EmptyState
+                    variant="region"
+                    icon={outcome.signed_in ? <LockKeyhole /> : <AlertTriangle />}
+                    title={outcome.signed_in ? 'Signed in' : 'Told the agent'}
+                    description={
+                        !outcome.signed_in
+                            ? 'The agent knows you could not sign in, and will not wait. You can close this.'
+                            : outcome.saved
+                              ? 'The agent is carrying on, and the login has been kept so you will not be asked next time. You can close this.'
+                              : `The agent is carrying on. The login could not be kept${
+                                    outcome.saved_detail ? ` (${outcome.saved_detail})` : ''
+                                }, so you may be asked again.`
+                    }
                 />
             </Centered>
         );
@@ -94,37 +115,6 @@ export default function SignInToSitePage({
     // A redirect somewhere else is not a fault, and saying so plainly is worth
     // more than hiding it: an SSO hop is what a real sign-in looks like.
     const elsewhere = hostOf(showing) !== hostOf(data.origin);
-
-    if (data.status === 'SIGNED_IN') {
-        return (
-            <Centered>
-                <EmptyState
-                    variant="region"
-                    icon={<LockKeyhole />}
-                    title="Signed in"
-                    description={
-                        data.saved
-                            ? 'The agent is carrying on, and the login has been kept so you will not be asked next time. You can close this.'
-                            : `The agent is carrying on. The login could not be kept${
-                                  data.saved_detail ? ` (${data.saved_detail})` : ''
-                              }, so you may be asked again.`
-                    }
-                />
-            </Centered>
-        );
-    }
-
-    if (data.status === 'DECLINED') {
-        return (
-            <Centered>
-                <EmptyState
-                    variant="region"
-                    title="You declined this"
-                    description="The agent has been told and will not wait. Send it a message if you want to try again."
-                />
-            </Centered>
-        );
-    }
 
     return (
         <div className="mx-auto flex h-full w-full max-w-[1100px] flex-col gap-3 p-4">
@@ -166,7 +156,7 @@ export default function SignInToSitePage({
                 <BrowserPane origin={data.origin} autoControl onNavigated={setLiveUrl} />
             </div>
 
-            {finish.isError ? (
+            {answer.isError ? (
                 <div className="rounded-lg border border-[var(--state-warning)] px-3 py-2 text-sm">
                     It does not look like you are signed in yet — the browser holds nothing
                     for this site.{' '}
@@ -175,7 +165,7 @@ export default function SignInToSitePage({
                         size="xs"
                         onClick={() => {
                             setForced(true);
-                            finish.mutate(true);
+                            answer.mutate({ signedIn: true, force: true });
                         }}
                     >
                         Save anyway
@@ -186,17 +176,17 @@ export default function SignInToSitePage({
             <footer className="flex items-center justify-end gap-2">
                 <Button
                     variant="quiet"
-                    onClick={() => decline.mutate()}
-                    disabled={decline.isPending || finish.isPending}
+                    onClick={() => answer.mutate({ signedIn: false })}
+                    disabled={answer.isPending}
                 >
                     Can’t right now
                 </Button>
                 <Button
                     variant="primary"
-                    onClick={() => finish.mutate(forced)}
-                    disabled={finish.isPending || decline.isPending}
+                    onClick={() => answer.mutate({ signedIn: true, force: forced })}
+                    disabled={answer.isPending}
                 >
-                    {finish.isPending ? 'Checking…' : 'I’m signed in'}
+                    {answer.isPending ? 'Checking…' : 'I’m signed in'}
                 </Button>
             </footer>
         </div>

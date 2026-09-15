@@ -19,6 +19,7 @@ would have to store -- and the thing under test is our half, not theirs.
 from __future__ import annotations
 
 import shlex
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -160,10 +161,32 @@ async def _serve_the_site(ctx) -> None:
     )
 
 
-def _service(db_manager, browser=None):
+def _service(db_manager, *, waiting_on: str | None = None):
+    """The real service, against the real database and the real sandbox.
+
+    The one stand-in is the pause reader, and only when the test needs to answer
+    one. This test's subject is *which browser* a sign-in lands in -- the thing
+    that was silently wrong -- and it drives the service directly rather than
+    through an agent run, so there is no paused tool call for the real reader to
+    find. What a pause looks like, and that answering resolves it, is covered
+    where it belongs: `web_login/tests/unit/test_sign_in_service.py`.
+    """
     from app.modules.web_login.contracts import SignInService
 
-    return SignInService(SessionUnitOfWorkFactory(db_manager.session_factory))
+    async def _waiting(_uow, _conversation_id):
+        if waiting_on is None:
+            return None
+        return SimpleNamespace(
+            tool_call_id=waiting_on,
+            kind="browser_sign_in",
+            tool_args={"origin": SITE, "reason": "reading the account page"},
+            agent_run_id=None,
+        )
+
+    return SignInService(
+        SessionUnitOfWorkFactory(db_manager.session_factory),
+        read_pause=_waiting,
+    )
 
 
 class _Ctx:
@@ -209,24 +232,24 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         assert loaded is False, detail
 
         # 2. The ask. This opens the site in the session the capture will read,
-        #    which is the pairing the viewer used to get wrong.
-        request = await service.open_request(
+        #    which is the pairing the viewer used to get wrong. Nothing is
+        #    written: the paused tool call is the record of what was asked.
+        tool_call_id = f"call_{uuid4().hex[:8]}"
+        site = await service.open_request(
             origin=SITE,
             reason="reading the account page",
             auth_ctx=auth,
             conversation_id=ctx.conversation_id,
-            tool_call_id=f"call_{uuid4().hex[:8]}",
+            tool_call_id=tool_call_id,
         )
-        assert request.origin.rstrip("/") == SITE
+        assert site.rstrip("/") == SITE
 
         # 3. The person signs in. Driven here with the CLI in the *login*
         #    session -- the same browser `ensure_for_sign_in` opened and the same
         #    one `finish` reads. If those three ever disagree again, this fails.
-        from app.modules.workspace.domain.browser_context import (
-            agent_session,
-            login_session,
-        )
+        from app.modules.workspace.domain.browser_context import agent_session
         from sandbox_runtime.browser_relay.chrome import profile_for_session
+        from sandbox_runtime.browser_relay.state import session_for_domain
 
         def _in(session: str) -> str:
             """Run the CLI in one named browser, the way each caller does."""
@@ -237,7 +260,7 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
             )
 
         #: Where the person signs in.
-        env = _in(login_session("127.0.0.1"))
+        env = _in(session_for_domain("127.0.0.1"))
         #: Where the *agent* works -- a different Chrome with its own profile,
         #: and the one every assertion about "is it signed in" has to use.
         #: Checking the login browser instead is how this test passed while the
@@ -255,7 +278,15 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
 
         # 4. Keeping it. `finish` refuses an empty capture, so reaching
         #    `saved is True` means real cookies came back from a real browser.
-        finished = await service.finish(request_id=request.id, user_id=user_id)
+        # Answered the way the page answers: by naming the pause, not a row.
+        # There is no request id to pass, because there is no request row --
+        # the paused tool call is the record.
+        finished = await _service(db_manager, waiting_on=tool_call_id).answer(
+            conversation_id=ctx.conversation_id,
+            tool_call_id=tool_call_id,
+            user_id=user_id,
+            signed_in=True,
+        )
         assert finished.saved is True, finished.saved_detail
 
         # 4b. And the run it resumes into is signed in *now*, in the agent's own
@@ -286,12 +317,14 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         )
         assert "Account" in (landed.stdout or ""), landed.stdout
 
-        # 7. Removing it makes the next run ask again.
-        from app.modules.web_login.contracts import WebLoginRepository
-
-        async with SessionUnitOfWorkFactory(db_manager.session_factory)() as uow:
-            await WebLoginRepository(uow.session).delete(user_id, request.origin)
-            await uow.commit()
+        # 7. Removing it makes the next run ask again. Removed the way a person
+        #    removes one -- over the route the saved-logins screen calls -- and
+        #    not by reaching into a repository, which is no longer something a
+        #    caller outside `web_login` can do.
+        removed = await authenticated_client.request(
+            "DELETE", "/web-logins", params={"origin": site}
+        )
+        assert removed.status_code == status.HTTP_200_OK, removed.text
 
         loaded, detail = await service.try_saved_login(
             origin=SITE, conversation_id=ctx.conversation_id, auth_ctx=auth

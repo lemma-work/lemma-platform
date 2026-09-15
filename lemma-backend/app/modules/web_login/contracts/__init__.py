@@ -1,47 +1,37 @@
-"""What another module may use from `web_login`.
+"""What other modules may use from `web_login`.
 
-Reaching into the module's internals would make a caller's build depend on where
-inside `web_login` each thing happens to live. Same shape as
-`workspace/contracts/tooling.py`, and for the same reason.
+Operations, not repositories. The previous version of this file said so and did
+the opposite: it exported `WebLoginRepository`, whose constructor takes nothing
+but a session and whose `reveal_secret` returns a person's cookies in plaintext.
+Any module could have reached it, and the docstring claiming otherwise was the
+only thing suggesting they could not.
 
-Note what is deliberately *not* here: nothing that returns a decrypted secret.
-`WebLoginRepository.reveal_secret` exists, but a caller has to go through this
-module's own service to reach it, so "who can decrypt a saved login" stays a
-question with a short answer.
+So the rule is the shape of this file rather than a sentence in it. Nothing
+below returns a decrypted secret, and nothing below can move a sign-in's state:
+the one caller outside this module that needs to know about a paused sign-in
+gets a read, and the one that needs to resolve one goes through the service,
+which is what writes the audit trail.
 """
 
 from __future__ import annotations
 
 from app.modules.web_login.domain.entities import (
-    SignInRequest,
-    SignInRequestStatus,
-    WebLogin,
-    WebLoginSecret,
-    WebLoginStatus,
-)
-from app.modules.web_login.infrastructure.repository import (
-    WebLoginNotFound,
-    WebLoginRepository,
-)
-from app.modules.web_login.infrastructure.sign_in_repository import (
-    SignInRequestNotFound,
-    SignInRequestRepository,
+    PendingSignIn,
+    SignInOutcome,
 )
 from app.modules.web_login.services.origin import InvalidOrigin, normalize_origin
-from app.modules.web_login.services.sign_in import NotSignedInYet, SignInService
+from app.modules.web_login.services.sign_in import (
+    NotSignedInYet,
+    SignInNotPending,
+    SignInService,
+)
 
 __all__ = [
     "InvalidOrigin",
     "NotSignedInYet",
-    "SignInRequest",
-    "SignInRequestNotFound",
-    "SignInRequestRepository",
-    "SignInRequestStatus",
+    "PendingSignIn",
+    "SignInNotPending",
+    "SignInOutcome",
     "SignInService",
-    "WebLogin",
-    "WebLoginNotFound",
-    "WebLoginRepository",
-    "WebLoginSecret",
-    "WebLoginStatus",
     "normalize_origin",
 ]

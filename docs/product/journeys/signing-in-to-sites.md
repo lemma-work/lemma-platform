@@ -55,7 +55,7 @@ the cookies a browser would send back to it, and the storage it wrote itself.
 - The system shall reach the person wherever they are, with a link that opens
   only for them.
 
-**Contracts:** `web_login.sign_in_request.get`
+**Contracts:** `web_login.sign_in.pending`
 
 ### PS-BROWSER-011 — A person can tell what they are signing in to
 **Status:** manual
@@ -69,7 +69,7 @@ canvas.
 - The system shall show the agent's own words for why it is asking, as the
   agent's words.
 
-**Contracts:** `web_login.sign_in_request.get`
+**Contracts:** `web_login.sign_in.pending`
 
 ### PS-BROWSER-012 — Finishing resumes the run, and says whether it was kept
 **Status:** covered
@@ -82,7 +82,7 @@ canvas.
 - When a person declines, the system shall tell the agent so it can do the task
   another way or stop, rather than leaving it waiting.
 
-**Contracts:** `web_login.sign_in_request.finish`, `web_login.sign_in_request.decline`
+**Contracts:** `web_login.sign_in.answer`
 
 ---
 

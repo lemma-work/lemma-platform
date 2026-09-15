@@ -53,7 +53,6 @@ from .chrome import (
 from .stream_proxy import CONTROL, VIEW, pump
 from .state import (
     StateOperationFailed,
-    clear_session,
     load_session,
     save_session,
     session_for_domain,
@@ -305,10 +304,6 @@ def create_app() -> FastAPI:
             await load_session(request.state, session=session)
         except StateOperationFailed as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-
-    @app.post("/state:clear", status_code=204, dependencies=[Depends(require_token)])
-    async def state_clear(request: StateSaveRequest) -> None:
-        await clear_session(session=_session_name(request.session, request.domain))
 
     @app.websocket("/session")
     async def session_socket(

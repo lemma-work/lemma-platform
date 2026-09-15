@@ -17,20 +17,20 @@ than assumed.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import uuid4
+from types import SimpleNamespace
+from uuid import UUID, uuid4
 
 import pytest
 
 from app.modules.web_login.domain.entities import (
-    SignInRequestStatus,
     WebLoginStatus,
 )
 from app.modules.web_login.infrastructure.models import (
-    SignInRequestModel,
     WebLoginAuditModel,
     WebLoginModel,
 )
 from app.modules.web_login.services.sign_in import (
+    SignInNotPending,
     NotSignedInYet,
     SignInService,
     page_looks_like_a_login_wall,
@@ -59,11 +59,6 @@ def _fill_defaults(row) -> None:
         row.updated_at = _now()
     if isinstance(row, WebLoginModel) and row.status is None:
         row.status = WebLoginStatus.ACTIVE.value
-    if isinstance(row, SignInRequestModel):
-        if row.status is None:
-            row.status = SignInRequestStatus.PENDING.value
-        if row.saved is None:
-            row.saved = False
 
 
 class _Session:
@@ -73,9 +68,8 @@ class _Session:
     rows back, and fills in on `flush` what Postgres would.
     """
 
-    def __init__(self, *, logins=None, requests=None) -> None:
+    def __init__(self, *, logins=None) -> None:
         self.logins = list(logins or [])
-        self.requests = list(requests or [])
         self.audit: list[WebLoginAuditModel] = []
         self.deleted: list[object] = []
 
@@ -87,7 +81,7 @@ class _Session:
         self.deleted.append(row)
 
     async def flush(self) -> None:
-        for bucket in (self.logins, self.requests, self.audit):
+        for bucket in (self.logins, self.audit):
             for row in bucket:
                 _fill_defaults(row)
 
@@ -111,8 +105,6 @@ class _Session:
         return iter(self._match(statement))
 
     def _rows_for(self, entity) -> list:
-        if entity is SignInRequestModel:
-            return self.requests
         if entity is WebLoginAuditModel:
             return self.audit
         return self.logins
@@ -137,7 +129,6 @@ def _saved_login(*, status=WebLoginStatus.ACTIVE, payload=None) -> WebLoginModel
     row = WebLoginModel(
         user_id=uuid4(),
         origin=SITE,
-        label="app.example.com",
         status=status.value,
         secret=get_secret_cipher().encrypt_json(body),
     )
@@ -145,16 +136,33 @@ def _saved_login(*, status=WebLoginStatus.ACTIVE, payload=None) -> WebLoginModel
     return row
 
 
-def _pending_request() -> SignInRequestModel:
-    row = SignInRequestModel(
-        user_id=uuid4(),
-        origin=SITE,
-        reason="pulling invoices",
-        status=SignInRequestStatus.PENDING.value,
-        saved=False,
-    )
-    _fill_defaults(row)
-    return row
+class _Waiting:
+    """The conversation's unresolved sign-in, as the pause reports it.
+
+    This *is* the sign-in request now. It used to be a row carrying an origin, a
+    reason and a status; the first two are the paused call's arguments and the
+    third is whether this returns anything at all.
+    """
+
+    def __init__(
+        self, *, tool_call_id="call-1", origin=SITE, reason="pulling invoices"
+    ):
+        self.pause = SimpleNamespace(
+            tool_call_id=tool_call_id,
+            kind="browser_sign_in",
+            tool_args={"origin": origin, "reason": reason},
+            agent_run_id=None,
+        )
+        self.calls: list[UUID] = []
+
+    async def __call__(self, _uow, conversation_id):
+        self.calls.append(conversation_id)
+        return self.pause
+
+
+class _NothingWaiting:
+    async def __call__(self, _uow, _conversation_id):
+        return None
 
 
 class _Ctx:
@@ -236,7 +244,10 @@ class _Resume:
 
 
 def _service(
-    session: _Session, browser: _Browser, resume: "_Resume | None" = None
+    session: _Session,
+    browser: _Browser,
+    resume: "_Resume | None" = None,
+    waiting: object | None = None,
 ) -> SignInService:
     """The real service, with a session that records instead of a database."""
 
@@ -256,7 +267,30 @@ def _service(
 
         return _CM()
 
-    return SignInService(factory, browser=browser, resume=resume or _Resume())
+    return SignInService(
+        factory,
+        browser=browser,
+        resume=resume or _Resume(),
+        read_pause=waiting if waiting is not None else _Waiting(),
+    )
+
+
+async def _answer(
+    session: _Session,
+    browser: _Browser,
+    *,
+    signed_in: bool = True,
+    force: bool = False,
+    resume: "_Resume | None" = None,
+):
+    """Somebody answering the sign-in the conversation is waiting on."""
+    return await _service(session, browser, resume).answer(
+        conversation_id=uuid4(),
+        tool_call_id="call-1",
+        user_id=uuid4(),
+        signed_in=signed_in,
+        force=force,
+    )
 
 
 def _relay_error() -> type[Exception]:
@@ -391,8 +425,9 @@ async def test_opening_a_request_puts_the_site_in_front_of_them() -> None:
         auth_ctx=_Ctx(uuid4()),
     )
 
-    assert session.requests[0].origin == SITE
-    assert session.requests[0].tool_call_id == "call-1"
+    # Nothing is written. The pause already records that somebody was asked,
+    # and what for; a row here was a second copy of both.
+    assert session.logins == []
     assert [call["origin"] for call in browser.opened] == [SITE], (
         "the person lands on the site, not a blank page"
     )
@@ -414,7 +449,7 @@ async def test_a_browser_that_will_not_start_does_not_lose_the_request() -> None
         tool_call_id="call-2",
         auth_ctx=_Ctx(uuid4()),
     )
-    assert len(session.requests) == 1
+    assert ("request", "opened") in session.audit_trail
 
 
 # ---------------------------------------------------------------------------
@@ -422,9 +457,8 @@ async def test_a_browser_that_will_not_start_does_not_lose_the_request() -> None
 # ---------------------------------------------------------------------------
 
 
-async def test_finishing_keeps_only_what_belongs_to_the_site() -> None:
-    request = _pending_request()
-    session = _Session(requests=[request])
+async def test_answering_keeps_only_what_belongs_to_the_site() -> None:
+    session = _Session()
     browser = _Browser(
         state={
             "cookies": COOKIES
@@ -433,11 +467,9 @@ async def test_finishing_keeps_only_what_belongs_to_the_site() -> None:
         }
     )
 
-    result = await _service(session, browser).finish(
-        request_id=request.id, user_id=request.user_id
-    )
+    result = await _answer(session, browser)
 
-    assert result.status is SignInRequestStatus.SIGNED_IN
+    assert result.signed_in is True
     assert result.saved is True
     assert len(session.logins) == 1, "the login was stored"
     assert ("capture", "ok") in session.audit_trail
@@ -446,64 +478,78 @@ async def test_finishing_keeps_only_what_belongs_to_the_site() -> None:
 async def test_pressing_the_button_too_early_is_refused() -> None:
     """Saving an empty capture would tell somebody their login was kept and
     then ask them again on the very next run."""
-    request = _pending_request()
-    session = _Session(requests=[request])
+    session = _Session()
 
     with pytest.raises(NotSignedInYet):
-        await _service(session, _Browser(state={"cookies": [], "origins": []})).finish(
-            request_id=request.id, user_id=request.user_id
-        )
+        await _answer(session, _Browser(state={"cookies": [], "origins": []}))
 
 
 async def test_a_person_can_insist_when_the_check_reads_the_site_wrongly() -> None:
-    request = _pending_request()
-    session = _Session(requests=[request])
+    session = _Session()
 
-    result = await _service(
-        session, _Browser(state={"cookies": [], "origins": []})
-    ).finish(request_id=request.id, user_id=request.user_id, force=True)
+    result = await _answer(
+        session, _Browser(state={"cookies": [], "origins": []}), force=True
+    )
 
-    assert result.status is SignInRequestStatus.SIGNED_IN
+    assert result.signed_in is True
     assert result.saved is False, "there was still nothing for this site to keep"
     assert session.logins == []
 
 
-async def test_a_browser_that_cannot_be_read_still_resolves_the_request() -> None:
+async def test_a_browser_that_cannot_be_read_still_resolves_the_pause() -> None:
     """The person signed in; the run should carry on even when the capture
     failed, and they should be told why it was not kept."""
-    request = _pending_request()
-    session = _Session(requests=[request])
+    session = _Session()
 
-    result = await _service(session, _Browser(fails=_relay_error()("gone"))).finish(
-        request_id=request.id, user_id=request.user_id, force=True
-    )
+    result = await _answer(session, _Browser(fails=_relay_error()("gone")), force=True)
 
-    assert result.status is SignInRequestStatus.SIGNED_IN
+    assert result.signed_in is True
     assert result.saved is False
     assert "could not be read" in (result.saved_detail or "")
 
 
-async def test_declining_tells_the_agent_rather_than_leaving_it_waiting() -> None:
-    request = _pending_request()
-    session = _Session(requests=[request])
+async def test_answering_a_link_nothing_is_waiting_on_is_refused() -> None:
+    """The one answer for "never asked", "already answered" and "not yours".
 
-    result = await _service(session, _Browser()).decline(
-        request_id=request.id, user_id=request.user_id
-    )
+    A row used to hold a status, so these were three different lookups with
+    three different outcomes -- and the one that let a stale tab overwrite a
+    decision was the one that did not check it.
+    """
+    session = _Session()
 
-    assert result.status is SignInRequestStatus.DECLINED
-    assert ("request", "declined") in session.audit_trail
-
-
-async def test_finishing_a_request_that_is_not_there_is_refused() -> None:
-    from app.modules.web_login.infrastructure.sign_in_repository import (
-        SignInRequestNotFound,
-    )
-
-    with pytest.raises(SignInRequestNotFound):
-        await _service(_Session(), _Browser()).finish(
-            request_id=uuid4(), user_id=uuid4()
+    with pytest.raises(SignInNotPending):
+        await _service(session, _Browser(), waiting=_NothingWaiting()).answer(
+            conversation_id=uuid4(),
+            tool_call_id="call-1",
+            user_id=uuid4(),
+            signed_in=True,
         )
+
+
+async def test_answering_a_different_pause_than_the_link_names_is_refused() -> None:
+    """Two runs can wait on two sites at once; the link says which."""
+    session = _Session()
+
+    with pytest.raises(SignInNotPending):
+        await _service(
+            session, _Browser(), waiting=_Waiting(tool_call_id="call-other")
+        ).answer(
+            conversation_id=uuid4(),
+            tool_call_id="call-1",
+            user_id=uuid4(),
+            signed_in=True,
+        )
+
+
+async def test_declining_tells_the_agent_rather_than_leaving_it_waiting() -> None:
+    session = _Session()
+
+    result = await _answer(session, _Browser(), signed_in=False)
+
+    assert result.signed_in is False
+    assert result.saved is False
+    assert ("request", "declined") in session.audit_trail
+    assert session.logins == [], "nothing is captured from somebody who said no"
 
 
 async def test_closing_the_service_closes_the_browser_it_was_given() -> None:
@@ -529,79 +575,94 @@ def test_a_page_that_still_wants_a_login_is_recognised() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _paused_request() -> SignInRequestModel:
-    """A request raised by a run that is waiting on it."""
-    row = _pending_request()
-    row.conversation_id = uuid4()
-    row.tool_call_id = "call_abc123"
-    return row
-
-
-async def test_finishing_resolves_the_pause_the_agent_is_waiting_on() -> None:
+async def test_answering_resolves_the_pause_the_agent_is_waiting_on() -> None:
     """The whole point, and it did not happen.
 
-    `finish` moved the row and wrote an audit line. Nothing told the run. It
+    Finishing moved a row and wrote an audit line. Nothing told the run. It
     stayed WAITING for ever while the page said "the agent is carrying on", and
     the only thing that could eventually close the pause was the person sending
     another message -- which *supersedes* it with an auto-denial. So signing in
     and then saying anything told the agent you had not signed in.
     """
-    request = _paused_request()
-    session = _Session(requests=[request])
+    session = _Session()
     resume = _Resume()
+    conversation = uuid4()
 
     await _service(
         session, _Browser(state={"cookies": COOKIES, "origins": []}), resume
-    ).finish(request_id=request.id, user_id=request.user_id)
+    ).answer(
+        conversation_id=conversation,
+        tool_call_id="call-1",
+        user_id=uuid4(),
+        signed_in=True,
+    )
 
     assert len(resume.calls) == 1
     call = resume.calls[0]
-    assert call["conversation_id"] == request.conversation_id
+    assert call["conversation_id"] == conversation
     # The tool call is the approval id, which is what lets this go through the
     # same idempotent path an approval button uses.
-    assert call["tool_call_id"] == "call_abc123"
+    assert call["tool_call_id"] == "call-1"
     assert call["approved"] is True
+
+
+async def test_the_outcome_rides_on_the_decision_rather_than_a_table() -> None:
+    """What "was it kept" is, now.
+
+    It used to be two columns on a row of this feature's own, which the resume
+    path then went and read -- and the lookup filtered on a status the capture
+    had already moved past, so the agent was told the login had not been kept
+    every single time, including the times it had. `response` is the channel
+    `ask_user` already answers through.
+    """
+    session = _Session()
+    resume = _Resume()
+
+    await _answer(
+        session, _Browser(state={"cookies": COOKIES, "origins": []}), resume=resume
+    )
+
+    assert resume.calls[0]["response"] == {"saved": True, "saved_detail": None}
+
+
+async def test_a_capture_that_found_nothing_says_so_to_the_agent() -> None:
+    session = _Session()
+    resume = _Resume()
+
+    await _answer(
+        session,
+        _Browser(state={"cookies": [], "origins": []}),
+        force=True,
+        resume=resume,
+    )
+
+    payload = resume.calls[0]["response"]
+    assert payload["saved"] is False
+    assert payload["saved_detail"]
 
 
 async def test_declining_tells_the_agent_too() -> None:
     """Or the run waits for ever on somebody who has already said no."""
-    request = _paused_request()
-    session = _Session(requests=[request])
+    session = _Session()
     resume = _Resume()
 
-    await _service(session, _Browser(), resume).decline(
-        request_id=request.id, user_id=request.user_id
-    )
+    await _answer(session, _Browser(), signed_in=False, resume=resume)
 
     assert [call["approved"] for call in resume.calls] == [False]
-
-
-async def test_a_sign_in_with_no_run_behind_it_resolves_nothing() -> None:
-    """Asked for from the CLI, or a test. There is no pause, and that is fine."""
-    request = _pending_request()  # no conversation, no tool call
-    session = _Session(requests=[request])
-    resume = _Resume()
-
-    await _service(
-        session, _Browser(state={"cookies": COOKIES, "origins": []}), resume
-    ).finish(request_id=request.id, user_id=request.user_id)
-
-    assert resume.calls == []
 
 
 async def test_a_conversation_that_has_gone_does_not_fail_the_person() -> None:
     """They did what was asked. Losing the conversation is not their problem,
     and the login is still saved."""
-    request = _paused_request()
-    session = _Session(requests=[request])
+    session = _Session()
 
-    result = await _service(
+    result = await _answer(
         session,
         _Browser(state={"cookies": COOKIES, "origins": []}),
-        _Resume(reached=False),
-    ).finish(request_id=request.id, user_id=request.user_id)
+        resume=_Resume(reached=False),
+    )
 
-    assert result.status is SignInRequestStatus.SIGNED_IN
+    assert result.signed_in is True
     assert result.saved is True
 
 
@@ -653,7 +714,7 @@ async def test_the_browser_checked_is_the_browser_loaded() -> None:
     assert browser.opened[0]["session"] == browser.loaded[0]["session"]
 
 
-async def test_finishing_hands_the_session_to_the_agents_browser() -> None:
+async def test_answering_hands_the_session_to_the_agents_browser() -> None:
     """The run resumes into its own browser, and it has to be signed in.
 
     Without this the person signs in, the capture is stored, the run resumes --
@@ -663,13 +724,14 @@ async def test_finishing_hands_the_session_to_the_agents_browser() -> None:
     after somebody had just got past one.
     """
     conversation = uuid4()
-    request = _pending_request()
-    request.conversation_id = conversation
-    session = _Session(requests=[request])
+    session = _Session()
     browser = _Browser(state={"cookies": COOKIES, "origins": []})
 
-    await _service(session, browser).finish(
-        request_id=request.id, user_id=request.user_id
+    await _service(session, browser).answer(
+        conversation_id=conversation,
+        tool_call_id="call-1",
+        user_id=uuid4(),
+        signed_in=True,
     )
 
     handed = [call for call in browser.loaded if call["session"]]

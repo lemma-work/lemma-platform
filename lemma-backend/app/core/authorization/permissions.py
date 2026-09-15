@@ -84,7 +84,6 @@ class Permissions:
     CONNECTOR_ACCOUNT_USE: ClassVar[str] = "connector_account.use"
     CONNECTOR_ACCOUNT_MANAGE: ClassVar[str] = "connector_account.manage"
     WEB_LOGIN_USE: ClassVar[str] = "web_login.use"
-    WEB_LOGIN_MANAGE: ClassVar[str] = "web_login.manage"
     CONNECTOR_AUTH_CONFIG_MANAGE: ClassVar[str] = "connector_auth_config.manage"
 
 
@@ -313,12 +312,6 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Sign in to a saved site with a stored session",
     ),
     PermissionDefinition(
-        Permissions.WEB_LOGIN_MANAGE,
-        PermissionScope.POD,
-        "web_login",
-        "Add, replace and remove saved site logins",
-    ),
-    PermissionDefinition(
         Permissions.CONNECTOR_AUTH_CONFIG_MANAGE,
         PermissionScope.ORG,
         "connector_auth_config",
@@ -397,7 +390,6 @@ POD_ADMIN_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.WORKFLOW_DELETE,
         Permissions.SCHEDULE_DELETE,
         Permissions.CONNECTOR_ACCOUNT_MANAGE,
-        Permissions.WEB_LOGIN_MANAGE,
     }
 )
 
@@ -444,7 +436,6 @@ IMPLIED_PERMISSIONS: dict[str, frozenset[str]] = {
     Permissions.CONNECTOR_ACCOUNT_MANAGE: frozenset(
         {Permissions.CONNECTOR_ACCOUNT_USE}
     ),
-    Permissions.WEB_LOGIN_MANAGE: frozenset({Permissions.WEB_LOGIN_USE}),
     Permissions.CONVERSATION_WRITE: frozenset({Permissions.CONVERSATION_READ}),
     # Executing a workload requires reading its definition (an agent's
     # instructions, a function's source) to run it at all, so execute-only

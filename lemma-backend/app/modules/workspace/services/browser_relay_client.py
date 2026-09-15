@@ -263,18 +263,6 @@ class BrowserRelayClient:
         if response.status_code not in (200, 204):
             raise BrowserRelayUnavailable(_detail(response))
 
-    async def clear_state(self, *, domain: str) -> None:
-        """Take a login session out of the browser when a run is done with it."""
-        try:
-            await self._request(
-                "POST", "/state:clear", json_body={"domain": domain}, timeout=60.0
-            )
-        except BrowserRelayUnavailable:
-            # Best effort by design: the sandbox may already be gone, which is
-            # the outcome this wanted. Logged rather than raised so a caller
-            # finishing a run is not failed by cleanup.
-            logger.warning("workspace.browser_relay.clear_failed.degraded")
-
     async def session_socket_url(
         self, *, target_id: str, mode: str, session: str | None = None
     ) -> tuple[str, dict[str, str]]:

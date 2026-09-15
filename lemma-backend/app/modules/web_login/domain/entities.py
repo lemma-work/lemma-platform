@@ -37,12 +37,6 @@ class WebLoginStatus(StrEnum):
     DEAD = "DEAD"
 
 
-class SignInRequestStatus(StrEnum):
-    PENDING = "PENDING"
-    SIGNED_IN = "SIGNED_IN"
-    DECLINED = "DECLINED"
-
-
 @dataclass(frozen=True, slots=True)
 class WebLoginSecret:
     """The part that is encrypted at rest and never leaves the backend.
@@ -71,14 +65,12 @@ class WebLogin:
     id: UUID
     user_id: UUID
     origin: str
-    label: str
     status: WebLoginStatus
     created_at: datetime
     updated_at: datetime
     last_used_at: datetime | None = None
     #: When the stored session is expected to stop working. A hint, not a fact:
     #: sites expire sessions on their own schedule and rarely say so.
-    expires_hint_at: datetime | None = None
 
     @property
     def is_usable(self) -> bool:
@@ -86,41 +78,37 @@ class WebLogin:
 
 
 @dataclass(frozen=True, slots=True)
-class SignInRequest:
-    """An agent waiting for a person to sign in to a site.
+class PendingSignIn:
+    """A sign-in somebody has been asked for and has not answered.
 
-    Durable, in Postgres, rather than a Redis key with a fifteen-minute life.
-    The run it belongs to is paused indefinitely -- `PS-AGENT-020` promises a
-    pause waits rather than times out -- and a request that expired while the
-    conversation was still waiting would leave the person with a dead link and
-    the agent with nothing to resume from. The *browser* is the ephemeral part,
-    and it is re-opened when somebody arrives.
+    Read from the paused tool call, not from a row: `origin` and `reason` are
+    its arguments, and its being unresolved is what makes it pending. There used
+    to be a table saying the same three things, and it drifted from the pause it
+    described.
     """
 
-    id: UUID
-    user_id: UUID
+    tool_call_id: str
     origin: str
     reason: str
-    status: SignInRequestStatus
-    created_at: datetime
-    conversation_id: UUID | None = None
-    #: The paused tool call this resolves. Also the approval id, which is what
-    #: lets an existing approvals endpoint resume the run.
-    tool_call_id: str | None = None
-    resolved_at: datetime | None = None
-    #: Whether a session was captured when the person said they were done, and
-    #: the sentence to show them if it was not.
-    saved: bool = False
-    saved_detail: str | None = None
 
-    @property
-    def is_open(self) -> bool:
-        return self.status is SignInRequestStatus.PENDING
+
+@dataclass(frozen=True, slots=True)
+class SignInOutcome:
+    """What came of a person answering.
+
+    Returned to the page so it can say what happened, and carried to the agent
+    on the approval's own payload. Not stored: the decision row is the record.
+    """
+
+    origin: str
+    signed_in: bool
+    saved: bool
+    saved_detail: str | None = None
 
 
 __all__ = [
-    "SignInRequest",
-    "SignInRequestStatus",
+    "PendingSignIn",
+    "SignInOutcome",
     "WebLogin",
     "WebLoginSecret",
     "WebLoginStatus",

@@ -44,14 +44,22 @@ export interface WebLogin {
   has_password: boolean;
 }
 
-/** An agent waiting for somebody to sign a site in. */
-export interface SignInRequest {
-  id: string;
+/** An agent waiting for somebody to sign a site in.
+ *
+ * There is no status here and no id of its own: the paused tool call is the
+ * request, so "still waiting" is whether this comes back at all.
+ */
+export interface PendingSignIn {
+  tool_call_id: string;
   origin: string;
   /** What the agent is doing, in its own words, to show the person. */
   reason: string;
-  status: "PENDING" | "SIGNED_IN" | "DECLINED";
-  created_at: string;
+}
+
+/** What came of somebody answering. */
+export interface SignInOutcome {
+  origin: string;
+  signed_in: boolean;
   /** Whether the login was kept for next time. */
   saved: boolean;
   /** Why it was not kept, when it was not. */
@@ -100,34 +108,35 @@ export class WebLoginsNamespace {
     );
   }
 
-  /** What an agent is asking you to sign in to, and why. */
-  signInRequest(requestId: string): Promise<SignInRequest> {
-    return this.http.request<SignInRequest>(
+  /** What a sign-in link is asking for, addressed by the pause it is for.
+   *
+   * The conversation and tool call are a lookup, not a credential: the server
+   * resolves both against the caller's own session, so a forwarded link answers
+   * exactly as an invented one does.
+   */
+  pendingSignIn(conversationId: string, toolCallId: string): Promise<PendingSignIn> {
+    return this.http.request<PendingSignIn>(
       "GET",
-      `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}`,
+      `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}`,
     );
   }
 
   /**
-   * Say you have signed in, so the waiting run can carry on.
+   * Say whether you signed in, so the waiting run can carry on.
    *
-   * Refused with a 409 when the browser holds nothing for the site — which
-   * usually means the sign-in did not finish. `force` is for sites the check
+   * One call for both answers because it is one answer. `force` saves whatever
+   * the browser holds even when it does not look signed in, for sites the check
    * reads wrongly.
    */
-  finishSignIn(requestId: string, options: { force?: boolean } = {}): Promise<SignInRequest> {
-    return this.http.request<SignInRequest>(
+  answerSignIn(
+    conversationId: string,
+    toolCallId: string,
+    options: { signedIn: boolean; force?: boolean },
+  ): Promise<SignInOutcome> {
+    return this.http.request<SignInOutcome>(
       "POST",
-      `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:finish`,
-      { body: { force: Boolean(options.force) } },
-    );
-  }
-
-  /** Say you cannot sign in, so the agent stops waiting and says so. */
-  declineSignIn(requestId: string): Promise<SignInRequest> {
-    return this.http.request<SignInRequest>(
-      "POST",
-      `/web-logins/sign-in-requests/${encodeURIComponent(requestId)}:decline`,
+      `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}:answer`,
+      { body: { signed_in: options.signedIn, force: Boolean(options.force) } },
     );
   }
 }

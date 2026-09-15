@@ -256,7 +256,8 @@ export type { WorkflowsNamespace } from "./namespaces/workflows.js";
 export type {
   WorkspaceFileEntry,
   WorkspaceFileListResponse,
-  SignInRequest,
+  PendingSignIn,
+  SignInOutcome,
   WebLogin,
   WebLoginAuditEntry,
   WebLoginsNamespace,

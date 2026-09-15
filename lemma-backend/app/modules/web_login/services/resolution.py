@@ -15,6 +15,14 @@ the owner, with nothing at the site's end able to tell the difference. So there
 is no "pinned login" and no borrowing -- `delegated_by_user_id` decides, and the
 owner is the only answer.
 
+There is deliberately only *one* permission. An earlier version also declared
+`web_login.manage`, granted it to pod admins and marked it destructive -- and
+nothing could ever have checked it, because there is no operation it would
+guard: the routes that add and remove a saved login act on the caller's own,
+and lending one to another person is refused by construction above. A
+permission that names a capability the system does not have is worse than no
+permission, because a role template showing it says somebody has it.
+
 **The permission is checked, not described.** An earlier version of this
 declared `web_login.use`, made `web_login.manage` destructive, put both in the
 role templates, and never called `require()` anywhere -- so removing the
