@@ -2021,9 +2021,9 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
     # every run, so they sit at the front of the cached prefix. The base prompt
     # follows them rather than opening the file.
     assert prompt.startswith("# Who you are")
-    assert "You are a teammate in a Lemma pod" in prompt
+    assert "You are a teammate:" in prompt
     assert "# The pod you work in" in prompt
-    assert "You are this pod's own teammate" in prompt
+    assert "You are this pod." in prompt
     assert "## Where the work lands" in prompt
     # Reply discipline is not keyed to a toolset: every agent replies, and the
     # reply is the one thing the person always sees. It rode in on the surface
@@ -2146,7 +2146,7 @@ def test_pod_default_assistant_uses_rich_base_and_all_fragments():
     )
 
     assert prompt.startswith("# Who you are")
-    assert "You are this pod's own teammate" in prompt
+    assert "You are this pod." in prompt
     assert "## Lemma CLI" in prompt
     assert "## Skills" in prompt
     assert "## Web research" in prompt
@@ -2173,7 +2173,7 @@ def test_user_agent_uses_lean_base_and_only_its_toolset_fragments():
     # differs is the base prompt after them.
     assert prompt.startswith("# Who you are")
     assert "You are a named agent in this pod" in prompt
-    assert "You are this pod's own teammate" not in prompt
+    assert "You are this pod." not in prompt
     assert "## Lemma CLI" in prompt  # its one toolset's fragment
     assert "## Web research" not in prompt
     assert "## Skills" not in prompt

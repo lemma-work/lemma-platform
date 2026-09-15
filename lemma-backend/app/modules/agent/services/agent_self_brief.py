@@ -6,9 +6,9 @@ here rather than inline because it is the half that grew the file past what the
 architecture gate allows.
 
 Everything it renders already existed and none of it reached the prompt. The
-agent did not know its own name: the pod's own agent is stored as
-``pod_default`` and shown to people as ``Lem``, and neither string was in front
-of it. It did not know what it was allowed to do without asking, because
+agent did not know its own name -- which is the pod's name, because the pod is
+the teammate; it is stored as ``pod_default`` and neither string was in front of
+it. It did not know what it was allowed to do without asking, because
 ``allowed_actions`` was authorization data and nothing else. It did not know its
 standing work, though a schedule is the closest thing an agent has to a job and
 its profile page has listed them under that heading for a while. And it knew
@@ -26,7 +26,6 @@ from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.core.authorization.delegation import agent_display_name
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent
@@ -89,18 +88,34 @@ def schedule_line(summary: PodScheduleSummary) -> str:
 
 
 def _identity_lines(*, agent: Agent, pod: PodProfile, is_default: bool) -> list[str]:
-    """Name, description, tenure and permits -- everything needing no read."""
-    name = agent_display_name(agent.name) if is_default else (agent.name or "(unnamed)")
+    """Name, description, tenure and permits -- everything needing no read.
+
+    The pod's own agent is named by the **pod**, not by
+    ``DEFAULT_RESPONDER_NAME``. That constant is the platform's word for
+    whatever answers in a pod, and it is the right answer to "who sent this
+    Slack message" where no other name exists. It is the wrong answer here: a
+    person with six teammates would be introduced to six agents all called Lem,
+    which is precisely why the room app stopped rendering it and gives each pod
+    its own name and face.
+    """
     lines = ["\n## You"]
-    if is_default:
+    if is_default and pod.name:
         lines.append(
-            f"- You are **{name}**, this pod's own teammate: the one that "
-            "answers here unless somebody names another agent."
+            f"- You are **{pod.name}**. The pod is the teammate, so its name is "
+            "your name and its work is your work. You answer here unless "
+            "somebody names another agent."
+        )
+    elif is_default:
+        # A pod row that no longer resolves. Say what is still true rather than
+        # reaching for a placeholder name and asserting it.
+        lines.append(
+            "- You are this pod's own teammate: the one that answers here "
+            "unless somebody names another agent."
         )
     else:
         lines.append(
-            f"- You are **{name}**, one of this pod's named agents, built for "
-            "the job in your instructions below."
+            f"- You are **{agent.name or '(unnamed)'}**, one of this pod's "
+            "named agents, built for the job in your instructions below."
         )
     if agent.description and agent.description.strip():
         lines.append(f"- How you are described: {agent.description.strip()}")

@@ -576,11 +576,13 @@ class TestTheAgentIsToldWhoItIs:
     teammate did.
     """
 
-    async def test_the_teammate_is_named_and_dated(self, stubbed, monkeypatch):
-        """Stored as ``pod_default``, shown to people as Lem, told neither.
+    async def test_the_teammate_wears_the_pods_name(self, stubbed, monkeypatch):
+        """The pod is the teammate, so the pod's name is the agent's name.
 
-        An agent asked its own name had to guess at it, and an agent asked how
-        long it had been here had nothing at all.
+        `DEFAULT_RESPONDER_NAME` is the platform's word for whatever answers in
+        a pod. Rendered here it would introduce every teammate in an
+        organization as the same person, which is why the room app stopped
+        using it -- and an agent asked its own name had nothing else to read.
         """
 
         class _Repo(_FakeBriefRepo):
@@ -603,7 +605,8 @@ class TestTheAgentIsToldWhoItIs:
         )
 
         assert "## You" in brief
-        assert "**Lem**" in brief
+        assert "**Acme**" in brief
+        assert "Lem" not in brief
         assert "Here since 2026-03-04" in brief
         assert "What this pod is for: Where support lives." in brief
 
