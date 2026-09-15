@@ -1923,7 +1923,7 @@ def _composio_catalog_row(toolkit_item, toolkit_detail):
     tests the decision rather than the orchestration around it.
     """
     auth_method = importer._infer_composio_auth_method(toolkit_item, toolkit_detail)
-    managed = bool(importer._composio_managed_schemes(toolkit_item, toolkit_detail))
+    managed_schemes = importer._composio_managed_schemes(toolkit_item, toolkit_detail)
     return importer._composio_provider_capability(
         auth_method=auth_method,
         toolkit_slug=toolkit_item.slug,
@@ -1933,9 +1933,11 @@ def _composio_catalog_row(toolkit_item, toolkit_detail):
         install_config_schema=importer._composio_install_config_schema(
             toolkit_detail,
             auth_method,
-            org_supplies=(auth_method == AuthMethod.OAUTH2 and not managed),
+            org_supplies=not importer._composio_manages_selected_scheme(
+                auth_method, managed_schemes
+            ),
         ),
-        managed=managed,
+        managed_schemes=managed_schemes,
     )
 
 
@@ -2105,3 +2107,52 @@ def test_an_org_credential_is_masked_even_when_composio_does_not_say_so():
     assert "client_id" not in masked
     assert "oauth_redirect_uri" not in masked
     assert "scopes" not in masked
+
+
+def test_a_managed_scheme_we_did_not_select_is_not_a_system_default():
+    """Composio managing *something* is not Composio managing *this*.
+
+    A toolkit can support OAUTH2 while Composio manages only its S2S_OAUTH2 --
+    client credentials, no browser leg, not the flow a person signs in with. A
+    boolean built from "the managed set is non-empty" reads that as a system
+    default, advertises a sign-in, sends `use_composio_managed_auth`, and gets
+    back the same "Default auth config not found for toolkit" this import
+    exists to stop producing.
+    """
+    toolkit = _toolkit(
+        "s2s-only",
+        auth_schemes=["OAUTH2", "S2S_OAUTH2"],
+        managed_schemes=["S2S_OAUTH2"],
+    )
+    detail = _toolkit_detail()
+
+    auth_method = importer._infer_composio_auth_method(toolkit, detail)
+    capability = importer._composio_provider_capability(
+        auth_method=auth_method,
+        toolkit_slug="s2s-only",
+        managed_schemes=importer._composio_managed_schemes(toolkit, detail),
+    )
+
+    assert auth_method == AuthMethod.OAUTH2
+    assert capability.system_default_available is False
+    assert capability.supports_org_custom_oauth is True
+
+
+def test_a_non_oauth_toolkit_needs_no_managed_scheme_at_all():
+    """The other half of the same rule, which must not move.
+
+    An API-key toolkit's credentials belong to the account and are collected
+    after the install exists, so the install needs nothing from the org whether
+    Composio manages anything or not. Every existing freshdesk, metabase and
+    posthog install is SYSTEM_DEFAULT and has to stay installable.
+    """
+    assert importer._composio_manages_selected_scheme(AuthMethod.API_KEY, set()) is True
+    assert importer._composio_manages_selected_scheme(AuthMethod.NOAUTH, set()) is True
+    assert (
+        importer._composio_manages_selected_scheme(AuthMethod.OAUTH2, {"OAUTH2"})
+        is True
+    )
+    assert (
+        importer._composio_manages_selected_scheme(AuthMethod.OAUTH2, {"S2S_OAUTH2"})
+        is False
+    )

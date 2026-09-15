@@ -798,36 +798,56 @@ def _native_kind_spec(
     )
 
 
+def _composio_manages_selected_scheme(
+    auth_method: AuthMethod, managed_schemes: set[str]
+) -> bool:
+    """Can an install of this toolkit be created with nothing from the org?
+
+    The question is about the scheme we actually *settled on*, not about whether
+    Composio manages something. A toolkit that supports OAUTH2 while Composio
+    manages only its S2S_OAUTH2 has a non-empty managed set and no managed
+    browser redirect: reading "manages anything" as "manages this" advertised a
+    sign-in, sent `use_composio_managed_auth`, and earned the same "Default auth
+    config not found for toolkit" this import exists to stop producing.
+
+    A non-OAuth scheme is always answerable: its credentials belong to the
+    *account*, collected after the install exists, so the install needs nothing
+    from the org whether Composio manages anything or not.
+    """
+    if auth_method != AuthMethod.OAUTH2:
+        return True
+    return bool(managed_schemes & _COMPOSIO_REDIRECT_OAUTH_MODES)
+
+
 def _composio_provider_capability(
     *,
     auth_method: AuthMethod,
     toolkit_slug: str,
     auth_config_schema: dict | None = None,
     install_config_schema: dict | None = None,
-    managed: bool = True,
+    managed_schemes: set[str] | None = None,
     profile_operation_names: list[str] | None = None,
 ) -> ComposioProviderCapability:
     """The catalog row for one Composio toolkit.
 
-    ``managed`` is whether Composio holds credentials for this toolkit on
-    Lemma's account. It used to be assumed -- ``system_default_available`` was
-    the literal ``True`` -- and for the toolkits Composio does not manage that
-    assumption is what put a Connect button in front of a call that could only
-    500.
-
-    The line below is deliberately the same one the native kinds use: an install
-    needs nothing from the org unless it is OAuth, because an API-key toolkit's
-    credentials belong to the *account* and are collected after the install
-    exists. Only an OAuth toolkit Composio does not manage has a client the org
-    must bring, and only that case turns the Connect button into setup.
+    ``managed_schemes`` is what Composio holds credentials for, and it is passed
+    whole rather than pre-reduced to a boolean: whether it makes this install
+    system-default depends on which scheme was selected, and a caller deciding
+    that separately is a caller that can get it wrong. ``system_default_available``
+    used to be the literal ``True`` here, which is what put a Connect button in
+    front of a call that could only 500.
     """
-    system_default_available = auth_method != AuthMethod.OAUTH2 or managed
+    system_default_available = _composio_manages_selected_scheme(
+        auth_method, managed_schemes or set()
+    )
     return ComposioProviderCapability(
         auth_scheme=auth_method,
         toolkit_slug=toolkit_slug,
         auth_config_schema=auth_config_schema,
         install_config_schema=install_config_schema,
         system_default_available=system_default_available,
+        # The only case with an OAuth client for the org to bring. An API-key
+        # toolkit has none, and a managed one has nothing to override.
         supports_org_custom_oauth=not system_default_available,
         profile_operation_names=profile_operation_names,
     )
@@ -1496,15 +1516,18 @@ async def _sync_single_composio_toolkit(
     existing = await connector_repository.get(connector_id)
     toolkit_detail = composio.toolkits.get(toolkit_item.slug)
     composio_auth_method = _infer_composio_auth_method(toolkit_item, toolkit_detail)
-    composio_is_managed = bool(_composio_managed_schemes(toolkit_item, toolkit_detail))
+    composio_managed_schemes = _composio_managed_schemes(toolkit_item, toolkit_detail)
     composio_auth_config_schema = _composio_credential_schema(
         toolkit_detail, composio_auth_method
     )
     composio_install_config_schema = _composio_install_config_schema(
         toolkit_detail,
         composio_auth_method,
-        org_supplies=(
-            composio_auth_method == AuthMethod.OAUTH2 and not composio_is_managed
+        # The org fills in a form exactly when Composio cannot sign in for us.
+        # Asked of the same helper the capability uses, so the schema and the
+        # flag it belongs to can never disagree.
+        org_supplies=not _composio_manages_selected_scheme(
+            composio_auth_method, composio_managed_schemes
         ),
     )
     profile_operations = _load_connector_profile_operations()
@@ -1557,7 +1580,7 @@ async def _sync_single_composio_toolkit(
                 toolkit_slug=toolkit_item.slug,
                 auth_config_schema=composio_auth_config_schema,
                 install_config_schema=composio_install_config_schema,
-                managed=composio_is_managed,
+                managed_schemes=composio_managed_schemes,
                 profile_operation_names=_profile_operation_names(
                     profile_operations, connector_id, AuthProvider.COMPOSIO
                 ),

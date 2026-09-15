@@ -61,7 +61,8 @@ Then `operations search` / `details` / `run`, as with any connector.
   `lemma connectors auth-configs refresh-operations acme-mcp` and read `status`.
 - Each operation's execution descriptor is `{"kind": "mcp", "tool_name": "..."}`
   — the operation id you run is Lemma's, the tool name is the server's.
-- Credential precedence, highest first: the account's OAuth token, the account's
-  bearer token, then a token on the install itself.
+- Credential precedence, highest first: the account's OAuth token, then the
+  account's bearer token. The token belongs to the account, not the install —
+  the install schema is closed and has no field for one.
 - **Private, loopback and link-local addresses are refused.**
 - Changing `server_url` sends the install's accounts to `REAUTH_REQUIRED`.

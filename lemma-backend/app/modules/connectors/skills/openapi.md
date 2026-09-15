@@ -37,7 +37,7 @@ every later command addresses.
 ```bash
 lemma connectors operations search acme-api "create an invoice"
 lemma connectors operations details acme-api <OPERATION>
-lemma connectors run acme-api <OPERATION> -d '{"payload": {...}}'
+lemma connectors run acme-api <OPERATION> -d '{"payload": {}}'
 ```
 
 ## Tips
