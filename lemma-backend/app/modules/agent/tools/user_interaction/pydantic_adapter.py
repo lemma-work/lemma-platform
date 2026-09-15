@@ -47,6 +47,10 @@ async def display_resource(
     question in the composer. It cannot send one — `ask_user` is for an answer
     this run needs.
 
+    A display that succeeds is already in front of the person. Nothing here
+    replaces or edits an earlier one, so calling again adds a second resource
+    below the first rather than correcting it.
+
     This tool displays. `ask_user` collects choices, `request_approval` collects
     permission.
     """

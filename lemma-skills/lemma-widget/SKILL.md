@@ -98,6 +98,14 @@ workspace, and no draft that is not yet in front of the person. So:
   against the list under [Before display](#before-display) instead.
 - **If the fragment is genuinely too long to write out, it is an app.** Save the
   HTML as an app and pass its address as `public_url`.
+- **A call that succeeds cannot be taken back.** The widget is in the
+  conversation the moment the tool returns, and the person is looking at it.
+  There is no replacing it, no editing it, and no un-displaying it: another call
+  is another widget, and it lands *underneath* the first with the mistake still
+  sitting above it. Spotting the error afterwards does not buy a do-over — it
+  turns one bad widget into two. Read your markup before the call, not after
+  it. If something did go out wrong, say so in your reply; display again only
+  when the first is genuinely unusable, and then say which one to read.
 
 The starters are a shape to follow, not a file to transcribe. Take the SDK
 loader and the loading/empty/error scaffolding verbatim, and write the markup
@@ -263,6 +271,14 @@ prints a number that is simply false in front of the person who asked for it.
   cap cut the result short and `items` is a prefix of the real answer, so the
   count is a floor. Narrow the query rather than label a floor as a total.
 
+**Read the keys your own query produces.** `sum(runs_failed) as failed` returns
+`failed`, and `row.runs_failed` on that result is `undefined`. Nothing throws:
+`Number(undefined) || 0` is `0`, and the widget renders a confident, plausible,
+wrong number — "none failed" over a window full of failures. Nothing in the
+platform can catch this for you, because that column may be a real key of a
+*different* query in the same widget. Alias deliberately, and read back the name
+you aliased to.
+
 Aggregate in SQL. A count taken over a page of records is a count of the page:
 group in the database (`select status, count(*) …`) and a widget over a 5,000-row
 table stops reporting the first hundred rows as the whole table. The metric and
@@ -286,7 +302,10 @@ chart starters do exactly this; keep their query rather than counting rows in JS
 ## Before display
 
 - The chosen view is genuinely more useful than short prose.
-- `content` opens with `<` and carries the entire fragment, not a note about it.
+- `content` opens with a tag — not a stray character, not a sentence — and
+  carries the whole fragment. This is the last look you get; the call cannot be
+  undone.
+- Every value read off a query result uses the name that query aliases it to.
 - The closest versioned starter was used and all placeholders were replaced.
 - Every tag opens with `<` and closes once; the fragment carries no full-document
   tags, secrets, hardcoded hosts, or pod ids.
