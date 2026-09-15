@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, Home, Plus, User } from '@/components/ui/icons';
 
 import { Logo } from '@/components/brand/logo';
 import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
@@ -12,10 +11,22 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { PanelLeftOpen } from '@/components/ui/icons';
 import { useProfile } from '@/lib/hooks/use-user';
+import { OrgSidebarSection } from './org-sidebar-section';
+import { OrgSwitcher } from './org-switcher';
+
+/** The organization whose settings the current route belongs to, if any. */
+function activeOrganizationIdFrom(pathname: string): string | undefined {
+    return pathname.match(/^\/organizations\/([^/]+)\//)?.[1];
+}
 
 function SettingsSidebarContent({ onNavigate }: { onNavigate: () => void }) {
     const pathname = usePathname();
-    const { organizations, setCurrentOrg, isLoading } = useOrganization();
+    const activeOrganizationId = activeOrganizationIdFrom(pathname);
+    const { organizations, currentOrg } = useOrganization();
+    // Off an organization route -- on your profile, say -- the rail still shows
+    // the organization you are working in, so it is not a switcher above a
+    // column of nothing.
+    const shownOrganizationId = activeOrganizationId ?? currentOrg?.id;
     const { data: profile } = useProfile();
     const displayName = profile?.first_name
         ? `${profile.first_name} ${profile.last_name || ''}`.trim()
@@ -38,80 +49,44 @@ function SettingsSidebarContent({ onNavigate }: { onNavigate: () => void }) {
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-3">
-                <nav className="space-y-0.5" aria-label="Settings navigation">
-                    <Link
-                        href="/home"
-                        onClick={onNavigate}
-                        className="lemma-sidebar-row lemma-sidebar-row-sm"
-                    >
-                        <Home className="h-4 w-4" />
-                        Home
-                    </Link>
-                    <Link
-                        href="/profile"
-                        onClick={onNavigate}
-                        data-active={pathname === '/profile' ? 'true' : undefined}
-                        className="lemma-sidebar-row lemma-sidebar-row-sm"
-                    >
-                        <User className="h-4 w-4" />
-                        Profile
-                    </Link>
-                </nav>
+                {/* One row for the organization you are in, rather than a list
+                    of every organization you belong to. */}
+                <OrgSwitcher
+                    activeOrganizationId={activeOrganizationId}
+                    onNavigate={onNavigate}
+                />
 
-                <div className="mt-6">
-                    <div className="flex h-7 items-center justify-between px-2">
-                        <p className="type-eyebrow text-[var(--text-tertiary)]">Organizations</p>
-                        <Link
-                            href="/organizations/new"
-                            onClick={onNavigate}
-                            className="custom-focus-ring flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)]"
-                            aria-label="Create organization"
-                            title="Create organization"
-                        >
-                            <Plus className="h-3.5 w-3.5" />
-                        </Link>
-                    </div>
-
-                    <div className="mt-1 space-y-0.5">
-                        {isLoading ? (
-                            <p className="px-2 py-2 text-xs text-[var(--text-tertiary)]">Loading organizations…</p>
-                        ) : organizations.length === 0 ? (
-                            <p className="px-2 py-2 text-xs text-[var(--text-tertiary)]">No organizations yet.</p>
-                        ) : organizations.map((organization) => {
-                            const active = pathname.startsWith(`/organizations/${organization.id}/`);
-
-                            return (
-                                <Link
-                                    key={organization.id}
-                                    href={`/organizations/${organization.id}/settings/members`}
-                                    onClick={() => {
-                                        setCurrentOrg(organization);
-                                        onNavigate();
-                                    }}
-                                    data-active={active ? 'true' : undefined}
-                                    className="lemma-sidebar-row lemma-sidebar-row-sm min-w-0"
-                                    title={organization.name}
-                                >
-                                    <Building2 className="h-4 w-4 shrink-0" />
-                                    <span className="truncate">{organization.name}</span>
-                                </Link>
-                            );
-                        })}
-                    </div>
-                </div>
+                {shownOrganizationId ? (
+                    <OrgSidebarSection
+                        organizationId={shownOrganizationId}
+                        organizationName={
+                            organizations.find((org) => org.id === shownOrganizationId)?.name
+                        }
+                        onNavigate={onNavigate}
+                    />
+                ) : null}
             </div>
 
             <div className="shrink-0 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] px-2.5 py-2">
                 <LocalSettingsButton className="mb-1" />
-                <div className="flex items-center gap-2">
-                    <Avatar className="h-7 w-7 shrink-0 border border-[var(--border-subtle)]">
-                        <AvatarFallback className="bg-[var(--surface-2)] text-xs text-[var(--text-secondary)]">
-                            {initials}
-                        </AvatarFallback>
-                    </Avatar>
-                    <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]" title={displayName}>
-                        {displayName}
-                    </span>
+                {/* One row: who you are, and the theme control at the end of
+                    it. Splitting them left the toggle floating on a line of
+                    its own under your name. */}
+                <div className="flex items-center gap-1">
+                    <Link
+                        href="/profile"
+                        onClick={onNavigate}
+                        data-active={pathname === '/profile' ? 'true' : undefined}
+                        className="lemma-sidebar-row lemma-sidebar-row-comfy min-w-0 flex-1"
+                        title={`${displayName} — open profile`}
+                    >
+                        <Avatar className="h-6 w-6 shrink-0 border border-[var(--border-subtle)]">
+                            <AvatarFallback className="bg-[var(--surface-2)] text-xs text-[var(--text-secondary)]">
+                                {initials}
+                            </AvatarFallback>
+                        </Avatar>
+                        <span className="truncate">{displayName}</span>
+                    </Link>
                     <ThemeToggle variant="icon" className="lemma-shell-icon-button h-8 w-8 shrink-0" />
                 </div>
             </div>
