@@ -422,26 +422,60 @@ def _default_composio_connector_ids() -> set[str]:
     return _filter_composio_connector_ids(selected)
 
 
-def _infer_composio_auth_method(toolkit_item, toolkit_detail) -> AuthMethod:
-    if getattr(toolkit_item, "no_auth", False):
-        return AuthMethod.NOAUTH
+def _composio_managed_schemes(toolkit_item, toolkit_detail) -> set[str]:
+    """The auth schemes Composio holds credentials for, on Lemma's account.
 
+    Kept apart from the schemes a toolkit merely *supports*, which is the
+    distinction the one-set version threw away. Twitter and Spotify both
+    advertise OAUTH2 and Composio manages neither, so a catalog row built from
+    the union read as "sign in with Lemma's app" -- and the connect call came
+    back 500 with Composio's own "Composio does not have managed credentials
+    for this toolkit".
+    """
+    managed = set()
+    for source in (toolkit_item, toolkit_detail):
+        for scheme in getattr(source, "composio_managed_auth_schemes", None) or []:
+            managed.add(str(scheme).upper())
+    return managed
+
+
+def _composio_supported_schemes(toolkit_item, toolkit_detail) -> set[str]:
+    """Every scheme the toolkit can be connected with, managed or not."""
     schemes = set()
     for scheme in getattr(toolkit_item, "auth_schemes", None) or []:
         schemes.add(str(scheme).upper())
-    for scheme in getattr(toolkit_item, "composio_managed_auth_schemes", None) or []:
-        schemes.add(str(scheme).upper())
     for detail in getattr(toolkit_detail, "auth_config_details", None) or []:
         schemes.add(str(detail.mode).upper())
+    return schemes
 
-    if "NO_AUTH" in schemes:
+
+def _infer_composio_auth_method(toolkit_item, toolkit_detail) -> AuthMethod:
+    """Which scheme an install of this toolkit should use.
+
+    The order is "cheapest for the org that can actually work", not "most
+    capable": a scheme Composio manages costs nobody anything, a pasted API key
+    costs one visit to the app's settings, and registering an OAuth application
+    costs the most. So a managed redirect flow wins outright; failing that any
+    non-OAuth mode is preferred; and org-supplied OAuth is the last resort,
+    taken only when the toolkit offers no other way in.
+    """
+    if getattr(toolkit_item, "no_auth", False):
         return AuthMethod.NOAUTH
-    # DCR_OAUTH is an OAuth flow whose client is registered dynamically rather
-    # than configured ahead of time. Composio handles the registration, so from
-    # here it is an authorization-code redirect like any other -- and falling
-    # through to API_KEY, as it did, offers a form asking for a key that does
-    # not exist instead of a consent screen.
-    if schemes & {"OAUTH1", "OAUTH2", "COMPOSIO_LINK", "DCR_OAUTH"}:
+
+    managed = _composio_managed_schemes(toolkit_item, toolkit_detail)
+    supported = _composio_supported_schemes(toolkit_item, toolkit_detail) | managed
+
+    if "NO_AUTH" in supported:
+        return AuthMethod.NOAUTH
+    if managed & _COMPOSIO_REDIRECT_OAUTH_MODES:
+        return AuthMethod.OAUTH2
+    # Nothing managed from here down. `_COMPOSIO_OAUTH_MODES` rather than the
+    # redirect set: S2S_OAUTH2 is an OAuth mode with no browser leg, so it is
+    # neither a redirect flow to offer nor a key to paste, and it fell through
+    # to API_KEY before this change too.
+    if supported - _COMPOSIO_OAUTH_MODES:
+        return AuthMethod.API_KEY
+    if supported & _COMPOSIO_REDIRECT_OAUTH_MODES:
         return AuthMethod.OAUTH2
     return AuthMethod.API_KEY
 
@@ -454,37 +488,50 @@ _COMPOSIO_FIELD_TYPE_TO_JSON = {
     "object": "object",
 }
 _COMPOSIO_OAUTH_MODES = {"OAUTH1", "OAUTH2", "COMPOSIO_LINK", "DCR_OAUTH", "S2S_OAUTH2"}
+#: The OAuth modes that send a person to a browser. S2S_OAUTH2 is deliberately
+#: absent: it exchanges client credentials with no user leg, so offering it as
+#: "sign in" would open a consent screen that does not exist.
+_COMPOSIO_REDIRECT_OAUTH_MODES = {"OAUTH1", "OAUTH2", "COMPOSIO_LINK", "DCR_OAUTH"}
 
 
 def _composio_field_json_type(field_type: object) -> str:
     return _COMPOSIO_FIELD_TYPE_TO_JSON.get(str(field_type).lower(), "string")
 
 
-def _composio_credential_schema(toolkit_detail, auth_method: AuthMethod) -> dict | None:
-    """Build a JSON Schema describing the credentials a user must submit to
-    connect a non-OAuth Composio app, derived from the toolkit's
-    ``connected_account_initiation`` fields so the UI can render the form."""
-    if auth_method == AuthMethod.OAUTH2:
-        return None
+def _composio_auth_detail(toolkit_detail, auth_method: AuthMethod):
+    """The toolkit's auth-config detail for this scheme, or the nearest one.
 
+    Composio describes each mode separately and a toolkit commonly offers
+    several. Prefer the mode we settled on; for a non-OAuth method fall back to
+    any non-OAuth detail rather than reading an OAuth one, whose fields describe
+    a completely different form.
+    """
     details = getattr(toolkit_detail, "auth_config_details", None) or []
     target_mode = auth_method.value.upper()
-    selected = None
     for detail in details:
         if str(getattr(detail, "mode", "")).upper() == target_mode:
-            selected = detail
-            break
-    if selected is None:
+            return detail
+    if auth_method == AuthMethod.OAUTH2:
         for detail in details:
-            if str(getattr(detail, "mode", "")).upper() not in _COMPOSIO_OAUTH_MODES:
-                selected = detail
-                break
-    if selected is None:
+            if (
+                str(getattr(detail, "mode", "")).upper()
+                in _COMPOSIO_REDIRECT_OAUTH_MODES
+            ):
+                return detail
         return None
+    for detail in details:
+        if str(getattr(detail, "mode", "")).upper() not in _COMPOSIO_OAUTH_MODES:
+            return detail
+    return None
 
-    fields_group = getattr(
-        getattr(selected, "fields", None), "connected_account_initiation", None
-    )
+
+def _composio_fields_schema(fields_group) -> dict | None:
+    """Turn one Composio field group into a closed JSON Schema.
+
+    Shared by the two groups a toolkit detail carries, which differ in who fills
+    them in and in nothing else: ``connected_account_initiation`` is the end
+    user's credential form, ``auth_config_creation`` is the org's install form.
+    """
     if fields_group is None:
         return None
 
@@ -524,6 +571,47 @@ def _composio_credential_schema(toolkit_detail, auth_method: AuthMethod) -> dict
     if required:
         schema["required"] = required
     return schema
+
+
+def _composio_credential_schema(toolkit_detail, auth_method: AuthMethod) -> dict | None:
+    """The credentials an end user submits to connect a non-OAuth Composio app.
+
+    Derived from the toolkit's ``connected_account_initiation`` fields so the
+    connect dialog can render the form. An OAuth toolkit has none -- the person
+    signs in instead.
+    """
+    if auth_method == AuthMethod.OAUTH2:
+        return None
+    selected = _composio_auth_detail(toolkit_detail, auth_method)
+    if selected is None:
+        return None
+    return _composio_fields_schema(
+        getattr(getattr(selected, "fields", None), "connected_account_initiation", None)
+    )
+
+
+def _composio_install_config_schema(
+    toolkit_detail, auth_method: AuthMethod, *, org_supplies: bool
+) -> dict | None:
+    """What the *org* supplies to install a toolkit Composio does not manage.
+
+    Composio's ``auth_config_creation`` fields, which vary per toolkit: most
+    want a client id and secret, Twitter also wants a ``generic_id``. Deriving
+    them beats a fixed client_id/client_secret pair, which would be accepted
+    here and then rejected by Composio for every toolkit needing a third field.
+
+    ``None`` unless the org actually has to fill something in -- a toolkit
+    Composio manages runs on Lemma's credentials, and an API-key toolkit's
+    credentials belong to the account rather than the install.
+    """
+    if not org_supplies:
+        return None
+    selected = _composio_auth_detail(toolkit_detail, auth_method)
+    if selected is None:
+        return None
+    return _composio_fields_schema(
+        getattr(getattr(selected, "fields", None), "auth_config_creation", None)
+    )
 
 
 def _infer_native_auth_method(
@@ -681,13 +769,32 @@ def _composio_provider_capability(
     auth_method: AuthMethod,
     toolkit_slug: str,
     auth_config_schema: dict | None = None,
+    install_config_schema: dict | None = None,
+    managed: bool = True,
     profile_operation_names: list[str] | None = None,
 ) -> ComposioProviderCapability:
+    """The catalog row for one Composio toolkit.
+
+    ``managed`` is whether Composio holds credentials for this toolkit on
+    Lemma's account. It used to be assumed -- ``system_default_available`` was
+    the literal ``True`` -- and for the toolkits Composio does not manage that
+    assumption is what put a Connect button in front of a call that could only
+    500.
+
+    The line below is deliberately the same one the native kinds use: an install
+    needs nothing from the org unless it is OAuth, because an API-key toolkit's
+    credentials belong to the *account* and are collected after the install
+    exists. Only an OAuth toolkit Composio does not manage has a client the org
+    must bring, and only that case turns the Connect button into setup.
+    """
+    system_default_available = auth_method != AuthMethod.OAUTH2 or managed
     return ComposioProviderCapability(
         auth_scheme=auth_method,
         toolkit_slug=toolkit_slug,
         auth_config_schema=auth_config_schema,
-        system_default_available=True,
+        install_config_schema=install_config_schema,
+        system_default_available=system_default_available,
+        supports_org_custom_oauth=not system_default_available,
         profile_operation_names=profile_operation_names,
     )
 
@@ -1355,8 +1462,16 @@ async def _sync_single_composio_toolkit(
     existing = await connector_repository.get(connector_id)
     toolkit_detail = composio.toolkits.get(toolkit_item.slug)
     composio_auth_method = _infer_composio_auth_method(toolkit_item, toolkit_detail)
+    composio_is_managed = bool(_composio_managed_schemes(toolkit_item, toolkit_detail))
     composio_auth_config_schema = _composio_credential_schema(
         toolkit_detail, composio_auth_method
+    )
+    composio_install_config_schema = _composio_install_config_schema(
+        toolkit_detail,
+        composio_auth_method,
+        org_supplies=(
+            composio_auth_method == AuthMethod.OAUTH2 and not composio_is_managed
+        ),
     )
     profile_operations = _load_connector_profile_operations()
     lemma_capability = None
@@ -1407,6 +1522,8 @@ async def _sync_single_composio_toolkit(
                 auth_method=composio_auth_method,
                 toolkit_slug=toolkit_item.slug,
                 auth_config_schema=composio_auth_config_schema,
+                install_config_schema=composio_install_config_schema,
+                managed=composio_is_managed,
                 profile_operation_names=_profile_operation_names(
                     profile_operations, connector_id, AuthProvider.COMPOSIO
                 ),

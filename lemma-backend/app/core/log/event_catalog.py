@@ -429,7 +429,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.connector_service.credential_refresh_rejected.degraded': EventSpec('warning', frozenset({'account_id', 'connector_id', 'error_type'})),
     'connectors.connector_service.discovery_credentials.skipped': EventSpec('info', frozenset({'auth_config_id', 'error_type'})),
     'connectors.connector_service.exchange_connector_authorization_code.propagated': EventSpec('debug', frozenset({'error_type'})),
-    'connectors.connector_service.get_connector_authorization_url.propagated': EventSpec('debug', frozenset({'error_type'})),
+    'connectors.connector_service.get_connector_authorization_url.propagated': EventSpec('warning', frozenset({'connector_id', 'error_type'})),
     'connectors.connector_service.revoke.failed': EventSpec('error', frozenset()),
     'connectors.github_app.installation_token_refused': EventSpec('warning', frozenset({'upstream_status'})),
     'connectors.github_installation.choice_required.diagnostic': EventSpec('info', frozenset({'count'})),

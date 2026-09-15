@@ -42,6 +42,8 @@ def _install(
     *,
     toolkit_slug: str = "googlecalendar",
     auth_scheme: AuthScheme = AuthScheme.OAUTH2,
+    config_source: AuthConfigSource = AuthConfigSource.SYSTEM_DEFAULT,
+    config: dict | None = None,
 ) -> ResolvedAuthInstall:
     return ResolvedAuthInstall(
         connector_id=app_id,
@@ -49,8 +51,8 @@ def _install(
         auth_scheme=auth_scheme,
         auth_config_id=uuid4(),
         organization_id=uuid4(),
-        config_source=AuthConfigSource.SYSTEM_DEFAULT,
-        config={},
+        config_source=config_source,
+        config=config or {},
         composio_toolkit_slug=toolkit_slug,
     )
 
@@ -395,3 +397,156 @@ async def test_a_callback_naming_a_different_connection_is_refused():
         )
 
     assert fetched == [], "nothing may be fetched once the callback is disowned"
+
+
+@pytest.mark.asyncio
+async def test_an_unmanaged_toolkit_signs_in_with_the_orgs_own_oauth_client():
+    """The 500 this change exists to remove.
+
+    Twitter and Spotify are brokered by Composio, which holds no credentials
+    for either and which they offer no API key instead of. Every OAuth connect
+    asked for `use_composio_managed_auth` regardless, and Composio answered
+    "Default auth config not found for toolkit ... Composio does not have
+    managed credentials for this toolkit". An ORG_CUSTOM install carries the
+    app's own client, and it is sent as the custom auth config Composio expects.
+    """
+    install = _install(
+        "twitter",
+        toolkit_slug="twitter",
+        auth_scheme=AuthScheme.OAUTH2,
+        config_source=AuthConfigSource.ORG_CUSTOM,
+        config={"client_id": "org-client", "client_secret": "org-secret"},
+    )
+    create = MagicMock(return_value=SimpleNamespace(id="ac_org"))
+    initiate = MagicMock(
+        return_value=SimpleNamespace(id="ca_org", redirect_url="https://meta/oauth")
+    )
+    composio = SimpleNamespace(
+        auth_configs=SimpleNamespace(create=create),
+        connected_accounts=SimpleNamespace(initiate=initiate),
+    )
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: composio,
+    )
+
+    url, provider_state = await provider.get_authorization_url(
+        install=install,
+        user_id=uuid4(),
+        state="state-1",
+        redirect_uri="https://lemma/callback",
+    )
+
+    assert url == "https://meta/oauth"
+    assert provider_state == "ca_org"
+    _, create_kwargs = create.call_args
+    assert create_kwargs["toolkit"] == "twitter"
+    assert create_kwargs["options"] == {
+        "type": "use_custom_auth",
+        "auth_scheme": "OAUTH2",
+        "credentials": {"client_id": "org-client", "client_secret": "org-secret"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_managed_toolkit_still_uses_lemmas_composio_credentials():
+    """The path that was always right, pinned so the new branch cannot take it."""
+    install = _install("gmail", toolkit_slug="gmail")
+    create = MagicMock(return_value=SimpleNamespace(id="ac_managed"))
+    initiate = MagicMock(
+        return_value=SimpleNamespace(id="ca_managed", redirect_url="https://g/oauth")
+    )
+    composio = SimpleNamespace(
+        auth_configs=SimpleNamespace(create=create),
+        connected_accounts=SimpleNamespace(initiate=initiate),
+    )
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: composio,
+    )
+
+    await provider.get_authorization_url(
+        install=install,
+        user_id=uuid4(),
+        state="state-2",
+        redirect_uri="https://lemma/callback",
+    )
+
+    _, create_kwargs = create.call_args
+    assert create_kwargs["options"] == {"type": "use_composio_managed_auth"}
+
+
+@pytest.mark.asyncio
+async def test_nested_oauth2_credentials_reach_composio_flattened():
+    """The auth-config API accepts both shapes; Composio understands one.
+
+    `{"oauth2_credentials": {...}}` is the shape the native org-custom path uses
+    and the API still takes it here. Passed through as-is it would send Composio
+    a single key it has never heard of instead of the two it wants.
+    """
+    install = _install(
+        "twitter",
+        toolkit_slug="twitter",
+        config_source=AuthConfigSource.ORG_CUSTOM,
+        config={"oauth2_credentials": {"client_id": "a", "client_secret": "b"}},
+    )
+    create = MagicMock(return_value=SimpleNamespace(id="ac_org"))
+    composio = SimpleNamespace(
+        auth_configs=SimpleNamespace(create=create),
+        connected_accounts=SimpleNamespace(
+            initiate=MagicMock(
+                return_value=SimpleNamespace(id="ca", redirect_url="https://x")
+            )
+        ),
+    )
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: composio,
+    )
+
+    await provider.get_authorization_url(
+        install=install,
+        user_id=uuid4(),
+        state="s",
+        redirect_uri="https://lemma/callback",
+    )
+
+    _, create_kwargs = create.call_args
+    assert create_kwargs["options"]["credentials"] == {
+        "client_id": "a",
+        "client_secret": "b",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_org_custom_install_with_no_credentials_is_refused_before_composio():
+    """Better than letting Composio answer it.
+
+    An install whose config is empty cannot produce a sign-in, and sending it
+    anyway spends a round trip to be told so in a message that names neither the
+    install nor what is missing.
+    """
+    install = _install(
+        "twitter",
+        toolkit_slug="twitter",
+        config_source=AuthConfigSource.ORG_CUSTOM,
+        config={},
+    )
+    create = MagicMock()
+    composio = SimpleNamespace(
+        auth_configs=SimpleNamespace(create=create),
+        connected_accounts=SimpleNamespace(initiate=MagicMock()),
+    )
+    provider = ComposioAuthProvider(
+        connector_repository=AsyncMock(),
+        composio_client_factory=lambda: composio,
+    )
+
+    with pytest.raises(ConnectorValidationError):
+        await provider.get_authorization_url(
+            install=install,
+            user_id=uuid4(),
+            state="s",
+            redirect_uri="https://lemma/callback",
+        )
+    create.assert_not_called()

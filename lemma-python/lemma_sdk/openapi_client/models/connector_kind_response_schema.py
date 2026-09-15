@@ -17,6 +17,9 @@ if TYPE_CHECKING:
     from ..models.connector_kind_response_schema_credential_schema_type_0 import (
         ConnectorKindResponseSchemaCredentialSchemaType0,
     )
+    from ..models.connector_kind_response_schema_install_config_schema_type_0 import (
+        ConnectorKindResponseSchemaInstallConfigSchemaType0,
+    )
     from ..models.o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
 
 
@@ -39,6 +42,9 @@ class ConnectorKindResponseSchema:
                 `config`.
             credential_schema (ConnectorKindResponseSchemaCredentialSchemaType0 | None | Unset):
             discovery (str | Unset):  Default: 'none'.
+            install_config_schema (ConnectorKindResponseSchemaInstallConfigSchemaType0 | None | Unset): JSON Schema for the
+                organization-supplied install config, when the connector cannot be installed with the platform's own
+                credentials.
             oauth2_defaults (None | OAuth2DefaultsResponseSchema | Unset):
             supports_org_custom_oauth (bool | Unset):  Default: False.
             system_default_available (bool | Unset):  Default: False.
@@ -52,6 +58,9 @@ class ConnectorKindResponseSchema:
         ConnectorKindResponseSchemaCredentialSchemaType0 | None | Unset
     ) = UNSET
     discovery: str | Unset = "none"
+    install_config_schema: (
+        ConnectorKindResponseSchemaInstallConfigSchemaType0 | None | Unset
+    ) = UNSET
     oauth2_defaults: None | OAuth2DefaultsResponseSchema | Unset = UNSET
     supports_org_custom_oauth: bool | Unset = False
     system_default_available: bool | Unset = False
@@ -64,6 +73,9 @@ class ConnectorKindResponseSchema:
         )
         from ..models.connector_kind_response_schema_credential_schema_type_0 import (
             ConnectorKindResponseSchemaCredentialSchemaType0,
+        )
+        from ..models.connector_kind_response_schema_install_config_schema_type_0 import (
+            ConnectorKindResponseSchemaInstallConfigSchemaType0,
         )
         from ..models.o_auth_2_defaults_response_schema import (
             OAuth2DefaultsResponseSchema,
@@ -96,6 +108,17 @@ class ConnectorKindResponseSchema:
             credential_schema = self.credential_schema
 
         discovery = self.discovery
+
+        install_config_schema: dict[str, Any] | None | Unset
+        if isinstance(self.install_config_schema, Unset):
+            install_config_schema = UNSET
+        elif isinstance(
+            self.install_config_schema,
+            ConnectorKindResponseSchemaInstallConfigSchemaType0,
+        ):
+            install_config_schema = self.install_config_schema.to_dict()
+        else:
+            install_config_schema = self.install_config_schema
 
         oauth2_defaults: dict[str, Any] | None | Unset
         if isinstance(self.oauth2_defaults, Unset):
@@ -130,6 +153,8 @@ class ConnectorKindResponseSchema:
             field_dict["credential_schema"] = credential_schema
         if discovery is not UNSET:
             field_dict["discovery"] = discovery
+        if install_config_schema is not UNSET:
+            field_dict["install_config_schema"] = install_config_schema
         if oauth2_defaults is not UNSET:
             field_dict["oauth2_defaults"] = oauth2_defaults
         if supports_org_custom_oauth is not UNSET:
@@ -148,6 +173,9 @@ class ConnectorKindResponseSchema:
         )
         from ..models.connector_kind_response_schema_credential_schema_type_0 import (
             ConnectorKindResponseSchemaCredentialSchemaType0,
+        )
+        from ..models.connector_kind_response_schema_install_config_schema_type_0 import (
+            ConnectorKindResponseSchemaInstallConfigSchemaType0,
         )
         from ..models.o_auth_2_defaults_response_schema import (
             OAuth2DefaultsResponseSchema,
@@ -211,6 +239,31 @@ class ConnectorKindResponseSchema:
 
         discovery = d.pop("discovery", UNSET)
 
+        def _parse_install_config_schema(
+            data: object,
+        ) -> ConnectorKindResponseSchemaInstallConfigSchemaType0 | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                install_config_schema_type_0 = (
+                    ConnectorKindResponseSchemaInstallConfigSchemaType0.from_dict(data)
+                )
+
+                return install_config_schema_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(
+                ConnectorKindResponseSchemaInstallConfigSchemaType0 | None | Unset, data
+            )
+
+        install_config_schema = _parse_install_config_schema(
+            d.pop("install_config_schema", UNSET)
+        )
+
         def _parse_oauth2_defaults(
             data: object,
         ) -> None | OAuth2DefaultsResponseSchema | Unset:
@@ -249,6 +302,7 @@ class ConnectorKindResponseSchema:
             config_schema=config_schema,
             credential_schema=credential_schema,
             discovery=discovery,
+            install_config_schema=install_config_schema,
             oauth2_defaults=oauth2_defaults,
             supports_org_custom_oauth=supports_org_custom_oauth,
             system_default_available=system_default_available,

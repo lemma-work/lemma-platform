@@ -24,6 +24,7 @@ import {
     getKindLabel,
     getSupportedKinds,
     hasSystemDefault,
+    isComposio,
     supportsCustomConfig,
     type AuthConfigMode,
     type SchemaValues,
@@ -278,8 +279,21 @@ export function AdvancedConfigDialog({
                             />
                             {/* The manifest already registered this URL, so on Slack
                                 it is a reference rather than an instruction. Every
-                                other connector still has to be told. */}
-                            {isSlack ? null : <OAuthRedirectField />}
+                                other *natively* brokered connector still has to be
+                                told.
+
+                                Not Composio, though: it runs the OAuth dance on its
+                                own backend, so the URL the org must allow-list is
+                                Composio's and not Lemma's. Showing Lemma's callback
+                                here would send someone to register the wrong one
+                                with Twitter or Spotify, and the first sign of it
+                                would be the provider's error page after the
+                                redirect — exactly the failure this field exists to
+                                prevent. The right URL arrives as an
+                                `oauth_redirect_uri` field on the toolkit's own
+                                derived schema, default filled in, rendered by
+                                SchemaFields above. */}
+                            {isSlack || isComposio(capability) ? null : <OAuthRedirectField />}
                         </div>
                     ) : null}
                 </div>

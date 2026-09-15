@@ -36,20 +36,72 @@ importer = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(importer)
 
 
-def _toolkit(slug: str, *, name: str = "App") -> SimpleNamespace:
+def _toolkit(
+    slug: str,
+    *,
+    name: str = "App",
+    auth_schemes: list[str] | None = None,
+    managed_schemes: list[str] | None = None,
+) -> SimpleNamespace:
+    """A Composio toolkit list item.
+
+    ``managed_schemes`` defaults to the same schemes the toolkit supports --
+    the ordinary case, and what Gmail, Slack and HubSpot all look like. Pass an
+    empty list for the toolkits Composio brokers but holds no credentials for.
+    """
+    supported = list(auth_schemes or ["OAUTH2"])
     return SimpleNamespace(
         slug=slug,
         name=name,
         meta=SimpleNamespace(description=f"{name} description", logo=f"{slug}.png"),
         status="ACTIVE",
         no_auth=False,
-        auth_schemes=["OAUTH2"],
-        composio_managed_auth_schemes=[],
+        auth_schemes=supported,
+        composio_managed_auth_schemes=(
+            supported if managed_schemes is None else list(managed_schemes)
+        ),
     )
 
 
-def _toolkit_detail() -> SimpleNamespace:
-    return SimpleNamespace(auth_config_details=[])
+def _composio_field(
+    name: str,
+    *,
+    required: bool = True,
+    is_secret: bool = False,
+    display_name: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        display_name=display_name or name.replace("_", " ").title(),
+        description=f"{name} description",
+        type="string",
+        required=required,
+        default=None,
+        is_secret=is_secret,
+    )
+
+
+def _toolkit_detail(
+    *,
+    mode: str | None = None,
+    auth_config_creation: SimpleNamespace | None = None,
+    connected_account_initiation: SimpleNamespace | None = None,
+) -> SimpleNamespace:
+    if mode is None:
+        return SimpleNamespace(auth_config_details=[], composio_managed_auth_schemes=[])
+    empty = SimpleNamespace(required=[], optional=[])
+    return SimpleNamespace(
+        composio_managed_auth_schemes=[],
+        auth_config_details=[
+            SimpleNamespace(
+                mode=mode,
+                fields=SimpleNamespace(
+                    auth_config_creation=auth_config_creation or empty,
+                    connected_account_initiation=connected_account_initiation or empty,
+                ),
+            )
+        ],
+    )
 
 
 def _tool(slug: str) -> SimpleNamespace:
@@ -533,8 +585,10 @@ async def test_sync_composio_catalog_keeps_composio_operations_for_non_native_ap
     assert _providers(entity) == [AuthProvider.COMPOSIO]
     capability = _capability(entity, AuthProvider.COMPOSIO)
     assert capability.toolkit_slug == "hubspot"
-    # Always true: every Composio toolkit runs on Lemma's own Composio account.
+    # Composio manages this toolkit's OAuth, so an install needs nothing from
+    # the org and Connect can go straight to the consent screen.
     assert capability.system_default_available is True
+    assert capability.supports_org_custom_oauth is False
     # None only because HubSpot is OAuth2 here. A non-OAuth toolkit carries the
     # end user's credential form in this field -- see the API_KEY case below.
     assert capability.auth_config_schema is None
@@ -556,8 +610,11 @@ async def test_sync_composio_catalog_imports_apollo_api_key_and_contact_operatio
     operation_repository = SimpleNamespace()
     trigger_repository = SimpleNamespace()
 
-    toolkit_item = _toolkit("apollo", name="Apollo")
-    toolkit_item.auth_schemes = ["API_KEY"]
+    # An API-key toolkit: Composio brokers the calls but holds no credentials of
+    # its own, because there are none to hold -- the key is the user's.
+    toolkit_item = _toolkit(
+        "apollo", name="Apollo", auth_schemes=["API_KEY"], managed_schemes=[]
+    )
     api_key_field = SimpleNamespace(
         name="generic_api_key",
         display_name="API Key",
@@ -1856,3 +1913,149 @@ def test_the_meeting_and_warehouse_apps_are_in_the_default_catalog():
     """By Composio's slugs, which are not the names people use for them."""
     ids = set(importer.DEFAULT_COMPOSIO_CONNECTOR_IDS)
     assert {"granola_mcp", "fireflies", "googlebigquery"} <= ids
+
+
+def _composio_catalog_row(toolkit_item, toolkit_detail):
+    """Build a Composio kind spec the way `_sync_single_composio_toolkit` does.
+
+    The three calls in the same order, with nothing patched: these are pure
+    functions of the two objects Composio returns, so exercising them directly
+    tests the decision rather than the orchestration around it.
+    """
+    auth_method = importer._infer_composio_auth_method(toolkit_item, toolkit_detail)
+    managed = bool(importer._composio_managed_schemes(toolkit_item, toolkit_detail))
+    return importer._composio_provider_capability(
+        auth_method=auth_method,
+        toolkit_slug=toolkit_item.slug,
+        auth_config_schema=importer._composio_credential_schema(
+            toolkit_detail, auth_method
+        ),
+        install_config_schema=importer._composio_install_config_schema(
+            toolkit_detail,
+            auth_method,
+            org_supplies=(auth_method == AuthMethod.OAUTH2 and not managed),
+        ),
+        managed=managed,
+    )
+
+
+def test_a_toolkit_composio_manages_no_credentials_for_asks_the_org_for_them():
+    """Twitter and Spotify, the shape that 500'd.
+
+    The toolkit advertises OAUTH2 and nothing else, and
+    `composio_managed_auth_schemes` is empty, so there is no Composio-managed
+    client to sign in with and no key to paste instead. The catalog used to
+    say `system_default_available: true` anyway -- the importer hardcoded it --
+    and the resulting Connect button sent a `use_composio_managed_auth` request
+    that came back "Composio does not have managed credentials for this
+    toolkit".
+    """
+    capability = _composio_catalog_row(
+        _toolkit("twitter", auth_schemes=["OAUTH2"], managed_schemes=[]),
+        _toolkit_detail(
+            mode="OAUTH2",
+            auth_config_creation=SimpleNamespace(
+                required=[
+                    _composio_field("client_id"),
+                    _composio_field("client_secret", is_secret=True),
+                ],
+                optional=[],
+            ),
+        ),
+    )
+
+    assert capability.auth_scheme == AuthMethod.OAUTH2
+    assert capability.system_default_available is False
+    assert capability.supports_org_custom_oauth is True
+    # Derived from the toolkit's own auth-config-creation fields, so a toolkit
+    # wanting a third field (Twitter's `generic_id`) asks for it rather than
+    # being handed a fixed client_id/client_secret pair Composio would reject.
+    assert capability.install_config_schema == {
+        "type": "object",
+        "properties": {
+            "client_id": {
+                "type": "string",
+                "title": "Client Id",
+                "description": "client_id description",
+            },
+            "client_secret": {
+                "type": "string",
+                "title": "Client Secret",
+                "description": "client_secret description",
+                "format": "password",
+            },
+        },
+        "additionalProperties": False,
+        "required": ["client_id", "client_secret"],
+    }
+
+
+def test_an_unmanaged_toolkit_prefers_a_pasted_key_to_an_oauth_app():
+    """Shopify offers both OAuth and an API key, and Composio manages neither.
+
+    Asking the org to register an OAuth application when the same toolkit takes
+    a token from its own settings page is the more expensive of two answers that
+    both work. The install then needs nothing from the org at all -- the key
+    belongs to the account -- so this stays a one-click Connect.
+    """
+    capability = _composio_catalog_row(
+        _toolkit("shopify", auth_schemes=["OAUTH2", "API_KEY"], managed_schemes=[]),
+        _toolkit_detail(
+            mode="API_KEY",
+            connected_account_initiation=SimpleNamespace(
+                required=[_composio_field("generic_api_key", is_secret=True)],
+                optional=[],
+            ),
+        ),
+    )
+
+    assert capability.auth_scheme == AuthMethod.API_KEY
+    assert capability.system_default_available is True
+    assert capability.supports_org_custom_oauth is False
+    # The org fills in nothing; the person pastes a key when they connect.
+    assert capability.install_config_schema is None
+    assert capability.auth_config_schema["required"] == ["generic_api_key"]
+
+
+def test_an_api_key_toolkit_is_still_installable_with_nothing_from_the_org():
+    """The compatibility case, and the one a stricter rule would have broken.
+
+    Composio holds no credentials for an API-key toolkit because there are none
+    to hold -- the key is the user's. That must not read as "the org has to
+    supply something": every existing freshdesk, metabase and posthog install is
+    SYSTEM_DEFAULT, and requiring ORG_CUSTOM would strand all of them.
+    """
+    capability = _composio_catalog_row(
+        _toolkit("freshdesk", auth_schemes=["API_KEY"], managed_schemes=[]),
+        _toolkit_detail(mode="API_KEY"),
+    )
+
+    assert capability.auth_scheme == AuthMethod.API_KEY
+    assert capability.system_default_available is True
+    assert capability.supports_org_custom_oauth is False
+
+
+def test_a_managed_oauth_toolkit_is_unchanged():
+    capability = _composio_catalog_row(
+        _toolkit("gmail", auth_schemes=["OAUTH2"]), _toolkit_detail(mode="OAUTH2")
+    )
+
+    assert capability.auth_scheme == AuthMethod.OAUTH2
+    assert capability.system_default_available is True
+    assert capability.supports_org_custom_oauth is False
+    assert capability.install_config_schema is None
+
+
+def test_a_managed_scheme_is_not_inferred_from_a_supported_one():
+    """The union that lost the distinction.
+
+    `auth_schemes` says what the toolkit can do; `composio_managed_auth_schemes`
+    says what Composio holds credentials for. Merging them into one set made
+    every OAuth-capable toolkit look managed.
+    """
+    unmanaged = _toolkit("shopify", auth_schemes=["OAUTH2"], managed_schemes=[])
+    managed = _toolkit("gmail", auth_schemes=["OAUTH2"])
+    detail = _toolkit_detail()
+
+    assert importer._composio_managed_schemes(unmanaged, detail) == set()
+    assert importer._composio_managed_schemes(managed, detail) == {"OAUTH2"}

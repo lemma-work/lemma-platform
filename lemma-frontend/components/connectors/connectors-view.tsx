@@ -524,6 +524,13 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         setBusyAppId(app.id);
         try {
             let authConfig = existing;
+            // Tracks the install *this* click created, so a failure in the
+            // second call can undo the first. An install made moments ago with
+            // no accounts on it has nothing to lose, and leaving it behind is
+            // worse than nothing: the name is taken, so even retrying is
+            // refused, and the app reads as enabled while being unreachable.
+            // Every Meta Ads connect that 500'd left one of these.
+            let createdHere: AuthConfig | null = null;
             if (!authConfig) {
                 if (!canConnectWithDefaults(capability)) {
                     setAdvancedApp(app);
@@ -534,8 +541,23 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                     kind: capability.kind,
                     configSource: 'SYSTEM_DEFAULT',
                 });
+                createdHere = authConfig;
             }
-            await startOAuth(app.id, authConfig.id);
+            try {
+                await startOAuth(app.id, authConfig.id);
+            } catch (oauthError) {
+                if (createdHere) {
+                    // Best-effort, as in `handleConnectionSubmit`: if the
+                    // cleanup itself fails the original error is still what the
+                    // person needs to see.
+                    try {
+                        await deleteAuthConfig.mutateAsync(createdHere.name);
+                    } catch (cleanupError) {
+                        console.error('Failed to remove the partial install:', cleanupError);
+                    }
+                }
+                throw oauthError;
+            }
         } catch (error) {
             console.error('Failed to connect:', error);
             toast.error(describeConnectorError(error, 'Failed to connect'));

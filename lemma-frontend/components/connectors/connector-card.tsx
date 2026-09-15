@@ -10,6 +10,7 @@ import {
     getAccountStateMeta,
     INSTALL_STATE,
     getPrimaryKindSpec,
+    requiresInstallConfig,
     usesDirectCredentials,
 } from './connector-utils';
 import { StepLoader } from '@/components/brand/loader';
@@ -40,6 +41,11 @@ export function ConnectorRow({
 }) {
     const capability = getPrimaryKindSpec(app);
     const connectsWithCredentials = usesDirectCredentials(capability);
+    // Some connectors cannot be turned on in one click: a database needs an
+    // address, and a Composio toolkit Composio holds no credentials for needs
+    // the app's own client. Every row said "Connect" regardless, so the catalog
+    // promised something it could not do — for the unmanaged toolkits, a 500.
+    const needsSetup = !isConnected && requiresInstallConfig(capability);
     const label = app.title || app.name || app.id;
 
     return (
@@ -100,8 +106,13 @@ export function ConnectorRow({
                         </>
                     ) : (
                         <>
-                            {isConnected ? 'Add another' : 'Connect'}
-                            {connectsWithCredentials ? null : <ExternalLink className="ml-1.5 h-3.5 w-3.5" />}
+                            {isConnected ? 'Add another' : needsSetup ? 'Set up' : 'Connect'}
+                            {/* No external-link hint on a setup row: the next
+                                thing that opens is a form in this page, not the
+                                provider's consent screen. */}
+                            {connectsWithCredentials || needsSetup ? null : (
+                                <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                            )}
                         </>
                     )}
                 </Button>

@@ -36,6 +36,7 @@ def _schedule(**overrides) -> SimpleNamespace:
         "id": uuid4(),
         "pod_id": uuid4(),
         "user_id": uuid4(),
+        "name": "nightly-review",
         "workflow_id": None,
         "agent_id": None,
         "instruction": None,
@@ -666,6 +667,17 @@ async def test_an_assistant_schedule_dispatches_down_the_ordinary_agent_path(
     assert call["agent_id"] == pod_id
     assert call["conversation_id"] == target_run_id
     assert call["instructions"] == "Summarise yesterday's open tickets."
+    # ...and the firing says which schedule, of what kind, and when. A TIME
+    # schedule carried none of this: its payload is empty because nothing writes
+    # one, and its metadata was `None`, so the run could not tell a cron fire
+    # from a webhook with an empty body, let alone which occurrence it was for.
+    # Asserted here beside the instruction because the two travel together --
+    # what to do, and what just happened.
+    fired = call["input_data"]["metadata"]
+    assert fired["schedule_name"] == schedule.name
+    assert fired["schedule_id"] == str(schedule.id)
+    assert fired["trigger_type"] == "TIME"
+    assert fired["fired_at"]
     # The ledger still records it as an agent target: Lem is an agent, it just
     # has no row. A third `target_kind` would make every consumer of the run
     # ledger learn a distinction that does not exist downstream.

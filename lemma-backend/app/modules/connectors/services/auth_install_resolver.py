@@ -29,8 +29,10 @@ from app.modules.connectors.services.auth.mcp_install_authorization import (
     MCP_OAUTH_CONFIG_KEY,
 )
 from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CREDENTIALS_REQUIRED,
     COMPOSIO_ORG_CUSTOM_REASON,
     COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
+    COMPOSIO_SYSTEM_DEFAULT_REASON,
 )
 from app.modules.connectors.domain.errors import (
     ConnectorValidationError,
@@ -253,11 +255,33 @@ def validate_auth_config_request(
     spec = connector.spec_for(kind)
 
     if kind is ConnectorKind.COMPOSIO:
-        if config_source != AuthConfigSource.SYSTEM_DEFAULT:
+        # Which source is allowed is the catalog's answer, per toolkit, and the
+        # org still never brings a Composio key -- what it may bring is the
+        # third party's own OAuth client for a toolkit Composio does not manage.
+        #
+        # An API-key toolkit is unaffected either way: its credentials belong to
+        # the account and are collected after the install exists, so the install
+        # needs nothing from the org and `system_default_available` is true.
+        if spec.system_default_available:
+            if config_source != AuthConfigSource.SYSTEM_DEFAULT:
+                raise ConnectorValidationError(
+                    COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
+                    details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
+                )
+            return
+        # Unmanaged OAuth. A SYSTEM_DEFAULT install here is a row that can only
+        # ever produce a 500 at connect time -- Composio answers "Composio does
+        # not have managed credentials for this toolkit" -- so it is refused
+        # here, where the person can still be told what to supply instead.
+        if config_source != AuthConfigSource.ORG_CUSTOM:
             raise ConnectorValidationError(
-                COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
-                details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
+                COMPOSIO_ORG_CREDENTIALS_REQUIRED,
+                details={"reason": COMPOSIO_SYSTEM_DEFAULT_REASON},
             )
+        # The org's fields are whatever Composio's auth-config-creation form
+        # asks for, which the importer derived onto the spec. Validated by the
+        # kind installer against that schema -- closed, so an unknown key is
+        # rejected rather than stored and silently read as a credential later.
         return
 
     # Everything below is about who issued the OAuth tokens. A kind that
