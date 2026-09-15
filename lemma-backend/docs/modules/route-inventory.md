@@ -305,7 +305,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/web-logins` | `web_login.list` | List saved site logins |
 | GET | `/web-logins/history` | `web_login.history` | What has been done with your saved logins |
 | GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | `web_login.sign_in.pending` | What a sign-in link is asking for |
-| POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer` | `web_login.sign_in.answer` | Say whether you signed in |
+| POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer` | `web_login.sign_in.answer` | Say whether you signed in |
 
 ## workflow
 

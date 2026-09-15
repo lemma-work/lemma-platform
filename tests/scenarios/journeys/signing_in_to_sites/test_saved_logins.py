@@ -99,7 +99,7 @@ async def test_finishing_somebody_elses_request_is_refused(world) -> None:
     alice = await world.person("priya")
     await alice.api.expect(
         "POST",
-        f"/web-logins/sign-ins/{uuid4()}/call_invented:answer",
+        f"/web-logins/sign-ins/{uuid4()}/call_invented/answer",
         json={"signed_in": True, "force": False},
         status=404,
         what="answering a sign-in that is not yours",

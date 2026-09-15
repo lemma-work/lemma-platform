@@ -37033,7 +37033,7 @@
         }
       }
     },
-    "/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer": {
+    "/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer": {
       "post": {
         "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run -- so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.\n\nOne route for both answers because it is one answer. Two routes meant two\nstatus writes with two different guards, and the weaker one let a stale tab\noverwrite a decision the agent had already been given.",
         "operationId": "web_login.sign_in.answer",

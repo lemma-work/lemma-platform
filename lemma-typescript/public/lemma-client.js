@@ -17355,7 +17355,7 @@ var LemmaClient = (() => {
     answerSignIn(conversationId, toolCallId, options) {
       return this.http.request(
         "POST",
-        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}:answer`,
+        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
         { body: { signed_in: options.signedIn, force: Boolean(options.force) } }
       );
     }

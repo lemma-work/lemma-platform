@@ -135,7 +135,7 @@ export class WebLoginsNamespace {
   ): Promise<SignInOutcome> {
     return this.http.request<SignInOutcome>(
       "POST",
-      `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}:answer`,
+      `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
       { body: { signed_in: options.signedIn, force: Boolean(options.force) } },
     );
   }

@@ -23,7 +23,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer".format(
+        "url": "/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer".format(
             conversation_id=quote(str(conversation_id), safe=""),
             tool_call_id=quote(str(tool_call_id), safe=""),
         ),

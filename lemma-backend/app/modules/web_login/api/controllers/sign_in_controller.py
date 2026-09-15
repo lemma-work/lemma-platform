@@ -100,7 +100,7 @@ async def get_pending_sign_in(
 
 
 @router.post(
-    "/{conversation_id}/{tool_call_id}:answer",
+    "/{conversation_id}/{tool_call_id}/answer",
     response_model=SignInOutcomeResponse,
     operation_id="web_login.sign_in.answer",
     summary="Say whether you signed in",

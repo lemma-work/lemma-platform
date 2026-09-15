@@ -116,7 +116,7 @@ export class WebLoginsService {
     ): CancelablePromise<SignInOutcomeResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/web-logins/sign-ins/{conversation_id}/{tool_call_id}:answer',
+            url: '/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer',
             path: {
                 'conversation_id': conversationId,
                 'tool_call_id': toolCallId,
