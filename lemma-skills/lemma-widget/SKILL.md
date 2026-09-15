@@ -10,6 +10,10 @@ Use `display_resource(type="WIDGET")` whenever the useful result has structure o
 visual hierarchy: several values, records, statuses, steps, comparisons, a timeline,
 a compact table, a preview, or a chart.
 
+A widget is also where an answer *continues*: it reads live pod data, it can be
+filtered and opened and sorted in place, and it can offer the person their next
+question ready to send.
+
 Use plain text only for a single fact, a short explanation, or narration around the
 widget. If an existing FILE, TABLE, APP, or other pod resource already represents the
 answer, display that resource directly instead of recreating it as a widget.
@@ -74,6 +78,39 @@ Passing both, or neither, is rejected. One more WIDGET-only field:
 
 `name`, `path`, `filters`, and `query` belong to other types.
 
+### One call, one argument
+
+`content` is written once, in the tool call, and the widget is shown the moment
+that call succeeds. Nothing stages a widget: there is no second call that
+completes a first, no path or handle that points at markup you wrote into the
+workspace, and no draft that is not yet in front of the person. So:
+
+- **Write the fragment out in full, in the argument.** Building it in a
+  workspace file first is a fine way to check your own markup. It is not a way
+  to hand it over — the file is yours, and `path` is for FILE.
+- **Never put a sentence in `content`.** Not narration, not "clean version
+  below", not a note about the markup you are about to write, not a placeholder
+  standing in for it. Content with no tag in it is rejected, and text in front
+  of the first tag ships as a bare unstyled line above the view. What the person
+  should read goes in your reply.
+- **Never display a probe.** A call that succeeds is shown, so "testing whether
+  this transmits" is a test run in front of the person. Check your own markup
+  against the list under [Before display](#before-display) instead.
+- **If the fragment is genuinely too long to write out, it is an app.** Save the
+  HTML as an app and pass its address as `public_url`.
+- **A call that succeeds cannot be taken back.** The widget is in the
+  conversation the moment the tool returns, and the person is looking at it.
+  There is no replacing it, no editing it, and no un-displaying it: another call
+  is another widget, and it lands *underneath* the first with the mistake still
+  sitting above it. Spotting the error afterwards does not buy a do-over — it
+  turns one bad widget into two. Read your markup before the call, not after
+  it. If something did go out wrong, say so in your reply; display again only
+  when the first is genuinely unusable, and then say which one to read.
+
+The starters are a shape to follow, not a file to transcribe. Take the SDK
+loader and the loading/empty/error scaffolding verbatim, and write the markup
+your answer actually needs around them.
+
 ## Fixed contract
 
 - `content` is an HTML **fragment**: raw markup, body-level tags only. A doctype,
@@ -93,9 +130,12 @@ Passing both, or neither, is rejected. One more WIDGET-only field:
 - **Height is capped.** The inline view clips at **480px** with a fade and an
   Expand control, and a self-reported height above 2400px is ignored. Design for
   the fold: put the answer at the top, not below a long table.
-- Widgets are **display-only** — they cannot send anything back into the
-  conversation. The host accepts one message from the frame, a height report.
-  Use `ask_user` when you need an answer.
+- A widget **offers** a message; it never sends one. `composeInConversation`
+  puts text in the conversation's composer for the person to send, edit, or
+  ignore — see [Let it answer back](#let-it-answer-back). Everything else the
+  frame might want to say to the host is not part of the contract.
+- Use `ask_user` when the run cannot continue without an answer. A widget's
+  offer arrives after the run is over; `ask_user` pauses it.
 
 The starters are platform-themed and system-aware: their
 `prefers-color-scheme: dark` rules and semantic fallbacks carry over intact. They
@@ -164,6 +204,59 @@ const handle = client.datastore.watchChanges({
 It is a WebSocket with its own auth, so it is subject to the same cross-site
 constraint as `initialize()` above — always keep the non-live render working.
 
+## Make it do something
+
+A widget is a small program with a live connection to the pod, not a picture of
+an answer. Reach for that whenever the answer has more in it than fits on screen
+at once:
+
+- **Narrow it in place.** A status filter, a date range, a search box, a sort —
+  re-query in `onchange` rather than rendering every row and hoping.
+- **Open a row.** A list where clicking a record swaps the panel for its detail
+  is one `records.get`, and it saves the person a round trip through you.
+- **Keep it current.** `datastore.watchChanges` for a view someone leaves open.
+- **Show the thing itself.** `files.children.markdown` and `.content` render a
+  document's own pages inside the widget instead of describing them.
+
+What stays out: anything needing React, routing, or state worth persisting —
+that is an app. And anything destructive. A widget may read, filter and offer;
+a write behind a button in a view somebody clicked without reading is not a
+decision anyone made.
+
+## Let it answer back
+
+`composeInConversation(text, options?)` asks the host to put `text` in the
+conversation's composer. It is on the browser SDK's global, beside the client:
+
+```js
+const { composeInConversation, canComposeInConversation } = window.LemmaClient;
+
+if (canComposeInConversation()) {
+  button.onclick = () => composeInConversation(
+    "Why is " + account.name + " cooling?",
+  );
+}
+```
+
+Three things about it, and all three matter:
+
+- **It fills the box; it does not send.** The person reads what arrived, edits
+  it or not, and presses enter. So write the text as *them* asking — "Why is
+  Acme cooling?", not "The user would like to know about Acme."
+- **It can be unavailable.** It resolves `false` when nothing is hosting the
+  widget — an app opened from a share link has no conversation anywhere near
+  it. Check `canComposeInConversation()` before drawing the button, and let the
+  widget be useful without it. A button that quietly does nothing is worse than
+  one that was never there.
+- **`{ newConversation: true }` is for a handoff.** The default lands in the
+  thread the person is looking at, which is what "ask about this" means. Pass
+  the flag when the point is that the subject gets a thread of its own rather
+  than landing in the middle of something else.
+
+Two or three offers on a widget is plenty, and each should be a question the
+person would plausibly ask next. A row of eight buttons is a menu, and a menu is
+an app.
+
 ## Never count what came back
 
 Both read paths are capped, and the two report it differently. Getting this wrong
@@ -177,6 +270,14 @@ prints a number that is simply false in front of the person who asked for it.
   counts **rows returned, not rows matched**. When `truncated` is true the row
   cap cut the result short and `items` is a prefix of the real answer, so the
   count is a floor. Narrow the query rather than label a floor as a total.
+
+**Read the keys your own query produces.** `sum(runs_failed) as failed` returns
+`failed`, and `row.runs_failed` on that result is `undefined`. Nothing throws:
+`Number(undefined) || 0` is `0`, and the widget renders a confident, plausible,
+wrong number — "none failed" over a window full of failures. Nothing in the
+platform can catch this for you, because that column may be a real key of a
+*different* query in the same widget. Alias deliberately, and read back the name
+you aliased to.
 
 Aggregate in SQL. A count taken over a page of records is a count of the page:
 group in the database (`select status, count(*) …`) and a widget over a 5,000-row
@@ -201,6 +302,10 @@ chart starters do exactly this; keep their query rather than counting rows in JS
 ## Before display
 
 - The chosen view is genuinely more useful than short prose.
+- `content` opens with a tag — not a stray character, not a sentence — and
+  carries the whole fragment. This is the last look you get; the call cannot be
+  undone.
+- Every value read off a query result uses the name that query aliases it to.
 - The closest versioned starter was used and all placeholders were replaced.
 - Every tag opens with `<` and closes once; the fragment carries no full-document
   tags, secrets, hardcoded hosts, or pod ids.
@@ -210,6 +315,10 @@ chart starters do exactly this; keep their query rather than counting rows in JS
   `records.list`'s `total`, and a `truncated` query result says so.
 - Loading, empty, error, and mobile states are present, and the
   non-authenticated branch does not tell a signed-in person to sign in.
+- Anything the person can click does something here, or offers something to the
+  composer. Nothing writes, and nothing claims to have sent a message.
+- Every compose button is behind `canComposeInConversation()`, and its text
+  reads as the person's own words.
 
 For React or a full product UI, load `lemma-builder` and follow
 `references/apps.md`. For interaction-tool behavior, see
