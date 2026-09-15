@@ -34,6 +34,7 @@ TAG_MODULES = {
     "Schedules": "schedule",
     "Usage": "usage",
     "Users": "identity",
+    "Web Logins": "web_login",
     "Widgets": "agent",
     "Workspace": "workspace",
     "Workspace Apps": "workspace",

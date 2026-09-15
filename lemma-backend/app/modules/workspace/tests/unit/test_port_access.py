@@ -94,3 +94,43 @@ def test_a_re_encoded_payload_does_not_verify() -> None:
 def test_a_short_key_is_rejected_at_construction() -> None:
     with pytest.raises(ValueError, match="32 bytes"):
         PortAccessSigner(key=b"tooshort")
+
+
+def test_a_proxied_page_says_who_may_frame_it() -> None:
+    """A signed URL is a bearer token in a link, and links leak. `frame-ancestors`
+    is what stops a leaked one being framed by somebody else's page and driven
+    from there."""
+    from app.modules.workspace.api.controllers.port_proxy_controller import (
+        _STRIPPED_RESPONSE_HEADERS,
+        _frame_ancestors,
+    )
+
+    ancestors = _frame_ancestors()
+    assert ancestors
+    assert "*" not in ancestors
+    # The sandbox's own opinion about framing is never forwarded — the answer
+    # belongs to the proxy.
+    assert "content-security-policy" in _STRIPPED_RESPONSE_HEADERS
+    assert "x-frame-options" in _STRIPPED_RESPONSE_HEADERS
+
+
+def test_the_grants_own_url_shape_reaches_the_proxy() -> None:
+    """The minted URL ends at the token with a trailing slash and no path.
+
+    `/{token}/{path:path}` alone does not match that, so the one URL this proxy
+    exists to hand out 404'd while every deeper path worked — which is exactly
+    the shape nothing tested.
+    """
+    from app.modules.workspace.api.controllers.port_proxy_controller import router
+
+    paths = {getattr(route, "path", "") for route in router.routes}
+    assert "/workspace-ports/{token}" in paths
+    assert "/workspace-ports/{token}/{path:path}" in paths
+
+
+def test_the_proxy_is_not_behind_the_session_gate() -> None:
+    """The signed grant in the path IS the credential, and this URL is handed to
+    a browser that has no Lemma session and never will."""
+    from app.core.security import EXCLUDED_PATHS
+
+    assert any(path.startswith("/workspace-ports") for path in EXCLUDED_PATHS)

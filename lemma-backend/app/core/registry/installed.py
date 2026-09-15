@@ -26,6 +26,7 @@ from app.modules.pod_bundle.module import module as pod_bundle_module
 from app.modules.schedule.module import module as schedule_module
 from app.modules.usage.module import module as usage_module
 from app.modules.workflow.module import module as workflow_module
+from app.modules.web_login.module import module as web_login_module
 from app.modules.workspace.module import module as workspace_module
 from app.core.registry.contract import LemmaModule
 
@@ -46,6 +47,7 @@ OSS_MODULES: tuple[LemmaModule, ...] = (
     icon_module,
     usage_module,
     workspace_module,
+    web_login_module,
     # Last: it only observes. Its consumers must never be the reason another
     # module's handlers are late.
     analytics_module,

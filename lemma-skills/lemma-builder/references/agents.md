@@ -84,11 +84,11 @@ Optional fields: `input_schema` (typed input when other systems invoke the agent
 
 ## Toolsets
 
-The field is `toolsets` (13 values, `agent/domain/value_objects.py` → `AgentToolset`).
-Only five of them are a decision. Set those on the agent; the rest arrive on their own.
+The field is `toolsets` (14 values, `agent/domain/value_objects.py` → `AgentToolset`).
+Only six of them are a decision. Set those on the agent; the rest arrive on their own.
 
-- **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`.
-  These are the five `toolsets` accepts as a real choice. Grant only what the job needs.
+- **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`, `BROWSER`.
+  These are the six `toolsets` accepts as a real choice. Grant only what the job needs.
 - **Always on** — `USER_INTERACTION`, `SKILLS`, `SNOOZE`, `MESSAGING`, `TODO`.
   Every agent has them; listing them changes nothing.
 - **Derived** — `POD` follows any folder or table grant, `CONNECTORS` follows any
@@ -116,6 +116,7 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | `WORKSPACE_CLI` | **Declared.**  a sandbox shell with the `lemma` CLI — the most powerful and broadest toolset. Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
 | `SKILLS` | **Always on.**  loading skills available in the workspace; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
 | `WEB_SEARCH` | **Declared.**  web search |
+| `BROWSER` | **Declared.**  a real Chrome in the agent's sandbox: open a page, read it, act on it by element ref, screenshot it, and — the one that changes what is reachable — `browser_sign_in`, which gets past a login wall by loading a login the person saved earlier, or by pausing the run and asking them to sign in themselves in that browser. The agent never sees or asks for a password. **Deferred**: the tools are not in the prompt prefix, so an agent that never meets a page never carries them. Pair with `WORKSPACE_CLI` only if the job also needs a shell — the typed tools do not need one |
 | `USER_INTERACTION` | **Always on.**  ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | **Declared.**  speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
 | `SUBAGENTS` | **Declared.**  async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |

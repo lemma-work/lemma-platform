@@ -107,12 +107,18 @@ LEARNS_POD_WITHOUT_A_QUERY = {ResourceType.POD}
 #: builds a `ResourceRef` for either — they exist as permission ids and grant
 #: targets only. They are named in `_NO_REFS_CONSTRUCTED` so that if something
 #: ever does build one, the clamp denies instead of waving it through.
+#:
+#: `WEB_LOGIN` is there for the same reason and not the same story: a saved
+#: login belongs to a person rather than a pod, and the repository filters every
+#: read by `user_id`. Nothing builds a ref for it *yet* — the resolution service
+#: that will is the one place that should, and it lands with a hydrator.
 NO_LOOKUP = {
     ResourceType.CONNECTOR,
     ResourceType.ORGANIZATION,
     ResourceType.ROLE,
     ResourceType.POD_MEMBER,
     ResourceType.DATASTORE_RECORD,
+    ResourceType.WEB_LOGIN,
 }
 
 

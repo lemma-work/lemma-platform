@@ -741,10 +741,28 @@ docker-reap:
 
 SANDBOX_REGISTRY  ?= ghcr.io/lemma-work
 SANDBOX_TAG       ?= dev
-SANDBOX_PLATFORM  ?= linux/amd64
+# A locally built workspace image targets the machine that will run it, which is
+# what `{{.Server.Arch}}` reports -- the *daemon's* architecture, not the CLI's.
+# Published images still cover both (`SANDBOX_PLATFORMS`), so this changes what a
+# developer builds, never what ships.
+#
+# It used to be pinned to linux/amd64, which on an Apple Silicon machine means
+# every process in the sandbox is emulated. That is not a small tax on a browser:
+# measured in an idle container on the same host, Chromium's cold launch is 4.4s
+# emulated against 0.33s native, `start-browser` 9.1s against 1.8s, and a cold
+# `open` 14.6s against 2.2s. Under the load of a sandbox that has just been
+# provisioned those multiply, which is how a browser tool with a 90s budget
+# timed out and fell back to fetching the page without a browser at all.
+# Evaluated lazily, so `make` targets that build nothing never shell out to
+# docker, and falling back to amd64 keeps a machine with no daemon running
+# building the same image it built before.
+SANDBOX_PLATFORM  ?= linux/$(or $(shell docker version --format '{{.Server.Arch}}' 2>/dev/null),amd64)
 SANDBOX_PLATFORMS ?= linux/amd64,linux/arm64
 # Function artifacts target the canonical x86-64 runtime ABI. Do not publish an
-# arm64 function image until the artifact builder emits an arm64 ABI.
+# arm64 function image until the artifact builder emits an arm64 ABI -- and for
+# the same reason do not build a local one either, so this keeps its own pin
+# rather than following the host the way the workspace image now does.
+SANDBOX_FUNCTION_PLATFORM  ?= linux/amd64
 SANDBOX_FUNCTION_PLATFORMS ?= linux/amd64
 SANDBOX_PYTHON_IMAGE ?= python:3.14.6-slim
 SANDBOX_NODE_IMAGE   ?= node:24.18.0-slim
@@ -777,7 +795,7 @@ sandbox-image-workspace:
 
 sandbox-image-function:
 	docker build \
-		--platform $(SANDBOX_PLATFORM) \
+		--platform $(SANDBOX_FUNCTION_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
 		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
 		-t $(FUNCTION_IMAGE):$(SANDBOX_TAG) \

@@ -295,13 +295,28 @@ async def pending_approval(
     )
 
 
+async def pending_sign_in(
+    uow: SqlAlchemyUnitOfWork, conversation_id: UUID
+) -> PendingInteraction | None:
+    """The oldest unresolved ``browser_sign_in``, or ``None``.
+
+    What a sign-in link needs, and all of it: `tool_args` carries the origin and
+    the reason the agent gave, and the pause existing at all is what "still
+    waiting" means. `web_login` used to keep a row saying the same three things,
+    and the row and the pause drifted apart.
+    """
+    return _pending(
+        await _service(uow).get_pending_sign_in(conversation_id=conversation_id)
+    )
+
+
 async def resolve_pending_interaction(
     uow: SqlAlchemyUnitOfWork,
     *,
     conversation_id: UUID,
     approval_id: str,
     user_id: UUID,
-    pod_id: UUID,
+    pod_id: UUID | None = None,
     decision: AgentRunApprovalDecision,
     response: dict[str, object] | None = None,
     defer_reconciliation: bool = True,
@@ -318,6 +333,11 @@ async def resolve_pending_interaction(
     against the conversation's owner, and it is holding a webhook deadline while
     it does. ``defer_reconciliation`` is on by default for the same reason --
     an approved command outlives the webhook that approved it.
+
+    ``pod_id`` is optional because the conversation is loaded here anyway and
+    knows its own pod. A caller that holds one passes it; one that holds only
+    the pause it is answering -- a finished sign-in, say -- should not have to
+    carry a pod id around to be allowed to say "they did it".
     """
     entity = await ConversationRepository(uow).get_conversation(conversation_id)
     if entity is None:
@@ -326,7 +346,7 @@ async def resolve_pending_interaction(
         conversation=entity,
         approval_id=approval_id,
         user_id=user_id,
-        pod_id=pod_id,
+        pod_id=pod_id if pod_id is not None else entity.pod_id,
         decision=decision,
         response=response or {},
         defer_reconciliation=defer_reconciliation,
@@ -437,6 +457,11 @@ async def set_conversation_metadata_value(
 
 
 __all__ = [
+    # Re-exported because `resolve_pending_interaction` takes one, and the enum
+    # itself lives in `domain`, which is not a surface another module may reach
+    # into. A published function whose argument type is unreachable is not
+    # published.
+    "AgentRunApprovalDecision",
     "PendingInteraction",
     "SurfaceAgentIdentity",
     "SurfaceConversation",
@@ -444,6 +469,7 @@ __all__ = [
     "conversation_metadata_value",
     "open_surface_conversation",
     "pending_approval",
+    "pending_sign_in",
     "pending_interaction",
     "pending_question",
     "resolve_pending_interaction",

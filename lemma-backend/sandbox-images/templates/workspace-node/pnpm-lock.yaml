@@ -18,8 +18,8 @@ importers:
         specifier: 0.6.0
         version: 0.6.0
       agent-browser:
-        specifier: 0.32.3
-        version: 0.32.3
+        specifier: 0.37.1
+        version: 0.37.1
       jsdom:
         specifier: 29.1.1
         version: 29.1.1
@@ -146,8 +146,8 @@ packages:
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
 
-  agent-browser@0.32.3:
-    resolution: {integrity: sha512-jwmqex/vEFNWx7X/W3JnZSWm5C+46SFKWDXYD7timGPCcvqHZtdVIBnKGUz7iCJYflQg4DrtxWUWzuin9+zoyA==}
+  agent-browser@0.37.1:
+    resolution: {integrity: sha512-NDojTSXrIq7zS090T0VwI1uzBryZWvewgxXvS0swj8/5GGnziBZLmyhEkfETO8n4n3DsJpZbZkq9F/MV2rIQKw==}
     engines: {node: '>=24.0.0', pnpm: '>=11.0.0'}
     hasBin: true
 
@@ -358,7 +358,7 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  agent-browser@0.32.3: {}
+  agent-browser@0.37.1: {}
 
   bidi-js@1.0.3:
     dependencies:

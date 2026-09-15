@@ -122,6 +122,17 @@ class FakeE2B:
     # the provider was passing neither.
     created_lifecycles: list[Any] = field(default_factory=list)
     connect_timeouts: list[float | None] = field(default_factory=list)
+    #: Whether each create asked for public traffic. Recorded for the same
+    #: reason as the lifecycles above: E2B defaults it to *open*, so a fake that
+    #: swallowed the argument could not tell "the provider closed this" from
+    #: "the provider said nothing" -- and saying nothing is what puts a signed-in
+    #: browser on a public URL.
+    created_public_traffic: list[bool | None] = field(default_factory=list)
+    #: The per-sandbox traffic token E2B mints when a sandbox is created with
+    #: public traffic disabled. `None` models the older, open arrangement, which
+    #: is what every sandbox created before that flag still has -- and what the
+    #: provider must report as `public` rather than quietly assume away.
+    traffic_access_token: str | None = None
     # Small, so every listing test crosses a page boundary.
     list_page_size: int = 2
     _next: int = 0
@@ -282,8 +293,10 @@ class FakeE2B:
                 envs=None,
                 volume_mounts=None,
                 lifecycle=None,
+                allow_public_traffic=None,
                 **_kwargs,
             ):
+                world.created_public_traffic.append(allow_public_traffic)
                 world._next += 1
                 sandbox_id = f"e2b-{world._next}"
                 world.sandboxes[sandbox_id] = FakeSandboxInfo(
@@ -350,6 +363,10 @@ class FakeE2B:
 
             def get_host(self, port):
                 return f"{port}-{self.sandbox_id}.e2b.test"
+
+            @property
+            def traffic_access_token(self):
+                return world.traffic_access_token
 
             def runtime_status(self, port):
                 """What the runtime port would answer, without serving HTTP.
