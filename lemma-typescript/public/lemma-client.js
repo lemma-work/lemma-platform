@@ -9095,13 +9095,17 @@ var LemmaClient = (() => {
     ApiError: () => ApiError,
     AuthManager: () => AuthManager,
     LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
+    LEMMA_COMPOSE_MESSAGE_TYPE: () => LEMMA_COMPOSE_MESSAGE_TYPE,
+    LEMMA_COMPOSE_RESULT_MESSAGE_TYPE: () => LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
     LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
     POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
     applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
     buildFederatedLogoutUrl: () => buildFederatedLogoutUrl,
+    canComposeInConversation: () => canComposeInConversation,
     clearTestingToken: () => clearTestingToken,
+    composeInConversation: () => composeInConversation,
     getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
@@ -17669,6 +17673,51 @@ var LemmaClient = (() => {
     });
   }
 
+  // src/browser-compose.ts
+  var LEMMA_COMPOSE_MESSAGE_TYPE = "lemma-compose";
+  var LEMMA_COMPOSE_RESULT_MESSAGE_TYPE = "lemma-compose-result";
+  var ACKNOWLEDGEMENT_TIMEOUT_MS = 1500;
+  function isAcknowledgement(value, id) {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value;
+    return candidate.type === LEMMA_COMPOSE_RESULT_MESSAGE_TYPE && candidate.id === id;
+  }
+  function canComposeInConversation() {
+    return typeof window !== "undefined" && window.parent !== window;
+  }
+  function composeInConversation(text, options = {}) {
+    const body = typeof text === "string" ? text.trim() : "";
+    if (!body || !canComposeInConversation()) return Promise.resolve(false);
+    const id = `compose-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const message = {
+      type: LEMMA_COMPOSE_MESSAGE_TYPE,
+      id,
+      text: body,
+      newConversation: options.newConversation === true
+    };
+    return new Promise((resolve2) => {
+      let settled = false;
+      const finish = (took) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        window.removeEventListener("message", hear);
+        resolve2(took);
+      };
+      const hear = (event) => {
+        if (event.source !== window.parent || !isAcknowledgement(event.data, id)) return;
+        finish(true);
+      };
+      const timer = window.setTimeout(() => finish(false), ACKNOWLEDGEMENT_TIMEOUT_MS);
+      window.addEventListener("message", hear);
+      try {
+        window.parent.postMessage(message, "*");
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
   // src/browser.ts
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
@@ -17687,7 +17736,11 @@ var LemmaClient = (() => {
       LEMMA_THEME_EVENT,
       applyLemmaHostTheme,
       getLemmaHostTheme,
-      subscribeLemmaHostTheme
+      subscribeLemmaHostTheme,
+      LEMMA_COMPOSE_MESSAGE_TYPE,
+      LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
+      canComposeInConversation,
+      composeInConversation
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;

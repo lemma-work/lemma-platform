@@ -42,6 +42,11 @@ async def display_resource(
     exactly one of `content` or `public_url`; load the `lemma-widget` skill before
     your first widget. React, routing, or real state means an app.
 
+    A WIDGET is a live view, not a picture: it reads pod data through the browser
+    SDK, filters and opens records in place, and can offer the person their next
+    question in the composer. It cannot send one — `ask_user` is for an answer
+    this run needs.
+
     This tool displays. `ask_user` collects choices, `request_approval` collects
     permission.
     """
