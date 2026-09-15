@@ -306,7 +306,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `content` or `public_url`; load the `lemma-widget` skill before\nyour first widget. React, routing, or real state means an app.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
+    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `path`, `content`, or `public_url`; load the `lemma-widget`\nskill before your first widget. React, routing, or real state means an app.\n\nA WIDGET is a live view, not a picture: it reads pod data through the browser\nSDK, filters and opens records in place, and can offer the person their next\nquestion in the composer. It cannot send one \u2014 `ask_user` is for an answer\nthis run needs.\n\nGive a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`\n(`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the\nfile says, so correcting one is an edit to the file. `content` inlines the\nHTML instead and freezes it in this call.\n\nA display that succeeds is already in front of the person. Nothing here\nreplaces or edits an earlier one, so calling again adds a second resource\nbelow the first rather than correcting it \u2014 which is the other reason to\nkeep the HTML in a file.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -391,7 +391,7 @@
             }
           ],
           "default": null,
-          "description": "Pod file path, for FILE. Never a workspace path."
+          "description": "Pod file path. For FILE, the file to show. For WIDGET, the pod file holding its HTML \u2014 write it with pod_write_file, then edit that file to change the widget. Never a workspace path."
         },
         "public_url": {
           "anyOf": [
@@ -415,7 +415,7 @@
             }
           ],
           "default": null,
-          "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only, opening with a tag. The whole fragment goes here in this one call and is shown the moment the call succeeds \u2014 no later call completes it, and a workspace file holding the markup cannot be referenced. An SVG image is a pod file, shown with type=FILE."
+          "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only, opening with a tag, complete in this one call. Prefer `path` for anything you may want to correct \u2014 an inline fragment is frozen in this call and cannot be edited. An SVG image is a pod file, shown with type=FILE."
         },
         "loading_messages": {
           "description": "Messages shown while a WIDGET renders.",

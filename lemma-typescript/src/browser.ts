@@ -34,6 +34,12 @@ import {
   getLemmaHostTheme,
   subscribeLemmaHostTheme,
 } from "./browser-theme.js";
+import {
+  LEMMA_COMPOSE_MESSAGE_TYPE,
+  LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
+  canComposeInConversation,
+  composeInConversation,
+} from "./browser-compose.js";
 
 export {
   LemmaClient,
@@ -51,6 +57,10 @@ export {
   applyLemmaHostTheme,
   getLemmaHostTheme,
   subscribeLemmaHostTheme,
+  LEMMA_COMPOSE_MESSAGE_TYPE,
+  LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
+  canComposeInConversation,
+  composeInConversation,
 };
 
 // Browser globals. We standardize on `window.LemmaClient` (the skills, the app
@@ -76,6 +86,10 @@ if (typeof globalThis !== "undefined") {
     applyLemmaHostTheme,
     getLemmaHostTheme,
     subscribeLemmaHostTheme,
+    LEMMA_COMPOSE_MESSAGE_TYPE,
+    LEMMA_COMPOSE_RESULT_MESSAGE_TYPE,
+    canComposeInConversation,
+    composeInConversation,
   };
   if (!scope.LemmaClient) {
     scope.LemmaClient = surface;

@@ -366,6 +366,30 @@ def test_widget_contract_quotes_back_what_arrived_instead_of_markup():
     assert "public_url" in errors[0]
 
 
+def test_widget_contract_rejects_one_stray_character_before_the_first_tag():
+    """`<` is not a tag, and the difference is a line of junk above the view.
+
+    Regression, and a hole in the rule below rather than a gap between rules:
+    the check was `startswith("<")`, which `<<style>` satisfies. It passed, the
+    widget rendered with a bare "<" on the line above it, the agent noticed,
+    tried to correct it, and displayed a *second* widget with the same "<" —
+    because a display cannot be taken back. Two junk widgets from one typo.
+    """
+    for opening in ("<<style>", "< style>", "<3 style>", "<-style>"):
+        errors = validate_widget_html(
+            opening + ".a{color:red}</style><div class='a'>7 open</div>"
+        )
+        assert any("must begin with a tag" in e for e in errors), opening
+
+
+def test_widget_contract_accepts_every_real_way_to_open_a_fragment():
+    # An element and a comment are the two things that open a tag; the rule has
+    # to admit both or it rejects the shipped starters.
+    assert validate_widget_html("<div class='card'>7 open</div>") == []
+    assert validate_widget_html("<!-- v1 --><div class='card'>7 open</div>") == []
+    assert validate_widget_html("<style>.a{color:red}</style><p class='a'>7</p>") == []
+
+
 def test_widget_contract_rejects_narration_before_the_fragment():
     """The half-measure of the same slip: the reply lands on top of the view."""
     errors = validate_widget_html(
@@ -373,7 +397,7 @@ def test_widget_contract_rejects_narration_before_the_fragment():
         "<style>.uw{color:var(--lemma-widget-text,#141414)}</style>"
         '<section class="uw"><div>7 open</div></section>'
     )
-    assert any("must begin with markup" in e for e in errors)
+    assert any("must begin with a tag" in e for e in errors)
     assert any("Ignore that stray line" in e for e in errors)
 
 

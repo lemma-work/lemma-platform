@@ -48,7 +48,11 @@ class DisplayResourceRequest(BaseModel):
     )
     path: str | None = Field(
         default=None,
-        description="Pod file path, for FILE. Never a workspace path.",
+        description=(
+            "Pod file path. For FILE, the file to show. For WIDGET, the pod file "
+            "holding its HTML — write it with pod_write_file, then edit that file "
+            "to change the widget. Never a workspace path."
+        ),
     )
     public_url: str | None = Field(
         default=None, description="URL to embed, for WIDGET."
@@ -57,10 +61,10 @@ class DisplayResourceRequest(BaseModel):
         default=None,
         description=(
             "Inline HTML fragment, for WIDGET: raw markup, body-level tags only, "
-            "opening with a tag. The whole fragment goes here in this one call and "
-            "is shown the moment the call succeeds — no later call completes it, "
-            "and a workspace file holding the markup cannot be referenced. "
-            "An SVG image is a pod file, shown with type=FILE."
+            "opening with a tag, complete in this one call. Prefer `path` for "
+            "anything you may want to correct — an inline fragment is frozen in "
+            "this call and cannot be edited. An SVG image is a pod file, shown "
+            "with type=FILE."
         ),
     )
     loading_messages: list[str] = Field(
@@ -128,8 +132,11 @@ def _reject_fields_from_other_types(
     request: "DisplayResourceRequest",
 ) -> str | None:
     """Fields that belong to one type and were sent with another."""
-    if request.type != DisplayResourceType.FILE and request.path is not None:
-        return "path is only valid for FILE resources."
+    if (
+        request.type not in {DisplayResourceType.FILE, DisplayResourceType.WIDGET}
+        and request.path is not None
+    ):
+        return "path is only valid for FILE and WIDGET resources."
     if request.type != DisplayResourceType.WIDGET:
         if request.public_url is not None or request.content is not None:
             return "public_url and content are only valid for WIDGET resources."
@@ -155,12 +162,14 @@ _NON_POD_FILE_ROOTS = ("/workspace", "/tmp", "/private", "/Users")
 
 
 def _check_file(request: "DisplayResourceRequest") -> str | None:
-    """A FILE has to be somewhere the pod can actually see.
+    """A path has to point somewhere the pod can actually see.
 
     The agent's own workspace is a sandbox nobody else can read, so a path into
-    it renders as a broken resource for every viewer but the agent.
+    it renders as a broken resource for every viewer but the agent. True of a
+    FILE and of a WIDGET's source alike — the widget route reads that file as
+    the person looking at the widget, and they are not in the sandbox.
     """
-    if request.type != DisplayResourceType.FILE:
+    if request.type not in {DisplayResourceType.FILE, DisplayResourceType.WIDGET}:
         return None
     path = request.path
     if path is None:
@@ -172,9 +181,9 @@ def _check_file(request: "DisplayResourceRequest") -> str | None:
     ):
         return (
             f"'{path}' is a sandbox path, which only exists inside your "
-            "workspace. FILE takes a pod path, such as /me/reports/q3.pdf. "
-            "Upload it first with `lemma files upload` and display the pod "
-            "path it returns."
+            "workspace. This takes a pod path, such as /me/c/2026-09-15/pulse.html. "
+            "Write it there with `pod_write_file` (or upload it with `lemma files "
+            "upload`) and display the pod path."
         )
     return None
 
@@ -184,10 +193,15 @@ def _check_widget(request: "DisplayResourceRequest") -> str | None:
     if request.type != DisplayResourceType.WIDGET:
         return None
     payload_count = sum(
-        bool(value and value.strip()) for value in (request.public_url, request.content)
+        bool(value and value.strip())
+        for value in (request.public_url, request.content, request.path)
     )
     if payload_count != 1:
-        return "WIDGET resources must provide exactly one of public_url or content."
+        return (
+            "WIDGET resources must provide exactly one of path, content, or "
+            "public_url. `path` is the pod file holding the widget's HTML, and "
+            "is the one to use for anything you may want to change later."
+        )
     if request.public_url:
         parsed = urlparse(request.public_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
