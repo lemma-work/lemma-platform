@@ -415,7 +415,7 @@
             }
           ],
           "default": null,
-          "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only. An SVG image is a pod file, shown with type=FILE."
+          "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only, opening with a tag. The whole fragment goes here in this one call and is shown the moment the call succeeds \u2014 no later call completes it, and a workspace file holding the markup cannot be referenced. An SVG image is a pod file, shown with type=FILE."
         },
         "loading_messages": {
           "description": "Messages shown while a WIDGET renders.",

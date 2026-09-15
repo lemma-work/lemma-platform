@@ -82,6 +82,10 @@ _FULL_DOCUMENT = re.compile(
 # *markup*, so an encoded blob trips none of them and would render as literal
 # text in the iframe. Checked first so the error names the actual mistake.
 _ELEMENT_TAG = re.compile(r"<[a-zA-Z][^>]*>")
+# How much of a rejected value the error quotes back. Long enough that the
+# author recognises what it sent, short enough that a whole failed fragment
+# does not land in the transcript twice.
+_EXCERPT_CHARACTERS = 80
 # A widget is a view, not an image. An SVG-rooted fragment belongs in pod files,
 # where it is addressable and reusable, and displays via FILE. Only the root is
 # rejected — inline <svg> icons inside an HTML fragment stay fine.
@@ -260,6 +264,64 @@ def _naked_css_error(html: str) -> str | None:
     return None
 
 
+def _excerpt(content: str) -> str:
+    """The head of a rejected value, quoted, for an error that names it."""
+    head = " ".join(content[: _EXCERPT_CHARACTERS * 2].split())
+    if len(head) > _EXCERPT_CHARACTERS:
+        head = head[:_EXCERPT_CHARACTERS].rstrip() + "…"
+    return repr(head)
+
+
+def _leading_text_error(content: str) -> str | None:
+    """An error when the fragment opens with text instead of markup, else None.
+
+    A fragment begins with a tag. Text in front of one is the sentence that was
+    meant for the person reading the reply — "clean version below", "ignore the
+    stray line", a title for the view — and it renders as a bare unstyled line
+    above the widget, outside every rule the fragment carries.
+
+    It is worth its own rule because of what it is a symptom of. The reply and
+    the argument are two channels, and the widget calls that fail worst are the
+    ones where they blur: a whole argument of narration where the fragment
+    should be, which the empty-markup check above catches, and this, its
+    half-measure, which nothing else does — the markup is all there, so every
+    other rule passes and the stray line ships.
+    """
+    if content.startswith("<"):
+        return None
+    opening = content.split("<", 1)[0]
+    return (
+        f"Widget content must begin with markup, not text ({_excerpt(opening)}). "
+        "Text before the first tag renders as a bare line above the view, "
+        "unstyled and outside the fragment. Explanation belongs in your reply to "
+        "the person, not in `content`."
+    )
+
+
+def _sdk_loader_errors(content: str) -> list[str]:
+    """Errors in how a data-backed fragment reaches the browser SDK, else []."""
+    if "lemma-client.js" not in content and "LemmaClient" not in content:
+        return []
+    errors: list[str] = []
+    if not _RUNTIME_CONFIG_REFERENCE.search(content):
+        errors.append(
+            "SDK-backed widgets must read window.__LEMMA_CONFIG__ at runtime."
+        )
+    if not _API_URL_IDENTIFIER.search(content):
+        errors.append("Build the browser SDK URL from window.__LEMMA_CONFIG__.apiUrl.")
+    if "lemma-client.js" not in content:
+        errors.append(
+            "The widget uses LemmaClient but does not load /public/sdk/lemma-client.js."
+        )
+    if not re.search(
+        r"\.onload\s*=|addEventListener\(\s*['\"]load['\"]",
+        content,
+        re.IGNORECASE,
+    ):
+        errors.append("Boot SDK-backed widget code from the SDK script's load handler.")
+    return errors
+
+
 def validate_widget_html(html: str) -> list[str]:
     """Return blocking authoring errors for an inline widget fragment."""
     content = (html or "").strip()
@@ -269,8 +331,15 @@ def validate_widget_html(html: str) -> list[str]:
     if not _ELEMENT_TAG.search(content):
         return [
             (
-                "Widget content must be an HTML fragment — no element tag found. "
-                "Pass raw markup, not base64 or any other encoded form."
+                "Widget content must be an HTML fragment — no element tag found "
+                f"in the {len(content)} characters received ({_excerpt(content)}). "
+                "The whole fragment goes in this one `content` argument and is "
+                "displayed the moment the call succeeds: a note about the markup, "
+                "a placeholder standing in for it, or a promise to send it next is "
+                "not markup, and no later call can complete this one. If the "
+                "fragment is too long to write out here, serve it instead — save "
+                "the HTML as an app and pass its address as `public_url`. Pass raw "
+                "markup, not base64 or any other encoded form."
             )
         ]
 
@@ -284,6 +353,9 @@ def validate_widget_html(html: str) -> list[str]:
         ]
 
     errors = list(lint_app_html(content))
+    leading = _leading_text_error(content)
+    if leading:
+        errors.append(leading)
     if _FULL_DOCUMENT.search(content):
         errors.append(
             "Widget content must be an HTML fragment without doctype, html, head, or body tags."
@@ -305,27 +377,6 @@ def validate_widget_html(html: str) -> list[str]:
             + "."
         )
 
-    uses_sdk = "lemma-client.js" in content or "LemmaClient" in content
-    if uses_sdk:
-        if not _RUNTIME_CONFIG_REFERENCE.search(content):
-            errors.append(
-                "SDK-backed widgets must read window.__LEMMA_CONFIG__ at runtime."
-            )
-        if not _API_URL_IDENTIFIER.search(content):
-            errors.append(
-                "Build the browser SDK URL from window.__LEMMA_CONFIG__.apiUrl."
-            )
-        if "lemma-client.js" not in content:
-            errors.append(
-                "The widget uses LemmaClient but does not load /public/sdk/lemma-client.js."
-            )
-        if not re.search(
-            r"\.onload\s*=|addEventListener\(\s*['\"]load['\"]",
-            content,
-            re.IGNORECASE,
-        ):
-            errors.append(
-                "Boot SDK-backed widget code from the SDK script's load handler."
-            )
+    errors.extend(_sdk_loader_errors(content))
 
     return list(dict.fromkeys(errors))

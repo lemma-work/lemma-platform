@@ -74,6 +74,31 @@ Passing both, or neither, is rejected. One more WIDGET-only field:
 
 `name`, `path`, `filters`, and `query` belong to other types.
 
+### One call, one argument
+
+`content` is written once, in the tool call, and the widget is shown the moment
+that call succeeds. Nothing stages a widget: there is no second call that
+completes a first, no path or handle that points at markup you wrote into the
+workspace, and no draft that is not yet in front of the person. So:
+
+- **Write the fragment out in full, in the argument.** Building it in a
+  workspace file first is a fine way to check your own markup. It is not a way
+  to hand it over — the file is yours, and `path` is for FILE.
+- **Never put a sentence in `content`.** Not narration, not "clean version
+  below", not a note about the markup you are about to write, not a placeholder
+  standing in for it. Content with no tag in it is rejected, and text in front
+  of the first tag ships as a bare unstyled line above the view. What the person
+  should read goes in your reply.
+- **Never display a probe.** A call that succeeds is shown, so "testing whether
+  this transmits" is a test run in front of the person. Check your own markup
+  against the list under [Before display](#before-display) instead.
+- **If the fragment is genuinely too long to write out, it is an app.** Save the
+  HTML as an app and pass its address as `public_url`.
+
+The starters are a shape to follow, not a file to transcribe. Take the SDK
+loader and the loading/empty/error scaffolding verbatim, and write the markup
+your answer actually needs around them.
+
 ## Fixed contract
 
 - `content` is an HTML **fragment**: raw markup, body-level tags only. A doctype,
@@ -201,6 +226,7 @@ chart starters do exactly this; keep their query rather than counting rows in JS
 ## Before display
 
 - The chosen view is genuinely more useful than short prose.
+- `content` opens with `<` and carries the entire fragment, not a note about it.
 - The closest versioned starter was used and all placeholders were replaced.
 - Every tag opens with `<` and closes once; the fragment carries no full-document
   tags, secrets, hardcoded hosts, or pod ids.

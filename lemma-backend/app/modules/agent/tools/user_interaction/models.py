@@ -56,7 +56,10 @@ class DisplayResourceRequest(BaseModel):
     content: str | None = Field(
         default=None,
         description=(
-            "Inline HTML fragment, for WIDGET: raw markup, body-level tags only. "
+            "Inline HTML fragment, for WIDGET: raw markup, body-level tags only, "
+            "opening with a tag. The whole fragment goes here in this one call and "
+            "is shown the moment the call succeeds — no later call completes it, "
+            "and a workspace file holding the markup cannot be referenced. "
             "An SVG image is a pod file, shown with type=FILE."
         ),
     )
