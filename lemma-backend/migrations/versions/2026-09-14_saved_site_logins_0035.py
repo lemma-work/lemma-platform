@@ -30,9 +30,15 @@ answers — what has been done with my saved logins — has to outlive log reten
 and be answerable to the person whose credentials they are. It carries no secret
 and no page content.
 
-``web_login_id`` is ``SET NULL`` rather than ``CASCADE``: "it was removed" is
-precisely the event somebody would come here to find, so deleting the login must
-not delete the record of its deletion.
+It is keyed by ``origin`` rather than by a foreign key to ``web_logins``, and
+that is the point: "it was removed" is precisely the event somebody comes here
+to find, so the trail for a site has to outlive the row for it. An origin is
+also what the person searches by, and it is what every writer already has in
+hand -- a nullable id, by contrast, would have been NULL on the one event that
+matters most.
+
+Append-only, so there is no ``updated_at``: a row that is never updated does not
+get a column saying when it last was.
 
 Revision ID: 0035_saved_site_logins
 Revises: 0034_ref_prefix_indexes
@@ -72,24 +78,15 @@ def upgrade() -> None:
     op.create_table(
         "web_login_audit",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("web_login_id", sa.Uuid(), nullable=True),
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("conversation_id", sa.Uuid(), nullable=True),
         sa.Column("origin", sa.String(length=255), nullable=False),
         sa.Column("action", sa.String(length=32), nullable=False),
         sa.Column("outcome", sa.String(length=32), nullable=False),
-        sa.Column("actor", sa.String(length=255), nullable=True),
         sa.Column("detail", sa.String(length=500), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["web_login_id"], ["web_logins.id"], ondelete="SET NULL"
-        ),
         sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_web_login_audit_login", "web_login_audit", ["web_login_id"], unique=False
     )
     op.create_index(
         "ix_web_login_audit_user_created",
@@ -101,7 +98,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_web_login_audit_user_created", table_name="web_login_audit")
-    op.drop_index("ix_web_login_audit_login", table_name="web_login_audit")
     op.drop_table("web_login_audit")
     op.drop_index("ix_web_logins_user_id", table_name="web_logins")
     op.drop_table("web_logins")

@@ -17217,21 +17217,24 @@
         "type": "object"
       },
       "WebLoginAuditEntry": {
+        "description": "One thing that was done with one saved login.\n\n`detail` is why, when the outcome was not plain \"ok\" \u2014 \"session rejected\",\n\"nothing for this site was in the browser\". It is the platform's own words\nrather than an agent's paraphrase, which is the point of reading it here.",
         "properties": {
           "action": {
             "title": "Action",
             "type": "string"
           },
-          "actor": {
+          "conversation_id": {
             "anyOf": [
               {
+                "format": "uuid",
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Actor"
+            "description": "The run that did it, or null for something the person did themselves from the saved-logins screen.",
+            "title": "Conversation Id"
           },
           "created_at": {
             "format": "date-time",
@@ -17262,8 +17265,8 @@
           "origin",
           "action",
           "outcome",
-          "actor",
           "detail",
+          "conversation_id",
           "created_at"
         ],
         "title": "WebLoginAuditEntry",

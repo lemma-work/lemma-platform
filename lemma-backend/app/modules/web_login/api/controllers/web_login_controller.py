@@ -57,11 +57,23 @@ class WebLoginListResponse(BaseModel):
 
 
 class WebLoginAuditEntry(BaseModel):
+    """One thing that was done with one saved login.
+
+    `detail` is why, when the outcome was not plain "ok" — "session rejected",
+    "nothing for this site was in the browser". It is the platform's own words
+    rather than an agent's paraphrase, which is the point of reading it here.
+    """
+
     origin: str
     action: str
     outcome: str
-    actor: str | None
     detail: str | None
+    conversation_id: UUID | None = Field(
+        description=(
+            "The run that did it, or null for something the person did "
+            "themselves from the saved-logins screen."
+        ),
+    )
     created_at: datetime
 
 
@@ -152,8 +164,8 @@ async def web_login_history(
                 origin=row.origin,
                 action=row.action,
                 outcome=row.outcome,
-                actor=row.actor,
                 detail=row.detail,
+                conversation_id=row.conversation_id,
                 created_at=row.created_at,
             )
             for row in rows

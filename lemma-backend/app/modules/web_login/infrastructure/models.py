@@ -13,7 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.infrastructure.db.base import UUIDAuditBase
+from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
 
 # What `core/crypto` writes into an encrypted JSONB column: `_encrypted`, `kid`,
 # `alg`, `dek`, `ct` — every value a string (see `core/crypto/envelope.py`).
@@ -59,7 +59,7 @@ class WebLoginModel(UUIDAuditBase):
     )
 
 
-class WebLoginAuditModel(UUIDAuditBase):
+class WebLoginAuditModel(UUIDCreatedBase):
     """Every time a saved login was used, or changed, and how it went.
 
     Net-new: nothing in this codebase kept a durable audit trail before, and a
@@ -68,30 +68,31 @@ class WebLoginAuditModel(UUIDAuditBase):
     been done with my saved logins" — has to survive log retention and be
     answerable to the person whose credentials they are.
 
-    Carries no secret and no page content: which login, which conversation,
-    what happened.
+    Carries no secret and no page content, and every column here is written by
+    every writer. Three that were not are gone: a foreign key to ``web_logins``
+    (NULL on the deletion this trail exists to record), and an ``actor`` string
+    that only ever restated ``action`` -- the person asks, captures and deletes;
+    an agent injects. ``conversation_id`` says which run far more precisely than
+    a label would have.
+
+    ``UUIDCreatedBase`` rather than ``UUIDAuditBase``: appended to and never
+    updated, so there is no honest value for ``updated_at`` to hold.
     """
 
     __tablename__ = "web_login_audit"
 
-    web_login_id: Mapped[UUID | None] = mapped_column(
-        # Kept when the login is deleted: "it was removed" is exactly the event
-        # somebody would come here to find.
-        ForeignKey("web_logins.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
+    #: Which run did it. NULL for the things a person does themselves, from the
+    #: saved-logins screen rather than from inside a conversation.
     conversation_id: Mapped[UUID | None] = mapped_column(nullable=True)
     origin: Mapped[str] = mapped_column(String(255), nullable=False)
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     outcome: Mapped[str] = mapped_column(String(32), nullable=False)
-    #: Which agent or function did it, when it was not the person themselves.
-    actor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    #: Why, in the platform's own words, when the outcome was not plain "ok".
     detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     __table_args__ = (
         Index("ix_web_login_audit_user_created", "user_id", "created_at"),
-        Index("ix_web_login_audit_login", "web_login_id"),
     )

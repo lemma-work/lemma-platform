@@ -152,10 +152,26 @@ export function SavedLogins() {
                                 <span className="shrink-0 tabular-nums">
                                     {relative(entry.created_at)}
                                 </span>
-                                <span className="min-w-0 flex-1 truncate">
-                                    {entry.action} {hostOf(entry.origin)}
-                                    {entry.actor ? ` · ${entry.actor}` : ''}
-                                    {entry.outcome === 'ok' ? '' : ` · ${entry.outcome}`}
+                                <span className="flex min-w-0 flex-1 flex-col">
+                                    <span className="truncate">
+                                        {entry.action} {hostOf(entry.origin)}
+                                        {entry.outcome === 'ok'
+                                            ? ''
+                                            : ` · ${entry.outcome}`}
+                                    </span>
+                                    {/* Why it went that way, in the platform's
+                                        own words. Without this the line says a
+                                        login failed and nothing about what to
+                                        do next, which is the only reason
+                                        somebody opened this list. */}
+                                    {entry.detail ? (
+                                        <span
+                                            className="truncate text-[var(--text-muted)]"
+                                            title={entry.detail}
+                                        >
+                                            {entry.detail}
+                                        </span>
+                                    ) : null}
                                 </span>
                             </li>
                         ))}

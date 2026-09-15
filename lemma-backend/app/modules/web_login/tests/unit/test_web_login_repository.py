@@ -106,12 +106,10 @@ def test_an_entity_carries_only_what_is_safe_to_show() -> None:
         id = uuid4()
         user_id = uuid4()
         origin = "https://app.example.com"
-        label = "Example"
         status = "ACTIVE"
         created_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
         updated_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
         last_used_at = None
-        expires_hint_at = None
 
     entity = _to_entity(_Row())
     assert entity.status is WebLoginStatus.ACTIVE
@@ -127,13 +125,10 @@ async def test_saving_the_same_origin_twice_replaces_rather_than_adds() -> None:
         id = uuid4()
         user_id = uuid4()
         origin = "https://app.example.com"
-        label = "old"
-        kind = "SESSION"
         secret = {"_encrypted": "x"}
         created_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
         updated_at = datetime(2026, 9, 4, tzinfo=timezone.utc)
         last_used_at = None
-        expires_hint_at = None
 
     row = _Row()
     session = _FakeSession(existing=row)
@@ -158,7 +153,6 @@ async def test_the_audit_row_has_nowhere_to_put_a_secret() -> None:
         origin="https://app.example.com",
         action="inject",
         outcome="ok",
-        actor="agent:researcher",
         detail="x" * 900,
     )
 

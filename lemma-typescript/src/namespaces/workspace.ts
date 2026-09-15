@@ -34,14 +34,11 @@ export interface WorkspaceFileListResponse {
 export interface WebLogin {
   id: string;
   origin: string;
-  label: string;
   /** Whether the stored session still signs you in. */
   working: boolean;
   created_at: string;
   updated_at: string;
   last_used_at: string | null;
-  expires_hint_at: string | null;
-  has_password: boolean;
 }
 
 /** An agent waiting for somebody to sign a site in.
@@ -66,12 +63,15 @@ export interface SignInOutcome {
   saved_detail: string | null;
 }
 
+/** One thing that was done with one saved login. */
 export interface WebLoginAuditEntry {
   origin: string;
   action: string;
   outcome: string;
-  actor: string | null;
+  /** Why, when the outcome was not plain "ok" — in the platform's own words. */
   detail: string | null;
+  /** The run that did it; null for something the person did themselves. */
+  conversation_id: string | null;
   created_at: string;
 }
 

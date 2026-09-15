@@ -69,8 +69,6 @@ class WebLogin:
     created_at: datetime
     updated_at: datetime
     last_used_at: datetime | None = None
-    #: When the stored session is expected to stop working. A hint, not a fact:
-    #: sites expire sessions on their own schedule and rarely say so.
 
     @property
     def is_usable(self) -> bool:

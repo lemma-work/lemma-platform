@@ -55,10 +55,15 @@ def _fill_defaults(row) -> None:
         row.id = uuid4()
     if row.created_at is None:
         row.created_at = _now()
-    if row.updated_at is None:
-        row.updated_at = _now()
-    if isinstance(row, WebLoginModel) and row.status is None:
-        row.status = WebLoginStatus.ACTIVE.value
+    # Only the login row has an `updated_at`. The audit table is appended to and
+    # never updated, so it has no column for one -- and a double that invented
+    # the attribute anyway would be certifying a shape the database does not
+    # have.
+    if isinstance(row, WebLoginModel):
+        if row.updated_at is None:
+            row.updated_at = _now()
+        if row.status is None:
+            row.status = WebLoginStatus.ACTIVE.value
 
 
 class _Session:

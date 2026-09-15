@@ -161,9 +161,7 @@ class WebLoginRepository:
         origin: str,
         action: str,
         outcome: str,
-        web_login_id: UUID | None = None,
         conversation_id: UUID | None = None,
-        actor: str | None = None,
         detail: str | None = None,
     ) -> None:
         """Append to the audit trail.
@@ -173,13 +171,11 @@ class WebLoginRepository:
         """
         self._session.add(
             WebLoginAuditModel(
-                web_login_id=web_login_id,
                 user_id=user_id,
                 conversation_id=conversation_id,
                 origin=origin,
                 action=action,
                 outcome=outcome,
-                actor=actor,
                 detail=(detail or None) and detail[:500],
             )
         )
