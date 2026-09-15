@@ -15,6 +15,7 @@ os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
 from app.modules.connectors.infrastructure.composio_client import get_composio_client
 
 from app.modules.connectors.domain.account import ComposioCredentials, OAuthCredentials
+from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.auth_install import ResolvedAuthInstall
 from app.modules.connectors.domain.connector import AuthScheme
 from app.modules.connectors.domain.errors import ConnectorValidationError
@@ -163,6 +164,7 @@ class ComposioAuthProvider(AuthProviderInterface):
     _CUSTOM_AUTH_SCHEME = {
         AuthScheme.API_KEY: "API_KEY",
         AuthScheme.NOAUTH: "NO_AUTH",
+        AuthScheme.OAUTH2: "OAUTH2",
     }
 
     async def _resolve_auth_config_id(
@@ -174,20 +176,49 @@ class ComposioAuthProvider(AuthProviderInterface):
     ) -> str:
         """Create the Composio auth config this connect will run under.
 
-        OAuth apps use Composio-managed credentials (``use_composio_managed_auth``).
-        Credential-managed apps (API key / no-auth) have no managed credentials, so
-        they need ``use_custom_auth`` with the explicit scheme; the per-account key
-        is supplied at ``initiate`` time. Note ``use_custom_auth`` is about the
-        *toolkit's* auth scheme, not about who owns the Composio account -- that is
-        always Lemma.
+        Three cases, and the discriminator is the install, not the caller:
+
+        - **ORG_CUSTOM** -- Composio has no managed credentials for this
+          toolkit, so the org brought the third party's own OAuth client. Sent
+          as ``use_custom_auth`` with those credentials. Without this branch the
+          call went out asking for managed credentials that do not exist and
+          came back 500 with Composio's "Default auth config not found for
+          toolkit".
+        - **API key / no-auth** (``custom_auth_scheme`` passed by
+          ``connect_with_credentials``) -- ``use_custom_auth`` with the scheme
+          and no credentials; the per-account key is supplied at ``initiate``.
+        - **Everything else** -- ``use_composio_managed_auth``, which is
+          Composio's own credentials for a toolkit it manages.
+
+        ``use_custom_auth`` is about the *toolkit's* credentials, not about who
+        owns the Composio account -- that is always Lemma.
 
         A ``connector.composio_auth_config_id`` reuse hook used to short-circuit
         this. It could never fire: the id had to arrive in an install's config,
-        and a Composio install is always SYSTEM_DEFAULT, whose config is then
+        and a Composio install was always SYSTEM_DEFAULT, whose config is then
         validated against a closed empty schema that rejects the key.
         """
-        if custom_auth_scheme is not None:
-            options: dict[str, Any] = {
+        options: dict[str, Any]
+        if install.config_source == AuthConfigSource.ORG_CUSTOM:
+            scheme = self._CUSTOM_AUTH_SCHEME.get(install.auth_scheme)
+            if scheme is None:
+                raise ConnectorValidationError(
+                    "This app cannot be connected with organization-supplied "
+                    "credentials."
+                )
+            credentials = self._org_custom_credentials(install)
+            if not credentials:
+                raise ConnectorValidationError(
+                    "This install has no credentials. Add the app's client "
+                    "details before connecting an account."
+                )
+            options = {
+                "type": "use_custom_auth",
+                "auth_scheme": scheme,
+                "credentials": credentials,
+            }
+        elif custom_auth_scheme is not None:
+            options = {
                 "type": "use_custom_auth",
                 "auth_scheme": custom_auth_scheme,
             }
@@ -201,6 +232,23 @@ class ComposioAuthProvider(AuthProviderInterface):
             limiter="external_http",
         )
         return auth_config.id
+
+    @staticmethod
+    def _org_custom_credentials(install: ResolvedAuthInstall) -> dict[str, Any]:
+        """The org's install config, as Composio wants to receive it.
+
+        The keys are Composio's own: the catalog derived this install's schema
+        from the toolkit's ``auth_config_creation`` fields, so whatever the org
+        filled in is already named the way Composio's API expects. Nested
+        ``oauth2_credentials`` is unwrapped because the auth-config API accepts
+        that shape too, and an install created through it would otherwise send
+        Composio one key it does not know instead of the two it does.
+        """
+        config = dict(install.config or {})
+        nested = config.pop("oauth2_credentials", None)
+        if isinstance(nested, dict):
+            config.update(nested)
+        return {key: value for key, value in config.items() if value is not None}
 
     async def connect_with_credentials(
         self,

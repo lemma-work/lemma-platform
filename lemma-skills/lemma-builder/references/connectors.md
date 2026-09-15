@@ -143,6 +143,124 @@ refresh-operations` re-syncs the operation catalog — only meaningful for the
 per-install discovery kinds (`mcp`, `http`), since every other kind's operations come
 from the catalog.
 
+## Custom connectors — an app that is not in the catalog
+
+The catalog is not the limit. Three of its entries are **generic**: they carry no
+app of their own and become one when an install points them at an address. This
+is how a pod reaches an internal API, a warehouse, or any MCP server, and it is
+the answer whenever `lemma connectors list` does not have what you need.
+
+| `connector_id` | `--kind` | The install config holds |
+| --- | --- | --- |
+| `openapi` | `http` | `spec_url` **or** `spec_inline`; optional `server_url` (overrides the spec's), `default_headers` |
+| `mcp` | `mcp` | `server_url`; optional `extra_headers`, `session_setup` |
+| `sql` | `sql` | `dialect`, `host`, `port`, `database` |
+
+The install carries the **address**; the account carries the **credentials**.
+That split is the thing to get right — a key on the install is rejected, and an
+address on the account is too.
+
+```bash
+# An OpenAPI-described API. Operations are discovered from the spec at install.
+lemma connectors auth-configs create openapi --kind http --name acme-api \
+  -d '{"spec_url": "https://api.acme.test/openapi.json"}'
+lemma connectors accounts create --auth-config acme-api -d '{"api_key": "sk-..."}'
+
+# An MCP server. Its tools become operations.
+lemma connectors auth-configs create mcp --kind mcp --name acme-mcp \
+  -d '{"server_url": "https://mcp.acme.test/mcp"}'
+
+# A Postgres database, read-only.
+lemma connectors auth-configs create sql --kind sql --name warehouse \
+  -d '{"dialect": "postgresql", "host": "db.acme.test", "port": 5432, "database": "analytics"}'
+lemma connectors accounts create --auth-config warehouse \
+  -d '{"username": "reader", "password": "..."}'
+
+# Then the ordinary loop — the operations came from the server, not the catalog.
+lemma connectors operations search acme-api "create an invoice"
+lemma connectors run acme-api <operation-id> --dry-run
+```
+
+**Credentials per kind** (they go on the *account*):
+
+- `openapi` — `access_token` and/or `api_key`, both optional.
+- `mcp` — `bearer_token`, optional (see OAuth below).
+- `sql` — `username` and `password`, both **required**.
+
+### Which credential a custom install wants — read the install, not the kind
+
+`mcp` is one catalog entry standing for every server a tenant may point at, and
+they do not agree on how to authenticate. So Lemma asks the server. At install
+time it tries RFC 9728 → RFC 8414 → RFC 7591 **dynamic client registration**: if
+the server describes its own authorization, the install is registered as an OAuth
+client and its people sign in through a browser. If not, it stays paste-a-token.
+Registration failing is never fatal — you get the token path.
+
+The consequence you must code against:
+
+```bash
+lemma connectors auth-configs get acme-mcp    # read `auth_scheme` on the INSTALL
+```
+
+The catalog entry says `API_KEY`. An install whose server negotiated
+authorization answers `OAUTH2`. **Branch on the install's `auth_scheme`, never on
+the connector's kind** — posting an empty credential set to a server that wanted
+a sign-in produces an account that looks connected, holds no token, and fails
+every call.
+
+### Rules that bite
+
+- **The config schemas are closed.** `additionalProperties: false`, validated on
+  create *and* update. An unknown key is refused, not quietly stored — which is
+  the point, since a stored stray key was once read back as a credential.
+- **Private and link-local addresses are refused.** `169.254.169.254` and
+  friends, on `server_url`, `spec_url` and the SQL host. A connector is not an
+  SSRF tool.
+- **`sql` is PostgreSQL and read-only.** Statements are parsed and non-`SELECT`
+  ones refused. Three operations: `execute_query`, `list_tables`,
+  `describe_table`.
+- **`kind`, `connector_id` and `config_source` are immutable** after create.
+  Changing where an install points is a new install, not an update.
+- **Changing the address invalidates accounts rather than deleting them.** Edit
+  `server_url` / `spec_url` / `spec_inline` and the accounts on it go
+  `REAUTH_REQUIRED`.
+- **`refresh-operations` is the recovery path** when a spec or a tool list
+  changes. It answers `200` whether or not the server replied — **read `status`**;
+  `failed` means the server refused.
+- **Config comes back redacted** on read, and secrets nested inside it too.
+
+### Composio toolkits Lemma cannot sign in to
+
+Composio brokers every toolkit on Lemma's account, but it only holds **managed
+OAuth credentials for some of them**. Where it holds none, the catalog says so:
+
+```bash
+lemma connectors get twitter     # kinds[].system_default_available
+```
+
+Two shapes, and the catalog picks whichever costs the org less:
+
+- **The toolkit also takes an API key** — Shopify, Meta Ads, PostHog, Metabase
+  and a dozen others. The entry reads `API_KEY`, `system_default_available:
+  true`, and it connects like any other key app: nothing for the org to set up,
+  a token pasted when someone connects their account.
+- **The toolkit is OAuth only** — Twitter, Spotify, TikTok, LinkedIn Ads, Google
+  Chat, Google Contacts, Google Forms. The entry reads
+  `system_default_available: false`, the UI offers *Set up* rather than
+  *Connect*, and the install needs the app's own OAuth client:
+
+```bash
+lemma connectors auth-configs create twitter --kind composio --name acme-twitter \
+  --config-source ORG_CUSTOM \
+  -d '{"client_id": "...", "client_secret": "...", "generic_id": "..."}'
+```
+
+The fields are **whatever that toolkit asks for** — read them off
+`kinds[].install_config_schema`, which the catalog derives per toolkit. Twitter
+wants a third one beyond the client id and secret; most want only those two. A
+`--config-source SYSTEM_DEFAULT` install of one of these is refused, and says
+what to supply instead: there is nothing for it to default to.
+
 ### GitHub is a first-class connector, backed by a real App
 
 Worth calling out because it behaves differently from an ordinary OAuth connector in
@@ -295,6 +413,73 @@ With both grants the pinned account works for every invoker (it is invoker-indep
 
 (App side — calling a connector operation from a browser app, with discovery and a
 safe action button → `app-recipes/connector-action.md`.)
+
+## An agent setting a connector up for itself
+
+Sooner or later an agent needs an API nobody has connected yet. It can do the
+whole thing, but only half of it is its own: **the agent creates the install, a
+person supplies the credentials.** There is no way around that second half and no
+reason to want one — the credential is theirs.
+
+**What the `CONNECTORS` toolset can do.** Four tools, all execution-only:
+`list_connectors`, `search_connector_operations`, `describe_connector_operation`,
+`run_connector_operation`. **None of them creates anything.** An agent that needs
+a new connector needs the `WORKSPACE_CLI` toolset and runs `lemma` itself.
+
+The loop, in full:
+
+```bash
+# 1. Is it already there? Installs, not catalog entries.
+lemma connectors overview
+
+# 2. Create the install. A custom API is the `openapi` entry (above); a catalog
+#    app is its own id.
+lemma connectors auth-configs create openapi --kind http --name acme-api \
+  -d '{"spec_url": "https://api.acme.test/openapi.json"}'
+
+# 3. Find out what the person has to supply.
+lemma connectors auth-configs get acme-api      # read `auth_scheme` HERE
+```
+
+Then one of two branches:
+
+**API key** — ask the person for it in the conversation, or point them at the UI.
+Both are fine; the second means the key never passes through a message:
+
+> "I've added Acme. It needs an API key — open **Connectors** in the workspace,
+> find *acme-api* and add an account, or paste the key here and I'll do it."
+
+```bash
+lemma connectors accounts create --auth-config acme-api -d '{"api_key": "sk-..."}'
+```
+
+**OAuth** — mint a link and hand it over. Do not try to follow it:
+
+```bash
+lemma connectors connect-requests create acme-api --auth-config-id <id>
+# → prints an authorization_url
+```
+
+> "Sign in here to finish connecting Acme: <authorization_url>"
+
+**Then wait for the account, and only then run anything.** An operation against
+an install with no account fails with an account-resolution error, so poll rather
+than guess:
+
+```bash
+lemma connectors accounts list --app acme-api     # empty until they finish
+lemma connectors operations search acme-api "create an invoice"
+lemma connectors run acme-api <operation-id> --dry-run
+```
+
+Two things worth saying plainly to whoever is reading the agent's output:
+
+- **The account is per person.** Connecting it yourself does not connect it for
+  the rest of the pod — each member connects their own, and a workload resolves
+  the invoking user's. A single shared account is the pinned-account pattern
+  above, and it needs a second grant.
+- **The workload still needs the grant.** Creating the install does not grant it:
+  `lemma agents grant <agent> connector:acme-api:use`.
 
 ## Triggers
 

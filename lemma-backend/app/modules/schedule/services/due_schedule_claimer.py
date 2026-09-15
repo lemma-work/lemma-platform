@@ -236,6 +236,12 @@ async def claim_due_schedules(
                 user_id=row.user_id,
                 fire_at=fire_at.astimezone(timezone.utc),
                 is_one_shot=is_one_shot,
+                # The only route into a TIME fire's payload, and an obscure
+                # one: no API schema declares it, `TimeScheduleConfig` does not
+                # validate it, and neither the CLI scaffold nor the UI writes
+                # it. Left in place rather than removed -- a config that sets it
+                # now reaches the agent as readable event data, where before it
+                # arrived inside an envelope of empty objects nobody could read.
                 payload=dict((row.config or {}).get("payload") or {}),
             )
         )

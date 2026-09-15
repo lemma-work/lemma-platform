@@ -11,8 +11,10 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.connectors.domain.auth_config import (
+    COMPOSIO_ORG_CREDENTIALS_REQUIRED,
     COMPOSIO_ORG_CUSTOM_REASON,
     COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
+    COMPOSIO_SYSTEM_DEFAULT_REASON,
     AuthConfigSource,
 )
 from app.modules.connectors.domain.connector import KindSpec, kind_to_provider
@@ -33,11 +35,19 @@ class ComposioInstaller:
     ) -> dict[str, Any]:
         # Also reached on the update path, which the service-layer check in
         # `_validate_auth_config_request` never sees -- so this is a second
-        # guard, not a duplicate one. Both raise the same shared message.
-        if config_source == AuthConfigSource.ORG_CUSTOM:
+        # guard, not a duplicate one. Both raise the same shared messages, and
+        # both branch on the same per-toolkit fact: whether Composio holds
+        # credentials for this toolkit on Lemma's account.
+        managed = getattr(spec, "system_default_available", False)
+        if managed and config_source == AuthConfigSource.ORG_CUSTOM:
             raise ConnectorValidationError(
                 COMPOSIO_SYSTEM_CREDENTIALS_ONLY,
                 details={"reason": COMPOSIO_ORG_CUSTOM_REASON},
+            )
+        if not managed and config_source != AuthConfigSource.ORG_CUSTOM:
+            raise ConnectorValidationError(
+                COMPOSIO_ORG_CREDENTIALS_REQUIRED,
+                details={"reason": COMPOSIO_SYSTEM_DEFAULT_REASON},
             )
         return validate_install_config(spec, config, config_source)
 

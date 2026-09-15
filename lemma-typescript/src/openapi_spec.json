@@ -4064,6 +4064,19 @@
             "title": "Discovery",
             "type": "string"
           },
+          "install_config_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON Schema for the organization-supplied install config, when the connector cannot be installed with the platform's own credentials.",
+            "title": "Install Config Schema"
+          },
           "kind": {
             "$ref": "#/components/schemas/ConnectorKind"
           },

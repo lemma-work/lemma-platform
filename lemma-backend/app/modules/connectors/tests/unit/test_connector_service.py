@@ -1359,7 +1359,13 @@ async def test_handle_oauth_callback_surfaces_upstream_error_details():
             state="state-3",
         )
 
-    assert exc_info.value.details == {"error_type": "RuntimeError"}
+    # The vendor's own sentence rides along. Stripping it is how a Composio
+    # connect that answered "Composio does not have managed credentials for this
+    # toolkit" reached the user as an unexplained 500.
+    assert exc_info.value.details == {
+        "error_type": "RuntimeError",
+        "upstream_message": "provider broke",
+    }
     assert "provider broke" not in str(exc_info.value)
     connect_repo.update.assert_awaited_once()
 

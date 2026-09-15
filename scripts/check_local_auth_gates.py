@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = ROOT / "Makefile"
 STACK_RENDER = ROOT / "lemma-stack/lemma_stack/config/render.py"
 CONFIG = ROOT / "lemma-backend/app/core/config.py"
+FRONTEND_CONFIG = ROOT / "lemma-frontend/components/auth/portal/auth/config.ts"
 
 
 def gates_on_by_default():
@@ -69,6 +70,30 @@ def stack_gates(gates):
     return {key: value for key, value in pairs if key in gates}
 
 
+def browser_mirrored_gates():
+    """Gates the *browser* also reads, from the frontend's own auth config.
+
+    A gate the frontend mirrors has two renderings to keep in step, not one, and
+    the second is easy to miss precisely because the backend half looks complete.
+    `supertokens-auth-react` mounts its email-verification recipe from this copy
+    and defaults it to ON when unset, so a backend told to relax the gate and a
+    frontend never told anything disagree -- and the disagreement is not a
+    warning, it is a 404 on a route the backend never registered and a sign-in
+    nobody can get past.
+    """
+    text = FRONTEND_CONFIG.read_text(encoding="utf-8")
+    return {
+        name
+        for name in re.findall(r'"(AUTH_[A-Z_]+)",\s*\n\s*process\.env\.NEXT_PUBLIC_', text)
+    }
+
+
+def frontend_env_gates(gates):
+    """What `make init` writes into the frontend's env, as NEXT_PUBLIC_ keys."""
+    text = MAKEFILE.read_text(encoding="utf-8")
+    written = set(re.findall(r"NEXT_PUBLIC_(AUTH_[A-Z_]+)", text))
+    return {name for name in written if name in gates}
+
 def main() -> int:
     gates = gates_on_by_default()
     if not gates:
@@ -94,12 +119,28 @@ def main() -> int:
                 f"{STACK_RENDER.name} says {stack[key]!r}"
             )
 
+    # The browser's half. A gate the frontend mirrors has to be rendered into
+    # the frontend's env too, or the backend relaxes it and the browser does not
+    # -- which is not a mismatch anybody sees in a config file, it is a sign-in
+    # that dead-ends on a route the backend was told not to register.
+    mirrored = browser_mirrored_gates()
+    for key in sorted(mirrored & set(make)):
+        if key not in frontend_env_gates(mirrored):
+            problems.append(
+                f"  {key}: {MAKEFILE.name} relaxes it for the backend but never "
+                f"writes NEXT_PUBLIC_{key} for the frontend, which reads the same "
+                f"gate and defaults it ON"
+            )
+
     if problems:
         print("Local auth gates disagree between `make dev` and the local stack:")
         print("\n".join(problems), file=sys.stderr)
         return 1
 
-    print(f"Local auth gates agree on {sorted(make)}.")
+    print(
+        f"Local auth gates agree on {sorted(make)}"
+        + (f"; {sorted(mirrored)} also rendered for the browser." if mirrored else ".")
+    )
     return 0
 
 

@@ -75,6 +75,52 @@ rather than chosen per call. PS-CONN-031 says which is which.
 
 **Contracts:** `connector.auth_config.delete`, `connector.account.list`
 
+### PS-CONN-013 — An app the catalog has never heard of can still be connected
+**Status:** covered
+
+- When an admin supplies the address of an API described by an OpenAPI
+  document, an MCP server, or a SQL database, the system shall make its
+  operations available to the organization as it would any catalog connector.
+- The system shall derive the operation set from what the address describes
+  rather than from the catalog, and shall let an admin re-derive it when the
+  provider's own surface changes.
+- The system shall refuse an address it cannot safely reach — private, loopback
+  and link-local addresses among them.
+- The system shall refuse a configuration field it does not recognize rather
+  than storing it.
+- Where the connected system describes its own authorization, the system shall
+  offer to sign in to it; where it does not, the system shall accept a token.
+  Which of the two an installation needs shall be readable from the
+  installation itself.
+
+**Contracts:** `connector.auth_config.create`, `connector.auth_config.get`, `connector.auth_config.refresh_operations`, `connector.operation.discover`
+
+### PS-CONN-014 — A connector the platform cannot sign in to asks for credentials instead of offering to connect
+**Status:** manual
+
+- Where the platform holds no credentials of its own for a connector, the
+  system shall say so on the catalog entry rather than presenting it as ready
+  to connect.
+- Where such a connector can also be reached with a credential the person
+  already has, the system shall offer that rather than requiring the
+  organization to register an application of its own.
+- Otherwise the system shall offer the installation as a configuration the
+  organization completes, and shall state which fields that particular provider
+  requires — which differ per provider, and are not assumed.
+- If a person attempts to install such a connector using the platform's own
+  credentials, then the system shall refuse before creating anything, and shall
+  say what to supply instead.
+- When an installation fails at the provider, the system shall carry the
+  provider's own explanation back to the person rather than reporting only that
+  something went wrong.
+
+> **Manual:** the distinction is a property of the brokering provider's account,
+> not of this system, so proving it needs a real toolkit that provider holds no
+> credentials for. Verified by hand against the development account; the refusal
+> and the catalog flag are covered by module tests.
+
+**Contracts:** `connector.list`, `connector.get`, `connector.auth_config.create`, `connector.connect_request.create`
+
 ---
 
 ## Capability: Connect your own account

@@ -11,12 +11,12 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 160 |
+| `covered` | 161 |
 | `gap` | 0 |
-| `manual` | 6 |
+| `manual` | 7 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **166** |
+| **total** | **168** |
 
 Scenario tests declaring a promise: 387.
 
@@ -126,6 +126,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-CONN-010` An admin installs a connector once for everyone | `covered` | `test_an_oauth_connector_needs_credentials`, `test_installing_discovers_operations`, `test_an_installation_does_not_leak_across_organizations`, `test_an_outsider_cannot_install`, `test_an_installation_can_be_renamed` |
 | `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials`, `test_connecting_github_identifies_the_account`, `test_the_google_connect_flow_is_configured`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
+| `PS-CONN-013` An app the catalog has never heard of can still be connected | `covered` | `test_installing_discovers_operations` |
+| `PS-CONN-014` A connector the platform cannot sign in to asks for credentials instead of offering to connect | `manual` | — |
 | `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |

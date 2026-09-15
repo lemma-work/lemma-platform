@@ -390,6 +390,15 @@ Either way the authorization is identical: a `connector:<name>:use` grant per
 app, executed through the invoking user's connected account. Having the toolset
 is not having access to any particular app.
 
+**Neither way creates a connector.** The `CONNECTORS` tools are execution-only —
+four of them, all for finding and running operations on installs that already
+exist. Reaching an app nobody has connected yet means the CLI, and it means
+asking a person for the credential at the end: the catalog has generic
+`openapi` / `mcp` / `sql` entries that become any API, MCP server or Postgres
+database you point them at. The `lemma-builder` skill's `connectors.md` has the
+commands, under *Custom connectors* and *An agent setting a connector up for
+itself*.
+
 ### As direct tools
 
 Once `search_tools` has surfaced them: leave `auth_config` unset and search by
@@ -442,7 +451,7 @@ When you want the wider picture rather than one call:
 lemma connectors overview             # installed connectors: auth-config name, kind, connected accounts
 lemma connectors status               # installed apps + your connected accounts
 lemma connectors describe gmail       # per-connector usage guide, per kind
-                                      # (kinds: package, composio, http, sql, mcp)
+                                      # (kinds: composio, http, sql, mcp)
 lemma connectors operations search "send email"                    # searches EVERY installed connector
 lemma connectors operations search gmail "send email" --limit 5    # scoped; hits include their input schema
 ```
