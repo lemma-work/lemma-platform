@@ -58,7 +58,13 @@ free-form input.
    `__TABLE_NAME__` and `__GROUP_FIELD__` land inside a SQL statement, so they take
    the exact table and column identifier — not a display label.
 
-4. Adapt the content and styling, then call `display_resource` with `type="WIDGET"`.
+4. Write the fragment to a pod file with `pod_write_file` — `/me/c/<date>/<name>.html`
+   alongside the rest of this conversation's work — then display that path:
+
+   ```
+   display_resource(type="WIDGET", path="/me/c/2026-09-15/pulse.html")
+   ```
+
    The starter's SDK loader and loading/empty/error scaffolding carry over as-is.
 
 The backend rejects unresolved placeholders, broken SDK loaders, and malformed
@@ -68,44 +74,53 @@ markup before display.
 
 `type="WIDGET"` takes **exactly one** of:
 
-- `content` — your inline HTML fragment (the usual case), or
+- `path` — a pod file holding the widget's HTML. **The one to reach for.**
+- `content` — the HTML inline, for something small you will not revisit.
 - `public_url` — a URL to embed instead.
 
-Passing both, or neither, is rejected. One more WIDGET-only field:
+Passing more than one, or none, is rejected. One more WIDGET-only field:
 
 - `loading_messages` — up to **4** short lines shown while the widget renders.
   Setting them on any other resource type is rejected.
 
-`name`, `path`, `filters`, and `query` belong to other types.
+`name`, `filters`, and `query` belong to other types.
 
-### One call, one argument
+### Put it in a file
 
-`content` is written once, in the tool call, and the widget is shown the moment
-that call succeeds. Nothing stages a widget: there is no second call that
-completes a first, no path or handle that points at markup you wrote into the
-workspace, and no draft that is not yet in front of the person. So:
+A widget's HTML is a file you write, the way everything else you build is. That
+is not a storage detail — it is the difference between work you can go back to
+and work you get one shot at:
 
-- **Write the fragment out in full, in the argument.** Building it in a
-  workspace file first is a fine way to check your own markup. It is not a way
-  to hand it over — the file is yours, and `path` is for FILE.
-- **Never put a sentence in `content`.** Not narration, not "clean version
-  below", not a note about the markup you are about to write, not a placeholder
-  standing in for it. Content with no tag in it is rejected, and text in front
-  of the first tag ships as a bare unstyled line above the view. What the person
-  should read goes in your reply.
-- **Never display a probe.** A call that succeeds is shown, so "testing whether
-  this transmits" is a test run in front of the person. Check your own markup
-  against the list under [Before display](#before-display) instead.
-- **If the fragment is genuinely too long to write out, it is an app.** Save the
-  HTML as an app and pass its address as `public_url`.
-- **A call that succeeds cannot be taken back.** The widget is in the
-  conversation the moment the tool returns, and the person is looking at it.
-  There is no replacing it, no editing it, and no un-displaying it: another call
-  is another widget, and it lands *underneath* the first with the mistake still
-  sitting above it. Spotting the error afterwards does not buy a do-over — it
-  turns one bad widget into two. Read your markup before the call, not after
-  it. If something did go out wrong, say so in your reply; display again only
-  when the first is genuinely unusable, and then say which one to read.
+- **You can read back what you wrote** instead of trusting that a few thousand
+  characters came out of a single tool argument intact. One missing `<` has
+  shipped a widget with a stray bracket over the top of it.
+- **You can fix it by editing it.** The served widget is whatever the file says
+  *now*, so correcting one is an edit to a few lines, not a retype of the whole
+  fragment — and a retype is where a working widget picks up a new bug.
+- **You can check it before anyone sees it.** The file exists before the
+  display does. Read it, run it past [Before display](#before-display), and only
+  then call.
+
+So: `pod_write_file` to `/me/c/<date>/<name>.html`, then
+`display_resource(type="WIDGET", path=...)`. A pod path, never a workspace one —
+the widget is read as the person looking at it, and they are not in your sandbox.
+
+`content` still takes an inline fragment, for something small you are sure of.
+It is frozen in the tool call the moment it succeeds: no editing it, no taking
+it back, and a second call is a second widget that lands *underneath* the first
+with the mistake still showing above it. If you are inlining, you get one look.
+
+Either way:
+
+- **Never put a sentence in the HTML's first line.** Not narration, not "clean
+  version below", not a note about the markup. Content with no tag is rejected,
+  and anything before the first tag renders as a bare unstyled line above the
+  view. What the person should read goes in your reply.
+- **Never display a probe.** A call that succeeds is shown. "Testing whether
+  this transmits" is a test run in front of the person — and with a file there
+  is finally somewhere to test that is not their screen.
+- **A widget people will come back to is an app.** Save the HTML as an app and
+  pass its address as `public_url`.
 
 The starters are a shape to follow, not a file to transcribe. Take the SDK
 loader and the loading/empty/error scaffolding verbatim, and write the markup
@@ -302,9 +317,9 @@ chart starters do exactly this; keep their query rather than counting rows in JS
 ## Before display
 
 - The chosen view is genuinely more useful than short prose.
-- `content` opens with a tag — not a stray character, not a sentence — and
-  carries the whole fragment. This is the last look you get; the call cannot be
-  undone.
+- The HTML lives in a pod file, unless it is small and settled enough to inline.
+- It opens with a tag — not a stray character, not a sentence — and is complete.
+  An inline fragment gets no second look; a file can be edited afterwards.
 - Every value read off a query result uses the name that query aliases it to.
 - The closest versioned starter was used and all placeholders were replaced.
 - Every tag opens with `<` and closes once; the fragment carries no full-document
