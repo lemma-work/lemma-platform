@@ -117,14 +117,30 @@ def _conversation_metadata(
     account and not the App installation: the sandbox's `git` and `gh` act as
     the person, so the work an agent pushes is attributed to whoever owns the
     repository rather than to a bot nobody recognises.
+
+    ``started_by`` is always set, and it is the only way a run can tell that
+    nobody is waiting for it. A schedule-started run used to be indistinguishable
+    from somebody typing -- same conversation shape, same prompt -- so the agent
+    would reach for ``ask_user`` at six in the morning and hang until the run
+    timed out, and would hold a finding back for a reply nobody was going to
+    read. ``agent_context_brief`` renders this into the run's own brief.
     """
+    started: FiringMetadata = {
+        "started_by": "SCHEDULE",
+        "schedule_type": getattr(
+            schedule.schedule_type, "value", str(schedule.schedule_type)
+        ),
+    }
+    if schedule.name:
+        started["schedule_name"] = schedule.name
+
     repo = (metadata or {}).get("repo")
-    if not isinstance(repo, dict) or not repo:
-        return None
-    bound = dict(repo)
-    if schedule.account_id is not None:
-        bound["account_id"] = str(schedule.account_id)
-    return {"repo": bound}
+    if isinstance(repo, dict) and repo:
+        bound = dict(repo)
+        if schedule.account_id is not None:
+            bound["account_id"] = str(schedule.account_id)
+        started["repo"] = bound
+    return started
 
 
 class ScheduleStartService:

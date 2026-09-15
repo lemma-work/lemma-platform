@@ -1131,7 +1131,19 @@ def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     assert "list `/workspace/c/`" not in prompt
 
 
-def test_workspace_directory_falls_back_to_conversation_path():
+def test_workspace_directory_falls_back_to_the_resolved_location():
+    """A context with no cwd still names the directory the tools use.
+
+    This asserted `/workspace/conversations/{id}` — a path shape the platform
+    stopped making when the cwd moved into conversation metadata with a
+    `/workspace/c/{date}/{slug}` default. The test was pinning the stale answer
+    in place, so the one section whose job is to say where the agent is pointed
+    at a directory that does not exist.
+    """
+    from app.modules.agent.services.workspace_location import (
+        resolve_workspace_location,
+    )
+
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
     agent = Agent(
         pod_id=conversation.pod_id,
@@ -1144,7 +1156,8 @@ def test_workspace_directory_falls_back_to_conversation_path():
     prompt = build_agent_instructions(
         agent=agent, conversation=conversation, ctx=SimpleNamespace()
     )
-    assert f"/workspace/conversations/{conversation.id}" in prompt
+    assert resolve_workspace_location(conversation).cwd in prompt
+    assert "/workspace/conversations/" not in prompt
 
 
 def test_pod_assistant_prompt_states_working_directory():
@@ -2017,8 +2030,12 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
         ctx=object(),
     )
 
-    assert prompt.startswith("You are the assistant for this Lemma pod")
-    assert "## Where the work lands" in prompt
+    # The constitution and the pod section come first and are the same for
+    # every run, so they sit at the front of the cached prefix. The base prompt
+    # follows them rather than opening the file.
+    assert prompt.startswith("# Working in Lemma")
+    assert "# The pod" in prompt
+    assert "You are the default AI agent for this Lemma pod" in prompt
     # Reply discipline is not keyed to a toolset: every agent replies, and the
     # reply is the one thing the person always sees. It rode in on the surface
     # fragment for a long time, which meant a run with no surface platform --
@@ -2139,7 +2156,8 @@ def test_pod_default_assistant_uses_rich_base_and_all_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("You are the assistant for this Lemma pod")
+    assert prompt.startswith("# Working in Lemma")
+    assert "You are the default AI agent for this Lemma pod" in prompt
     assert "## Lemma CLI" in prompt
     assert "## Skills" in prompt
     assert "## Web research" in prompt
@@ -2162,8 +2180,11 @@ def test_user_agent_uses_lean_base_and_only_its_toolset_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("You are a Lemma agent")
-    assert "You are a Lemma pod assistant" not in prompt
+    # Both agent kinds open on the same constitution and pod section; what
+    # differs is the base prompt after them.
+    assert prompt.startswith("# Working in Lemma")
+    assert "You are a named AI agent in a Lemma pod" in prompt
+    assert "You are the default AI agent" not in prompt
     assert "## Lemma CLI" in prompt  # its one toolset's fragment
     assert "## Web research" not in prompt
     assert "## Skills" not in prompt
@@ -2185,7 +2206,8 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("You are a Lemma agent")
+    assert prompt.startswith("# Working in Lemma")
+    assert "You are a named AI agent in a Lemma pod" in prompt
     for fragment_marker in (
         "## Lemma CLI",
         "## Web research",

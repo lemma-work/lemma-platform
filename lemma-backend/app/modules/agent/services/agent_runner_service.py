@@ -235,7 +235,7 @@ class AgentRunnerService:
                 uow_factory=self.uow_factory,
                 conversation=conversation,
                 agent=agent,
-                agent_run_id=agent_run_id,
+                agent_run=agent_run,
                 user_id=user_id,
                 resolved_runtime=resolved_runtime,
                 runtime_profile_snapshot=runtime_profile_snapshot,

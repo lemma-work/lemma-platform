@@ -62,6 +62,11 @@ class TestWhatTheDeliverySays:
         assert _repo_context({"installation": {"id": 1}}, "push") == {}
 
 
+def _schedule(*, account_id, name: str | None = None):
+    """The two fields `_conversation_metadata` reads off a schedule row."""
+    return SimpleNamespace(account_id=account_id, name=name, schedule_type="TIME")
+
+
 class TestWhatTheScheduleAdds:
     def test_the_schedules_account_becomes_the_clone_identity(self):
         """Deliberately the person's account, not the App installation.
@@ -71,31 +76,40 @@ class TestWhatTheScheduleAdds:
         """
         account_id = uuid4()
         metadata = _conversation_metadata(
-            SimpleNamespace(account_id=account_id),
+            _schedule(account_id=account_id),
             {"repo": {"owner": "octo", "repo": "api", "ref": "topic"}},
         )
-        assert metadata == {
-            "repo": {
-                "owner": "octo",
-                "repo": "api",
-                "ref": "topic",
-                "account_id": str(account_id),
-            }
+        assert metadata["repo"] == {
+            "owner": "octo",
+            "repo": "api",
+            "ref": "topic",
+            "account_id": str(account_id),
         }
 
     def test_a_schedule_with_no_account_still_binds_the_repository(self):
         """The credential bridge falls back to resolving the user's account."""
         metadata = _conversation_metadata(
-            SimpleNamespace(account_id=None), {"repo": {"owner": "octo", "repo": "api"}}
+            _schedule(account_id=None), {"repo": {"owner": "octo", "repo": "api"}}
         )
-        assert metadata == {"repo": {"owner": "octo", "repo": "api"}}
+        assert metadata["repo"] == {"owner": "octo", "repo": "api"}
 
-    def test_a_firing_that_names_no_repository_sets_no_metadata(self):
+    def test_a_firing_that_names_no_repository_binds_no_repository(self):
+        """No repo key at all -- but the metadata itself is no longer empty.
+
+        Every schedule-started run is stamped with where it came from, because
+        that is the only way the agent can tell that nobody is waiting on it.
+        """
         for value in ({}, None, {"repo": {}}, {"repo": "octo/api"}):
-            assert (
-                _conversation_metadata(SimpleNamespace(account_id=uuid4()), value)
-                is None
-            )
+            metadata = _conversation_metadata(_schedule(account_id=uuid4()), value)
+            assert "repo" not in metadata
+
+    def test_every_schedule_started_run_says_a_schedule_started_it(self):
+        metadata = _conversation_metadata(
+            _schedule(account_id=None, name="daily-invoices"), None
+        )
+        assert metadata["started_by"] == "SCHEDULE"
+        assert metadata["schedule_name"] == "daily-invoices"
+        assert metadata["schedule_type"] == "TIME"
 
 
 class TestTheTwoHalvesAgree:
@@ -115,9 +129,7 @@ class TestTheTwoHalvesAgree:
             },
             "pull_request",
         )
-        metadata = _conversation_metadata(
-            SimpleNamespace(account_id=account_id), context
-        )
+        metadata = _conversation_metadata(_schedule(account_id=account_id), context)
         assert metadata is not None
 
         parsed = parse_project_repo(metadata["repo"])

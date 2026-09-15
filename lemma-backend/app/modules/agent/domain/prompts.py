@@ -1,21 +1,28 @@
 """Base prompt composition for agent harnesses.
 
-Every agent's system prompt is composed the same way: a base prompt (rich for the
-pod-default assistant, lean for user-created agents) plus a per-toolset guidance
-fragment for each toolset the agent actually has, then the agent/conversation
-instructions and the runtime context brief. Tool guidance lives once, in the
-fragment files mapped by ``FRAGMENT_BY_TOOLSET`` — the pod-default assistant is
-rich because it has every toolset, not because its base prompt restates each tool.
+Every agent's system prompt is composed the same way: the constitution and the
+pod section (identical for every run, so they cache), then a base prompt (the
+pod's own teammate, or a named agent), then a per-toolset guidance fragment for
+each toolset the agent actually has, then the agent/conversation instructions and
+the runtime context brief. Tool guidance lives once, in the fragment files mapped
+by ``FRAGMENT_BY_TOOLSET`` — the teammate is rich because it has every toolset,
+not because its base prompt restates each tool.
+
+The first two sections are the ones an agent cannot derive from anything else in
+front of it. ``constitution.md`` says what it is, whose authority it acts on, and
+what it will not do; ``the_pod.md`` says what a pod is made of, what a refusal
+code means, and that ``enable_rls`` defaults to on. Both used to be absent, so
+the base prompt was tactics with nothing underneath them and every new lesson
+arrived as another bullet.
 """
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
+from app.modules.agent.domain.prompt_directories import _directory_sections
 from app.modules.agent.domain.value_objects import AgentToolset
 
 if TYPE_CHECKING:
@@ -23,8 +30,11 @@ if TYPE_CHECKING:
     from app.modules.agent.domain.entities import Agent, Conversation
 
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
-_POD_ASSISTANT_PROMPT_PATH = _PROMPT_DIR / "pod_assistant.md"
+_CONSTITUTION_PROMPT_PATH = _PROMPT_DIR / "constitution.md"
+_THE_POD_PROMPT_PATH = _PROMPT_DIR / "the_pod.md"
+_TEAMMATE_PROMPT_PATH = _PROMPT_DIR / "teammate.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
+_CONNECTORS_PROMPT_PATH = _PROMPT_DIR / "connectors.md"
 _REPLIES_PROMPT_PATH = _PROMPT_DIR / "replies.md"
 _WORKSPACE_CLI_PROMPT_PATH = _PROMPT_DIR / "workspace_cli.md"
 _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
@@ -60,6 +70,12 @@ FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     # behave like a coding agent — so it answered in prose and never showed
     # anything. Convention belongs in the instructions, not only in a schema.
     AgentToolset.USER_INTERACTION: _USER_INTERACTION_PROMPT_PATH,
+    # Connectors had no fragment at all, on either path. The toolset is deferred
+    # behind ToolSearch, so an agent with connected accounts met a one-line
+    # group label from the deferred-tools hint and nothing about the search →
+    # describe → run loop, or about the fact that a connector operation is the
+    # one call in the pod that acts on the world outside it.
+    AgentToolset.CONNECTORS: _CONNECTORS_PROMPT_PATH,
 }
 
 
@@ -69,12 +85,39 @@ def _read_required_prompt(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def load_pod_assistant_base_prompt() -> str:
-    return _read_required_prompt(_POD_ASSISTANT_PROMPT_PATH)
+def load_constitution_prompt() -> str:
+    """What this agent is, whose authority it acts on, and what it will not do.
+
+    First in every prompt and identical on every run, which is both why it can
+    be this long and why it has to stay stable: it sits ahead of everything a
+    provider caches.
+    """
+    return _read_required_prompt(_CONSTITUTION_PROMPT_PATH)
+
+
+def load_the_pod_prompt() -> str:
+    """What a pod is made of and what it is like to build and operate in one.
+
+    Second in every prompt. The resource model, the choosing heuristics, the
+    three refusal codes, and the ``enable_rls`` default all used to live only in
+    ``lemma-builder`` -- behind an instruction telling the agent not to load it
+    unless the user asked for a build. So an agent worked inside a pod all day
+    and was never told what one was, which is how it creates a per-user table
+    and calls it the team's ledger.
+    """
+    return _read_required_prompt(_THE_POD_PROMPT_PATH)
+
+
+def load_teammate_base_prompt() -> str:
+    return _read_required_prompt(_TEAMMATE_PROMPT_PATH)
 
 
 def load_agent_base_prompt() -> str:
     return _read_required_prompt(_AGENT_BASE_PROMPT_PATH)
+
+
+def load_connectors_prompt() -> str:
+    return _read_required_prompt(_CONNECTORS_PROMPT_PATH)
 
 
 def load_replies_prompt() -> str:
@@ -173,10 +216,15 @@ def build_agent_instructions(
     wrong one.
     """
 
+    # The constitution and the pod section come before the base prompt and are
+    # the same bytes for every agent on every run, so they sit at the front of
+    # the cached prefix rather than behind anything that varies.
+    sections = [load_constitution_prompt(), load_the_pod_prompt()]
+
     if conversation.is_pod_assistant:
-        sections = [load_pod_assistant_base_prompt()]
+        sections.append(load_teammate_base_prompt())
     else:
-        sections = [load_agent_base_prompt()]
+        sections.append(load_agent_base_prompt())
 
     # Unconditional, on both harness paths: reply discipline is not a toolset.
     # A surface run narrows this further -- ``platform_agent_guidance`` appends
@@ -254,28 +302,6 @@ def build_agent_instructions(
     )
 
 
-def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
-    """Resolve the agent's workspace working directory for the prompt.
-
-    Prefers the resolved ``workspace_cwd`` carried on the run context (set from
-    conversation metadata or the default by ``resolve_workspace_location``), then
-    ``get_workspace_cwd()`` if present, then the conversation-scoped default.
-    """
-    cwd = getattr(ctx, "workspace_cwd", None)
-    if cwd:
-        return str(cwd)
-    get_cwd = getattr(ctx, "get_workspace_cwd", None)
-    if callable(get_cwd):
-        # Not guarded. The only implementation reads a field and formats a
-        # string, and swallowing a failure here would put a directory in the
-        # prompt that the tools do not use -- which is the precise bug this
-        # resolution exists to prevent, made silent.
-        value = get_cwd()
-        if value:
-            return str(value)
-    return f"/workspace/conversations/{conversation.id}"
-
-
 def _stored_todos(conversation: Conversation) -> list[tuple[str, bool]]:
     """The conversation's task list as ``(content, done)``, oldest first."""
     metadata = conversation.metadata if isinstance(conversation.metadata, dict) else {}
@@ -333,245 +359,6 @@ def _task_list_section(
         "message sends you somewhere else. Check each item off with "
         f'`write_todos` (`["- [x] {first_open}"]`) as you finish it, before '
         "starting the next."
-    )
-
-
-def _workspace_repo(ctx: AgentContext):
-    """The repository this conversation works in, if it was started on one."""
-    return getattr(ctx, "workspace_repo", None)
-
-
-def _project_paragraph(repo) -> str:
-    """What an agent needs to know when its cwd is a real checkout."""
-    on_ref = f" on `{repo.ref}`" if repo.ref else ""
-    return (
-        f"This directory is a git checkout of **{repo.full_name}**{on_ref}, "
-        "cloned for you before this command ran. `git` and `gh` are already "
-        "authenticated as the connected account, and a commit identity is "
-        "already set — don't configure either.\n\n"
-        "The checkout is shared, not yours alone: another conversation may be "
-        "working in it right now. Run `git status` before you assume the tree "
-        "is clean, and never `reset --hard`, `clean`, or force-switch a branch "
-        "to tidy up — work on a branch of your own instead. An empty directory "
-        "here means the clone failed, and a notice will have said so."
-    )
-
-
-def _directory_sections(
-    *,
-    ctx: AgentContext,
-    conversation: Conversation,
-    enabled: set[AgentToolset],
-    runs_as_remote_process: bool,
-) -> list[str]:
-    """Which of the two working directories this run is told about.
-
-    The agent has up to two, and which ones it needs depends on what it can
-    reach: a sandbox under ``/workspace`` if it can run commands there, and a
-    pod-files directory under ``/me`` if it can reach pod files at all. Kept
-    together because the pair is one decision -- the workspace section has to
-    know whether there is a pod directory to point at, and an agent told about
-    neither goes looking for a person's attachment in a sandbox it was never
-    put in.
-    """
-    has_pod_files = AgentToolset.POD in enabled or AgentToolset.WORKSPACE_CLI in enabled
-    sections: list[str] = []
-    if AgentToolset.WORKSPACE_CLI in enabled or runs_as_remote_process:
-        sections.append(
-            _workspace_directory_section(
-                ctx=ctx,
-                conversation=conversation,
-                has_workspace_tools=AgentToolset.WORKSPACE_CLI in enabled,
-                runs_as_remote_process=runs_as_remote_process,
-                has_pod_files=has_pod_files,
-            )
-        )
-    if has_pod_files:
-        sections.append(_pod_directory_section(ctx=ctx, conversation=conversation))
-    return sections
-
-
-def _pod_cwd(ctx: AgentContext, conversation: Conversation) -> str:
-    """Where relative pod-file paths resolve, for the prompt.
-
-    Same resolution order as ``_workspace_cwd`` and the same reason: the tools
-    read this from the run context, so the prompt has to name what they use
-    rather than a directory of its own.
-    """
-    cwd = getattr(ctx, "pod_cwd", None)
-    if cwd:
-        return str(cwd)
-    get_cwd = getattr(ctx, "get_pod_cwd", None)
-    if callable(get_cwd):
-        value = get_cwd()
-        if value:
-            return str(value)
-    return (
-        f"/me/c/{conversation.created_at.date().isoformat()}/{conversation.id.hex[:8]}"
-    )
-
-
-def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> str:
-    """Where the person's files are, which is not where the sandbox is.
-
-    Left unsaid, an agent asked to read something a person just attached looks
-    in the workspace — the only directory the prompt named — finds an empty
-    sandbox, and searches. Sometimes the search lands and sometimes it gives up
-    saying the file does not exist, which reads as a storage bug and is really
-    an agent that was never told where to look.
-    """
-    cwd = _pod_cwd(ctx, conversation)
-    return (
-        "# Pod Files\n"
-        f"Your working directory in pod files is {_prompt_path(cwd)}. A "
-        "pod-file path with no leading `/` resolves there, so `report.pdf` "
-        f"means {_prompt_path(f'{cwd}/report.pdf')}.\n\n"
-        "**Anything the person attached to a message in this conversation is "
-        "in that directory.** Look there first and read it by name. It is not "
-        "in the workspace sandbox.\n\n"
-        "Do not go looking for it with search. Search runs over an index built "
-        "after a file is stored, so a file uploaded moments ago is readable by "
-        "path while search still returns nothing for it. An empty search result "
-        "means *not indexed yet*, never *not there* — listing the directory or "
-        "reading the path is what answers whether a file exists.\n\n"
-        "This is the pod filesystem, shared with the person and durable — not "
-        "the workspace, which is your own scratch space. Deliverables belong "
-        "here; working files belong in the workspace."
-    )
-
-
-# Path segments this file is willing to write into a Markdown code span.
-_PLAIN_PATH_SEGMENT = re.compile(r"[A-Za-z0-9._@+-]{1,64}")
-# A whole path it is willing to write into one: absolute, plain segments only.
-_PLAIN_PATH = re.compile(r"(?:/[A-Za-z0-9._@+-]{1,64})+/?")
-
-
-def _prompt_path(path: str) -> str:
-    """A path written into instructions, in a form that cannot restructure them.
-
-    A conversation's ``cwd`` is caller-supplied: ``metadata`` is free-form on
-    both the create and update requests, and ``workspace_location_for``
-    deliberately honours an explicit ``cwd`` over the derived one. It was then
-    interpolated straight into a Markdown code span, so a backtick closed the
-    span and a newline left the line -- and whatever followed became part of the
-    agent's instructions rather than part of a path.
-
-    A path this cannot render plainly is JSON-encoded and left outside a code
-    span, which is the answer Agent Host already gives for the native working
-    directory: the characters become data, the path is still stated exactly, and
-    nothing is silently rewritten into a path that does not exist.
-    """
-    if _PLAIN_PATH.fullmatch(path):
-        return f"`{path}`"
-    return f"{json.dumps(path)} (JSON-encoded path)"
-
-
-def _sandbox_root(cwd: str) -> str:
-    """The sandbox's top-level directory, taken from the cwd this run was given.
-
-    Every sentence below used to name ``/workspace`` outright while the cwd
-    beside it came from the run. That is the same fact written twice, and the
-    literal is the copy that cannot be right everywhere: an agent running as a
-    native process is handed a cwd on the host, and telling it to `cd` to a
-    container path it has no mount for produces a command that simply fails.
-
-    Derived rather than configured, so there is still only one source: whatever
-    root the run's own cwd is under is the root the prompt describes.
-    """
-    trimmed = (cwd or "").strip()
-    if not trimmed.startswith("/"):
-        # A relative cwd has no root to name, and returning it unchanged was a
-        # hole in this very guard: the absolute branch was validated and this
-        # one handed the string straight back, backticks and all, into the same
-        # code spans.
-        return "the working directory"
-    first = trimmed.strip("/").split("/", 1)[0]
-    if not first:
-        return "/"
-    # Every use of this sits inside a Markdown code span, and a backtick or a
-    # newline in it would close the span early and turn the rest of the sentence
-    # into whatever came after. Nothing is known to put one there -- the cwd is
-    # assembled from a date and a slug -- but this is a value derived from
-    # conversation metadata being written into instructions, and the cost of
-    # being wrong about that is an instruction that reads as something else.
-    #
-    # A root that is not a plain path segment is not described rather than
-    # described unsafely: the sentences around it still name the cwd, which is
-    # what the agent needs.
-    if not _PLAIN_PATH_SEGMENT.fullmatch(first):
-        return "the sandbox root"
-    return f"/{first}"
-
-
-def _workspace_directory_section(
-    *,
-    ctx: AgentContext,
-    conversation: Conversation,
-    has_workspace_tools: bool = True,
-    runs_as_remote_process: bool = False,
-    has_pod_files: bool = False,
-) -> str:
-    cwd = _workspace_cwd(ctx, conversation)
-    root = _sandbox_root(cwd)
-    if not has_workspace_tools:
-        return (
-            "# Working Directory\n"
-            "Your native tools use the directory this process started in. "
-            "Agent Host supplies its exact path in Native Working Directory; "
-            "it persists across conversation turns. You have no Lemma sandbox "
-            "execution tools on this run. Work only in the directory you were "
-            "given; do not invent a sandbox path such as `/workspace` for "
-            "native tools. Tool approvals still apply."
-        )
-    repo = _workspace_repo(ctx)
-    orientation = (
-        _project_paragraph(repo)
-        if repo is not None
-        else (
-            "An empty working directory means this is a **new conversation**, "
-            "not a reset sandbox. Earlier conversations' work is still on disk "
-            f"under another `{root}/c/<date>/<slug>`; list `{root}/c/` "
-            "to find it. Treat prior files as gone only if a tool result says "
-            "the workspace was recreated."
-        )
-    )
-    where = (
-        (
-            f"Your Lemma sandbox working directory is {_prompt_path(cwd)}. Reach it **only "
-            "through the Lemma tools** — `exec_command`, `execute_python` and "
-            "the sandbox file tools. Native tools use the directory this "
-            "process started in; native `pwd` reports that host directory. "
-            "Agent Host supplies its exact path in Native Working Directory. "
-            "These are separate filesystems with no automatic mount or sync. "
-            f"Do not use a sandbox `{root}` path with native tools, or a host "
-            "path with sandbox tools."
-        )
-        if runs_as_remote_process
-        else (
-            f"Your working directory is {_prompt_path(cwd)}. Files you write here are "
-            "private to you until you upload them to pod files."
-        )
-    )
-    # Said here, not only under `# Pod Files`, because this is the section an
-    # agent acts on when it is told to go and read something: "working
-    # directory" is where it looks, and a person's attachment is not there. It
-    # would search the sandbox, find nothing, and sometimes conclude the file
-    # did not exist.
-    attachments = (
-        "\n\nFiles a person **attached to this conversation are not here** — "
-        "they are in pod files, under the directory named in `# Pod Files`. "
-        f"Read them there rather than looking for them under `{root}`."
-        if has_pod_files
-        else ""
-    )
-    return (
-        "# Working Directory\n"
-        f"{where}\n\n"
-        f"{orientation}{attachments}\n\n"
-        f"Files under `{root}` survive an idle pause; running processes and "
-        "your `execute_python` kernel do not, so don't plan around a background "
-        "process living between turns. A `cd` in one `exec_command` does not "
-        "carry to the next — pass `workdir` or use relative paths."
     )
 
 
