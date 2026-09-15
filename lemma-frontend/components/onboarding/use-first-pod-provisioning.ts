@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -21,23 +21,34 @@ import {
 import { useEnsureOrganization } from "./use-ensure-organization";
 
 /**
- * Only failure is state.
- *
- * "Working" is not: `enabled` already says provisioning should be running, so a
- * second flag tracking the same fact would be a synchronous setState in an
- * effect body and one more thing to keep in step. The caller needs exactly one
- * answer from here — whether to stop waiting and show the old flow instead.
+ * `running` until the pod exists, `ready` once it does and nobody has asked to
+ * go in yet, `navigated` once somebody has. `failed` is the caller's cue to
+ * stop waiting and show the old flow instead.
  */
-export type ProvisioningState = "running" | "navigated" | "failed";
+export type ProvisioningState = "running" | "ready" | "navigated" | "failed";
+
+export interface FirstPodProvisioning {
+  state: ProvisioningState;
+  /**
+   * Go into the pod. Immediately if it exists; the moment it does otherwise.
+   *
+   * The screen in front of provisioning decides when, not this hook. It used
+   * to navigate the instant the pod was created, which was right when the
+   * screen in front was a spinner and wrong once it became something a person
+   * is reading: a screen that yanks itself away mid-sentence because a request
+   * finished is worse than a spinner.
+   */
+  open: () => void;
+}
 
 /**
  * Give a new account a workspace without asking it anything.
  *
  * Every question the old flow asked here had an answer already: the provider
  * sent the name, the email says which company, and the pod is theirs by
- * definition. So this runs while the pod shell is already on screen rather than
- * in front of it, and the naming choices it makes are all renameable from
- * inside — which is what makes it safe to make them silently.
+ * definition. So this runs while something else is on screen rather than in
+ * front of it, and the naming choices it makes are all renameable from inside,
+ * which is what makes it safe to make them silently.
  *
  * Not transactional, because the client cannot be. The failure it actually has
  * to survive is an organization created and a pod not: on the next load there
@@ -59,20 +70,42 @@ export function useFirstPodProvisioning({
   } | null;
   organizations: Organization[];
   suggestedOrganization: Organization | null;
-}): ProvisioningState {
+}): FirstPodProvisioning {
   const router = useRouter();
   const queryClient = useQueryClient();
   const updateProfile = useUpdateProfile();
   const ensureOrganization = useEnsureOrganization();
-  const [failed, setFailed] = useState(false);
-  // Set before the navigation, not after. Creating the pod invalidates the pods
-  // query, which re-renders the caller with `needsFirstPod` already false — and
-  // the child it then renders is the root redirect, which navigates to the bare
-  // pod URL and takes the composer launch with it.
-  const [navigated, setNavigated] = useState(false);
+  const [state, setState] = useState<ProvisioningState>("running");
+  // Where the pod opens, once it exists. A ref rather than state because
+  // `open` has to read it from inside a click handler without re-subscribing.
+  const hrefRef = useRef<string | null>(null);
+  // Set when `open` is called before the pod exists, so the navigation happens
+  // the moment it does rather than waiting for a second click.
+  const wantsOpenRef = useRef(false);
+  const navigatedRef = useRef(false);
   // Provisioning must happen once per mount even though its inputs change
   // underneath it — creating the organization is itself one of those changes.
   const startedRef = useRef(false);
+
+  const navigate = useCallback(
+    (href: string) => {
+      if (navigatedRef.current) return;
+      navigatedRef.current = true;
+      // Set before the navigation, not after. Creating the pod invalidated the
+      // pods query, which re-rendered the caller with `needsFirstPod` already
+      // false — and the child it would then render is the root redirect, which
+      // navigates to the bare pod URL and takes the composer launch with it.
+      // `navigated` is what keeps the caller holding this screen instead.
+      setState("navigated");
+      router.replace(href);
+    },
+    [router],
+  );
+
+  const open = useCallback(() => {
+    wantsOpenRef.current = true;
+    if (hrefRef.current) navigate(hrefRef.current);
+  }, [navigate]);
 
   useEffect(() => {
     if (!enabled || startedRef.current) return;
@@ -105,7 +138,7 @@ export function useFirstPodProvisioning({
         });
 
         if (!ensured) {
-          setFailed(true);
+          setState("failed");
           return;
         }
 
@@ -123,21 +156,23 @@ export function useFirstPodProvisioning({
           organization_id: organizationId,
         });
 
-        setNavigated(true);
         trackPodReady(entryKind, profile?.created_at ?? null);
         // Into the conversation, not onto pod home: nobody answered a question
         // to get here, so the launcher there has nothing to offer them yet.
         // The conversation opens behind the welcome door rather than opening
         // itself with a greeting — nobody has said anything to answer yet.
-        router.replace(
-          buildNewPodWelcomeHref({
-            podId: pod.id,
-            workDomain,
-            isFirstPod: true,
-          }),
-        );
-        // After the navigation is queued: refreshing the listing first is what
-        // hands the race to the redirect this is trying to beat.
+        hrefRef.current = buildNewPodWelcomeHref({
+          podId: pod.id,
+          workDomain,
+          isFirstPod: true,
+        });
+        if (wantsOpenRef.current) {
+          navigate(hrefRef.current);
+        } else {
+          setState("ready");
+        }
+        // After the state above is queued, never before: the refreshed listing
+        // is what would otherwise let the caller fall through to its redirect.
         queryClient.invalidateQueries({ queryKey: ["pods"] });
       } catch (error) {
         // Say what went wrong. An earlier version swallowed this and quietly
@@ -150,20 +185,19 @@ export function useFirstPodProvisioning({
             ? `Could not finish setting up your workspace: ${error.message}`
             : "Could not finish setting up your workspace.",
         );
-        setFailed(true);
+        setState("failed");
       }
     })();
   }, [
     enabled,
     ensureOrganization,
+    navigate,
     organizations,
     profile,
     queryClient,
-    router,
     suggestedOrganization,
     updateProfile,
   ]);
 
-  if (failed) return "failed";
-  return navigated ? "navigated" : "running";
+  return { state, open };
 }

@@ -1,0 +1,693 @@
+/**
+ * The four screens a new account sees while its workspace is provisioned.
+ *
+ * One claim per screen, one picture that shows it, one button. The pictures
+ * are drawn as windows on the product's own paper — sheets, hairlines, the
+ * identity tones — so the tour and the door it ends at are visibly the same
+ * product. Everything button-shaped inside a picture is a span styled here,
+ * never a control.
+ *
+ * Scale: the pictures are product UI at product size, not posters. Type inside
+ * a window sits at the product's own small step; the claim under it is one
+ * step above a page title. Bigger read as a landing page, which this is not.
+ *
+ * Every size is a token. The design audit's scale checks read this layer, and
+ * a hand-picked pixel here is exactly the drift they exist to catch.
+ */
+
+/* ── The screen ─────────────────────────────────────────────────────────── */
+
+.first-run-tour {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+}
+
+.first-run-tour-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-6);
+}
+
+.first-run-tour-body {
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: clamp(var(--space-4), 3vh, var(--space-7));
+    min-height: 0;
+    padding: var(--space-2) var(--space-6) var(--space-5);
+    overflow: auto;
+}
+
+.first-run-tour-frame {
+    display: grid;
+    justify-items: center;
+    gap: clamp(var(--space-4), 3vh, var(--space-7));
+    width: 100%;
+    max-width: 800px;
+    animation: first-run-tour-in 320ms ease both;
+}
+
+@keyframes first-run-tour-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.first-run-tour-scene {
+    position: relative;
+    width: 100%;
+    max-width: 720px;
+}
+
+.first-run-tour-scene.is-narrow {
+    max-width: 640px;
+}
+
+/* The one sentence. Size and space carry the hierarchy; weight stays at 500. */
+.first-run-tour-claim {
+    max-width: 38ch;
+    font-size: clamp(var(--text-lg), 2vw, var(--text-xl));
+    font-weight: 500;
+    line-height: var(--leading-snug);
+    letter-spacing: var(--tracking-snug);
+    text-align: center;
+    text-wrap: balance;
+    color: var(--text-primary);
+}
+
+.first-run-tour-controls {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-3);
+}
+
+.first-run-tour-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.first-run-tour-continue {
+    min-width: 140px;
+}
+
+.first-run-tour-dots {
+    display: flex;
+    gap: var(--space-1);
+}
+
+/* A quiet icon-sized Button carrying only a dot, so the hit target stays full
+   size while the mark itself stays small. */
+.first-run-tour-dot {
+    border-radius: var(--radius-full);
+}
+
+.first-run-tour-dot::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--border-default);
+    transition: transform 140ms ease, background 140ms ease;
+}
+
+.first-run-tour-dot[aria-selected="true"]::before {
+    background: var(--action-primary);
+    transform: scale(1.3);
+}
+
+.first-run-tour-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-6) var(--space-5);
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+}
+
+.first-run-tour-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.first-run-tour-led {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    background: var(--state-warning);
+    animation: first-run-tour-pulse 1.6s ease-in-out infinite;
+}
+
+.first-run-tour-status.is-ready .first-run-tour-led {
+    background: var(--state-success);
+    animation: none;
+}
+
+@keyframes first-run-tour-pulse {
+    0%,
+    100% {
+        opacity: 0.35;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+.first-run-tour-counter {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+.first-run-tour-aside {
+    margin-top: var(--space-3);
+    font-size: var(--text-xs);
+    color: var(--text-tertiary);
+    text-align: center;
+}
+
+/* ── Lem, peeking ───────────────────────────────────────────────────────── */
+
+.first-run-tour-lem {
+    position: absolute;
+    z-index: 2;
+    animation: first-run-tour-bob 4.4s ease-in-out infinite;
+}
+
+.first-run-tour-lem.is-top-right {
+    top: -32px;
+    right: var(--space-6);
+}
+
+.first-run-tour-lem.is-bottom-left {
+    bottom: -24px;
+    left: -36px;
+}
+
+.first-run-tour-lem.is-bottom-right {
+    bottom: -22px;
+    right: -26px;
+    animation-delay: -1.7s;
+}
+
+@keyframes first-run-tour-bob {
+    50% {
+        transform: translateY(-5px);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .first-run-tour-frame,
+    .first-run-tour-lem,
+    .first-run-tour-led {
+        animation: none;
+    }
+}
+
+/* ── Windows ────────────────────────────────────────────────────────────── */
+
+.first-run-mock-window {
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-2xl);
+    background: var(--surface-1);
+    box-shadow: var(--shadow-md);
+    color: var(--text-secondary);
+    text-align: left;
+}
+
+.first-run-mock-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 38px;
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.first-run-mock-lights {
+    display: inline-flex;
+    gap: var(--space-1-5);
+}
+
+.first-run-mock-lights i {
+    display: block;
+    width: 9px;
+    height: 9px;
+    border-radius: var(--radius-full);
+    opacity: 0.85;
+}
+
+.first-run-mock-lights i:nth-child(1) {
+    background: var(--state-error);
+}
+
+.first-run-mock-lights i:nth-child(2) {
+    background: var(--state-warning);
+}
+
+.first-run-mock-lights i:nth-child(3) {
+    background: var(--state-success);
+}
+
+.first-run-mock-bar-end {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    font-size: var(--text-xs);
+    font-weight: 400;
+    color: var(--text-tertiary);
+}
+
+.first-run-mock-time {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-variant-numeric: tabular-nums;
+}
+
+.first-run-mock-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-0-5) var(--space-2);
+    border-radius: var(--radius-full);
+    font-size: var(--text-2xs);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+/* Rust asks, green confirms — the same pairs the product's own status chips use. */
+.first-run-mock-pill.is-ask {
+    background: var(--identity-soft-3);
+    color: var(--identity-tone-3);
+}
+
+.first-run-mock-pill.is-ok,
+.first-run-mock-pill.is-whatsapp {
+    background: var(--identity-soft-1);
+    color: var(--identity-tone-1);
+}
+
+.first-run-mock-pill.is-quiet {
+    background: var(--surface-3);
+    color: var(--text-secondary);
+}
+
+.first-run-mock-pill.is-accent,
+.first-run-mock-pill.is-slack {
+    background: var(--identity-soft-0);
+    color: var(--identity-tone-0);
+}
+
+.first-run-mock-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    padding: 0 var(--space-2-5);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    font-size: var(--text-xs);
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.first-run-mock-button.is-primary {
+    border-color: transparent;
+    background: var(--action-primary);
+    color: var(--text-on-brand);
+}
+
+.first-run-mock-button.is-quiet {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.first-run-mock-check {
+    display: inline-flex;
+    color: var(--state-success);
+}
+
+/* ── Frame 1: the agent at work ─────────────────────────────────────────── */
+
+.first-run-mock-chat {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+}
+
+.first-run-mock-bubble {
+    padding: var(--space-2-5) var(--space-3-5);
+    border-radius: var(--radius-xl);
+    font-size: var(--text-sm);
+    line-height: var(--leading-snug);
+}
+
+.first-run-mock-bubble.is-you {
+    justify-self: end;
+    max-width: 78%;
+    border-bottom-right-radius: var(--radius-xs);
+    background: var(--action-primary);
+    color: var(--text-on-brand);
+}
+
+.first-run-mock-bubble.is-agent {
+    display: grid;
+    gap: var(--space-2);
+    justify-self: start;
+    width: 86%;
+    border-bottom-left-radius: var(--radius-xs);
+    background: var(--surface-2);
+    color: var(--text-primary);
+}
+
+.first-run-mock-steps {
+    display: grid;
+    gap: var(--space-1-5);
+}
+
+.first-run-mock-step {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: var(--space-2-5);
+    align-items: center;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+}
+
+.first-run-mock-step b {
+    font-weight: 500;
+}
+
+.first-run-mock-step-meta {
+    margin-left: var(--space-1-5);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+}
+
+.first-run-mock-ask {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2-5);
+    margin-top: var(--space-0-5);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border-subtle);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+}
+
+.first-run-mock-ask-actions {
+    display: inline-flex;
+    gap: var(--space-1-5);
+    margin-left: auto;
+}
+
+/* ── Frame 2: the app ───────────────────────────────────────────────────── */
+
+.first-run-mock-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-2-5);
+    padding: var(--space-3-5) var(--space-5) var(--space-1);
+}
+
+.first-run-mock-stat {
+    display: grid;
+    gap: var(--space-0-5);
+    padding: var(--space-2-5) var(--space-3);
+    border-radius: var(--radius-lg);
+    background: var(--surface-2);
+}
+
+.first-run-mock-stat-label {
+    font-size: var(--text-2xs);
+    color: var(--text-tertiary);
+}
+
+.first-run-mock-stat-value {
+    font-size: var(--text-lg);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: var(--tracking-snug);
+    color: var(--text-primary);
+}
+
+.first-run-mock-stat-value small {
+    margin-left: var(--space-1);
+    font-size: var(--text-2xs);
+    font-weight: 400;
+    letter-spacing: var(--tracking-normal);
+    color: var(--text-tertiary);
+}
+
+.first-run-mock-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+}
+
+.first-run-mock-table th {
+    padding: var(--space-3) var(--space-5) var(--space-1-5);
+    font-size: var(--text-2xs);
+    font-weight: 500;
+    letter-spacing: var(--tracking-wide);
+    text-align: left;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+}
+
+.first-run-mock-table td {
+    padding: var(--space-2-5) var(--space-5);
+    border-top: 1px solid var(--border-subtle);
+    vertical-align: middle;
+    color: var(--text-secondary);
+}
+
+.first-run-mock-table td.is-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.first-run-mock-table td.is-amount {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+.first-run-mock-table td.is-end {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.first-run-mock-table td.is-end > * + * {
+    margin-left: var(--space-1-5);
+}
+
+/* ── Frame 3: the people ────────────────────────────────────────────────── */
+
+.first-run-mock-people {
+    padding: var(--space-1-5) var(--space-5) var(--space-4);
+}
+
+.first-run-mock-person {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+    gap: var(--space-3);
+    align-items: center;
+    padding: var(--space-2-5) 0;
+    border-top: 1px solid var(--border-subtle);
+    font-size: var(--text-sm);
+}
+
+.first-run-mock-person:first-child {
+    border-top: 0;
+}
+
+/* Tinted from the identity hue the row wears, the way the door's marks are. */
+.first-run-mock-person-avatar {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--lm-identity-tone) 15%, var(--surface-1));
+    font-size: var(--text-2xs);
+    font-weight: 500;
+    color: var(--lm-identity-tone);
+}
+
+.first-run-mock-person-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.first-run-mock-person-note {
+    display: block;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+}
+
+.first-run-mock-invite {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-2);
+    align-items: center;
+    margin-top: var(--space-2-5);
+}
+
+.first-run-mock-field {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-1);
+    font-size: var(--text-xs);
+    color: var(--text-soft);
+}
+
+/* ── Frame 4: the channels ──────────────────────────────────────────────── */
+
+.first-run-mock-channels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-4);
+    align-items: start;
+}
+
+.first-run-mock-thread {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+}
+
+.first-run-mock-thread-in {
+    justify-self: start;
+    max-width: 92%;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-lg);
+    border-bottom-left-radius: var(--radius-xs);
+    background: var(--surface-2);
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-primary);
+}
+
+.first-run-mock-thread-out {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1-5);
+    justify-self: end;
+    padding: var(--space-1-5) var(--space-2-5);
+    border-radius: var(--radius-lg);
+    border-bottom-right-radius: var(--radius-xs);
+    background: var(--identity-soft-1);
+    font-size: var(--text-xs);
+    color: var(--text-primary);
+}
+
+.first-run-mock-thread-out svg {
+    color: var(--identity-tone-1);
+}
+
+.first-run-mock-message {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: var(--space-2);
+    align-items: start;
+    font-size: var(--text-xs);
+    line-height: var(--leading-snug);
+    color: var(--text-primary);
+}
+
+.first-run-mock-message-avatar {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--lm-identity-tone) 15%, var(--surface-1));
+    font-size: var(--text-2xs);
+    font-weight: 500;
+    color: var(--lm-identity-tone);
+}
+
+.first-run-mock-message-who {
+    display: block;
+    font-weight: 500;
+}
+
+.first-run-mock-message-time {
+    margin-left: var(--space-1-5);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    font-weight: 400;
+    color: var(--text-tertiary);
+}
+
+.first-run-mock-message-body {
+    display: block;
+    margin-top: var(--space-0-5);
+    color: var(--text-secondary);
+}
+
+.first-run-mock-message-body b {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.first-run-mock-message-actions {
+    display: inline-flex;
+    gap: var(--space-1-5);
+    margin-top: var(--space-1-5);
+}
+
+/* ── Smaller screens ────────────────────────────────────────────────────── */
+
+@media (max-width: 700px) {
+    .first-run-mock-channels {
+        grid-template-columns: 1fr;
+    }
+
+    .first-run-mock-stats {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .first-run-tour-lem.is-bottom-left {
+        display: none;
+    }
+}
+
+@media (max-width: 560px) {
+    .first-run-mock-table th:nth-child(3),
+    .first-run-mock-table td:nth-child(3) {
+        display: none;
+    }
+
+    .first-run-tour-lem.is-top-right {
+        top: -24px;
+        right: var(--space-2);
+    }
+}
