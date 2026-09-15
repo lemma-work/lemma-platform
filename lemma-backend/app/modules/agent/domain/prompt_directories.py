@@ -18,6 +18,10 @@ import re
 from typing import TYPE_CHECKING
 
 from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.services.workspace_location import (
+    resolve_pod_cwd,
+    resolve_workspace_location,
+)
 
 if TYPE_CHECKING:
     from app.modules.agent.domain.context import AgentContext
@@ -33,9 +37,19 @@ _PLAIN_PATH = re.compile(r"(?:/[A-Za-z0-9._@+-]{1,64})+/?")
 def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
     """Resolve the agent's workspace working directory for the prompt.
 
-    Prefers the resolved ``workspace_cwd`` carried on the run context (set from
-    conversation metadata or the default by ``resolve_workspace_location``), then
-    ``get_workspace_cwd()`` if present, then the conversation-scoped default.
+    Prefers the resolved ``workspace_cwd`` carried on the run context, then
+    ``get_workspace_cwd()`` if present, then the conversation's own resolution.
+
+    That last step delegates rather than formatting a path here. It used to
+    return ``/workspace/conversations/{id}``, which is not a directory this
+    platform has made for a long time -- the cwd is persisted in conversation
+    metadata and falls back to ``/workspace/c/{date}/{slug}``. So whenever the
+    context did not carry a cwd, the one section whose entire job is to say
+    where the agent is named somewhere that does not exist.
+
+    ``workspace_location`` says it in its own docstring: two implementations of
+    this ladder put a person's attachment in a directory the agent's cwd never
+    points at. There is one ladder, and this is a caller of it.
     """
     cwd = getattr(ctx, "workspace_cwd", None)
     if cwd:
@@ -49,7 +63,7 @@ def _workspace_cwd(ctx: AgentContext, conversation: Conversation) -> str:
         value = get_cwd()
         if value:
             return str(value)
-    return f"/workspace/conversations/{conversation.id}"
+    return resolve_workspace_location(conversation).cwd
 
 
 def _workspace_repo(ctx: AgentContext):
@@ -122,9 +136,10 @@ def _pod_cwd(ctx: AgentContext, conversation: Conversation) -> str:
         value = get_cwd()
         if value:
             return str(value)
-    return (
-        f"/me/c/{conversation.created_at.date().isoformat()}/{conversation.id.hex[:8]}"
-    )
+    # Derived from the workspace cwd by the one function that owns the mapping,
+    # rather than rebuilt from the date and the id here. The two have to share a
+    # suffix, and a second derivation is how they stop sharing it.
+    return resolve_pod_cwd(conversation)
 
 
 def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> str:

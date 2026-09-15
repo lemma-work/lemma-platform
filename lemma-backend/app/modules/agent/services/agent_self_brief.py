@@ -6,11 +6,10 @@ here rather than inline because it is the half that grew the file past what the
 architecture gate allows.
 
 Everything it renders already existed and none of it reached the prompt. The
-agent did not know its own name -- which is the pod's name, because the pod is
-the teammate; it is stored as ``pod_default`` and neither string was in front of
-it. It did not know its standing work, though a schedule is the closest thing an
-agent has to a job. And it knew only the one channel the current run arrived on,
-so it could not tell anybody where else to reach it.
+default agent did not know the pod's name, which is the name it answers to; the
+agent is stored as ``pod_default`` and neither string was in front of it. It did
+not know its configured schedules. And it knew only the channel the current run
+arrived on, so it could not say where else it is reachable.
 
 What this deliberately does *not* render is ``Agent.allowed_actions``. That
 field reads like the agent's own authority and is the opposite: the repository
@@ -49,10 +48,9 @@ from app.modules.schedule.contracts.pod_summaries import PodScheduleSummary
 
 logger = get_logger(__name__)
 
-# Smaller than the inventory caps on purpose: an agent needs to know it has
-# standing work and roughly what it is, and the full list of forty schedules is
-# one tool call away. A pod with three schedules and two apps -- which is most
-# of them -- renders whole either way.
+# Smaller than the inventory caps on purpose: an agent needs to know what is
+# configured for it and roughly what it does; the full list of forty is one tool
+# call away. A pod with three schedules and two apps renders whole either way.
 MAX_SCHEDULES = 12
 MAX_APPS = 12
 MAX_SURFACES = 8
@@ -65,11 +63,11 @@ READ_FAILED = (SQLAlchemyError, OSError)
 
 
 def schedule_line(summary: PodScheduleSummary) -> str:
-    """One standing job, said the way a person would say it.
+    """One configured schedule, with its trigger in readable form.
 
-    The cadence comes out of the type-specific config, because "every weekday at
-    nine" and "whenever a row lands in `tickets`" are the same kind of fact to
-    whoever reads this and are stored in two different shapes.
+    The trigger comes out of the type-specific config, because a cron expression
+    and a watched table are the same kind of fact to whoever reads this and are
+    stored in two different shapes.
     """
     name = summary.name or "(unnamed schedule)"
     config = summary.config or {}
@@ -97,34 +95,23 @@ def schedule_line(summary: PodScheduleSummary) -> str:
 
 
 def _identity_lines(*, agent: Agent, pod: PodProfile, is_default: bool) -> list[str]:
-    """Name, description and tenure -- everything needing no read.
+    """Name, description and start date -- everything needing no read.
 
-    The pod's own agent is named by the **pod**, not by
-    ``DEFAULT_RESPONDER_NAME``. That constant is the platform's word for
-    whatever answers in a pod, and it is the right answer to "who sent this
-    Slack message" where no other name exists. It is the wrong answer here: a
-    person with six teammates would be introduced to six agents all called Lem,
-    which is precisely why the room app stopped rendering it and gives each pod
-    its own name and face.
+    The default agent is named by the pod, not by ``DEFAULT_RESPONDER_NAME``.
+    That constant is the platform's word for whatever answers in a pod: right
+    where no other name exists, wrong here, because it would give every pod in
+    an organization the same name.
     """
     lines = ["\n## You"]
     if is_default and pod.name:
-        lines.append(
-            f"- You are **{pod.name}**. The pod is the teammate, so its name is "
-            "your name and its work is your work. You answer here unless "
-            "somebody names another agent."
-        )
+        lines.append(f"- You are the default agent for this pod, **{pod.name}**.")
     elif is_default:
         # A pod row that no longer resolves. Say what is still true rather than
         # reaching for a placeholder name and asserting it.
-        lines.append(
-            "- You are this pod's own teammate: the one that answers here "
-            "unless somebody names another agent."
-        )
+        lines.append("- You are the default agent for this pod.")
     else:
         lines.append(
-            f"- You are **{agent.name or '(unnamed)'}**, one of this pod's "
-            "named agents, built for the job in your instructions below."
+            f"- You are **{agent.name or '(unnamed)'}**, a named agent in this pod."
         )
     if agent.description and agent.description.strip():
         lines.append(f"- How you are described: {agent.description.strip()}")
@@ -133,20 +120,19 @@ def _identity_lines(*, agent: Agent, pod: PodProfile, is_default: bool) -> list[
     return lines
 
 
-def _standing_work_lines(
+def _schedule_lines(
     schedules: list[PodScheduleSummary], *, agent: Agent, is_default: bool
 ) -> list[str]:
     mine = [s for s in schedules if s.agent_id == agent.id]
     lines: list[str] = []
     if mine:
-        lines.append("- Standing work wired to you:")
+        lines.append("- Schedules configured to start you:")
         lines.extend(f"  {schedule_line(s)}" for s in mine)
     others = [s for s in schedules if s.agent_id != agent.id]
     if others and is_default:
-        # The teammate is the one asked "what runs around here", so it is told
-        # about the schedules pointing elsewhere too -- named as somebody
-        # else's, not as its own.
-        lines.append("- Standing work in this pod, wired to something else:")
+        # The default agent is the one asked what runs in this pod, so it is
+        # told about the schedules pointing elsewhere too, named as such.
+        lines.append("- Other schedules in this pod:")
         lines.extend(f"  {schedule_line(s)}" for s in others)
     return lines
 
@@ -156,12 +142,12 @@ def _reach_line(surfaces: list[PodSurfaceSummary], *, agent: Agent) -> list[str]
     if not reachable:
         return []
     return [
-        "- People reach you on: "
+        "- Channels you answer on: "
         + ", ".join(
             s.platform.lower() + (f" ({s.handle})" if s.handle else "")
             for s in reachable
         )
-        + ". Those are the same conversations you answer in here."
+        + "."
     ]
 
 
@@ -190,7 +176,7 @@ def _apps_line(apps: list[PodAppSummary]) -> list[str]:
 
 
 class AgentSelfBriefBuilder:
-    """Renders ``## You``, from the same reads the profile page already makes."""
+    """Renders ``## You``: what this agent is, and what is configured for it."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory):
         self.uow_factory = uow_factory
@@ -233,9 +219,7 @@ class AgentSelfBriefBuilder:
             )
             return lines
 
-        lines.extend(
-            _standing_work_lines(schedules, agent=agent, is_default=is_default)
-        )
+        lines.extend(_schedule_lines(schedules, agent=agent, is_default=is_default))
         if schedule_total > len(schedules):
             lines.append(
                 f"- … and {schedule_total - len(schedules)} more schedules not "

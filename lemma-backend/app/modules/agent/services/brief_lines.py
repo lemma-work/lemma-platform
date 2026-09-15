@@ -46,10 +46,22 @@ def more_note(shown: int, total: object, noun: str) -> list[str]:
     ]
 
 
-#: Run sources that mean a person typed something and is looking at the reply.
-#: Anything else -- a schedule firing, a workflow node, a table trigger -- may
-#: be unattended, and the conversation is what says which.
-HUMAN_RUN_SOURCES = frozenset({"user_message", "queued_messages"})
+#: Run sources known to start without a person: a timer coming due. A schedule's
+#: own first firing records no source at all, which ``None`` covers.
+#:
+#: An allow-list of *human* sources was the first shape of this and it was the
+#: wrong way round. ``approval_resume`` -- somebody clicked approve, or answered
+#: ``ask_user`` -- was missing from it, so the run that exists precisely because
+#: a person had just responded was told nothing had come from a person. Listing
+#: the automatic ones instead means an unrecognised source is never called
+#: unattended, and wrongly claiming nobody is watching is the failure that
+#: actually costs somebody an answer.
+AUTOMATIC_RUN_SOURCES = frozenset({"snooze_resume", "agent_snooze"})
+
+#: A person answered a pause: an approval decision, or a reply to ``ask_user``.
+#: Worth saying out loud, because the run resumes mid-task and the answer it was
+#: waiting for is now sitting in its history.
+RESUMED_BY_PERSON = "approval_resume"
 
 
 def run_source_of(agent_run) -> str | None:
@@ -68,33 +80,41 @@ def run_source_of(agent_run) -> str | None:
 
 
 def with_run_framing(brief: str, *, conversation, run_source: str | None = None) -> str:
-    """Say who started **this run**, and whether anybody is waiting on it.
+    """Say what started **this run**, and whether anybody is waiting on it.
 
     Every run read identically before this: a person typing, a message from
     Slack, and a schedule firing at six in the morning all produced the same
     prompt, so an unattended run would call `ask_user` and hang on an answer
     nobody was going to give.
 
-    The first version read only the conversation, and that was wrong in a way
-    worth spelling out. ``started_by`` is stamped on the *conversation* when a
-    schedule creates it, and it stays there. A person who opens that same
-    conversation the next morning and types a question starts a new run in it --
-    and the brief would still have told the agent that nobody was waiting, that
-    its reply would not be read, and that `ask_user` could not return. It would
-    then file its answer somewhere and say nothing to the person who asked.
+    Two corrections since. The first version read only the conversation --
+    ``started_by`` is stamped there when a schedule creates it and it stays
+    there, so a person opening that conversation the next morning was still told
+    nobody would read the reply. The second used an allow-list of human sources
+    and left ``approval_resume`` out of it, which meant the run that exists
+    *because* somebody had just approved something was told nothing had come
+    from a person.
 
-    So the conversation says how it *began* and ``run_source`` says what started
-    *this turn*, and only the two together justify the unattended claim. The
-    check is deliberately one-sided: an unrecognised source is not treated as a
-    person, but a recognised human source always wins, because wrongly claiming
-    nobody is there is the failure that actually costs somebody an answer.
+    So: the conversation says how it began, ``run_source`` says what started this
+    turn, and the unattended claim needs the source to be positively known
+    automatic. Anything unrecognised is not called unattended.
     """
     metadata = getattr(conversation, "metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
-    a_person_typed = run_source in HUMAN_RUN_SOURCES
-
     started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
-    if started_by_schedule and not a_person_typed:
+    unattended = run_source is None or run_source in AUTOMATIC_RUN_SOURCES
+    platform = metadata.get("surface_platform")
+    where = f" from {str(platform).lower()}" if platform else ""
+
+    if run_source == RESUMED_BY_PERSON:
+        return (
+            f"{brief}\n\n## This run\n"
+            "- A person answered what you were waiting on — an approval, or a "
+            "reply to `ask_user`. Their answer is in your history above. Carry "
+            "on from where you paused, and tell them what happened."
+        )
+
+    if started_by_schedule and unattended:
         name = metadata.get("schedule_name")
         named = f" (`{name}`)" if name else ""
         return (
@@ -109,27 +129,18 @@ def with_run_framing(brief: str, *, conversation, run_source: str | None = None)
             "only in the reply."
         )
 
-    platform = metadata.get("surface_platform")
-    if platform:
-        where = str(platform).lower()
-        if started_by_schedule:
-            # Began as a firing, but a person is in it now.
-            return (
-                f"{brief}\n\n## This run\n"
-                f"- This conversation was started by a schedule, and a person "
-                f"is now asking in it from {where}. Answer them here."
-            )
-        return (
-            f"{brief}\n\n## This run\n"
-            f"- This arrived from {where}, and the person is waiting there. "
-            "Your reply goes back to the same conversation."
-        )
-
-    if started_by_schedule and a_person_typed:
+    if started_by_schedule:
         return (
             f"{brief}\n\n## This run\n"
             "- This conversation was started by a schedule, and a person is now "
-            "asking in it. Answer them here."
+            f"asking in it{where}. Answer them here."
+        )
+
+    if platform:
+        return (
+            f"{brief}\n\n## This run\n"
+            f"- This arrived{where}, and the person is waiting there. Your reply "
+            "goes back to the same conversation."
         )
     return brief
 

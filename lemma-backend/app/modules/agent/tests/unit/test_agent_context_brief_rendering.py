@@ -117,15 +117,15 @@ class TestAColumnCarriesWhatAWriteNeeds:
 
 
 class TestTheRunSaysWhetherAnybodyIsWaiting:
-    """Every run used to read identically, which is the whole bug.
+    """Every run used to read identically, which is the original bug.
 
-    A person typing, a message arriving from Slack and a schedule firing at six
-    in the morning produced the same prompt. So an unattended run would call
+    A person typing, a message from Slack and a schedule firing at six in the
+    morning produced the same prompt, so an unattended run would call
     ``ask_user`` and hang on an answer nobody was going to give.
 
-    The first fix then introduced a second bug, which is what the rest of this
-    covers: it read the *conversation*, and a schedule stamps the conversation
-    once and forever.
+    Two corrections since, and both are regressions worth pinning: reading the
+    conversation alone, and then classifying run sources by an allow-list of
+    human ones that ``approval_resume`` was missing from.
     """
 
     SCHEDULED = {"started_by": "SCHEDULE", "schedule_name": "daily-invoices"}
@@ -136,16 +136,9 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         )
         assert "daily-invoices" in framed
         assert "Assume nobody is watching" in framed
-        assert "ask_user" in framed
 
     def test_a_person_typing_into_a_scheduled_conversation_is_not_ignored(self):
-        """The bug this class exists for.
-
-        ``started_by`` stays on the conversation. Somebody opening it the next
-        morning and asking a question starts a new run in it — and the agent was
-        being told nobody would read the reply, so it filed its answer and said
-        nothing to the person who had just asked.
-        """
+        """``started_by`` stays on the conversation; a person may return to it."""
         framed = brief_lines.with_run_framing(
             "BRIEF",
             conversation=SimpleNamespace(metadata=self.SCHEDULED),
@@ -154,29 +147,54 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         assert "Assume nobody is watching" not in framed
         assert "a person is now asking" in framed
 
-    def test_queued_messages_also_count_as_a_person(self):
-        """A message queued behind a running turn is still somebody typing."""
-        framed = brief_lines.with_run_framing(
-            "BRIEF",
-            conversation=SimpleNamespace(metadata=self.SCHEDULED),
-            run_source="queued_messages",
-        )
-        assert "Assume nobody is watching" not in framed
+    def test_an_approval_resume_is_a_person_answering(self):
+        """The reproduction that forced the second correction.
 
-    def test_an_unrecognised_run_source_does_not_count_as_a_person(self):
-        """One-sided on purpose.
-
-        A source this build does not know is not evidence somebody is there, so
-        the unattended framing stands — but a *recognised* human source always
-        wins, because wrongly claiming nobody is watching is the failure that
-        costs somebody an answer.
+        Approving, or answering `ask_user`, resumes the run with source
+        ``approval_resume``. Classified against an allow-list of human sources
+        that did not contain it, the run that exists *because* somebody just
+        responded was told nothing had come from a person — so it would carry on
+        as though unattended and file its answer away from them.
         """
         framed = brief_lines.with_run_framing(
             "BRIEF",
             conversation=SimpleNamespace(metadata=self.SCHEDULED),
-            run_source="some_future_trigger",
+            run_source="approval_resume",
+        )
+        assert "Assume nobody is watching" not in framed
+        assert "A person answered what you were waiting on" in framed
+
+    def test_an_approval_resume_says_so_outside_a_schedule_too(self):
+        """Most approvals happen in an ordinary conversation."""
+        framed = brief_lines.with_run_framing(
+            "BRIEF",
+            conversation=SimpleNamespace(metadata={}),
+            run_source="approval_resume",
+        )
+        assert "A person answered what you were waiting on" in framed
+
+    def test_a_snooze_resume_is_a_timer_not_a_person(self):
+        """The other resume: nobody pressed anything, a clock came due."""
+        framed = brief_lines.with_run_framing(
+            "BRIEF",
+            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+            run_source="snooze_resume",
         )
         assert "Assume nobody is watching" in framed
+
+    def test_an_unrecognised_source_is_never_called_unattended(self):
+        """The list is of *automatic* sources, and that direction is the point.
+
+        A source this build has not heard of is not evidence that nobody is
+        there, and claiming otherwise is the failure that costs somebody an
+        answer. This is the shape that would have caught `approval_resume`.
+        """
+        framed = brief_lines.with_run_framing(
+            "BRIEF",
+            conversation=SimpleNamespace(metadata=self.SCHEDULED),
+            run_source="some_future_human_action",
+        )
+        assert "Assume nobody is watching" not in framed
 
     def test_the_unattended_wording_does_not_claim_the_reply_vanishes(self):
         """Replies are persisted. Nobody reading it *now* is the honest claim."""
@@ -202,6 +220,18 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
             brief_lines.with_run_framing("BRIEF", conversation=SimpleNamespace())
             == "BRIEF"
         )
+
+
+class TestTheRunSourceComesOffTheRun:
+    """The conversation cannot answer this; only the run can."""
+
+    def test_the_source_is_read_from_run_metadata(self):
+        run = SimpleNamespace(metadata={"source": "approval_resume"})
+        assert brief_lines.run_source_of(run) == "approval_resume"
+
+    def test_a_run_without_metadata_has_no_source(self):
+        assert brief_lines.run_source_of(SimpleNamespace()) is None
+        assert brief_lines.run_source_of(SimpleNamespace(metadata=None)) is None
 
 
 class TestAScheduleReadsLikeAJob:

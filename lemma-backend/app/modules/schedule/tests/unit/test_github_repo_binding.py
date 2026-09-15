@@ -64,9 +64,7 @@ class TestWhatTheDeliverySays:
 
 def _schedule(*, account_id, name: str | None = None):
     """The two fields `_conversation_metadata` reads off a schedule row."""
-    return SimpleNamespace(
-        account_id=account_id, name=name, schedule_type="TIME"
-    )
+    return SimpleNamespace(account_id=account_id, name=name, schedule_type="TIME")
 
 
 class TestWhatTheScheduleAdds:

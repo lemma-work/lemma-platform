@@ -613,10 +613,11 @@ class TestTheAgentIsToldWhoItIs:
         assert "## You" in brief
         assert "**Acme**" in brief
         assert "Lem" not in brief
+        assert "default agent for this pod" in brief
         assert "Here since 2026-03-04" in brief
         assert "What this pod is for: Where support lives." in brief
 
-    async def test_a_named_agent_is_not_called_the_teammate(self, stubbed):
+    async def test_a_named_agent_is_named_as_one(self, stubbed):
         agent = _named_agent()
 
         brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
@@ -626,18 +627,13 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=uuid4(),
         )
 
-        assert "one of this pod's named agents" in brief
-        assert "this pod's own teammate" not in brief
+        assert "a named agent in this pod" in brief
+        assert "default agent for this pod" not in brief
 
-    async def test_standing_work_separates_yours_from_everyone_elses(
+    async def test_schedules_separate_yours_from_everyone_elses(
         self, stubbed, monkeypatch
     ):
-        """A schedule is the closest thing an agent has to a job.
-
-        Its profile page has listed them under that heading for a while and its
-        prompt never did, so it could be woken every weekday at nine by
-        something it was unable to name.
-        """
+        """The agent could be started by a schedule it was unable to name."""
         agent = _pod_default_agent()
         mine = PodScheduleSummary(
             name="morning-sweep",
@@ -671,9 +667,9 @@ class TestTheAgentIsToldWhoItIs:
             pod_id=agent.pod_id,
         )
 
-        assert "Standing work wired to you:" in brief
+        assert "Schedules configured to start you:" in brief
         assert "morning-sweep" in brief
-        assert "wired to something else:" in brief
+        assert "Other schedules in this pod:" in brief
         assert "reindex" in brief
 
     async def test_a_failed_self_read_still_renders_the_rest(

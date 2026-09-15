@@ -38,6 +38,9 @@ def _schedule(**overrides) -> SimpleNamespace:
         "user_id": uuid4(),
         "workflow_id": None,
         "agent_id": None,
+        # Read into the started conversation's metadata, so a run can tell that
+        # a schedule rather than a person began it.
+        "name": "a-schedule",
         "instruction": None,
         "is_active": True,
         "is_internal": False,
