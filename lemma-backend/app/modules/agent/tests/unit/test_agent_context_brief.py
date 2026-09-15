@@ -6,21 +6,24 @@ UoW), and a second build for the same key must be served from cache without
 opening any UoW.
 """
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services import agent_memory_brief as memory_mod
+from app.modules.agent.services import agent_self_brief as self_mod
 from app.modules.agent.infrastructure.context_brief_repository import UserProfile
-from app.modules.agent.services.agent_context_brief import (
-    AgentContextBriefBuilder,
-    _user_lines,
-)
+from app.modules.pod.contracts.members import PodProfile
+from app.modules.schedule.contracts.pod_summaries import PodScheduleSummary
+from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
+from app.modules.agent.services.brief_lines import user_lines as _user_lines
 
 
 class _FakeBriefCache:
@@ -81,6 +84,21 @@ class _FakeBriefRepo:
     async def get_pod_name(self, pod_id):
         return "Acme"
 
+    async def get_pod_profile(self, pod_id):
+        return PodProfile(name="Acme")
+
+    async def list_workflows(self, **kwargs):
+        return ([], 0)
+
+    async def list_schedules(self, **kwargs):
+        return ([], 0)
+
+    async def list_apps(self, **kwargs):
+        return []
+
+    async def list_surfaces(self, **kwargs):
+        return []
+
     async def get_user_profile(self, user_id):
         return UserProfile(email="a@b.co")
 
@@ -131,6 +149,9 @@ class _FakeFileService:
 @pytest.fixture
 def stubbed(monkeypatch):
     monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
+    # `## You` is built in its own module off its own import of the repository,
+    # so patching the brief module alone leaves the real one wired in behind it.
+    monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _FakeBriefRepo)
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
     # `function`'s published operation, not a name bound in the subject: a
     # double inside the module under test certifies the half you did not write.
@@ -141,6 +162,13 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(
         brief_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
+
+    # The member directory opens its own unit of work through `pod`, so it has
+    # to be stubbed here or the brief reaches a real database.
+    async def _no_members(**kwargs):
+        return None
+
+    monkeypatch.setattr(brief_mod, "list_pod_members", _no_members)
     monkeypatch.setattr(
         brief_mod, "build_table_service", lambda uow: _FakeTableService()
     )
@@ -175,7 +203,13 @@ def stubbed(monkeypatch):
 
 
 def _named_agent(kind: AgentKind = AgentKind.USER):
-    return SimpleNamespace(id=uuid4(), name="agent", description=None, kind=kind)
+    return SimpleNamespace(
+        id=uuid4(),
+        name="agent",
+        description=None,
+        kind=kind,
+        allowed_actions=[],
+    )
 
 
 def _pod_default_agent():
@@ -188,6 +222,7 @@ def _pod_default_agent():
         name="pod_default",
         description=None,
         kind=AgentKind.POD_DEFAULT,
+        allowed_actions=[],
     )
 
 
@@ -420,12 +455,12 @@ class TestEveryCapSaysWhatItLeftOut:
     """
 
     def test_nothing_is_said_when_nothing_was_dropped(self) -> None:
-        from app.modules.agent.services.agent_context_brief import _more_note
+        from app.modules.agent.services.brief_lines import more_note as _more_note
 
         assert _more_note(shown=3, total=3, noun="tables") == []
 
     def test_the_count_left_out_is_named(self) -> None:
-        from app.modules.agent.services.agent_context_brief import _more_note
+        from app.modules.agent.services.brief_lines import more_note as _more_note
 
         (line,) = _more_note(shown=50, total=137, noun="tables")
 
@@ -434,7 +469,7 @@ class TestEveryCapSaysWhatItLeftOut:
     def test_an_unknown_total_is_not_treated_as_nothing_more(self) -> None:
         """A repository that does not count returns None. That is 'unknown',
         and it must not crash prompt assembly either."""
-        from app.modules.agent.services.agent_context_brief import _more_note
+        from app.modules.agent.services.brief_lines import more_note as _more_note
 
         assert _more_note(shown=5, total=None, noun="agents") == []
 
@@ -443,9 +478,9 @@ class TestEveryCapSaysWhatItLeftOut:
         then told is required, or reports to the user as not existing."""
         from types import SimpleNamespace
 
-        from app.modules.agent.services.agent_context_brief import (
-            _MAX_COLUMNS,
-            _table_line,
+        from app.modules.agent.services.brief_lines import (
+            MAX_COLUMNS as _MAX_COLUMNS,
+            table_line as _table_line,
         )
 
         table = SimpleNamespace(
@@ -464,7 +499,7 @@ class TestEveryCapSaysWhatItLeftOut:
     def test_a_narrow_table_gets_no_note(self) -> None:
         from types import SimpleNamespace
 
-        from app.modules.agent.services.agent_context_brief import _table_line
+        from app.modules.agent.services.brief_lines import table_line as _table_line
 
         table = SimpleNamespace(
             table_name="orders",
@@ -475,9 +510,9 @@ class TestEveryCapSaysWhatItLeftOut:
         assert "more columns" not in _table_line(table)
 
     def test_extra_top_level_files_are_declared(self) -> None:
-        from app.modules.agent.services.agent_context_brief import (
-            _MAX_RESOURCES,
-            _top_level_file_entries,
+        from app.modules.agent.services.brief_lines import (
+            MAX_RESOURCES as _MAX_RESOURCES,
+            top_level_file_entries as _top_level_file_entries,
         )
 
         tree = {
@@ -531,3 +566,125 @@ class TestTheUserLine:
 
         assert "not set" in lines[1]
         assert "UTC" in lines[1]
+
+
+class TestTheAgentIsToldWhoItIs:
+    """``## You`` -- the half of the brief that is about the agent itself.
+
+    Everything in it already existed and none of it reached the prompt, so the
+    profile page beside the conversation knew more about the teammate than the
+    teammate did.
+    """
+
+    async def test_the_teammate_is_named_and_dated(self, stubbed, monkeypatch):
+        """Stored as ``pod_default``, shown to people as Lem, told neither.
+
+        An agent asked its own name had to guess at it, and an agent asked how
+        long it had been here had nothing at all.
+        """
+
+        class _Repo(_FakeBriefRepo):
+            async def get_pod_profile(self, pod_id):
+                return PodProfile(
+                    name="Acme",
+                    description="Where support lives.",
+                    created_at=datetime(2026, 3, 4, tzinfo=timezone.utc),
+                )
+
+        monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _Repo)
+        monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)
+        agent = _pod_default_agent()
+
+        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+            agent=agent,
+            conversation=_conversation(True),
+            user_id=uuid4(),
+            pod_id=agent.pod_id,
+        )
+
+        assert "## You" in brief
+        assert "**Lem**" in brief
+        assert "Here since 2026-03-04" in brief
+        assert "What this pod is for: Where support lives." in brief
+
+    async def test_a_named_agent_is_not_called_the_teammate(self, stubbed):
+        agent = _named_agent()
+
+        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+            agent=agent,
+            conversation=_conversation(False),
+            user_id=uuid4(),
+            pod_id=uuid4(),
+        )
+
+        assert "one of this pod's named agents" in brief
+        assert "this pod's own teammate" not in brief
+
+    async def test_standing_work_separates_yours_from_everyone_elses(
+        self, stubbed, monkeypatch
+    ):
+        """A schedule is the closest thing an agent has to a job.
+
+        Its profile page has listed them under that heading for a while and its
+        prompt never did, so it could be woken every weekday at nine by
+        something it was unable to name.
+        """
+        agent = _pod_default_agent()
+        mine = PodScheduleSummary(
+            name="morning-sweep",
+            schedule_type="TIME",
+            instruction="Check for stale rows.",
+            agent_id=agent.id,
+            workflow_id=None,
+            is_active=True,
+            config={"cron": "0 9 * * 1-5"},
+        )
+        theirs = PodScheduleSummary(
+            name="reindex",
+            schedule_type="DATASTORE",
+            instruction=None,
+            agent_id=uuid4(),
+            workflow_id=None,
+            is_active=True,
+            config={"table_name": "tickets", "operations": ["INSERT"]},
+        )
+
+        class _Repo(_FakeBriefRepo):
+            async def list_schedules(self, **kwargs):
+                return ([mine, theirs], 2)
+
+        monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)
+
+        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+            agent=agent,
+            conversation=_conversation(True),
+            user_id=uuid4(),
+            pod_id=agent.pod_id,
+        )
+
+        assert "Standing work wired to you:" in brief
+        assert "morning-sweep" in brief
+        assert "wired to something else:" in brief
+        assert "reindex" in brief
+
+    async def test_a_failed_self_read_still_renders_the_rest(
+        self, stubbed, monkeypatch
+    ):
+        """A self-description is never worth failing somebody's run over."""
+
+        class _Repo(_FakeBriefRepo):
+            async def list_schedules(self, **kwargs):
+                raise OperationalError("select", {}, Exception("no connection"))
+
+        monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)
+        agent = _pod_default_agent()
+
+        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+            agent=agent,
+            conversation=_conversation(True),
+            user_id=uuid4(),
+            pod_id=agent.pod_id,
+        )
+
+        assert "# Runtime Context" in brief
+        assert "## You" in brief

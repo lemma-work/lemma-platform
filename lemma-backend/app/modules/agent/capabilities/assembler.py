@@ -48,6 +48,7 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.prompts import (
+    load_connectors_prompt,
     load_messaging_prompt,
     load_skills_prompt,
     load_speech_prompt,
@@ -65,6 +66,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 )
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
+from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
@@ -98,6 +100,11 @@ _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
     (speech_toolset, "speech", load_speech_prompt),
     (messaging_toolset, "messaging", load_messaging_prompt),
     (user_interaction_toolset, "user_interaction", load_user_interaction_prompt),
+    # Deferred like messaging, and for the same reason its contract still has to
+    # ride along: the search -> describe -> run loop and the fact that a
+    # connector operation acts outside the pod are not recoverable from a tool
+    # name in the deferred hint.
+    (connectors_toolset, "connectors", load_connectors_prompt),
 )
 
 

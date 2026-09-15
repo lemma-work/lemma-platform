@@ -7,7 +7,9 @@ The workspace runs code, shell commands, and `lemma` CLI operations. Use it when
 Credentials are pre-injected, so `lemma` is ready. Default output is compact and complete (schemas included); prefer it over `--output json`, which is for piping or saving. `--full` expands folded fields.
 
 ```bash
-lemma pods describe                       # pod inventory
+lemma pods describe                       # pod inventory — apps are NOT in it
+lemma apps list                           # the other half of orienting
+lemma pods members                        # who is in this pod
 lemma chat <agent> "message"              # talk to a pod agent
 lemma tables list; lemma records list <table> --limit 20
 lemma records create <table> --data '{"title":"New"}'
@@ -17,6 +19,28 @@ lemma connectors operations search <auth-config> "send email"
 ```
 
 Pass payloads with `--data '<json>'` or `--file <path.json>`. Target a pod with `--pod <id>`; switch with `lemma orgs select` / `lemma pods select` (there is no `lemma use`). For approvals, workflow forms, shareable links, and grant/RLS troubleshooting, load the `lemma-user` skill — not for ordinary CLI or file work, which is covered here.
+
+## Making things, not only reading them
+
+The same CLI builds the pod, and the loop is the same for every resource: `init` scaffolds a bundle file, `schema` prints the shape that file has to satisfy, then `lemma pods import .` applies it — or `create --file` for a single resource.
+
+```bash
+lemma tables init <name> --shared         # --shared = enable_rls false, a team table
+lemma tables schema                       # the shape, for any resource type
+lemma tables create <name> --file t.json  # also: add-column, drop-column
+lemma functions init <name>               # same three verbs on functions,
+lemma workflows init <name>               #   workflows, schedules and agents
+lemma schedules create --file s.json      # pause / resume without deleting
+lemma agents grant <name> tickets:read,write /knowledge:read
+lemma apps create <name>; lemma apps deploy <name> ./dist
+lemma surfaces upsert slack --agent <name>
+lemma records import <table> --file rows.csv    # export is the pair
+lemma datastore watch <table>             # stream row changes
+lemma pods doctor                         # what is misconfigured here
+lemma pods import .                       # apply a bundle directory
+```
+
+`lemma agents grant` is how a new agent gets its resources: agents have zero access by default, so one created without grants can do nothing. Load `lemma-builder` before authoring anything non-trivial — it carries the bundle layout, the definition formats, and the progressive import loop.
 
 ## Pod files
 

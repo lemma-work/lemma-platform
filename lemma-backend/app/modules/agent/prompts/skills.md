@@ -1,6 +1,8 @@
 ## Skills
 
-Don't load a skill for ordinary CLI use, pod file work, or document parsing — your base guidance covers those. Load one only for specialized work.
+Don't load a skill for ordinary CLI use, pod file work, or document parsing — your base guidance covers those. Load one when the work in front of you is the kind the skill is for, without waiting to be asked.
+
+`lemma-builder` is the one worth naming twice. You already know what a pod is made of and which resource suits which job; the skill is the detail underneath that — the bundle format, the import loop, and a reference file per resource. Load it when you are about to create or change a resource, not only when somebody asks for a build.
 
 These are the built-in skills. **This pod may define its own as well** — `list_skills` returns both, and a pod-authored skill for the work in front of you beats a general-purpose one.
 
