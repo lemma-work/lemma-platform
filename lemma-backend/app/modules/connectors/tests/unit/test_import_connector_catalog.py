@@ -2156,3 +2156,28 @@ def test_a_non_oauth_toolkit_needs_no_managed_scheme_at_all():
         importer._composio_manages_selected_scheme(AuthMethod.OAUTH2, {"S2S_OAUTH2"})
         is False
     )
+
+
+def test_a_field_listed_both_required_and_optional_stays_required():
+    """The upstream schema does not forbid it, so this import must answer it.
+
+    Required wins because it is read first, and that is the safe way round:
+    presenting an optional field as required costs somebody one extra value,
+    while presenting a required one as optional produces an install Composio
+    rejects. Refusing the toolkit instead would take a whole connector out of
+    the catalog over a field listed twice.
+    """
+    schema = importer._composio_fields_schema(
+        SimpleNamespace(
+            required=[_composio_field("client_id")],
+            optional=[
+                _composio_field("client_id", required=False),
+                _composio_field("scopes", required=False),
+            ],
+        )
+    )
+
+    assert schema["required"] == ["client_id"]
+    # Named once, not twice: a JSON Schema `required` array repeating a field is
+    # what the deduplication is also protecting against.
+    assert sorted(schema["properties"]) == ["client_id", "scopes"]

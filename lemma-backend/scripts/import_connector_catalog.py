@@ -574,7 +574,25 @@ def _composio_fields_schema(fields_group) -> dict | None:
     )
     for field in all_fields:
         name = getattr(field, "name", None)
-        if not name or name in properties:
+        if not name:
+            continue
+        if name in properties:
+            # A name in both groups, which the upstream schema does not forbid.
+            # The required definition wins because it is the one read first, and
+            # that is the safe way round: presenting an optional field as
+            # required costs somebody one extra value, while presenting a
+            # required one as optional produces an install Composio rejects.
+            # Deduplicating also keeps the JSON Schema `required` array from
+            # naming the same field twice.
+            #
+            # Not an error, deliberately. This is the catalog import: refusing a
+            # toolkit over a field Composio listed twice would take the whole
+            # connector out of the catalog -- an outage caused by a cosmetic
+            # oddity. It is worth seeing, so it is worth a line in the log.
+            logger.warning(
+                "connector_catalog.composio.duplicate_field.observed",
+                field_name=name,
+            )
             continue
         prop: dict[str, object] = {
             "type": _composio_field_json_type(getattr(field, "type", "string")),

@@ -384,6 +384,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connector.operation.timeout': EventSpec('warning', frozenset({'connector_id', 'operation_name'})),
     'connector_catalog.app.synced': EventSpec('debug', frozenset({'connector_id'})),
     'connector_catalog.composio.disabled': EventSpec('debug', frozenset()),
+    'connector_catalog.composio.duplicate_field.observed': EventSpec('warning', frozenset({'field_name'})),
     'connector_catalog.composio_batch.started': EventSpec('debug', frozenset({'connector_id'})),
     'connector_catalog.composio_retirement.applied': EventSpec('debug', frozenset({'connector_id'})),
     'connector_catalog.composio_retirement.installs_disabled': EventSpec('warning', frozenset({'connector_id', 'count'})),
