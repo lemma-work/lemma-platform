@@ -24,6 +24,7 @@ import {
     getKindLabel,
     getSupportedKinds,
     hasSystemDefault,
+    isComposio,
     supportsCustomConfig,
     type AuthConfigMode,
     type SchemaValues,
@@ -176,10 +177,26 @@ export function AdvancedConfigDialog({
         <Dialog open={Boolean(app)} onOpenChange={onOpenChange}>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Advanced setup</DialogTitle>
+                    {/* Two different situations wear this dialog, and telling
+                        somebody their setup is optional when it is the only way
+                        in is worse than saying nothing. A connector Lemma can
+                        sign in to is genuinely advanced — you are here because
+                        you want your own app. A connector it cannot is not a
+                        choice at all. */}
+                    <DialogTitle>{systemDefault ? 'Advanced setup' : `Set up ${getAppLabel(app)}`}</DialogTitle>
                     <DialogDescription>
-                        How {getAppLabel(app)} signs in for your team. The default works for
-                        almost everyone — you only need this if you want to use your own app.
+                        {systemDefault ? (
+                            <>
+                                How {getAppLabel(app)} signs in for your team. The default works for
+                                almost everyone — you only need this if you want to use your own app.
+                            </>
+                        ) : (
+                            <>
+                                Lemma has no sign-in of its own for {getAppLabel(app)}, so it runs on
+                                your own {getAppLabel(app)} app. Create one there, then paste its
+                                details here.
+                            </>
+                        )}
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-2">
@@ -278,8 +295,21 @@ export function AdvancedConfigDialog({
                             />
                             {/* The manifest already registered this URL, so on Slack
                                 it is a reference rather than an instruction. Every
-                                other connector still has to be told. */}
-                            {isSlack ? null : <OAuthRedirectField />}
+                                other *natively* brokered connector still has to be
+                                told.
+
+                                Not Composio, though: it runs the OAuth dance on its
+                                own backend, so the URL the org must allow-list is
+                                Composio's and not Lemma's. Showing Lemma's callback
+                                here would send someone to register the wrong one
+                                with Twitter or Spotify, and the first sign of it
+                                would be the provider's error page after the
+                                redirect — exactly the failure this field exists to
+                                prevent. The right URL arrives as an
+                                `oauth_redirect_uri` field on the toolkit's own
+                                derived schema, default filled in, rendered by
+                                SchemaFields above. */}
+                            {isSlack || isComposio(capability) ? null : <OAuthRedirectField />}
                         </div>
                     ) : null}
                 </div>

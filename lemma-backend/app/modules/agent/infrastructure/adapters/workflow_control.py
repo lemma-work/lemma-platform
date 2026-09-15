@@ -47,6 +47,24 @@ from app.modules.agent.services.pod_runtime_defaults import (
 )
 from app.modules.workflow.contracts import AgentPort
 
+#: The run source whose opening message is a wake-up rather than a node's input.
+SCHEDULE_SOURCE = "SCHEDULE"
+
+#: Metadata keys that describe the *firing*, not the event, written by
+#: `ScheduleStartService._build_trigger`. Rendered as a sentence at the top of
+#: the wake message, so they are dropped from the event body below it rather
+#: than printed twice.
+_FIRING_FACTS = frozenset(
+    {
+        "schedule_id",
+        "schedule_name",
+        "trigger_type",
+        "fired_at",
+        "scheduled_for",
+        "timezone",
+    }
+)
+
 
 class AgentControlAdapter(AgentPort):
     def __init__(self, uow: SqlAlchemyUnitOfWork) -> None:
@@ -108,12 +126,19 @@ class AgentControlAdapter(AgentPort):
         }
         if workflow_run_id is not None:
             metadata["workflow_run_id"] = str(workflow_run_id)
+        started_by_schedule = source == SCHEDULE_SOURCE
         entity_values: dict[str, object] = {
             "user_id": user_id,
             "pod_id": pod_id,
             "organization_id": await self._get_pod_organization_id(pod_id),
             "agent_id": agent_id,
-            "title": f"Workflow run: {agent_name}",
+            # A schedule's runs are told apart by which schedule started them,
+            # not by which agent they woke: one agent on four schedules produced
+            # four identical "Workflow run: triage-agent" rows, naming a
+            # workflow that never existed.
+            "title": self._conversation_title(
+                agent_name, input_data, started_by_schedule
+            ),
             "type": ConversationType.TASK,
             "metadata": metadata,
             # What the trigger asked for, in the author's words. Lands in the
@@ -151,7 +176,9 @@ class AgentControlAdapter(AgentPort):
             conversation_id=conversation.id,
             agent_run_id=run.id,
             draft=MessageDraft.of_text(
-                self._workflow_input_prompt(input_data),
+                self._schedule_wake_prompt(input_data, instructions)
+                if started_by_schedule
+                else self._workflow_input_prompt(input_data),
                 role=MessageRole.USER,
                 metadata={
                     "author_user_id": str(user_id),
@@ -288,6 +315,113 @@ class AgentControlAdapter(AgentPort):
         return {"answer": output}
 
     @staticmethod
+    def _conversation_title(
+        agent_name: str, input_data: dict[str, object], started_by_schedule: bool
+    ) -> str:
+        if started_by_schedule:
+            metadata = input_data.get("metadata")
+            name = metadata.get("schedule_name") if isinstance(metadata, dict) else None
+            if isinstance(name, str) and name.strip():
+                return f"Schedule: {name.strip()}"
+            return f"Scheduled run: {agent_name}"
+        return f"Workflow run: {agent_name}"
+
+    @staticmethod
     def _workflow_input_prompt(input_data: dict[str, object]) -> str:
         payload = json.dumps(input_data, ensure_ascii=True, indent=2, default=str)
         return f"Workflow input JSON:\n{payload}"
+
+    @staticmethod
+    def _firing_sentences(metadata: dict[str, object]) -> list[str]:
+        """What fired, and when, as prose rather than as JSON keys."""
+
+        def _text(key: str) -> str | None:
+            value = metadata.get(key)
+            return value if isinstance(value, str) and value.strip() else None
+
+        name = _text("schedule_name")
+        lines = [
+            f'The schedule "{name}" started this run.'
+            if name
+            else "A schedule started this run."
+        ]
+
+        fired_at = _text("fired_at")
+        scheduled_for = _text("scheduled_for")
+        timezone_name = _text("timezone")
+        when = []
+        if fired_at:
+            when.append(f"Fired at {fired_at}.")
+        # Only worth saying when it differs: for a fire that ran on time the two
+        # are the same instant, and printing both invites the agent to wonder
+        # which one matters.
+        if scheduled_for and scheduled_for != fired_at:
+            when.append(f"This is the occurrence due at {scheduled_for}.")
+        if timezone_name:
+            when.append(f"The schedule is set in {timezone_name}; times above are UTC.")
+        if when:
+            lines.append(" ".join(when))
+        return lines
+
+    @staticmethod
+    def _firing_event_body(
+        input_data: dict[str, object], metadata: dict[str, object]
+    ) -> dict[str, object]:
+        """The event itself, with the empty parts and the firing facts removed.
+
+        A TIME firing has nothing left here, which is the point: it gets a
+        sentence and a task rather than three empty objects. A webhook or
+        datastore firing still carries its delivery or its row in full.
+        """
+        body = {
+            key: value
+            for key, value in input_data.items()
+            if key != "metadata" and value
+        }
+        event_metadata = {
+            key: value
+            for key, value in metadata.items()
+            if key not in _FIRING_FACTS and value
+        }
+        if event_metadata:
+            body["metadata"] = event_metadata
+        return body
+
+    @classmethod
+    def _schedule_wake_prompt(
+        cls, input_data: dict[str, object], instructions: str | None
+    ) -> str:
+        """What a schedule-started agent reads as its first turn.
+
+        The workflow rendering was wrong here in a way nothing caught, because
+        no test pinned this text. A cron-fired agent's opening message was:
+
+            Workflow input JSON:
+            {"payload": {}, "metadata": {}, "llm_output": {}}
+
+        -- three empty objects, under a heading naming a workflow that does not
+        exist, for a run started by a clock. Everything telling the agent why it
+        had woken was in the system prompt, where it reads as standing
+        configuration rather than as the thing that just happened.
+
+        So: say what fired and when, then the task, then the event body.
+
+        `instructions` is repeated here deliberately. The system prompt's
+        `# Conversation Instructions` is what survives into later turns of a
+        multi-turn run; this is what the first turn is answering.
+        """
+        raw = input_data.get("metadata")
+        metadata = raw if isinstance(raw, dict) else {}
+        lines = cls._firing_sentences(metadata)
+
+        if instructions and instructions.strip():
+            lines.append(f"What to do:\n{instructions.strip()}")
+
+        body = cls._firing_event_body(input_data, metadata)
+        if body:
+            rendered = json.dumps(body, ensure_ascii=True, indent=2, default=str)
+            lines.append(f"Event data:\n{rendered}")
+        elif metadata.get("trigger_type") == "TIME":
+            lines.append("There is no event data: this firing is the time arriving.")
+
+        return "\n\n".join(lines)

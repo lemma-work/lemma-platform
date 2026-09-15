@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 163 |
-| `gap` | 2 |
-| `manual` | 8 |
+| `covered` | 161 |
+| `gap` | 0 |
+| `manual` | 7 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **173** |
+| **total** | **168** |
 
-Scenario tests declaring a promise: 394.
+Scenario tests declaring a promise: 387.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 248 | 261 |
+| OpenAPI operations | 242 | 251 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -126,6 +126,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-CONN-010` An admin installs a connector once for everyone | `covered` | `test_an_oauth_connector_needs_credentials`, `test_installing_discovers_operations`, `test_an_installation_does_not_leak_across_organizations`, `test_an_outsider_cannot_install`, `test_an_installation_can_be_renamed` |
 | `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials`, `test_connecting_github_identifies_the_account`, `test_the_google_connect_flow_is_configured`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
+| `PS-CONN-013` An app the catalog has never heard of can still be connected | `covered` | `test_installing_discovers_operations` |
+| `PS-CONN-014` A connector the platform cannot sign in to asks for credentials instead of offering to connect | `manual` | — |
 | `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
@@ -228,18 +230,6 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ACCESS-023` Revoking a person's access revokes their software's too | `covered` | `test_removing_a_person_stops_their_delegations` |
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
 | `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |
-
-## [Signing in to sites](journeys/signing-in-to-sites.md)
-
-| Scenario | Status | Proven by |
-| --- | --- | --- |
-| `PS-BROWSER-010` An agent that meets a login wall asks, and waits | `gap` | `test_somebody_elses_request_is_not_found` |
-| `PS-BROWSER-011` A person can tell what they are signing in to | `manual` | — |
-| `PS-BROWSER-012` Finishing resumes the run, and says whether it was kept | `covered` | `test_finishing_somebody_elses_request_is_refused` |
-| `PS-BROWSER-020` A saved login is the person's own | `covered` | `test_one_persons_logins_are_not_anothers` |
-| `PS-BROWSER-021` A login that has stopped working says so | `manual` | — |
-| `PS-BROWSER-022` A person sees and removes what is saved | `covered` | `test_nothing_saved_is_an_empty_list`, `test_removing_something_that_is_not_there_is_refused`, `test_history_is_answerable_to_its_owner` |
-| `PS-BROWSER-030` A person can watch, and drive, their own browser | `gap` | `test_asking_whether_a_browser_can_be_watched_starts_nothing` |
 
 ## [Surfaces and notifications](journeys/surfaces-and-notifications.md)
 

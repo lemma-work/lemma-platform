@@ -70,3 +70,24 @@ def test_a_first_config_on_an_install_that_had_none():
     assert merged_install_config(None, {"server_url": "https://x"}) == {
         "server_url": "https://x"
     }
+
+
+def test_a_wholly_masked_composio_config_survives_a_round_trip():
+    """An org's own app credentials for a brokered toolkit come back all-masked.
+
+    Unlike every other install, a Composio ORG_CUSTOM config is masked by
+    *position* rather than by key name — the field names are the toolkit's and
+    no heuristic can be complete over them. So a GET-edit-PATCH resubmits
+    asterisks for every field, including ones no redaction rule would have
+    matched, and the merge has to give all of them back.
+    """
+    stored = {
+        "client_id": "public-enough",
+        "client_secret": "shh",
+        "consumer_key": "also-a-credential",
+    }
+    merged = merged_install_config(
+        stored, dict.fromkeys(stored, MASK) | {"scopes": "read,write"}
+    )
+
+    assert merged == stored | {"scopes": "read,write"}

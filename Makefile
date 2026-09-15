@@ -266,6 +266,23 @@ DEV_LOCAL_AUTH_ENV := \
 	AUTH_ALTCHA_ENABLED=false
 DEV_LOCAL_AUTH_KEYS := $(foreach pair,$(DEV_LOCAL_AUTH_ENV),$(firstword $(subst =, ,$(pair))))
 
+# The one gate above the *browser* also has an opinion about, and the reason the
+# fix above was only half of one.
+#
+# `supertokens-auth-react` mounts the email-verification recipe, and its claim
+# validator, from the frontend's own copy of this setting -- which defaults to
+# `true` when unset (`auth/config.ts`). The backend, told `false`, does not
+# register the recipe at all, so `/st/auth/user/email/verify` is not a route.
+# Signing in then ends on a 404 the person reads as "We couldn't reach the
+# verification service", and there is no way through it: a fresh `make init &&
+# make dev` could not sign in at all. `lemma-stack` has always rendered both
+# halves; `make dev` rendered one.
+#
+# Derived from the list above rather than written again, so changing the gate
+# changes both ends of it.
+DEV_FRONTEND_EMAIL_VERIFICATION := $(patsubst AUTH_EMAIL_VERIFICATION_REQUIRED=%,%,\
+	$(filter AUTH_EMAIL_VERIFICATION_REQUIRED=%,$(DEV_LOCAL_AUTH_ENV)))
+
 BACKEND_DEV_ENV := \
 	ENVIRONMENT=local \
 	DEBUG=true \
@@ -601,6 +618,7 @@ _init-frontend-env:
 			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
 			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(DEV_APPS_DOMAIN_SUFFIX)"; \
+			echo "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED=$(DEV_FRONTEND_EMAIL_VERIFICATION)"; \
 		} > $(FRONTEND_DIR)/.env.local; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	else \
@@ -609,7 +627,8 @@ _init-frontend-env:
 
 _ensure-frontend-env-keys:
 	@set -e; missing=""; \
-	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL NEXT_PUBLIC_APPS_DOMAIN_SUFFIX; do \
+	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL NEXT_PUBLIC_APPS_DOMAIN_SUFFIX \
+		NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED; do \
 		if ! grep -qE "^$$k=" $(FRONTEND_DIR)/.env.local; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -622,6 +641,7 @@ _ensure-frontend-env-keys:
 		append NEXT_PUBLIC_SITE_URL '$(DEV_FRONTEND_URL)'; \
 		append NEXT_PUBLIC_AUTH_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		append NEXT_PUBLIC_APPS_DOMAIN_SUFFIX '$(DEV_APPS_DOMAIN_SUFFIX)'; \
+		append NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED '$(DEV_FRONTEND_EMAIL_VERIFICATION)'; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	fi
 

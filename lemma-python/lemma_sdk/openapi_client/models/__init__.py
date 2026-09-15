@@ -145,6 +145,7 @@ _NAME_TO_MODULE = {
     'ConnectorKindResponseSchema': 'connector_kind_response_schema',
     'ConnectorKindResponseSchemaConfigSchemaType0': 'connector_kind_response_schema_config_schema_type_0',
     'ConnectorKindResponseSchemaCredentialSchemaType0': 'connector_kind_response_schema_credential_schema_type_0',
+    'ConnectorKindResponseSchemaInstallConfigSchemaType0': 'connector_kind_response_schema_install_config_schema_type_0',
     'ConnectorListResponseSchema': 'connector_list_response_schema',
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
@@ -695,6 +696,7 @@ if TYPE_CHECKING:
     from .connector_kind_response_schema import ConnectorKindResponseSchema
     from .connector_kind_response_schema_config_schema_type_0 import ConnectorKindResponseSchemaConfigSchemaType0
     from .connector_kind_response_schema_credential_schema_type_0 import ConnectorKindResponseSchemaCredentialSchemaType0
+    from .connector_kind_response_schema_install_config_schema_type_0 import ConnectorKindResponseSchemaInstallConfigSchemaType0
     from .connector_list_response_schema import ConnectorListResponseSchema
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
@@ -1258,6 +1260,7 @@ __all__ = [
     'ConnectorKindResponseSchema',
     'ConnectorKindResponseSchemaConfigSchemaType0',
     'ConnectorKindResponseSchemaCredentialSchemaType0',
+    'ConnectorKindResponseSchemaInstallConfigSchemaType0',
     'ConnectorListResponseSchema',
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',
