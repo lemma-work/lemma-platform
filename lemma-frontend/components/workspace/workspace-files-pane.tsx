@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { ChevronRight, Folder, RefreshCw } from '@/components/ui/icons';
 import {
     WORKSPACE_ROOT,
-    conversationDirectory,
     useWorkspaceFile,
     useWorkspaceFiles,
 } from '@/lib/hooks/use-workspace-files';
@@ -138,8 +137,24 @@ function FileBody({ path }: { path: string }) {
  * compute open for as long as it was on screen. Opening a file is the
  * interactive act, and the person asks for it.
  */
-export function WorkspaceFilesPane({ conversationId }: { conversationId?: string }) {
-    const home = conversationId ? conversationDirectory(conversationId) : WORKSPACE_ROOT;
+export function WorkspaceFilesPane({
+    workspaceCwd,
+}: {
+    /** The conversation's `workspace_cwd`, as the server resolved it. */
+    workspaceCwd?: string;
+}) {
+    // Given, not derived. This pane used to build the path itself as
+    // `/workspace/conversations/{id}`, mirroring `get_workspace_cwd()` — but
+    // mirroring its *fallback* branch, which only contexts without a
+    // conversation row ever reach. Every real run resolves to
+    // `/workspace/c/{date}/{slug}`, so the pane asked for a directory that has
+    // never existed. It showed no error because a missing directory and an
+    // empty one answered identically; it simply looked like the agent had
+    // written nothing.
+    //
+    // Until the record arrives there is no honest conversation directory to
+    // show, so the whole machine is the fallback rather than a guess.
+    const home = workspaceCwd ?? WORKSPACE_ROOT;
     const [directory, setDirectory] = useState(home);
     const [wake, setWake] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
@@ -194,7 +209,7 @@ export function WorkspaceFilesPane({ conversationId }: { conversationId?: string
                         setAfter(undefined);
                     }}
                 >
-                    {inHome && conversationId ? 'This conversation' : 'Whole computer'}
+                    {inHome && workspaceCwd ? 'This conversation' : 'Whole computer'}
                 </Button>
                 {segments.map((segment) => (
                     <span key={segment.path} className="flex items-center gap-1">

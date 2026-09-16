@@ -444,6 +444,7 @@ function PodConversationSurface({
                 stageBodyOverride={
                     <ComputerPanel
                         conversationId={isNewConversation ? undefined : conversationId}
+                        workspaceCwd={activeConversation?.workspace_cwd}
                     />
                 }
                 onClose={() => setComputerOpen(false)}

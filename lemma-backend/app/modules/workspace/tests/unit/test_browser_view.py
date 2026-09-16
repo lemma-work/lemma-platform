@@ -218,3 +218,77 @@ async def test_a_relay_that_cannot_say_is_not_treated_as_public() -> None:
             raise OSError("no route to the sandbox")
 
     await module._require_private(_Unreachable(public=True), doing="sign in to a site")
+
+
+# ---------------------------------------------------------------------------
+# Hanging up
+# ---------------------------------------------------------------------------
+
+
+class _WebSocketThatIsAlreadyGone:
+    """A socket whose handshake never completed, which is what production had.
+
+    `close()` raises `AttributeError` from inside uvicorn's own close path --
+    `'WebSocketProtocol' object has no attribute 'transfer_data_task'` -- when
+    the client went away before the refusal was written. Reproduced by type
+    rather than by message: the point is that it is not a `RuntimeError`.
+    """
+
+    def __init__(self) -> None:
+        self.accepted = False
+        self.close_attempts = 0
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def close(self, code: int) -> None:
+        self.close_attempts += 1
+        raise AttributeError(
+            "'WebSocketProtocol' object has no attribute 'transfer_data_task'"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_cannot_be_delivered_is_not_an_error_of_its_own() -> None:
+    """The close path guessed `RuntimeError` and got `AttributeError`.
+
+    So refusing a socket whose client had already gone raised, uvicorn logged
+    "Exception in ASGI application", and the pane -- which saw an error instead
+    of its close code -- reconnected and asked again. "The browser is not
+    running" is the ordinary resting state of an idle workspace, and it was
+    reaching people as a crash loop.
+    """
+    socket = _WebSocketThatIsAlreadyGone()
+
+    await view._refuse(socket, view.CLOSE_NO_BROWSER)
+
+    assert socket.accepted, "a close before accept never carries its code"
+    assert socket.close_attempts == 1, "the refusal was attempted"
+
+
+@pytest.mark.asyncio
+async def test_collecting_the_keep_awake_task_does_not_raise() -> None:
+    """Every close of the browser pane logged an unhandled ASGI error.
+
+    The keep-awake task is cancelled when the socket ends and then awaited, so
+    that a cancelled task is collected rather than outliving the request. That
+    await is *guaranteed* to raise `CancelledError` -- and it was collected
+    under `suppress(Exception)`, which does not catch it, because
+    `CancelledError` is a `BaseException`. So uvicorn logged a stack trace for
+    the ordinary act of stopping watching.
+
+    A real task, really cancelled: the bug was entirely in which exception the
+    suppression named, so a stand-in that raised something else would have
+    proved nothing.
+    """
+    import asyncio
+
+    async def _forever() -> None:
+        await asyncio.sleep(3600)
+
+    task = asyncio.get_running_loop().create_task(_forever())
+    await asyncio.sleep(0)  # let it reach the sleep
+
+    await view._collect(task)
+
+    assert task.cancelled(), "collected means finished, not merely asked to stop"
