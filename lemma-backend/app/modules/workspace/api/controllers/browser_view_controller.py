@@ -302,8 +302,16 @@ async def browser_view(
         await _refuse(websocket, CLOSE_UNSUPPORTED)
         await service.close()
         return
-    except BrowserRelayUnavailable:
-        logger.warning("workspace.browser_view.browser_start_failed.degraded")
+    except BrowserRelayUnavailable as exc:
+        # With the reason. It said only that starting failed, so a browser
+        # stuck on "Connecting..." meant reproducing this code path by hand
+        # inside a sandbox to find out why -- and the exception had the
+        # sentence all along ("the browser relay answered 502"). The neighbour
+        # below already carried its `error_type`; this one carried nothing.
+        logger.warning(
+            "workspace.browser_view.browser_start_failed.degraded",
+            reason=str(exc),
+        )
         await _refuse(websocket, CLOSE_NO_BROWSER)
         await service.close()
         return

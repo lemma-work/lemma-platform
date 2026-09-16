@@ -147,9 +147,21 @@ class BrowserRelayClient:
         same one call brings the relay up on Docker's runtime, on E2B's SDK
         and in the desktop guest, with no per-fabric branch and no start
         command baked into an image that has none.
+
+        "Nothing answers" is two different things depending on the fabric, and
+        for a while this only knew one of them. On Docker a port with no
+        listener refuses the connection, so `_request` raises. On E2B nothing
+        refuses: the edge is always there and answers for the sandbox, so an
+        unopened port comes back as a perfectly valid `502`. That took the
+        `except` out of the picture entirely -- `ensure_running` was never
+        reached, and the relay could not be started on E2B at all.
         """
         try:
             response = await self._request("GET", "/health")
+            if _nothing_is_listening(response):
+                raise BrowserRelayUnavailable(
+                    f"the browser relay answered {response.status_code}"
+                )
         except BrowserRelayUnavailable:
             if not start:
                 raise
@@ -281,6 +293,23 @@ class BrowserRelayClient:
         """Whether this sandbox's ports are on the internet behind only a token."""
         endpoint = await self._endpoint(deadline_seconds=_QUICK_TIMEOUT_SECONDS)
         return endpoint.public
+
+
+def _nothing_is_listening(response: httpx.Response) -> bool:
+    """Whether this answer means "no process has the port", not "the relay said no".
+
+    E2B's edge answers for the sandbox whether or not anything is bound, and
+    says which case it is in the body::
+
+        502 {"message": "The sandbox is running but port is not open", ...}
+
+    So the `502` is the fabric's way of spelling what a connection refusal
+    spells on Docker, and both have to reach `ensure_running`. Only `502`, and
+    deliberately not every 5xx: a relay that is up and failing should be
+    reported, not silently restarted, and the second probe after a start
+    attempt still surfaces whatever it finds.
+    """
+    return response.status_code == 502
 
 
 def _detail(response: httpx.Response) -> str:
