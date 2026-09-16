@@ -602,3 +602,67 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
             f"{navigated} -- aimed at {aimed} on a {page_width}x{page_height} page "
             f"from a {picture_width}x{picture_height} picture"
         )
+
+
+async def test_an_agent_can_record_the_browser_and_get_a_playable_file(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """Recording is a capability of the image, so only the image can prove it.
+
+    `agent-browser record` has existed all along and the browser skill has
+    documented it with a worked example; it shells out to `ffmpeg`, which the
+    workspace image did not install, so every attempt failed and no test
+    noticed because nothing ever tried.
+
+    Two things are asserted rather than one, because the second is how this
+    fails quietly. `record stop` reports `Recording saved` whether or not a file
+    was written -- a relative path is resolved by the browser daemon rather than
+    by the caller's shell and lands somewhere nobody looks -- so "the CLI said
+    it worked" is not evidence. `ffprobe` reading a video stream out of the file
+    is.
+    """
+    del configure_workspace_api_url
+    ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    started = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            cmd="start-browser about:blank",
+            timeout_seconds=120,
+            comment="Start the sandbox browser",
+        ),
+    )
+    assert started.success, started
+
+    take = "/workspace/recording-e2e/take.webm"
+    recorded = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            # Absolute, deliberately: the daemon resolves this path, not the
+            # shell, and a relative one is silently written elsewhere.
+            # Every step silenced but the last, so stdout is the codec name and
+            # nothing else. Left unsilenced, `agent-browser` prints its own
+            # "Recording saved" over the answer being asserted on.
+            cmd=(
+                f"mkdir -p $(dirname {take}) && "
+                f"agent-browser record start {take} >/dev/null && "
+                "agent-browser open "
+                "'data:text/html,<h1 style=font-size:90px>Lemma</h1>' >/dev/null && "
+                "for i in 1 2 3; do sleep 2; agent-browser get url >/dev/null; done && "
+                "agent-browser record stop >/dev/null && "
+                f"test -s {take} && "
+                "ffprobe -v error -select_streams v:0 "
+                f"-show_entries stream=codec_name -of csv=p=0 {take}"
+            ),
+            timeout_seconds=180,
+            comment="Record a short browser session and read it back",
+        ),
+    )
+
+    assert recorded.success, recorded
+    assert recorded.exit_code == 0, recorded.stderr
+    # A codec name means ffprobe found a video stream, not merely a file.
+    assert recorded.stdout.strip() in {"vp8", "vp9"}, recorded.stdout

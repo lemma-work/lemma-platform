@@ -114,6 +114,15 @@ class WorkspaceFileListResponse(BaseModel):
             "end: the rest could be counted and never reached."
         ),
     )
+    exists: bool = Field(
+        default=True,
+        description=(
+            "False when the directory is not there. A directory that does not "
+            "exist and one that is merely empty used to answer identically, "
+            "which is why a pane pointed at the wrong path looked like a "
+            "working, empty folder rather than a mistake."
+        ),
+    )
     entries: list[WorkspaceFileEntry] = Field(default_factory=list)
 
 
@@ -248,7 +257,7 @@ async def list_workspace_files(
         # workspace look broken. A missing *file* is still a 404 — that is
         # `:stat` and `:content`, below.
         if "NotFound" in type(exc).__name__:
-            return WorkspaceFileListResponse(path=target)
+            return WorkspaceFileListResponse(path=target, exists=False)
         raise _as_http_error(exc, target)
     finally:
         await service.close()

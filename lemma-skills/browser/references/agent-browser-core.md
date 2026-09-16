@@ -303,16 +303,53 @@ agent-browser network har stop /tmp/trace.har
 
 ### Record a video of the workflow
 
+**Give it an absolute path.** The path is resolved by the browser daemon, not by
+your shell, so a relative one is written relative to wherever the daemon happens
+to be — and `record stop` still reports `✓ Recording saved to ./demo.webm` with
+no file anywhere. Measured, not guessed: `./demo.webm` produced nothing and said
+it had worked.
+
+Write it into the conversation's own directory. `/tmp` dies with the sandbox,
+and the working directory is what the person's file pane shows and what
+`lemma files upload` resolves against.
+
 ```bash
-agent-browser record start demo.webm
+cwd="$(pwd)"                                        # an absolute path, always
+agent-browser record start "$cwd/demo.webm"         # .webm (VP8) or .mp4 (H.264)
 agent-browser open https://example.com
 agent-browser snapshot -i
 agent-browser click @e3
 agent-browser record stop
+test -s "$cwd/demo.webm" || echo "nothing was recorded"
 ```
 
-See the agent-browser video-recording docs for
-codec options, GIF export, and more.
+**Keep the session awake during a long take.** The browser daemon's idle
+timeout counts *commands*, not wall time, and a recording is not a command — so
+a take with nothing happening in it can outlive the browser that is producing
+it. Anything periodic is enough; a `get url` every twenty seconds will do.
+
+```bash
+agent-browser record start "$(pwd)/walkthrough.webm"
+for _ in $(seq 6); do sleep 5; agent-browser get url >/dev/null; done
+agent-browser record stop
+```
+
+Then hand it over — a recording nobody can see is not a deliverable:
+
+```bash
+lemma files upload ./walkthrough.webm walkthrough.webm
+```
+
+and `display_resource(type=FILE, path="walkthrough.webm")`. Chat surfaces attach
+a video inline up to roughly 16–20 MB and fall back to a link above that; a
+thirty-second take is usually a few MB.
+
+Recording needs `ffmpeg`, which the workspace image installs. If `record start`
+reports it cannot find it, you are on an image built before that — say so
+rather than retrying, because nothing you do in the sandbox will fix it.
+
+See the agent-browser video-recording docs for codec options, GIF export, and
+more.
 
 ### Iframes
 

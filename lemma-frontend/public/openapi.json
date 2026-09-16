@@ -4566,6 +4566,12 @@
             "format": "uuid",
             "title": "User Id",
             "type": "string"
+          },
+          "workspace_cwd": {
+            "description": "The conversation's working directory in the sandbox. This is where the agent's shell starts and where its files land, so it is the directory a file pane should be showing.",
+            "readOnly": true,
+            "title": "Workspace Cwd",
+            "type": "string"
           }
         },
         "required": [
@@ -4574,6 +4580,7 @@
           "pod_id",
           "created_at",
           "updated_at",
+          "workspace_cwd",
           "pod_cwd"
         ],
         "title": "ConversationResponse",
@@ -18808,6 +18815,12 @@
             },
             "title": "Entries",
             "type": "array"
+          },
+          "exists": {
+            "default": true,
+            "description": "False when the directory is not there. A directory that does not exist and one that is merely empty used to answer identically, which is why a pane pointed at the wrong path looked like a working, empty folder rather than a mistake.",
+            "title": "Exists",
+            "type": "boolean"
           },
           "next_after": {
             "anyOf": [

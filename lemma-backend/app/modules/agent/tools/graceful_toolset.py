@@ -14,7 +14,9 @@ cancellation) are re-raised untouched so the framework still handles them. Argum
 
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import ToolsetTool, WrapperToolset
@@ -52,9 +54,28 @@ class GracefulToolset[DepsT](WrapperToolset[DepsT]):
         ctx: RunContext[DepsT],
         tool: ToolsetTool[DepsT],
     ) -> object:
+        started = time.monotonic()
         try:
             with run_phase(_tool_span_name(name)):
                 return await self.wrapped.call_tool(name, tool_args, ctx, tool)
+        except asyncio.CancelledError:
+            # Named here because this is the only place that knows *which* tool
+            # was in flight. `reraise_driver_failure` already separates who
+            # asked for the cancellation -- its two counters say whether it came
+            # from outside or was aimed at the driver alone -- but the traceback
+            # it logs shows where the task was suspended, which is some poll
+            # loop three layers down, and the frames it captures are all
+            # harness. An incident spent on that ended in inference, and this
+            # line is the half that was missing from the answer.
+            #
+            # Re-raised bare: cancellation is the framework's to handle, and
+            # swallowing it here is how a truncated run reports success.
+            logger.warning(
+                "agent.graceful_toolset.tool_cancelled_mid_flight.degraded",
+                tool_name=name,
+                elapsed_seconds=round(time.monotonic() - started, 3),
+            )
+            raise
         except Exception as exc:  # noqa: BLE001 - intentional catch-all boundary
             if is_control_flow_exception(exc):
                 raise

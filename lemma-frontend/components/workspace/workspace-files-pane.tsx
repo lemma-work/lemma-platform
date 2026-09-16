@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { ChevronRight, Folder, RefreshCw } from '@/components/ui/icons';
 import {
     WORKSPACE_ROOT,
-    conversationDirectory,
     useWorkspaceFile,
     useWorkspaceFiles,
 } from '@/lib/hooks/use-workspace-files';
@@ -138,14 +137,49 @@ function FileBody({ path }: { path: string }) {
  * compute open for as long as it was on screen. Opening a file is the
  * interactive act, and the person asks for it.
  */
-export function WorkspaceFilesPane({ conversationId }: { conversationId?: string }) {
-    const home = conversationId ? conversationDirectory(conversationId) : WORKSPACE_ROOT;
+export function WorkspaceFilesPane({
+    workspaceCwd,
+}: {
+    /** The conversation's `workspace_cwd`, as the server resolved it. */
+    workspaceCwd?: string;
+}) {
+    // Given, not derived. This pane used to build the path itself as
+    // `/workspace/conversations/{id}`, mirroring `get_workspace_cwd()` — but
+    // mirroring its *fallback* branch, which only contexts without a
+    // conversation row ever reach. Every real run resolves to
+    // `/workspace/c/{date}/{slug}`, so the pane asked for a directory that has
+    // never existed. It showed no error because a missing directory and an
+    // empty one answered identically; it simply looked like the agent had
+    // written nothing.
+    //
+    // Until the record arrives there is no honest conversation directory to
+    // show, so the whole machine is the fallback rather than a guess.
+    const home = workspaceCwd ?? WORKSPACE_ROOT;
     const [directory, setDirectory] = useState(home);
     const [wake, setWake] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
     // Where this page started. A directory bigger than one page was a dead end
     // before: the response counted the rest and offered no way to reach them.
     const [after, setAfter] = useState<string | undefined>(undefined);
+
+    // The conversation record is fetched, so the first render of this pane
+    // almost always has no `workspaceCwd` yet. `useState` takes its argument
+    // once, so without this the pane opened on `/workspace` and stayed there
+    // for the life of the mount -- which is the same "shows the wrong
+    // directory" bug in a new place, and the reason the fix has to follow the
+    // prop rather than merely seed from it.
+    //
+    // Adjusted during render against the previous value rather than in an
+    // effect: React documents this as the way to reset state when a prop
+    // changes, and it re-renders before painting instead of showing the wrong
+    // directory for a frame and fetching it.
+    const [homeSeen, setHomeSeen] = useState(home);
+    if (home !== homeSeen) {
+        setHomeSeen(home);
+        setDirectory(home);
+        setSelected(null);
+        setAfter(undefined);
+    }
 
     const { data, isPending, error, refetch, isFetching } = useWorkspaceFiles(
         directory,
@@ -194,7 +228,7 @@ export function WorkspaceFilesPane({ conversationId }: { conversationId?: string
                         setAfter(undefined);
                     }}
                 >
-                    {inHome && conversationId ? 'This conversation' : 'Whole computer'}
+                    {inHome && workspaceCwd ? 'This conversation' : 'Whole computer'}
                 </Button>
                 {segments.map((segment) => (
                     <span key={segment.path} className="flex items-center gap-1">

@@ -72,6 +72,27 @@ async def test_graceful_toolset_reraises_cancellation():
 
 
 @pytest.mark.anyio
+async def test_a_cancelled_tool_call_says_which_tool_it_was(caplog):
+    """The one fact the cancellation logs did not carry.
+
+    `reraise_driver_failure` already separates who asked for a cancellation --
+    its two counters say whether it came from outside or was aimed at the
+    driver alone -- but the frames it captures are all harness, the deepest
+    being whichever poll loop the task happened to be suspended in. Four
+    cancelled runs in dev were diagnosable down to "something inside the graph"
+    and no further. This boundary is the only place that knows the tool's name.
+    """
+    toolset = GracefulToolset(_RaisingToolset(asyncio.CancelledError()))
+
+    with caplog.at_level("WARNING"), pytest.raises(asyncio.CancelledError):
+        await toolset.call_tool("exec_command", {}, None, None)
+
+    said = [r for r in caplog.records if "tool_cancelled_mid_flight" in r.getMessage()]
+    assert said, "a cancelled tool call has to name itself"
+    assert "exec_command" in said[0].getMessage()
+
+
+@pytest.mark.anyio
 async def test_failing_tool_does_not_abort_a_real_run():
     """A raising tool body becomes a tool response; the run still completes."""
 

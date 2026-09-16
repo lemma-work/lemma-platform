@@ -160,13 +160,19 @@ RUN apt-get update \
         ca-certificates \
         chromium \
         curl \
+        # Recording. `agent-browser record` shells out to ffmpeg and fails
+        # without it, which is the whole reason an agent could not produce a
+        # video: the CLI has had `record start|stop` all along and the browser
+        # skill documents it with a worked example. Encodes webm with libvpx
+        # and mp4 with libx264, both of which Debian's ffmpeg carries. Measured
+        # at 93 packages and 159 MB on top of what Chromium already pulls in.
+        ffmpeg \
         fonts-dejavu-core \
         fonts-liberation \
         git \
         libasound2t64 \
         libatk-bridge2.0-0t64 \
         libatk1.0-0t64 \
-        libatomic1 \
         libatspi2.0-0t64 \
         libcairo2 \
         libcups2t64 \

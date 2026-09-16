@@ -218,3 +218,101 @@ async def test_a_relay_that_cannot_say_is_not_treated_as_public() -> None:
             raise OSError("no route to the sandbox")
 
     await module._require_private(_Unreachable(public=True), doing="sign in to a site")
+
+
+# ---------------------------------------------------------------------------
+# Hanging up
+# ---------------------------------------------------------------------------
+
+
+class _WebSocketThatIsAlreadyGone:
+    """A socket whose handshake never completed, which is what production had.
+
+    `close()` raises `AttributeError` from inside uvicorn's own close path --
+    `'WebSocketProtocol' object has no attribute 'transfer_data_task'` -- when
+    the client went away before the refusal was written. Reproduced by type
+    rather than by message: the point is that it is not a `RuntimeError`.
+    """
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    def __init__(self, raises: BaseException | None = None) -> None:  # noqa: F811
+        self.accepted = False
+        self.close_attempts = 0
+        self.raises = raises or AttributeError(
+            "'WebSocketProtocol' object has no attribute 'transfer_data_task'"
+        )
+
+    async def close(self, code: int) -> None:
+        self.close_attempts += 1
+        raise self.raises
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_cannot_be_delivered_is_not_an_error_of_its_own() -> None:
+    """The close path guessed `RuntimeError` and got `AttributeError`.
+
+    So refusing a socket whose client had already gone raised, uvicorn logged
+    "Exception in ASGI application", and the pane -- which saw an error instead
+    of its close code -- reconnected and asked again. "The browser is not
+    running" is the ordinary resting state of an idle workspace, and it was
+    reaching people as a crash loop.
+    """
+    socket = _WebSocketThatIsAlreadyGone()
+
+    await view._refuse(socket, view.CLOSE_NO_BROWSER)
+
+    assert socket.accepted, "a close before accept never carries its code"
+    assert socket.close_attempts == 1, "the refusal was attempted"
+
+
+@pytest.mark.asyncio
+async def test_collecting_the_keep_awake_task_does_not_raise() -> None:
+    """Every close of the browser pane logged an unhandled ASGI error.
+
+    The keep-awake task is cancelled when the socket ends and then awaited, so
+    that a cancelled task is collected rather than outliving the request. That
+    await is *guaranteed* to raise `CancelledError` -- and it was collected
+    under `suppress(Exception)`, which does not catch it, because
+    `CancelledError` is a `BaseException`. So uvicorn logged a stack trace for
+    the ordinary act of stopping watching.
+
+    A real task, really cancelled: the bug was entirely in which exception the
+    suppression named, so a stand-in that raised something else would have
+    proved nothing.
+    """
+    import asyncio
+
+    async def _forever() -> None:
+        await asyncio.sleep(3600)
+
+    task = asyncio.get_running_loop().create_task(_forever())
+    await asyncio.sleep(0)  # let it reach the sleep
+
+    await view._collect(task)
+
+    assert task.cancelled(), "collected means finished, not merely asked to stop"
+
+
+@pytest.mark.asyncio
+async def test_every_way_a_socket_is_seen_to_end_is_handled() -> None:
+    """The set has been corrected twice from production; this is what pins it.
+
+    `RuntimeError` was the original guess. `AttributeError` was found crashing
+    refusals in dev. `WebSocketDisconnect` was found crashing them again in a
+    local run against E2B that was meant to confirm the first fix -- and it is
+    the *ordinary* case, because by the time a refusal is written the person may
+    simply have navigated away.
+    """
+    from fastapi import WebSocketDisconnect
+
+    for failure in (
+        RuntimeError("socket is not connected"),
+        AttributeError("'WebSocketProtocol' object has no attribute ..."),
+        OSError("transport gone"),
+        WebSocketDisconnect(code=1006),
+    ):
+        socket = _WebSocketThatIsAlreadyGone(failure)
+        await view._refuse(socket, view.CLOSE_NO_BROWSER)
+        assert socket.close_attempts == 1, f"{type(failure).__name__} was not handled"

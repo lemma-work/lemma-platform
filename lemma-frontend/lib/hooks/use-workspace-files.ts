@@ -7,16 +7,6 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
 export const WORKSPACE_ROOT = '/workspace';
 
-/**
- * Where one conversation's own files live.
- *
- * Mirrors `BaseAgentContext.get_workspace_cwd()`. The sandbox is one machine per
- * person, so this is the only thing that separates one conversation's work from
- * another's — there is no second sandbox to put it in.
- */
-export const conversationDirectory = (conversationId: string): string =>
-    `${WORKSPACE_ROOT}/conversations/${conversationId}`;
-
 export const workspaceFilesQueryKey = (path: string, wake: boolean, after?: string) =>
     ['workspace-files', path, wake, after ?? ''] as const;
 

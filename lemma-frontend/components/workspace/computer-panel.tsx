@@ -16,7 +16,13 @@ type Tab = 'files' | 'browser';
  * starts a browser if none is running, and a panel that did that on render
  * would hold a few hundred megabytes open for as long as it was on screen.
  */
-export function ComputerPanel({ conversationId }: { conversationId?: string }) {
+export function ComputerPanel({
+    conversationId,
+    workspaceCwd,
+}: {
+    conversationId?: string;
+    workspaceCwd?: string;
+}) {
     const [tab, setTab] = useState<Tab>('files');
 
     return (
@@ -42,7 +48,7 @@ export function ComputerPanel({ conversationId }: { conversationId?: string }) {
 
             <div className="min-h-0 flex-1">
                 {tab === 'files' ? (
-                    <WorkspaceFilesPane conversationId={conversationId} />
+                    <WorkspaceFilesPane workspaceCwd={workspaceCwd} />
                 ) : (
                     /* Named, so the pane watches *this* conversation's browser.
                        Without it every pane attached to the sandbox's default
