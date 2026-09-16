@@ -34,7 +34,6 @@ deadline. Errors here are classified and raised, not absorbed.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
@@ -61,30 +60,16 @@ from app.modules.workspace.providers.e2b_common import (
     every_page as _every_page,
 )
 from app.modules.workspace.providers.profiles import profile_for
+from app.modules.workspace.providers.e2b_config import (
+    CLOSED_TO_THE_INTERNET,
+    E2BProviderConfig,
+)
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
 logger = get_logger(__name__)
 
 WORKSPACE_MOUNT = "/workspace"
-
-
-@dataclass(frozen=True, slots=True)
-class E2BProviderConfig:
-    api_key: str
-    workspace_template: str
-    function_template: str
-    # Namespaces every metadata key this provider writes and queries, making a
-    # provider blind to sandboxes labelled by another namespace. Required, not
-    # defaulted: a shared default is what let two deployments on one E2B team
-    # read each other's sandboxes as unowned orphans and destroy them. See
-    # `provider_factory.resolve_metadata_namespace`.
-    metadata_namespace: str
-    # How long E2B keeps a sandbox alive without contact. The service touches
-    # activity on use, so this is a backstop against leaking compute when the
-    # backend dies, not the primary idle policy.
-    sandbox_timeout_seconds: int = 60 * 30
-    domain: str | None = None
 
 
 class E2BSandboxProvider(E2BOpsMixin):
@@ -295,6 +280,7 @@ class E2BSandboxProvider(E2BOpsMixin):
                 lifecycle=self._lifecycle(spec.kind),
                 metadata=self._identity_metadata(spec),
                 envs=dict(spec.env),
+                network=CLOSED_TO_THE_INTERNET,
                 **self._api(),
             )
 

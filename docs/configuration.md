@@ -261,6 +261,22 @@ E2B_METADATA_NAMESPACE=
 
 These five are the whole backend-side E2B surface. In particular:
 
+- **Whether a sandbox is on the internet is not one of them.** E2B gives every
+  port a sandbox listens on a public name, so sandboxes are created closed:
+  E2B mints a per-sandbox traffic token, the edge answers 403 without it, and
+  the backend carries that token on every call it makes. This used to be
+  `E2B_ALLOW_PUBLIC_TRAFFIC` and is now `CLOSED_TO_THE_INTERNET`, a constant in
+  the E2B provider. Nothing outside the backend ever needs a sandbox's own
+  address — a browser is handed a signed URL at Lemma's own API, which
+  reverse-proxies to the port — so the setting's only other position exposed
+  whatever was listening, including the agent's browser and its dashboard, for
+  nothing in return. Setting the variable now configures nothing.
+
+  It is fixed when a sandbox is created and cannot be changed afterwards, so
+  sandboxes made before this stay open until they are replaced; the backend
+  reports those as public rather than assuming, and refuses to put a saved
+  login into one.
+
 - **`E2B_METADATA_NAMESPACE` is a safety boundary.** A provider is blind to
   sandboxes labelled with any other namespace, and the orphan sweep destroys
   every object it *can* identify that has no sandbox row. A test runs against a

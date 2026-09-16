@@ -51,7 +51,7 @@ from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
-from app.core.registry.assembly import enter_api_lifespans, include_module_routers
+from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
@@ -225,7 +225,7 @@ async def lifespan(app: FastAPI):
                 # The composed module list (OSS by default; lemma-cloud passes
                 # CLOUD_MODULES) is stashed on app.state by create_app.
                 modules = getattr(app.state, "lemma_modules", OSS_MODULES)
-                await enter_api_lifespans(module_stack, modules, app)
+                await assembly.enter_api_lifespans(module_stack, modules, app)
                 # Emit only after every core and module lifespan has entered.
                 # service.version and release.sha come from LEMMA_RELEASE_SHA.
                 logger.info("service.started")
@@ -448,7 +448,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # while being included, which is exactly when a readiness probe is worth
     # having.
     app.include_router(health_router)
-    include_module_routers(app, modules)
+    assembly.include_module_routers(app, modules)
 
     # Registered only alongside the document it renders. Left on with
     # `openapi_url=None` it would serve a reference UI pointed at nothing.

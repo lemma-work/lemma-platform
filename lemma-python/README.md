@@ -361,7 +361,8 @@ results = lemma.tools.web_search("vendor SLA policy", max_results=5)
 ```
 
 Facades: `lemma.orgs` · `lemma.org` · `lemma.pods` · `lemma.user` ·
-`lemma.connectors` · `lemma.tools` · `lemma.agent_hosts` · `lemma.org_runtime`.
+`lemma.connectors` · `lemma.tools` · `lemma.agent_hosts` · `lemma.web_logins` ·
+`lemma.org_runtime`.
 
 ## Writing a function
 

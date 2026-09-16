@@ -160,7 +160,14 @@ NOT_POD_SCOPED = frozenset({ResourceType.ORGANIZATION, ResourceType.ROLE})
 #: `pod_is_unknowable` denies instead of waving it through, and the fix is to
 #: give the type a row above.
 NO_REFS_CONSTRUCTED = frozenset(
-    {ResourceType.POD_MEMBER, ResourceType.DATASTORE_RECORD}
+    {
+        ResourceType.POD_MEMBER,
+        ResourceType.DATASTORE_RECORD,
+        # Owned by a person rather than a pod; the repository filters on
+        # user_id and no caller builds a ref. Listed so the clamp denies
+        # rather than skips if one ever is.
+        ResourceType.WEB_LOGIN,
+    }
 )
 
 

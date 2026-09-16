@@ -516,7 +516,7 @@ Workspace public app traffic uses E2B secured access and short-lived sandbox gra
 Raw traffic tokens are resolved from the connected E2B handle, kept only in adapter
 memory for the upstream request, and never persisted or returned to backend callers.
 
-Function sandboxes set `allow_public_traffic=false`; E2B's authenticated TLS traffic
+Every sandbox is created with `allow_public_traffic` false; E2B's authenticated TLS traffic
 gateway remains reachable with the per-sandbox traffic token. For the initial
 release their outbound network allowlist contains only the exact Lemma runtime
 gateway host needed for artifact, SDK, and JOB callback traffic. DNS needed to

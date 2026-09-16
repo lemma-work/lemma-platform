@@ -41,7 +41,7 @@ class ProgressWaitingMixin:
         """
         data = event.data if isinstance(event.data, dict) else {}
         kind = data.get("kind")
-        if kind not in ("ask_user", "request_approval"):
+        if kind not in ("ask_user", "request_approval", "browser_sign_in"):
             return
         tool_call_id = str(data.get("tool_call_id") or "")
         rendered_key: tuple[str, str] | None = None
@@ -103,6 +103,16 @@ class ProgressWaitingMixin:
             try:
                 if kind == "ask_user":
                     delivered = await service.send_questions_for_conversation(
+                        conversation_id=conversation.id,
+                        tool_call_id=tool_call_id or None,
+                        narration=narration,
+                    )
+                elif kind == "browser_sign_in":
+                    # A link, not buttons. A sign-in is not a yes/no: the person
+                    # has to go somewhere and type something, and rendering it as
+                    # an approval would offer them two answers neither of which
+                    # is what is being asked.
+                    delivered = await service.send_sign_in_prompt_for_conversation(
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
                         narration=narration,

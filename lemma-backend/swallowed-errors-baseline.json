@@ -44,7 +44,6 @@
     "app/modules/connectors/api/connector_controller.py::get_connector_skill::silent-broad-catch::Exception -> assign": 1,
     "app/modules/connectors/services/account_identity.py::_telegram_identity::debug-only-broad-catch::connectors.account_identity.telegram_getme_while_resolving_account.diagnostic": 1,
     "app/modules/connectors/services/account_identity.py::resolve_account_identity::silent-broad-catch::Exception -> return": 1,
-    "app/modules/connectors/services/account_profile.py::_load_slack_account_profile::debug-only-broad-catch::connectors.connector_service.enrich_slack_user_profile_s.diagnostic": 1,
     "app/modules/datastore/application/file_use_cases.py::FileUseCases.delete_path::silent-broad-catch::Exception -> assign": 1,
     "app/modules/datastore/infrastructure/reranker.py::LocalCrossEncoderReranker.rerank::debug-only-broad-catch::datastore.reranker.local_reranker_keeping_first_stage.diagnostic": 1,
     "app/modules/datastore/infrastructure/reranker.py::OpenAICompatReranker.rerank::debug-only-broad-catch::datastore.reranker.openai_compat_reranker_keeping_first.diagnostic": 1,

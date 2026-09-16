@@ -17307,6 +17307,115 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/namespaces/workspace.ts
+  var WebLoginsNamespace = class {
+    constructor(http) {
+      __publicField(this, "http", http);
+    }
+    list() {
+      return this.http.request("GET", "/web-logins");
+    }
+    /**
+     * Forget a site.
+     *
+     * Revokes Lemma's copy and nothing else: the session stays valid at the site
+     * until it expires or the person logs out there.
+     */
+    remove(origin) {
+      return this.http.request("DELETE", "/web-logins", {
+        params: { origin }
+      });
+    }
+    history(limit = 100) {
+      return this.http.request(
+        "GET",
+        "/web-logins/history",
+        { params: { limit } }
+      );
+    }
+    /** What a sign-in link is asking for, addressed by the pause it is for.
+     *
+     * The conversation and tool call are a lookup, not a credential: the server
+     * resolves both against the caller's own session, so a forwarded link answers
+     * exactly as an invented one does.
+     */
+    pendingSignIn(conversationId, toolCallId) {
+      return this.http.request(
+        "GET",
+        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}`
+      );
+    }
+    /**
+     * Say whether you signed in, so the waiting run can carry on.
+     *
+     * One call for both answers because it is one answer. `force` saves whatever
+     * the browser holds even when it does not look signed in, for sites the check
+     * reads wrongly.
+     */
+    answerSignIn(conversationId, toolCallId, options) {
+      return this.http.request(
+        "POST",
+        `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
+        { body: { signed_in: options.signedIn, force: Boolean(options.force) } }
+      );
+    }
+  };
+  var WorkspaceNamespace = class {
+    constructor(http) {
+      __publicField(this, "http", http);
+    }
+    listFiles(options = {}) {
+      return this.http.request("GET", "/workspace/files", {
+        params: {
+          ...options.path ? { path: options.path } : {},
+          ...options.wake ? { wake: true } : {},
+          // From a previous response's `nextAfter`. A directory bigger than one
+          // page was otherwise a dead end.
+          ...options.after ? { after: options.after } : {}
+        }
+      });
+    }
+    statFile(path) {
+      return this.http.request("GET", "/workspace/files:stat", {
+        params: { path }
+      });
+    }
+    /**
+     * A signed, short-lived URL for the live browser view.
+     *
+     * Minting one starts the workspace if it is paused, so ask whether it is
+     * awake before calling this rather than after.
+     */
+    browserAccess(ttlSeconds = 1800) {
+      return this.http.request("POST", "/workspace/apps/browser/access", {
+        body: { ttl_seconds: ttlSeconds }
+      });
+    }
+    /**
+     * Whether the browser can be watched, without starting anything.
+     *
+     * `asleep` the computer is paused; `stopped` it is up but the browser is not
+     * (its resting state after two idle minutes); `running` there is one now;
+     * `unavailable` the relay did not answer, which on an older image stays true
+     * until it is replaced; `unsupported` this kind of computer cannot do it.
+     */
+    browserStatus() {
+      return this.http.request("GET", "/workspace/browser/status");
+    }
+    /**
+     * Raw bytes of one file, from `offset`, at most `length` bytes.
+     *
+     * The query is built into the path because `requestBytes` takes no options —
+     * it is the byte-returning sibling of `request`, not a full request builder.
+     */
+    readFile(path, options = {}) {
+      const query = new URLSearchParams({ path });
+      if (options.offset) query.set("offset", String(options.offset));
+      if (options.length) query.set("length", String(options.length));
+      return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`);
+    }
+  };
+
   // src/openapi_client/services/QueryService.ts
   var QueryService = class {
     /**
@@ -17514,6 +17623,8 @@ var LemmaClient = (() => {
       __publicField(this, "workflows");
       __publicField(this, "apps");
       __publicField(this, "widgets");
+      __publicField(this, "workspace");
+      __publicField(this, "webLogins");
       __publicField(this, "connectors");
       __publicField(this, "resourceAccess");
       __publicField(this, "schedules");
@@ -17568,6 +17679,8 @@ var LemmaClient = (() => {
       this.notifications = new NotificationsNamespace(this._generated, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
       this.widgets = new WidgetsNamespace(this._http, podIdFn);
+      this.workspace = new WorkspaceNamespace(this._http);
+      this.webLogins = new WebLoginsNamespace(this._http);
       this.connectors = new ConnectorsNamespace(this._generated, this._http);
       this.resourceAccess = new ResourceAccessNamespace(this._generated, podIdFn);
       this.schedules = new SchedulesNamespace(this._generated, podIdFn);

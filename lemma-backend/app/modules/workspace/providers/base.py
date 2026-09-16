@@ -27,6 +27,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
+from sandbox_runtime.errors import SandboxCapabilityUnsupported
 from sandbox_runtime.protocol import (
     ByteRange,
     CreatePythonSessionRequest,
@@ -166,6 +167,42 @@ class ProviderObject:
     storage_generation: int | None = None
 
 
+class ProviderCapability(StrEnum):
+    """What a fabric can do beyond running processes and moving files.
+
+    Declared rather than discovered. A caller that needs one asks first and gets
+    a sentence back when the answer is no; the alternative -- calling and seeing
+    what breaks -- is how a method implemented for one provider came to raise
+    `AttributeError` on the two that carry production traffic.
+    """
+
+    #: A port inside the sandbox can be reached from the API.
+    PORT_REACH = "port_reach"
+    #: A file can be placed inside the sandbox without going through a shell,
+    #: so a credential never appears in argv or in the environment.
+    SECRET_DELIVERY = "secret_delivery"
+
+
+@dataclass(frozen=True, slots=True)
+class SandboxEndpoint:
+    """Where to reach something inside a sandbox, and what it takes to get in.
+
+    The headers are the fabric's own doorkeeper, not the sandbox's: E2B wants a
+    traffic token, a preview proxy wants its own, Docker and a pod IP want
+    nothing. Returning them beside the URL is what lets the proxy and the
+    browser bridge stay ignorant of which fabric they are talking to -- the
+    alternative is every caller learning the provider's name and its header.
+
+    `public` is the honest half. An E2B host is on the internet whether or not
+    we like it, and a caller that is about to expose a port needs to know that
+    the only thing in front of it is the token.
+    """
+
+    url: str
+    headers: Mapping[str, str] = field(default_factory=dict)
+    public: bool = False
+
+
 class ProviderCreateAmbiguous(RuntimeError):
     """The provider could not be asked, so create may or may not have landed.
 
@@ -266,6 +303,23 @@ def resumes_stopped_instances(provider: object) -> bool:
     existed.
     """
     return bool(getattr(provider, "resumes_stopped_instances", True))
+
+
+def require_capability(provider: object, capability: ProviderCapability) -> None:
+    """Refuse, in words, before calling something this fabric cannot do.
+
+    A provider that does not declare a capability is treated as not having it,
+    so a fabric added later is refused honestly until it says otherwise. That is
+    the opposite of the previous arrangement, where the absence of a method
+    surfaced as `AttributeError` from inside a request handler.
+    """
+    declared = getattr(provider, "capabilities", frozenset())
+    if capability in declared:
+        return
+    raise SandboxCapabilityUnsupported(
+        str(capability),
+        kind=getattr(provider, "provider_name", type(provider).__name__),
+    )
 
 
 class SandboxOpsProvider(Protocol):
@@ -404,3 +458,41 @@ class SandboxOpsProvider(Protocol):
         self, instance: ProviderInstance, *, session_id: str, deadline_at: datetime
     ) -> None:
         """Discard a session and the namespace it held."""
+
+    # ------------------------------------------------------------------
+    # Reaching in
+    # ------------------------------------------------------------------
+
+    #: What this fabric offers beyond processes and files. Declared as a plain
+    #: attribute so `require_capability` can ask without calling anything.
+    capabilities: frozenset[ProviderCapability]
+
+    async def reach_port(
+        self, instance: ProviderInstance, *, port: int, deadline_at: datetime
+    ) -> SandboxEndpoint:
+        """Where a port inside this sandbox is answered, and with what.
+
+        Replaces the `port_base_url` every provider grew privately: that
+        returned a bare string, so a fabric whose door needs a token had nowhere
+        to put it and each caller had to know which fabric it was on.
+
+        Raises `SandboxCapabilityUnsupported` where ports are not reachable at
+        all -- a real answer, and one a caller can render as a sentence rather
+        than as a stack trace.
+        """
+
+    async def deliver_secret(
+        self,
+        instance: ProviderInstance,
+        *,
+        path: str,
+        value: bytes,
+        deadline_at: datetime,
+    ) -> None:
+        """Place bytes at a path inside the sandbox, readable only by its owner.
+
+        For credentials, which must not travel as argv (any process can read
+        `/proc/<pid>/cmdline`) or as environment (inherited by everything the
+        sandbox starts). Idempotent: delivering the same secret twice is how a
+        resumed sandbox gets its token back.
+        """

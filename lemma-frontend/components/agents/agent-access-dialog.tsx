@@ -4,6 +4,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import Image from 'next/image';
 
 import {
+    AppWindow,
     Bot,
     Check,
     Code,
@@ -110,6 +111,14 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         description: 'Run shell commands and Python on a computer of its own.',
         icon: SquareTerminal,
     },
+    BROWSER: {
+        // Named for the thing, not the capability: people ask for "a browser",
+        // and the switch above it already gave the agent the computer this runs
+        // on.
+        label: 'Browser',
+        description: 'Open real web pages, fill in forms, and read what renders.',
+        icon: AppWindow,
+    },
     POD: {
         label: 'Pod data',
         description: 'Read and write this pod’s tables and files directly.',
@@ -194,6 +203,7 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
 const TOOL_ORDER: string[] = [
     'WORKSPACE_CLI',
     'WEB_SEARCH',
+    'BROWSER',
     'SUBAGENTS',
     'MEMORY',
     'SPEECH',

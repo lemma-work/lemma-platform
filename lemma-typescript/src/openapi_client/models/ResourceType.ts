@@ -19,5 +19,6 @@ export enum ResourceType {
     CONVERSATION = 'conversation',
     CONNECTOR = 'connector',
     CONNECTOR_ACCOUNT = 'connector_account',
+    WEB_LOGIN = 'web_login',
     CONNECTOR_AUTH_CONFIG = 'connector_auth_config',
 }
