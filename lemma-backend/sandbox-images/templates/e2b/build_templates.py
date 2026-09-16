@@ -198,7 +198,7 @@ def workspace_template():
             "/usr/local/bin/start-browser-relay",
             mode=0o755,
         )
-        # The browser relay, and the two package files it needs to be importable.
+        # The browser relay, and the package files it needs to be importable.
         #
         # This template deliberately ships no workspace runtime -- an E2B
         # sandbox serves no HTTP of its own, and exec and files go through the
@@ -206,9 +206,21 @@ def workspace_template():
         # as a separate process: a browser channel that lived in the runtime
         # existed on Docker and nowhere else, which is the whole reason this
         # exists.
+        #
+        # `tasks.py` is here because `browser_relay.app` and
+        # `browser_relay.stream_proxy` both import it, and it was not: the
+        # comment said "the two package files it needs" while the relay needed
+        # three, so every workspace sandbox shipped a relay that raised
+        # `ModuleNotFoundError` on its first line and left no log. Counting
+        # them by hand is what `test_e2b_templates_ship_what_they_import` now
+        # does instead.
         .copy(
             "lemma-backend/sandbox_runtime/__init__.py",
             "/app/sandbox_runtime/__init__.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/tasks.py",
+            "/app/sandbox_runtime/tasks.py",
         )
         .copy(
             "lemma-backend/sandbox_runtime/browser_relay",
