@@ -7,6 +7,7 @@ import {
   isAskUserToolName,
   isRenderableUserInteractionInvocation,
   isUserApprovalToolName,
+  isSignInToolName,
   isUserInteractionToolName,
   latestPlanSummary,
   messageTextContent,
@@ -29,6 +30,22 @@ describe("user-interaction tool predicates", () => {
     expect(isAskUserToolName("mcp__lemma_tools__lemma_ask_user")).toBe(true);
     expect(isUserApprovalToolName("lemma_tools_lemma_request_approval")).toBe(true);
     expect(isUserInteractionToolName("exec_command")).toBe(false);
+  });
+
+  it("classifies browser_sign_in as an interaction, not as tool activity", () => {
+    // The backend has always listed it beside the other two
+    // (`USER_PAUSING_TOOL_NAMES`), so a sign-in pauses the run and sets the
+    // conversation to WAITING. This predicate did not, so the web transcript
+    // rendered the paused call as an ordinary tool log line: nobody was asked
+    // anything, and the run waited for an errand that was never requested.
+    expect(isSignInToolName("browser_sign_in")).toBe(true);
+    expect(isSignInToolName("mcp__lemma_tools__lemma_browser_sign_in")).toBe(true);
+    expect(isSignInToolName("ask_user")).toBe(false);
+    expect(isUserInteractionToolName("browser_sign_in")).toBe(true);
+    // And it is its own kind: rendering it as an approval would offer two
+    // answers, neither of which is "go and sign in".
+    expect(isUserApprovalToolName("browser_sign_in")).toBe(false);
+    expect(isAskUserToolName("browser_sign_in")).toBe(false);
   });
 
   it("does not render a completed daemon prose fallback as an interaction card", () => {

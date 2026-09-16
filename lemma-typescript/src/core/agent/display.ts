@@ -868,10 +868,30 @@ export function isAskUserToolName(toolName: string): boolean {
   return normalizeAgentToolName(toolName).toLowerCase() === "ask_user";
 }
 
-/** Whether a tool pauses the run for the user (an approval OR a question). Both
- * end the run (conversation -> WAITING) and resume via the approvals endpoint. */
+/** Whether a tool is the browser sign-in gate (`browser_sign_in`).
+ *
+ * Neither an approval nor a question: the answer is not a word or a button but
+ * an errand. The person has to go to the site, in the agent's own browser, and
+ * sign in there — so this renders as a link rather than as Approve/Deny, which
+ * would offer two answers neither of which is what is being asked. */
+export function isSignInToolName(toolName: string): boolean {
+  return normalizeAgentToolName(toolName).toLowerCase() === "browser_sign_in";
+}
+
+/** Whether a tool pauses the run for the user (an approval, a question, or a
+ * sign-in). All three end the run (conversation -> WAITING).
+ *
+ * `browser_sign_in` was missing here for the life of the feature, and the
+ * consequence was the whole feature: the backend paused correctly, the surfaces
+ * sent their link, and the web transcript rendered the call as ordinary tool
+ * activity — so a web conversation waited for an errand nobody was ever asked
+ * to run. */
 export function isUserInteractionToolName(toolName: string): boolean {
-  return isUserApprovalToolName(toolName) || isAskUserToolName(toolName);
+  return (
+    isUserApprovalToolName(toolName) ||
+    isAskUserToolName(toolName) ||
+    isSignInToolName(toolName)
+  );
 }
 
 /** Whether an interaction invocation should use the specialized question /

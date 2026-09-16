@@ -23,7 +23,7 @@ import { useQuery } from "@tanstack/react-query";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  isAskUserToolName,
+  isAskUserToolName, isSignInToolName,
   isToolInvocationActive,
   normalizeAssistantMarkdown,
   type AssistantRenderableMessage,
@@ -73,7 +73,7 @@ import { useNowMs } from "./use-assistant-experience";
 import { useTurnSettleFlip } from "./use-turn-settle-flip";
 import { stripMarkdownNode } from "./assistant-experience-helpers";
 import { ToolDetailsPanel } from "./assistant-tool-details";
-import { AskUserCard, UserApprovalCard } from "./assistant-approval-cards";
+import { AskUserCard, SignInCard, UserApprovalCard } from "./assistant-approval-cards";
 import { AssistantSubagentChipRow } from "./assistant-subagent-chips";
 import { DisplayResourceCards } from "./assistant-resource-cards";
 import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
@@ -654,13 +654,19 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 
         if (item.kind === "interaction") {
           const isAsk = isAskUserToolName(item.invocation.toolName);
+          const isSignIn = isSignInToolName(item.invocation.toolName);
           return (
             <div
               key={item.id}
               className="lchat-interaction"
               id={interactionAnchorId(item.invocation.toolCallId)}
             >
-              {isAsk ? (
+              {isSignIn ? (
+                <SignInCard
+                  invocation={item.invocation}
+                  conversationId={activeConversationId}
+                />
+              ) : isAsk ? (
                 <AskUserCard
                   invocation={item.invocation}
                   onResolveUserApproval={onResolveUserApproval}
