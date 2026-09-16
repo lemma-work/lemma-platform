@@ -234,18 +234,19 @@ class _WebSocketThatIsAlreadyGone:
     rather than by message: the point is that it is not a `RuntimeError`.
     """
 
-    def __init__(self) -> None:
-        self.accepted = False
-        self.close_attempts = 0
-
     async def accept(self) -> None:
         self.accepted = True
 
-    async def close(self, code: int) -> None:
-        self.close_attempts += 1
-        raise AttributeError(
+    def __init__(self, raises: BaseException | None = None) -> None:  # noqa: F811
+        self.accepted = False
+        self.close_attempts = 0
+        self.raises = raises or AttributeError(
             "'WebSocketProtocol' object has no attribute 'transfer_data_task'"
         )
+
+    async def close(self, code: int) -> None:
+        self.close_attempts += 1
+        raise self.raises
 
 
 @pytest.mark.asyncio
@@ -292,3 +293,26 @@ async def test_collecting_the_keep_awake_task_does_not_raise() -> None:
     await view._collect(task)
 
     assert task.cancelled(), "collected means finished, not merely asked to stop"
+
+
+@pytest.mark.asyncio
+async def test_every_way_a_socket_is_seen_to_end_is_handled() -> None:
+    """The set has been corrected twice from production; this is what pins it.
+
+    `RuntimeError` was the original guess. `AttributeError` was found crashing
+    refusals in dev. `WebSocketDisconnect` was found crashing them again in a
+    local run against E2B that was meant to confirm the first fix -- and it is
+    the *ordinary* case, because by the time a refusal is written the person may
+    simply have navigated away.
+    """
+    from fastapi import WebSocketDisconnect
+
+    for failure in (
+        RuntimeError("socket is not connected"),
+        AttributeError("'WebSocketProtocol' object has no attribute ..."),
+        OSError("transport gone"),
+        WebSocketDisconnect(code=1006),
+    ):
+        socket = _WebSocketThatIsAlreadyGone(failure)
+        await view._refuse(socket, view.CLOSE_NO_BROWSER)
+        assert socket.close_attempts == 1, f"{type(failure).__name__} was not handled"

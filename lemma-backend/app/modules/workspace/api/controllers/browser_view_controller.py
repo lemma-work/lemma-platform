@@ -24,7 +24,7 @@ import contextlib
 import httpx
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, WebSocket, status
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
@@ -218,10 +218,18 @@ def _session_for(conversation: str | None, origin: str | None) -> str | None:
 #: than its close code, retried. `OSError` covers the transport being gone
 #: underneath, `ConnectionError` included.
 #:
-#: Named rather than a bare `except Exception` because the architecture ratchet
-#: counts broad catches and is right to: the set is knowable, and a type outside
-#: it is news.
-_HANGUP_FAILURES = (RuntimeError, AttributeError, OSError)
+#: `WebSocketDisconnect` is starlette's for a client that has already gone, and
+#: is the *ordinary* case here rather than an edge: by the time anything is
+#: being refused, the person may well have navigated away.
+#:
+#: This tuple has now been corrected twice from production, which is the honest
+#: note to leave. It began as `RuntimeError` alone; `AttributeError` was found
+#: crashing refusals in dev; `WebSocketDisconnect` was found crashing them again
+#: in the local E2B run that was meant to confirm the first fix. So read the
+#: list as "the ways a socket is observed to end", not as a proof of
+#: completeness -- and if a fifth appears, the log line below names its type,
+#: which is the whole reason it logs rather than swallowing.
+_HANGUP_FAILURES = (RuntimeError, AttributeError, OSError, WebSocketDisconnect)
 
 
 async def _collect(task: "asyncio.Task[None]") -> None:
