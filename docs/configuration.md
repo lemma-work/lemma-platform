@@ -257,21 +257,25 @@ E2B_DOMAIN=
 # production; override it for anything sharing an E2B account with real
 # workspaces.
 E2B_METADATA_NAMESPACE=
-# Whether a sandbox's public *.e2b.app hosts answer without a credential.
-# Off by default; see below before turning it on.
-E2B_ALLOW_PUBLIC_TRAFFIC=false
 ```
 
-These six are the whole backend-side E2B surface. In particular:
+These five are the whole backend-side E2B surface. In particular:
 
-- **`E2B_ALLOW_PUBLIC_TRAFFIC` decides whether a sandbox is on the internet.**
-  E2B gives every port a sandbox listens on a public name. With this off — the
-  default — E2B mints a per-sandbox traffic token and answers 403 without it,
-  and the backend carries that token on every call it makes. Turning it on
-  exposes whatever is listening, which includes the agent's browser and its
-  dashboard. The flag is set when a sandbox is created and cannot be changed
-  afterwards, so sandboxes made before it was introduced stay open until they
-  are replaced; the backend reports those as public rather than assuming.
+- **Whether a sandbox is on the internet is not one of them.** E2B gives every
+  port a sandbox listens on a public name, so sandboxes are created closed:
+  E2B mints a per-sandbox traffic token, the edge answers 403 without it, and
+  the backend carries that token on every call it makes. This used to be
+  `E2B_ALLOW_PUBLIC_TRAFFIC` and is now `CLOSED_TO_THE_INTERNET`, a constant in
+  the E2B provider. Nothing outside the backend ever needs a sandbox's own
+  address — a browser is handed a signed URL at Lemma's own API, which
+  reverse-proxies to the port — so the setting's only other position exposed
+  whatever was listening, including the agent's browser and its dashboard, for
+  nothing in return. Setting the variable now configures nothing.
+
+  It is fixed when a sandbox is created and cannot be changed afterwards, so
+  sandboxes made before this stay open until they are replaced; the backend
+  reports those as public rather than assuming, and refuses to put a saved
+  login into one.
 
 - **`E2B_METADATA_NAMESPACE` is a safety boundary.** A provider is blind to
   sandboxes labelled with any other namespace, and the orphan sweep destroys

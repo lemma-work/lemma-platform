@@ -170,17 +170,6 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("E2B_DOMAIN"),
         description="E2B API domain override",
     )
-    e2b_allow_public_traffic: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("E2B_ALLOW_PUBLIC_TRAFFIC"),
-        description=(
-            "Whether new E2B sandboxes answer their public *.e2b.app hosts "
-            "without a credential. Off: E2B mints a per-sandbox traffic token "
-            "and the backend carries it. Turning this on exposes every port a "
-            "sandbox listens on, including the browser, to the internet."
-        ),
-    )
-
     e2b_metadata_namespace: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("E2B_METADATA_NAMESPACE"),

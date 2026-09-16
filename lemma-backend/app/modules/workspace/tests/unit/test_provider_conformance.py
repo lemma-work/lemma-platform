@@ -309,11 +309,41 @@ async def test_new_e2b_sandboxes_do_not_answer_the_internet(
     which on Docker is the container's own network and on E2B is a public name.
     Nothing in front of it asks who you are. Closing public traffic at create is
     what puts E2B's own doorkeeper there; `reach_port` then carries the token.
+
+    Unconditional now. This was `E2B_ALLOW_PUBLIC_TRAFFIC`, and a deployment
+    that set it true got sandboxes whose every listening port answered the
+    internet -- for no gain, because nothing outside the backend ever needs a
+    sandbox's own address.
     """
     await e2b_provider.create(_spec(uuid4()))
     assert e2b_world.created_public_traffic == [False], (
         "a sandbox created without this argument is open by default"
     )
+
+
+def test_no_setting_can_open_a_sandbox_to_the_internet() -> None:
+    """There is no longer a position of a knob that exposes the browser.
+
+    The pairing is the point: the constant says what is sent, and this says
+    nothing can be introduced that changes it per deployment. Re-adding the
+    setting fails here even if every other test still passes, because every
+    other test would be exercising whatever the default happened to be.
+    """
+    from app.modules.workspace.config import WorkspaceSettings
+    from app.modules.workspace.providers.e2b_config import CLOSED_TO_THE_INTERNET
+
+    assert CLOSED_TO_THE_INTERNET == {"allow_public_traffic": False}
+    assert not [
+        name
+        for name, field in WorkspaceSettings.model_fields.items()
+        if "public_traffic" in name
+        or "PUBLIC_TRAFFIC"
+        in (
+            field.validation_alias.choices[0].upper()
+            if field.validation_alias
+            else name.upper()
+        )
+    ]
 
 
 async def test_the_arguments_we_create_sandboxes_with_are_ones_the_sdk_takes(

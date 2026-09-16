@@ -60,7 +60,10 @@ from app.modules.workspace.providers.e2b_common import (
     every_page as _every_page,
 )
 from app.modules.workspace.providers.profiles import profile_for
-from app.modules.workspace.providers.e2b_config import E2BProviderConfig
+from app.modules.workspace.providers.e2b_config import (
+    CLOSED_TO_THE_INTERNET,
+    E2BProviderConfig,
+)
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
@@ -277,14 +280,7 @@ class E2BSandboxProvider(E2BOpsMixin):
                 lifecycle=self._lifecycle(spec.kind),
                 metadata=self._identity_metadata(spec),
                 envs=dict(spec.env),
-                # On `network`, not as an argument of its own. `create` takes
-                # its extra keywords as `Unpack[ApiParams]` and hands them
-                # straight to `ConnectionConfig(**opts)`, which rejects what it
-                # does not know -- so a top-level `allow_public_traffic=` does
-                # not get ignored, it raises `TypeError` and no sandbox is made
-                # at all. `SandboxNetworkOpts` is a total=False TypedDict, so
-                # naming this one key leaves egress exactly as it was.
-                network={"allow_public_traffic": self._config.allow_public_traffic},
+                network=CLOSED_TO_THE_INTERNET,
                 **self._api(),
             )
 
