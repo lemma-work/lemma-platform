@@ -120,9 +120,17 @@ export function BrowserPane({
                     x: point.x,
                     y: point.y,
                     button: ['left', 'middle', 'right'][event.button] ?? 'left',
-                    // A hover is not a drag. Reporting a held button on every
-                    // move made pages with sliders and canvases think one was.
-                    buttons: type === 'mouseMoved' ? 0 : 1,
+                    // What is held *now*, which is the CDP contract and not
+                    // "which button this event is about". A release reports 0
+                    // because nothing is held after it -- reporting 1 there
+                    // said the button was still down, so the page saw a press
+                    // that never ended and never produced a click. A cookie
+                    // banner's Allow took focus and did nothing.
+                    //
+                    // A hover is not a drag either: reporting a held button on
+                    // every move made pages with sliders and canvases think one
+                    // was.
+                    buttons: type === 'mousePressed' ? 1 : 0,
                     clickCount: type === 'mouseMoved' ? 0 : event.detail || 1,
                 });
             },

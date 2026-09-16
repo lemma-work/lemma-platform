@@ -28,21 +28,33 @@ export type ViewerState =
 
 export interface ViewerFrame {
     /**
-     * The picture's own pixels. Three things are in this space and nothing is
-     * in any other: the canvas, the hit-testing, and the coordinates of every
-     * input message sent back.
+     * The picture's own pixels: what the canvas is sized to and what the
+     * hit-testing is done against, because the picture is what is on screen.
      *
-     * Not the size of the page. A frame carries `metadata.deviceWidth` /
-     * `deviceHeight` as well, and they are a different pair of numbers --
-     * measured, a 1280x720 device arrives as a 985x800 JPEG, because the stream
-     * encodes within the caps the image sets (`AGENT_BROWSER_STREAM_MAX_WIDTH`
-     * / `_MAX_HEIGHT`). The stream server scales input back out of the frame's
-     * space itself, so sending it page coordinates puts the pointer off the
-     * right of the picture and nothing is clicked at all. That metadata is not
-     * used here, and this comment is why.
+     * Not what input is sent in. See `deviceWidth`.
      */
     pictureWidth: number;
     pictureHeight: number;
+    /**
+     * The page's own pixels, from `metadata.deviceWidth` / `deviceHeight`, and
+     * the space every input message must be in.
+     *
+     * The two differ: the stream encodes within the caps the image sets
+     * (`AGENT_BROWSER_STREAM_MAX_WIDTH` / `_MAX_HEIGHT`), so a 1050x797 page
+     * arrives as a 949x720 JPEG. An earlier version of this file asserted, at
+     * length, that the server scaled input back out of the picture's space
+     * itself and that this metadata was therefore unused. That was wrong, and
+     * the comment saying so was the most confident thing in the file.
+     *
+     * Settled by experiment rather than by reading: a 44x22 button at page
+     * (800,700) in a real sandbox, clicked through the stream socket twice.
+     * Page coordinates (822,711) set the title; picture coordinates (743,642)
+     * did nothing. Every click was landing about a tenth of the way up and to
+     * the left -- which large targets absorb and small ones do not, so it
+     * presented as "clicks sometimes work" rather than as a broken mapping.
+     */
+    deviceWidth: number;
+    deviceHeight: number;
     bitmap: HTMLImageElement;
 }
 
@@ -80,12 +92,21 @@ const NON_TEXT_KEYS = new Set([
  */
 export const toFramePoint = (
     rect: { left: number; top: number; width: number; height: number },
-    frame: { pictureWidth: number; pictureHeight: number },
+    frame: {
+        pictureWidth: number;
+        pictureHeight: number;
+        deviceWidth?: number;
+        deviceHeight?: number;
+    },
     event: { clientX: number; clientY: number },
 ): { x: number; y: number } => {
     if (!rect.width || !rect.height || !frame.pictureWidth || !frame.pictureHeight) {
         return { x: 0, y: 0 };
     }
+    // Two spaces, and the whole of this function is the conversion between
+    // them. Hit-testing is against the *picture*, because that is what is drawn
+    // and what the person is aiming at. The answer is in *page* pixels, because
+    // that is what the stream server dispatches.
     const scale = Math.min(
         rect.width / frame.pictureWidth,
         rect.height / frame.pictureHeight,
@@ -95,11 +116,20 @@ export const toFramePoint = (
     const offsetX = (rect.width - drawnWidth) / 2;
     const offsetY = (rect.height - drawnHeight) / 2;
 
-    const x = (event.clientX - rect.left - offsetX) / scale;
-    const y = (event.clientY - rect.top - offsetY) / scale;
+    // Where in the drawn picture, as a fraction. Going through a fraction
+    // rather than through picture pixels means the picture's size drops out
+    // entirely, which is the point: it is a display detail and input never
+    // depended on it.
+    const across = (event.clientX - rect.left - offsetX) / drawnWidth;
+    const down = (event.clientY - rect.top - offsetY) / drawnHeight;
+
+    // Falling back to the picture's size keeps a frame that somehow arrived
+    // without metadata roughly usable, rather than sending every click to 0,0.
+    const width = frame.deviceWidth || frame.pictureWidth;
+    const height = frame.deviceHeight || frame.pictureHeight;
     return {
-        x: Math.max(0, Math.min(frame.pictureWidth, Math.round(x))),
-        y: Math.max(0, Math.min(frame.pictureHeight, Math.round(y))),
+        x: Math.max(0, Math.min(width, Math.round(across * width))),
+        y: Math.max(0, Math.min(height, Math.round(down * height))),
     };
 };
 
@@ -283,9 +313,15 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                 send({ type: 'ack', seq: message.seq });
                 const bitmap = new Image();
                 bitmap.onload = () => {
+                    const metadata = (message.metadata || {}) as Record<
+                        string,
+                        unknown
+                    >;
                     latest = {
                         pictureWidth: bitmap.naturalWidth || bitmap.width,
                         pictureHeight: bitmap.naturalHeight || bitmap.height,
+                        deviceWidth: Number(metadata.deviceWidth) || 0,
+                        deviceHeight: Number(metadata.deviceHeight) || 0,
                     };
                     options.onFrame({ ...latest, bitmap });
                     // Live when there is a picture, not when there is a socket.
