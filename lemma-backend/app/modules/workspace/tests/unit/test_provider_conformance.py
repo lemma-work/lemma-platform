@@ -377,3 +377,55 @@ async def test_the_arguments_we_create_sandboxes_with_are_ones_the_sdk_takes(
 
     assert "allow_public_traffic" in SandboxNetworkOpts.__annotations__
     assert passed["network"] == {"allow_public_traffic": False}
+
+
+async def test_a_burst_of_operations_makes_one_connection(e2b_provider, e2b_world):
+    """Every provider operation used to open its own connection first.
+
+    There are nineteen `_connect` call sites, and the browser view touches most
+    of them, so opening the pane on a paused sandbox was measured making thirty
+    requests to E2B -- nineteen of them this one, to the same sandbox, inside
+    four seconds. Each is a round trip over the internet, so the wait a person
+    reads as "the sandbox is slow" was mostly the platform talking to itself.
+
+    Asserted as a count rather than a duration: a timing test would pass on a
+    fast machine while the round trips were still being made.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    instance = await e2b_provider.create(_spec(uuid4()))
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    before = len(e2b_world.connect_timeouts)
+
+    for _ in range(5):
+        await e2b_provider.reach_port(instance, port=4850, deadline_at=deadline)
+
+    spent = len(e2b_world.connect_timeouts) - before
+    assert spent == 1, f"five operations opened {spent} connections"
+
+
+async def test_the_lease_is_still_re_armed_when_the_hold_lapses(
+    e2b_provider, e2b_world, monkeypatch
+):
+    """Holding a connection must not stop the sandbox lease being renewed.
+
+    Connecting is what re-arms it, and a workspace whose lease runs out loses
+    every process at once. So the hold is a short window, not a cache: once it
+    lapses the next operation connects again and the lease moves with it.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    instance = await e2b_provider.create(_spec(uuid4()))
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    await e2b_provider.reach_port(instance, port=4850, deadline_at=deadline)
+    before = len(e2b_world.connect_timeouts)
+
+    # Lapse the hold rather than sleep through it.
+    monkeypatch.setattr(e2b_provider._connections, "_rearm_seconds", -1.0)
+    await e2b_provider.reach_port(instance, port=4850, deadline_at=deadline)
+
+    assert len(e2b_world.connect_timeouts) == before + 1
+    # And it carries the real lease, not the SDK's five-minute default.
+    assert (
+        e2b_world.connect_timeouts[-1] == e2b_provider._config.sandbox_timeout_seconds
+    )
