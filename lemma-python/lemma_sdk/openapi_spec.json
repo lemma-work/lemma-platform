@@ -2490,6 +2490,7 @@
         "description": "Known tool bundles an agent may request.",
         "enum": [
           "WORKSPACE_CLI",
+          "BROWSER",
           "SKILLS",
           "WEB_SEARCH",
           "USER_INTERACTION",
@@ -2505,6 +2506,26 @@
         ],
         "title": "AgentToolset",
         "type": "string"
+      },
+      "AnswerSignInRequest": {
+        "properties": {
+          "force": {
+            "default": false,
+            "description": "Save whatever the browser holds even though it does not look signed in. For sites the check reads wrongly.",
+            "title": "Force",
+            "type": "boolean"
+          },
+          "signed_in": {
+            "description": "True when the person says they have signed in; false when they cannot right now.",
+            "title": "Signed In",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "signed_in"
+        ],
+        "title": "AnswerSignInRequest",
+        "type": "object"
       },
       "AppBundleUploadRequest": {
         "properties": {
@@ -3558,6 +3579,31 @@
           }
         },
         "title": "AvailableSurfacesResponse",
+        "type": "object"
+      },
+      "BrowserStatusResponse": {
+        "description": "What the pane can say without waking anything.\n\n`asleep` the computer is paused or was never started; `stopped` it is up but\nthe browser is not (the resting state after two idle minutes); `running` a\nbrowser is there now; `unavailable` the relay did not answer, which on an\nolder image is permanent until it is replaced; `unsupported` this fabric\ncannot reach a port at all.",
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "BrowserStatusResponse",
         "type": "object"
       },
       "BulkCreateRecordsRequest": {
@@ -11012,6 +11058,30 @@
         "title": "PartialApplyResponse",
         "type": "object"
       },
+      "PendingSignInResponse": {
+        "description": "What the page needs to put a site in front of somebody.",
+        "properties": {
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "tool_call_id": {
+            "title": "Tool Call Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool_call_id",
+          "origin",
+          "reason"
+        ],
+        "title": "PendingSignInResponse",
+        "type": "object"
+      },
       "PlanStepResponse": {
         "properties": {
           "action": {
@@ -12658,6 +12728,7 @@
           "conversation",
           "connector",
           "connector_account",
+          "web_login",
           "connector_auth_config"
         ],
         "title": "ResourceType",
@@ -13531,6 +13602,42 @@
           "surface_id"
         ],
         "title": "SetDefaultSurfaceRequest",
+        "type": "object"
+      },
+      "SignInOutcomeResponse": {
+        "properties": {
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "saved": {
+            "default": false,
+            "description": "Whether the login was kept for next time.",
+            "title": "Saved",
+            "type": "boolean"
+          },
+          "saved_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why it was not kept, in words, when it was not.",
+            "title": "Saved Detail"
+          },
+          "signed_in": {
+            "title": "Signed In",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "origin",
+          "signed_in"
+        ],
+        "title": "SignInOutcomeResponse",
         "type": "object"
       },
       "SignedUrlListResponse": {
@@ -17109,6 +17216,144 @@
         "title": "WaitUntilNodeResponse",
         "type": "object"
       },
+      "WebLoginAuditEntry": {
+        "description": "One thing that was done with one saved login.\n\n`detail` is why, when the outcome was not plain \"ok\" \u2014 \"session rejected\",\n\"nothing for this site was in the browser\". It is the platform's own words\nrather than an agent's paraphrase, which is the point of reading it here.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run that did it, or null for something the person did themselves from the saved-logins screen.",
+            "title": "Conversation Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "origin",
+          "action",
+          "outcome",
+          "detail",
+          "conversation_id",
+          "created_at"
+        ],
+        "title": "WebLoginAuditEntry",
+        "type": "object"
+      },
+      "WebLoginAuditResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebLoginAuditEntry"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "WebLoginAuditResponse",
+        "type": "object"
+      },
+      "WebLoginListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WebLoginResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "WebLoginListResponse",
+        "type": "object"
+      },
+      "WebLoginResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "working": {
+            "description": "Whether the stored session still signs you in. False means it stopped working and the next run will ask you again.",
+            "title": "Working",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "origin",
+          "created_at",
+          "updated_at",
+          "last_used_at",
+          "working"
+        ],
+        "title": "WebLoginResponse",
+        "type": "object"
+      },
       "WebSearchRequest": {
         "description": "Request model for standard web search",
         "properties": {
@@ -18509,6 +18754,95 @@
           "expires_at"
         ],
         "title": "WorkspaceAppAccessResponse",
+        "type": "object"
+      },
+      "WorkspaceFileEntry": {
+        "properties": {
+          "kind": {
+            "description": "What this entry is.",
+            "enum": [
+              "file",
+              "directory",
+              "symlink"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "modified_at": {
+            "description": "Last modification time.",
+            "format": "date-time",
+            "title": "Modified At",
+            "type": "string"
+          },
+          "name": {
+            "description": "Final path segment.",
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute path inside the workspace.",
+            "title": "Path",
+            "type": "string"
+          },
+          "size_bytes": {
+            "description": "Size in bytes; 0 for a directory.",
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "kind",
+          "size_bytes",
+          "modified_at"
+        ],
+        "title": "WorkspaceFileEntry",
+        "type": "object"
+      },
+      "WorkspaceFileListResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceFileEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "next_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `after` to get the next page. Null when this is the last one. A directory with more entries than fit was previously a dead end: the rest could be counted and never reached.",
+            "title": "Next After"
+          },
+          "path": {
+            "description": "The directory that was listed.",
+            "title": "Path",
+            "type": "string"
+          },
+          "sleeping": {
+            "default": false,
+            "description": "True when the workspace is paused and was not woken to answer. Entries are empty; ask again with `wake=true` to start it.",
+            "title": "Sleeping",
+            "type": "boolean"
+          },
+          "truncated": {
+            "default": false,
+            "description": "True when the directory holds more entries than were returned.",
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "WorkspaceFileListResponse",
         "type": "object"
       },
       "attach": {
@@ -36510,6 +36844,271 @@
         }
       }
     },
+    "/web-logins": {
+      "delete": {
+        "description": "Forget a site.\n\nRemoving the row is the whole revocation from Lemma's side. It does **not**\nsign the person out at the site, and the response says so \u2014 a saved session\nthat has been deleted here is still a valid session there until they log out\nor it expires, and implying otherwise would be the more dangerous lie.",
+        "operationId": "web_login.delete",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "origin",
+            "required": true,
+            "schema": {
+              "maxLength": 255,
+              "minLength": 1,
+              "title": "Origin",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLoginResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove a saved site login",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "web_login"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "web_login",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "get": {
+        "operationId": "web_login.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLoginListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List saved site logins",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "web_login",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/web-logins/history": {
+      "get": {
+        "operationId": "web_login.history",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLoginAuditResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What has been done with your saved logins",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "web_login",
+          "result": "entity",
+          "verb": "history"
+        }
+      }
+    },
+    "/web-logins/sign-ins/{conversation_id}/{tool_call_id}": {
+      "get": {
+        "operationId": "web_login.sign_in.pending",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool_call_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingSignInResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What a sign-in link is asking for",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "web_login.sign_in",
+          "result": "entity",
+          "verb": "pending"
+        }
+      }
+    },
+    "/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer": {
+      "post": {
+        "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run -- so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.\n\nOne route for both answers because it is one answer. Two routes meant two\nstatus writes with two different guards, and the weaker one let a stale tab\noverwrite a decision the agent had already been given.",
+        "operationId": "web_login.sign_in.answer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "tool_call_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Call Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerSignInRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInOutcomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Say whether you signed in",
+        "tags": [
+          "Web Logins"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "web_login.sign_in"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "web_login.sign_in",
+          "result": "entity",
+          "verb": "answer"
+        }
+      }
+    },
     "/workspace/apps/browser/access": {
       "post": {
         "operationId": "workspace.browser.access",
@@ -36558,6 +37157,246 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "access"
+        }
+      }
+    },
+    "/workspace/browser/status": {
+      "get": {
+        "operationId": "workspace.browser.status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whether the workspace browser can be watched",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "status"
+        }
+      }
+    },
+    "/workspace/files": {
+      "get": {
+        "operationId": "workspace.files.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Path"
+            }
+          },
+          {
+            "description": "Start the workspace if it is paused. Off by default.",
+            "in": "query",
+            "name": "wake",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Start the workspace if it is paused. Off by default.",
+              "title": "Wake",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Continue after this entry's path, from a previous response's `next_after`.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Continue after this entry's path, from a previous response's `next_after`.",
+              "title": "After"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFileListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List workspace files",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "workspace.files",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/workspace/files:content": {
+      "get": {
+        "operationId": "workspace.files.content",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "length",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 8388608,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Length"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read workspace file content",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "workspace.files",
+          "result": "entity",
+          "verb": "content"
+        }
+      }
+    },
+    "/workspace/files:stat": {
+      "get": {
+        "operationId": "workspace.files.stat",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceFileEntry"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stat one workspace file",
+        "tags": [
+          "Workspace"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.files",
+          "result": "entity",
+          "verb": "stat"
         }
       }
     }

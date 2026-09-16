@@ -297,6 +297,16 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/usage/organizations/{organization_id}/stats` | `usage.organization.stats.get` | Get Usage Stats |
 | GET | `/usage/organizations/{organization_id}/summary` | `usage.organization.summary.get` | Get Organization Usage Summary |
 
+## web_login
+
+| Method | Path | Operation ID | Summary |
+| --- | --- | --- | --- |
+| DELETE | `/web-logins` | `web_login.delete` | Remove a saved site login |
+| GET | `/web-logins` | `web_login.list` | List saved site logins |
+| GET | `/web-logins/history` | `web_login.history` | What has been done with your saved logins |
+| GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | `web_login.sign_in.pending` | What a sign-in link is asking for |
+| POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer` | `web_login.sign_in.answer` | Say whether you signed in |
+
 ## workflow
 
 | Method | Path | Operation ID | Summary |
@@ -322,4 +332,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| GET | `/workspace/browser/status` | `workspace.browser.status` | Whether the workspace browser can be watched |
+| GET | `/workspace/files` | `workspace.files.list` | List workspace files |
+| GET | `/workspace/files:content` | `workspace.files.content` | Read workspace file content |
+| GET | `/workspace/files:stat` | `workspace.files.stat` | Stat one workspace file |
 | POST | `/workspace/apps/browser/access` | `workspace.browser.access` | Create workspace browser access URL |

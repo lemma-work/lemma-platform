@@ -94,3 +94,76 @@ def test_a_re_encoded_payload_does_not_verify() -> None:
 def test_a_short_key_is_rejected_at_construction() -> None:
     with pytest.raises(ValueError, match="32 bytes"):
         PortAccessSigner(key=b"tooshort")
+
+
+def test_a_proxied_page_says_who_may_frame_it() -> None:
+    """A signed URL is a bearer token in a link, and links leak. `frame-ancestors`
+    is what stops a leaked one being framed by somebody else's page and driven
+    from there."""
+    from app.modules.workspace.api.controllers.port_proxy_controller import (
+        _STRIPPED_RESPONSE_HEADERS,
+        _frame_ancestors,
+    )
+
+    ancestors = _frame_ancestors()
+    assert ancestors
+    assert "*" not in ancestors
+    # The sandbox's own opinion about framing is never forwarded — the answer
+    # belongs to the proxy.
+    assert "content-security-policy" in _STRIPPED_RESPONSE_HEADERS
+    assert "x-frame-options" in _STRIPPED_RESPONSE_HEADERS
+
+
+def test_the_grants_own_url_shape_reaches_the_proxy() -> None:
+    """The minted URL ends at the token with a trailing slash and no path.
+
+    `/{token}/{path:path}` alone does not match that, so the one URL this proxy
+    exists to hand out 404'd while every deeper path worked — which is exactly
+    the shape nothing tested.
+    """
+    from app.modules.workspace.api.controllers.port_proxy_controller import router
+
+    paths = {getattr(route, "path", "") for route in router.routes}
+    assert "/workspace-ports/{token}" in paths
+    assert "/workspace-ports/{token}/{path:path}" in paths
+
+
+def test_the_proxy_is_not_behind_the_session_gate() -> None:
+    """The signed grant in the path IS the credential, and this URL is handed to
+    a browser that has no Lemma session and never will."""
+    from app.core.security import EXCLUDED_PATHS
+
+    assert any(path.startswith("/workspace-ports") for path in EXCLUDED_PATHS)
+
+
+def test_the_proxy_carries_whatever_the_fabrics_own_door_needs() -> None:
+    """The request half has to send the headers `reach_port` hands back.
+
+    On E2B a closed sandbox answers 403 without its per-sandbox traffic token,
+    and `reach_port` returns it as `SandboxEndpoint.headers`. The WebSocket half
+    has always forwarded those; this half dropped them, and nothing noticed
+    because no sandbox had ever actually been created closed -- the flag meant
+    to close them raised `TypeError` and was never in effect.
+
+    Dropping ours was not the whole of it. The caller's headers were forwarded
+    verbatim, so a holder of a signed link could put their own
+    `e2b-traffic-access-token` on the request and have it passed to the sandbox
+    as the only one. The fabric's go last for that reason: the sandbox's
+    doorkeeper is not something the person holding the link gets to choose.
+    """
+    from app.modules.workspace.api.controllers.port_proxy_controller import (
+        _upstream_headers,
+    )
+
+    sent = _upstream_headers(
+        {
+            "e2b-traffic-access-token": "forged-by-the-caller",
+            "cookie": "lemma_session=hunter2",
+            "x-harmless": "kept",
+        },
+        {"e2b-traffic-access-token": "the-real-one"},
+    )
+
+    assert sent["e2b-traffic-access-token"] == "the-real-one"
+    assert sent["x-harmless"] == "kept"
+    assert "cookie" not in sent

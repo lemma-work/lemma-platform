@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { BrowserStatusResponse } from '../models/BrowserStatusResponse.js';
 import type { WorkspaceAppAccessRequest } from '../models/WorkspaceAppAccessRequest.js';
 import type { WorkspaceAppAccessResponse } from '../models/WorkspaceAppAccessResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -25,6 +26,17 @@ export class WorkspaceAppsService {
             errors: {
                 422: `Validation Error`,
             },
+        });
+    }
+    /**
+     * Whether the workspace browser can be watched
+     * @returns BrowserStatusResponse Successful Response
+     * @throws ApiError
+     */
+    public static workspaceBrowserStatus(): CancelablePromise<BrowserStatusResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/workspace/browser/status',
         });
     }
 }

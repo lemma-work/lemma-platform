@@ -9,7 +9,7 @@
   "dependencies": {
     "@llamaindex/liteparse": "2.8.0",
     "@mozilla/readability": "0.6.0",
-    "agent-browser": "0.32.3",
+    "agent-browser": "0.37.1",
     "jsdom": "29.1.1",
     "pnpm": "11.15.1",
     "turndown": "7.2.4"

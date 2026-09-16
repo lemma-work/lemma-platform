@@ -68,6 +68,7 @@ class ResumeToolReturnBuilder:
         response: dict[str, object],
         paused_agent_run_id: UUID,
         deliver_to_host: bool = True,
+        tool_call_id: str | None = None,
     ) -> tuple[str, object]:
         """Return ``(tool_name, tool_result)`` for the synthesized resume message."""
         from app.modules.agent.tools.user_interaction.models import (
@@ -94,6 +95,13 @@ class ResumeToolReturnBuilder:
                     message="User answered the questions.",
                 )
             return "ask_user", content.model_dump(mode="json")
+
+        if kind == "browser_sign_in":
+            return "browser_sign_in", await self._browser_sign_in_return(
+                tool_args=tool_args,
+                decision=decision,
+                response=response,
+            )
 
         host_permission = agent_host_permission_request(tool_args)
         if host_permission is not None and deliver_to_host:
@@ -182,6 +190,63 @@ class ResumeToolReturnBuilder:
                 response=response,
             )
         return "request_approval", content.model_dump(mode="json")
+
+    async def _browser_sign_in_return(
+        self,
+        *,
+        tool_args: dict[str, object],
+        decision: AgentRunApprovalDecision,
+        response: dict[str, object],
+    ) -> dict[str, object]:
+        """What the agent is told after somebody answered a sign-in request.
+
+        The capture itself already happened, at the moment the person pressed
+        "I'm signed in" -- that endpoint reads the browser while they are still
+        there to be told if it found nothing. This only reports it, which is
+        why a failure to capture does not fail the resume: the run is allowed
+        to carry on with a browser that is signed in but a login that was not
+        kept, and the agent is told exactly that.
+        """
+        from app.modules.agent.tools.browser.models import BrowserSignInResponse
+
+        origin = str(tool_args.get("origin") or "")
+
+        if decision == AgentRunApprovalDecision.DENY:
+            return BrowserSignInResponse(
+                success=True,
+                outcome="declined",
+                origin=origin,
+                message=(
+                    "The person did not sign in. Do not ask again for this "
+                    "site in this run: do the task another way, or stop and "
+                    "say what you could not reach."
+                ),
+            ).model_dump(mode="json")
+
+        # Read from the decision's own payload, the way the `ask_user` branch
+        # above reads its answers. This used to query a table of this feature's
+        # own, keyed by the same tool call -- two stores for two values, and
+        # they drifted: the lookup filtered on a status the capture had already
+        # moved past, so the agent was told the login had not been kept every
+        # single time, including the times it had.
+        saved = bool(response.get("saved"))
+        detail = response.get("saved_detail")
+        detail = str(detail) if detail else None
+
+        kept = (
+            "It has been kept, so the next run will not ask."
+            if saved
+            else f"It was not kept{f' ({detail})' if detail else ''}, so a later "
+            "run may ask again."
+        )
+        return BrowserSignInResponse(
+            success=True,
+            outcome="signed_in",
+            source="person",
+            origin=origin,
+            saved=saved,
+            message=f"The person signed in. {kept} Open the page again to carry on.",
+        ).model_dump(mode="json")
 
     async def _execute_approved_tool_as_user(
         self,

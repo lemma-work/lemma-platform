@@ -41,6 +41,10 @@ class FakeDockerEngine:
     destroyed: list[str] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
     archives: list[tuple[str, str]] = field(default_factory=list)
+    #: The bytes too: what is *in* a delivered archive -- a 0700 directory and
+    #: a 0600 file -- is the property worth asserting, and a fake that dropped
+    #: the payload could not be asked about it.
+    archive_payloads: list[tuple[str, bytes]] = field(default_factory=list)
     # Set to raise from the next create, to exercise recovery paths.
     fail_next_create: Exception | None = None
     _next_id: int = 0
@@ -155,7 +159,11 @@ class FakeDockerEngine:
         container = self._find(ref)
         if container is None:
             raise DockerEngineError("no such container")
+        # The bytes as well as the destination: what is *in* the archive is
+        # the security property worth asserting -- a 0700 directory and a 0600
+        # file -- and a fake that dropped the payload could not be asked.
         self.archives.append((container.name, path))
+        self.archive_payloads.append((path, payload))
 
     async def close(self) -> None:
         return None

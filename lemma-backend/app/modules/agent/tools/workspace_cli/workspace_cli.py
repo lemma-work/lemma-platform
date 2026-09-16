@@ -44,11 +44,11 @@ from app.modules.agent.tools.workspace_cli.helper import (
     trim_python_result,
 )
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
-from app.modules.workspace.session_support import retry_advice
 from app.modules.agent.tools.workspace_cli.process_visibility import (
     visible_processes,
 )
 from app.modules.workspace.contracts.tooling import (
+    retry_advice,
     get_workspace_tool_runtime,
 )
 from pydantic_ai import ToolReturn, BinaryContent
@@ -146,7 +146,16 @@ async def get_workspace_session(
     runtime_context = workspace_runtime_context(ctx)
     if runtime is None:
         runtime = get_workspace_tool_runtime()
+    # Named here rather than left to the image, because a shell that inherits
+    # the image's `AGENT_BROWSER_SESSION` is in the sandbox's *shared* browser.
+    # The typed browser tools name their session per command; a raw
+    # `agent-browser` in `exec_command` does not, and agents reach for one --
+    # so the agent browsed in the default session while the person's pane
+    # watched this conversation's, which showed a blank page throughout.
+    from app.modules.workspace.contracts.browser import agent_session
+
     return await runtime.get_session(
+        browser_session=agent_session(ctx.conversation_id),
         user_id=ctx.user_id,
         pod_id=ctx.pod_id,
         organization_id=ctx.organization_id,
