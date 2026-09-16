@@ -161,15 +161,20 @@ async def _serve_the_site(ctx) -> None:
     )
 
 
-def _service(db_manager, *, waiting_on: str | None = None):
+def _service(db_manager, *, waiting_on: str | None = None, owner: UUID | None = None):
     """The real service, against the real database and the real sandbox.
 
-    The one stand-in is the pause reader, and only when the test needs to answer
-    one. This test's subject is *which browser* a sign-in lands in -- the thing
-    that was silently wrong -- and it drives the service directly rather than
-    through an agent run, so there is no paused tool call for the real reader to
-    find. What a pause looks like, and that answering resolves it, is covered
-    where it belongs: `web_login/tests/unit/test_sign_in_service.py`.
+    Two stand-ins, and both for the same reason: there is no conversation row.
+    This test's subject is *which browser* a sign-in lands in -- the thing that
+    was silently wrong -- so it drives the service directly rather than through
+    an agent run, and its `conversation_id` names nothing in the database.
+
+    So the pause reader is stood in for, because there is no paused tool call
+    for the real one to find, and the owner lookup is stood in for, because the
+    real one reads the conversation and would find nothing to own. Standing in
+    for the second is what says a sign-in is answerable only by the person whose
+    it is -- the real check, and what a pause looks like, are covered where they
+    belong: `web_login/tests/unit/test_sign_in_service.py`.
     """
     from app.modules.web_login.contracts import SignInService
 
@@ -183,9 +188,13 @@ def _service(db_manager, *, waiting_on: str | None = None):
             agent_run_id=None,
         )
 
+    async def _owned_by(_uow, _conversation_id):
+        return owner
+
     return SignInService(
         SessionUnitOfWorkFactory(db_manager.session_factory),
         read_pause=_waiting,
+        owner_of=_owned_by,
     )
 
 
@@ -281,7 +290,9 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         # Answered the way the page answers: by naming the pause, not a row.
         # There is no request id to pass, because there is no request row --
         # the paused tool call is the record.
-        finished = await _service(db_manager, waiting_on=tool_call_id).answer(
+        finished = await _service(
+            db_manager, waiting_on=tool_call_id, owner=user_id
+        ).answer(
             conversation_id=ctx.conversation_id,
             tool_call_id=tool_call_id,
             user_id=user_id,
