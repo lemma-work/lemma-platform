@@ -216,20 +216,29 @@ export function BrowserPane({
                             keyboardIsHere &&
                             'ring-2 ring-[var(--action-primary)] ring-inset',
                     )}
+                    // Capture belongs on `pointerdown`, not `mousedown`. A
+                    // `MouseEvent` has no `pointerId` at all, so calling
+                    // `setPointerCapture` from the mouse handler passes
+                    // `undefined` and throws `NotFoundError` -- which, being
+                    // ahead of the send, took the press down with it. The
+                    // first version of this fix could not click at all.
+                    //
+                    // `pointerdown` fires first, so the capture is in place by
+                    // the time the press is sent. What it buys: the page hears
+                    // the whole of the press, including the part outside this
+                    // element. Without it a drag off the canvas -- past the
+                    // edge of a banner, out of a dropdown, or a sloppy click
+                    // near the bezel -- delivers a press with no release, and
+                    // the page goes on believing the button is held, so the
+                    // next click extends a selection instead of pressing
+                    // anything. That is the shape of "the popup will not go
+                    // away".
+                    onPointerDown={(event) => {
+                        if (!controlling) return;
+                        event.currentTarget.setPointerCapture?.(event.pointerId);
+                    }}
                     onMouseDown={(event) => {
                         canvasRef.current?.focus();
-                        // The page hears the whole of the press, including the
-                        // part that happens outside this element. Without it a
-                        // drag off the canvas -- past the edge of a banner, out
-                        // of a dropdown, or simply a sloppy click near the
-                        // bezel -- delivers a press with no release, and the
-                        // page goes on believing the button is held: the next
-                        // click extends a selection instead of pressing
-                        // anything, which is the shape of "the popup will not
-                        // go away".
-                        event.currentTarget.setPointerCapture?.(
-                            (event as unknown as React.PointerEvent).pointerId,
-                        );
                         onMouse('mousePressed')(event);
                     }}
                     onMouseUp={onMouse('mouseReleased')}

@@ -58,4 +58,46 @@ describe('what the pane tells the page about the mouse', () => {
             ['mouseMoved', 0], // the hover
         ]);
     });
+
+    it('keeps the press when the browser really has setPointerCapture', () => {
+        // jsdom does not implement `setPointerCapture`, so the optional call
+        // short-circuits and every test above passes whatever it is handed.
+        // A real browser has it -- and a `MouseEvent` has no `pointerId`, so
+        // calling it from the mouse handler passed `undefined` and threw
+        // `NotFoundError` *before* the press was sent. The pane could not
+        // click at all, and nothing here said so.
+        //
+        // Defining it is the whole point: the double was certifying the half
+        // that was not written.
+        const captured: unknown[] = [];
+        const proto = window.HTMLCanvasElement.prototype as unknown as Record<
+            string,
+            unknown
+        >;
+        proto.setPointerCapture = function (id: unknown) {
+            if (typeof id !== 'number' || Number.isNaN(id)) {
+                throw new DOMException('bad pointerId', 'NotFoundError');
+            }
+            captured.push(id);
+        };
+
+        try {
+            const { container } = render(
+                <BrowserPane origin="https://example.com" autoControl />,
+            );
+            const canvas = container.querySelector('canvas');
+
+            fireEvent.pointerDown(canvas!, {
+                clientX: 10, clientY: 10, button: 0, buttons: 1, pointerId: 7,
+            });
+            fireEvent.mouseDown(canvas!, {
+                clientX: 10, clientY: 10, button: 0, buttons: 1,
+            });
+
+            expect(captured).toEqual([7]);
+            expect(mouseMessages().map((m) => m.eventType)).toEqual(['mousePressed']);
+        } finally {
+            delete proto.setPointerCapture;
+        }
+    });
 });
