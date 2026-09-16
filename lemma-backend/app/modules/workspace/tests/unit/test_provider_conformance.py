@@ -13,6 +13,7 @@ failed on that commit.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import inspect
 from pathlib import Path
 from uuid import uuid4
 
@@ -313,3 +314,36 @@ async def test_new_e2b_sandboxes_do_not_answer_the_internet(
     assert e2b_world.created_public_traffic == [False], (
         "a sandbox created without this argument is open by default"
     )
+
+
+async def test_the_arguments_we_create_sandboxes_with_are_ones_the_sdk_takes(
+    e2b_provider, e2b_world
+) -> None:
+    """Bind our real call against the real library, not against the double.
+
+    This is the test that was missing. `allow_public_traffic` was passed to
+    `AsyncSandbox.create` as a keyword of its own for the life of this branch,
+    and no released `e2b` has ever had such a parameter -- it is a key on
+    `network`. `create` forwards its extra keywords to `ConnectionConfig`,
+    which raises on a name it does not know, so every real sandbox creation
+    raised `TypeError` while `test_new_e2b_sandboxes_do_not_answer_the_internet`
+    passed, because the double had been written to match our call rather than
+    the library.
+
+    Skipped where the extra is absent, which is every unit lane; there, the
+    double's own signature carries the guarantee. This is what notices when the
+    SDK moves a parameter again.
+    """
+    e2b = pytest.importorskip("e2b", reason="the e2b extra is not installed")
+
+    await e2b_provider.create(_spec(uuid4()))
+    (passed,) = e2b_world.created_kwargs
+
+    # `bind` raises exactly what production raised.
+    inspect.signature(e2b.AsyncSandbox.create).bind(**passed)
+
+    # And the flag really is a network key, which is why it has to travel there.
+    from e2b.sandbox.sandbox_api import SandboxNetworkOpts
+
+    assert "allow_public_traffic" in SandboxNetworkOpts.__annotations__
+    assert passed["network"] == {"allow_public_traffic": False}
