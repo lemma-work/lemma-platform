@@ -37,7 +37,7 @@ dependencies = [
   # — an unbounded floor lets a `pip install lemma-cli` a year from now resolve
   # a CLI against an SDK nobody ever ran it with. The release workflow rewrites
   # both halves on every tagged build.
-  "lemma-sdk>=0.7.2,<0.8",
+  "lemma-sdk>=0.8.0,<0.9",
   "click>=8.3.0",
   "typer>=0.12.5",
   "rich>=13.9.4",

@@ -432,6 +432,23 @@ fn executable_resolution_uses_explicit_search_paths() {
     );
 }
 
+// npm installs `npm` and `npm.cmd` side by side, and only the second is a
+// thing CreateProcess can run. Resolving the bare name first is what made
+// the adapter cache warm-up report "%1 is not a valid Win32 application",
+// leaving every npm-distributed adapter stuck at Installing.
+#[cfg(windows)]
+#[test]
+fn a_windows_launcher_beats_the_posix_shim_beside_it() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("npm"), b"#!/bin/sh\n").unwrap();
+    let launcher = root.path().join("npm.cmd");
+    std::fs::write(&launcher, b"@echo off\n").unwrap();
+    assert_eq!(
+        resolve_executable_in("npm", [root.path().to_path_buf()]),
+        Some(launcher)
+    );
+}
+
 #[test]
 fn detection_covers_the_directories_these_agents_install_themselves_into() {
     // The Agent Host is a sidecar of a GUI app, so it inherits

@@ -23,6 +23,7 @@ from app.core.api.streaming_multipart import (
 )
 from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.core.helpers.slug import normalize_resource_name
+from app.core.ports.widget_content import WidgetSourceUnavailable
 from app.modules.apps.api.asset_response import app_asset_response
 from app.modules.apps.config import apps_settings
 from app.modules.apps.api.dependencies import (
@@ -31,6 +32,7 @@ from app.modules.apps.api.dependencies import (
     WidgetContentReaderDep,
 )
 from app.modules.apps.api.schemas.app_schemas import (
+    MAX_RELEASE_PAGE_SIZE,
     CreateAppFromWidgetRequest,
     CreateAppRequest,
     AppBundleUploadResponse,
@@ -152,6 +154,15 @@ async def create_app_from_widget(
     artifact = await reader.get_widget(data.conversation_id, data.tool_call_id)
     if artifact is None or artifact.pod_id != pod_id:
         raise HTTPException(status_code=404, detail="Widget not found")
+
+    # A widget kept in a pod file is promoted from what that file says now, read
+    # as the person promoting it. An app is a copy taken at this moment, not a
+    # live view of the file — editing the file afterwards changes the widget and
+    # leaves the app where it was, which is what "promote" has always meant here.
+    try:
+        artifact = await reader.resolve(artifact, ctx)
+    except WidgetSourceUnavailable as missing:
+        raise HTTPException(status_code=404, detail=str(missing)) from missing
 
     app = await app_service.create_app_from_widget(
         pod_id,
@@ -356,15 +367,34 @@ async def list_app_releases(
     user: CurrentUser,
     request: Request,
     use_cases: AppUseCasesDep,
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=MAX_RELEASE_PAGE_SIZE,
+        description=(
+            "Max releases to return, up to "
+            f"{MAX_RELEASE_PAGE_SIZE}. Page beyond that with `page_token`."
+        ),
+    ),
+    page_token: str | None = Query(
+        default=None,
+        description="`next_page_token` from the previous page.",
+    ),
 ) -> AppReleaseListResponse:
     history = await use_cases.list_releases(
-        pod_id=pod_id, app_name=app_name, request=request, user_id=user.id
+        pod_id=pod_id,
+        app_name=app_name,
+        request=request,
+        user_id=user.id,
+        limit=limit,
+        cursor=parse_uuid_page_token(page_token),
     )
     return AppReleaseListResponse(
         items=[
             _release_response(entry, app_public_slug=history.app_public_slug)
             for entry in history.items
-        ]
+        ],
+        next_page_token=history.next_page_token,
     )
 
 

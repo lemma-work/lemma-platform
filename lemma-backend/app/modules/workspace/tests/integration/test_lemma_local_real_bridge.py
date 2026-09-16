@@ -333,7 +333,7 @@ async def test_lifecycle_round_trips_through_the_real_bridge(real_bridge) -> Non
     assert found is not None and found.provider_id == instance.provider_id
 
     assert (
-        await provider.port_base_url(instance, port=4848, deadline_at=_deadline())
+        await provider.reach_port(instance, port=4848, deadline_at=_deadline())
         == "http://127.0.0.1:10"
     )
 
@@ -369,7 +369,7 @@ async def test_a_missing_sandbox_is_definitively_gone_through_the_real_bridge(
     )
 
     with pytest.raises(ProviderGone):
-        await provider.port_base_url(instance, port=8080, deadline_at=_deadline())
+        await provider.reach_port(instance, port=8080, deadline_at=_deadline())
 
 
 async def test_storage_model_is_declared_the_same_way_here(real_bridge) -> None:

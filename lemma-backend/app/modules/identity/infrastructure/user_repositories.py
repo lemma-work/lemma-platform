@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Optional
 from uuid import UUID
 
@@ -19,6 +20,12 @@ from app.modules.identity.infrastructure.mobile_number_claims import (
 )
 from app.modules.identity.infrastructure.models import User
 from app.core.helpers.identifiers import normalize_mobile_digits
+
+
+#: Ids per statement in ``existing_ids``. Well under asyncpg's 32,767
+#: bind-parameter ceiling, and large enough that the batches this serves are
+#: one statement in practice.
+_EXISTENCE_CHUNK = 10_000
 
 
 class UserRepository(UserRepositoryPort):
@@ -68,6 +75,40 @@ class UserRepository(UserRepositoryPort):
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
+
+    async def existing_ids(self, user_ids: Collection[UUID]) -> set[UUID]:
+        """Which of these ids name a real user.
+
+        The batch spelling of ``get``, and deliberately as permissive: no
+        ``is_active`` or ``is_deleted`` filter, because the caller is checking
+        that a stored reference points at somebody, not that they can sign in.
+        Its two callers validate USER-typed record columns, where someone
+        leaving must not make the rows naming them unwritable.
+
+        Projected to ids -- the answer is membership, so hydrating a user row
+        per id would be reading a person's whole record to learn they exist.
+
+        Chunked because the id list is the caller's, not this module's. The
+        HTTP record endpoints cap their batch, but a pod-bundle import calls
+        the same validation through ``seed_table_rows`` with however many rows
+        the bundle holds -- and one bind parameter per distinct id runs into
+        asyncpg's ceiling of 32,767 long before a large import is unusual. A
+        driver-level error on a number nobody chose is the worst way to find
+        that out.
+        """
+        unique_ids = set(user_ids)
+        if not unique_ids:
+            return set()
+        ordered = list(unique_ids)
+        found: set[UUID] = set()
+        for start in range(0, len(ordered), _EXISTENCE_CHUNK):
+            rows = await self.session.execute(
+                select(User.id).where(
+                    User.id.in_(ordered[start : start + _EXISTENCE_CHUNK])
+                )
+            )
+            found.update(rows.scalars().all())
+        return found
 
     async def get_by_email(self, email: str) -> Optional[UserEntity]:
         normalized = normalize_identity_email(email)

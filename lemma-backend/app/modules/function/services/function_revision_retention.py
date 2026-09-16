@@ -65,6 +65,37 @@ class RevisionPrunePlan:
         return not self.artifact_paths and not self.source_prefixes
 
 
+def _source_prefix(code_path: str) -> str | None:
+    """The directory holding a revision's source, or ``None`` if it has none."""
+    return code_path.rsplit("/", 1)[0] if "/" in code_path else None
+
+
+def _prunable_source_prefixes(doomed, retained) -> set[str]:
+    """Source directories no surviving revision still points at.
+
+    The path is `revisions/<content hash>/function.py`, so two revisions of
+    identical bytes share one directory -- which `record_revision` allows, and
+    which the legacy layout makes likely. Deleting the directory for a pruned
+    revision then takes the source of a revision that is still live, and a
+    retried prune of a long-pruned row does it to whatever now shares the hash.
+
+    The apps side has had `_prunable_source_paths` for exactly this since it
+    was written, with a comment saying legacy releases may share a source path.
+    This is that check, on the half that never got one.
+    """
+    still_referenced = {
+        prefix
+        for revision in retained
+        if (prefix := _source_prefix(revision.code_path)) is not None
+    }
+    return {
+        prefix
+        for revision in doomed
+        if (prefix := _source_prefix(revision.code_path)) is not None
+        and prefix not in still_referenced
+    }
+
+
 def _unfinished_prunes(
     revisions: list[FunctionRevisionEntity],
     live_id: UUID | None,
@@ -101,7 +132,10 @@ class FunctionRevisionRetention:
         if function is None:
             raise ValueError("function was deleted before retention could lock it")
         moment = now or datetime.now(timezone.utc)
-        revisions = await self.repository.list_revisions(function.id)
+        # Not `list_revisions`: purged rows are tombstones whose bytes are
+        # already gone, and reading them made the plan's cost the function's
+        # whole deploy history rather than the handful retention can act on.
+        revisions = await self.repository.list_unpurged_revisions(function.id)
         live_id = next(
             (
                 revision.id
@@ -120,6 +154,8 @@ class FunctionRevisionRetention:
         candidates = await self._drop_in_flight(function.id, candidates, moment)
         unfinished = _unfinished_prunes(revisions, live_id, moment)
         doomed = candidates + unfinished
+        doomed_ids = {revision.id for revision in doomed}
+        retained = [revision for revision in revisions if revision.id not in doomed_ids]
         if not doomed:
             return RevisionPrunePlan(function.id, (), (), ())
 
@@ -131,9 +167,12 @@ class FunctionRevisionRetention:
             artifact_paths=tuple(r.artifact_path for r in doomed),
             # `revisions/<hash>/function.py` -- delete the directory, not the
             # single file, so nothing is left behind if the layout ever grows.
-            source_prefixes=tuple(
-                r.code_path.rsplit("/", 1)[0] for r in doomed if "/" in r.code_path
-            ),
+            # Never a directory a surviving revision still points at: the path
+            # is keyed on the content hash, so redeploying identical bytes
+            # gives two revisions one directory, and pruning the older one
+            # deleted the live one's source. The apps twin has guarded this
+            # since it was written; this side did not.
+            source_prefixes=tuple(_prunable_source_prefixes(doomed, retained)),
             # Only the fresh ones: re-running a delete is not a new prune.
             revision_numbers=tuple(r.revision_number for r in candidates),
         )

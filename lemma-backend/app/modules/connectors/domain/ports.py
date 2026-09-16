@@ -82,6 +82,8 @@ class AccountRepositoryPort(Protocol):
         self, auth_config_id: UUID
     ) -> Sequence[AccountEntity]: ...
 
+    async def mark_connected_for_reauth(self, auth_config_id: UUID) -> int: ...
+
     async def list_by_user(
         self,
         user_id: UUID,

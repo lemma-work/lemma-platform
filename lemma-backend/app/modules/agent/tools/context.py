@@ -24,6 +24,9 @@ from app.modules.agent.services.workspace_location import (
 from app.modules.workspace.contracts.tooling import WorkspaceFileManager
 
 
+TOOL_COMMENT_DESC = "One-line statement of intent, shown to the user."
+
+
 class BaseAgentContext(AgentContext):
     """Context passed to Pydantic AI toolsets."""
 

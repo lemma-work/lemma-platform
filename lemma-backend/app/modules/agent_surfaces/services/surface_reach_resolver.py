@@ -7,18 +7,26 @@ or the connected account / email address for email surfaces.
 Resolution is **lazy write-through**: the first read that needs a live call
 (Slack/Teams/Telegram) fetches the value once and persists it onto the surface's
 ``surface_identity_username`` column, so every later read reuses the stored value
-with no external call. Everything here is best-effort — a GET must always
-succeed, so failures degrade to a fallback handle (or None) and never raise.
+with no external call.
+
+Everything here is best-effort with one stated exception: a GET must always
+succeed, so a failed platform call, an undecryptable credential or a
+write-through that does not land all degrade to a fallback handle (or None).
+A *database* error does not, because it takes the caller's session with it --
+continuing past one only produces more failures, later, with no error naming
+the first.
 """
 
 from __future__ import annotations
 
 from contextlib import suppress
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.modules.agent_surfaces.platforms.common import (
     PLATFORM_TRANSPORT_ERRORS,
@@ -55,6 +63,17 @@ FindAccount = Callable[[UUID], Awaitable[SurfaceAccount | None]]
 # never stall a surfaces list. On timeout we degrade to the fallback handle.
 _LIVE_HANDLE_TIMEOUT_SECONDS = 6.0
 
+#: Platforms whose live handle lookup needs credentials resolved first --
+#: the database step. Teams reads the deployment's own Graph app instead,
+#: so it has nothing to look up and nothing to serialise behind.
+_CREDENTIALLED_PLATFORMS = frozenset(
+    {
+        SurfacePlatform.SLACK,
+        SurfacePlatform.TELEGRAM,
+        SurfacePlatform.WHATSAPP,
+    }
+)
+
 
 class SurfaceReachResolver:
     async def resolve(
@@ -65,44 +84,158 @@ class SurfaceReachResolver:
         find_account: FindAccount | None = None,
         surface_repository=None,
     ) -> SurfaceReach:
-        email = surface.surface_identity_email
+        """One surface. The batch below is the same work; this is one element."""
+        reaches = await self.resolve_many(
+            [surface],
+            credential_resolver=credential_resolver,
+            find_account=find_account,
+            surface_repository=surface_repository,
+        )
+        return reaches[0]
 
-        # Already resolved (lazy cache hit): reuse the stored handle, no live call.
-        if surface.surface_identity_username:
-            return SurfaceReach(handle=surface.surface_identity_username, email=email)
+    async def resolve_many(
+        self,
+        surfaces: Sequence[AgentSurfaceEntity],
+        *,
+        credential_resolver: "SurfaceCredentialResolver | None" = None,
+        find_account: FindAccount | None = None,
+        surface_repository=None,
+    ) -> list[SurfaceReach]:
+        """A page of surfaces, in three phases split by what they touch.
 
-        handle = await self._resolve_live_handle(
-            surface, credential_resolver=credential_resolver
+        A listing used to run this whole method concurrently, once per surface,
+        over the request's single unit of work -- and resolving one surface
+        reads credentials, sometimes refreshes and stores them, may read the
+        connected account, and writes the resolved handle back. An
+        ``AsyncSession`` serves one operation at a time: two surfaces needing
+        any of that at once is an illegal concurrent operation on the session,
+        and the surfaces that avoided it only did so by already having a stored
+        handle and doing nothing at all.
+
+        Concurrency was reached for because a page of eight surfaces was eight
+        sequential round trips to Slack or Telegram. That is still true, and
+        still worth fixing -- but the round trips are the only part of this
+        that is slow *and* the only part that touches no database. So they are
+        the only part that overlaps:
+
+        1. credentials, in series, through the caller's unit of work;
+        2. the platform calls, concurrently, over credentials already in hand;
+        3. write-through and the account fallback, in series, back on the unit
+           of work.
+
+        Credential resolution no longer degrades quietly either: it was inside
+        the same guard as the platform call, and a failed statement leaves the
+        session unusable for everyone after it, so carrying on past one turned
+        a single failure into a page of them with no error to show for it. The
+        write-through and the account fallback below keep their guards -- both
+        are genuinely optional, and a read must still succeed without them.
+        """
+        pending: list[int] = []
+        resolved: dict[int, SurfaceReach] = {}
+        for index, surface in enumerate(surfaces):
+            # Already resolved (lazy cache hit): the stored handle, no live call.
+            if surface.surface_identity_username:
+                resolved[index] = SurfaceReach(
+                    handle=surface.surface_identity_username,
+                    email=surface.surface_identity_email,
+                )
+            else:
+                pending.append(index)
+
+        credentials = [
+            await self._credentials_for(surfaces[i], credential_resolver)
+            for i in pending
+        ]
+        handles = await asyncio.gather(
+            *(
+                self._live_handle(surfaces[i], credentials[position])
+                for position, i in enumerate(pending)
+            )
         )
 
-        # Write-through: a live call produced a NEW username → persist it once so
-        # later reads short-circuit above. Idempotent + best-effort.
-        if handle and surface_repository is not None:
-            await self._persist_username(surface, handle, surface_repository)
+        for position, index in enumerate(pending):
+            surface = surfaces[index]
+            handle = handles[position]
+            # Write-through: a live call produced a NEW username → persist it
+            # once so later reads short-circuit above. Idempotent, best-effort.
+            if handle and surface_repository is not None:
+                await self._persist_username(surface, handle, surface_repository)
+            if handle is None:
+                handle = await self._fallback_handle(surface, find_account=find_account)
+            resolved[index] = SurfaceReach(
+                handle=handle, email=surface.surface_identity_email
+            )
 
-        if handle is None:
-            handle = await self._fallback_handle(surface, find_account=find_account)
+        # Indexed rather than appended, so the answer lines up with the input
+        # positionally. A surface that somehow reached neither branch raises
+        # here instead of shifting every reach after it onto the wrong row.
+        return [resolved[index] for index in range(len(surfaces))]
 
-        return SurfaceReach(handle=handle, email=email)
-
-    async def _resolve_live_handle(
+    async def _credentials_for(
         self,
         surface: AgentSurfaceEntity,
-        *,
         credential_resolver: "SurfaceCredentialResolver | None",
+    ) -> dict[str, object] | None:
+        """The database half of a live handle lookup, on its own.
+
+        Separated so it can run in series while the calls it feeds run
+        concurrently. ``None`` means there is nothing to look up -- no
+        resolver, or a platform whose handle needs no credentials.
+
+        The two kinds of failure here are not the same and are not treated the
+        same. A database error leaves the session unusable for everyone after
+        it, so swallowing one turns a single failure into a page of them with
+        nothing to show for it; it propagates. Anything else -- a secret that
+        will not decrypt, a provider whose config is malformed -- belongs to
+        one surface, and a listing that fails because one bot's credentials
+        went bad is worse than a listing that shows that bot without a handle.
+
+        An earlier version of this had no split: the whole thing was inside the
+        same broad catch as the platform call, and then briefly had no guard at
+        all, which made one undecryptable secret a 500 for the whole page.
+        """
+        if credential_resolver is None:
+            return None
+        if surface.surface_type not in _CREDENTIALLED_PLATFORMS:
+            return None
+        try:
+            return await credential_resolver.for_surface(surface)
+        except SQLAlchemyError:
+            raise
+        except Exception:
+            logger.warning(
+                "agent_surfaces.surface_reach_resolver.credentials_unavailable",
+                surface_type=getattr(
+                    surface.surface_type, "value", surface.surface_type
+                ),
+                exc_info=True,
+            )
+            return None
+
+    async def _live_handle(
+        self,
+        surface: AgentSurfaceEntity,
+        credentials: dict[str, object] | None,
     ) -> str | None:
         """Per-platform live handle lookup (best-effort → None on any failure).
 
         Bounded by ``_LIVE_HANDLE_TIMEOUT_SECONDS`` so a hung provider can't stall
         the caller; a timeout is treated like any other failure (→ fallback)."""
         if surface.surface_type is SurfacePlatform.SLACK:
-            coro = self._slack_handle(surface, credential_resolver)
+            user_id = surface.surface_identity_id
+            if credentials is None or not user_id:
+                return None
+            coro = self._slack_handle(user_id, credentials)
         elif surface.surface_type is SurfacePlatform.TEAMS:
             coro = self._teams_handle(surface)
         elif surface.surface_type is SurfacePlatform.TELEGRAM:
-            coro = self._telegram_handle(surface, credential_resolver)
+            if credentials is None:
+                return None
+            coro = self._telegram_handle(credentials)
         elif surface.surface_type is SurfacePlatform.WHATSAPP:
-            coro = self._whatsapp_handle(surface, credential_resolver)
+            if credentials is None:
+                return None
+            coro = self._whatsapp_handle(credentials)
         else:
             return None
         try:
@@ -115,48 +248,29 @@ class SurfaceReachResolver:
         return None
 
     async def _slack_handle(
-        self,
-        surface: AgentSurfaceEntity,
-        credential_resolver: "SurfaceCredentialResolver | None",
+        self, user_id: str, credentials: dict[str, object]
     ) -> str | None:
-        if credential_resolver is None or not surface.surface_identity_id:
-            return None
         from app.modules.agent_surfaces.platforms.slack.service import (
             SlackPlatformService,
         )
 
-        credentials = await credential_resolver.for_surface(surface)
         return await SlackPlatformService(
             credentials=credentials
-        ).get_user_display_name(surface.surface_identity_id)
+        ).get_user_display_name(user_id)
 
-    async def _telegram_handle(
-        self,
-        surface: AgentSurfaceEntity,
-        credential_resolver: "SurfaceCredentialResolver | None",
-    ) -> str | None:
-        if credential_resolver is None:
-            return None
+    async def _telegram_handle(self, credentials: dict[str, object]) -> str | None:
         from app.modules.agent_surfaces.platforms.telegram.service import (
             TelegramPlatformService,
         )
 
-        credentials = await credential_resolver.for_surface(surface)
         username = await TelegramPlatformService(credentials).get_bot_username()
         return f"@{username}" if username else None
 
-    async def _whatsapp_handle(
-        self,
-        surface: AgentSurfaceEntity,
-        credential_resolver: "SurfaceCredentialResolver | None",
-    ) -> str | None:
-        if credential_resolver is None:
-            return None
+    async def _whatsapp_handle(self, credentials: dict[str, object]) -> str | None:
         from app.modules.agent_surfaces.platforms.whatsapp.service import (
             WhatsAppPlatformService,
         )
 
-        credentials = await credential_resolver.for_surface(surface)
         return await WhatsAppPlatformService(credentials).get_display_phone_number()
 
     async def _teams_handle(self, surface: AgentSurfaceEntity) -> str | None:

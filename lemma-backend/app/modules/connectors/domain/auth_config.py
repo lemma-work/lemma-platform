@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import model_validator
 
 from app.core.domain.entity import Entity
 from app.modules.connectors.domain.errors import ConnectorValidationError
@@ -26,19 +25,31 @@ class AuthConfigSource(str, enum.Enum):
     ORG_CUSTOM = "ORG_CUSTOM"
 
 
-# Composio brokers every one of its toolkits through Lemma's own Composio
-# account -- one process-global ``COMPOSIO_API_KEY`` (connectors/config.py).
-# There is no per-org Composio key, so a Composio install is always
-# SYSTEM_DEFAULT.
+# Which config source a Composio install may use is decided per toolkit, by
+# whether Composio holds credentials for it on Lemma's account
+# (``system_default_available`` on the catalog's kind spec).
+#
+# The org still never brings a Composio key -- there is one process-global
+# ``COMPOSIO_API_KEY`` (connectors/config.py) and no per-org equivalent. What an
+# org brings for an unmanaged toolkit is the *third party's* OAuth client, which
+# Composio accepts as a custom auth config while running it on Lemma's account.
+# Those are different things, and treating the second as the first is what left
+# eight brokered toolkits with no way to be connected at all.
 #
 # Two layers enforce this, and they are not redundant: the service check runs
 # on create, the kind installer also runs on the update path. They share these
 # constants so the two can't drift into saying different things.
 COMPOSIO_SYSTEM_CREDENTIALS_ONLY = (
-    "Composio installs use Lemma's Composio credentials; org-supplied "
-    "credentials are not supported."
+    "Composio holds credentials for this toolkit, so its install uses Lemma's "
+    "Composio credentials; org-supplied credentials are not supported."
 )
 COMPOSIO_ORG_CUSTOM_REASON = "org_custom_not_supported_for_composio"
+
+COMPOSIO_ORG_CREDENTIALS_REQUIRED = (
+    "Composio has no managed credentials for this toolkit, so it cannot be "
+    "installed with Lemma's defaults. Supply the app's own credentials."
+)
+COMPOSIO_SYSTEM_DEFAULT_REASON = "system_default_not_available_for_composio"
 
 
 class AuthConfigEntity(Entity):
@@ -62,10 +73,6 @@ class AuthConfigEntity(Entity):
     metadata: dict[str, Any] | None = None
     created_by_user_id: UUID | None = None
     updated_by_user_id: UUID | None = None
-
-    model_config = ConfigDict(from_attributes=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @model_validator(mode="before")
     @classmethod

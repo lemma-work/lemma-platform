@@ -51,7 +51,10 @@ from app.core.html_document import wrap_html_fragment
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import ConversationNotFoundError
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.widget_asset_service import WidgetAssetService
+from app.modules.agent.services.widget_asset_service import (
+    WidgetAssetService,
+    WidgetSourceUnavailable,
+)
 from app.modules.agent.services.widget_token import (
     InvalidWidgetToken,
     mint_widget_token,
@@ -245,6 +248,13 @@ async def serve_widget(
             pod_id=artifact.pod_id,
             conversations=services.conversations,
         )
+        # Only now: a widget backed by a pod file is read as the person looking
+        # at it, under their own grants. Reading it earlier would serve a file
+        # to someone the file's permissions had not yet been consulted about.
+        try:
+            artifact = await services.widget_content(uow).resolve(artifact, ctx)
+        except WidgetSourceUnavailable as missing:
+            raise HTTPException(status_code=404, detail=str(missing)) from missing
 
     document = wrap_html_fragment(artifact.content, title=artifact.title, embed=True)
     return build_injected_html_response(document, artifact.pod_id)

@@ -321,7 +321,7 @@ async def test_the_runtime_port_resolves_to_something_the_backend_can_call(
     workspace,
 ) -> None:
     """Every tool call goes to this URL. Without it the sandbox is unreachable."""
-    url = await workspace.provider.port_base_url(
+    url = await workspace.provider.reach_port(
         workspace.instance, port=8080, deadline_at=_deadline(120)
     )
 

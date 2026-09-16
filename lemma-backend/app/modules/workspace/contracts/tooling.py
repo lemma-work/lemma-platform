@@ -11,6 +11,7 @@ where inside `workspace` each class happened to live.
 
 from __future__ import annotations
 
+from app.modules.workspace.session_support import retry_advice, sandbox_failure_types
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
@@ -22,6 +23,8 @@ from app.modules.workspace.services.workspace_tool_runtime import (
 
 __all__ = [
     "WorkspaceFileManager",
+    "retry_advice",
+    "sandbox_failure_types",
     "WorkspaceSandboxService",
     "get_workspace_tool_runtime",
     "invalidate_function_workspace_env_cache",

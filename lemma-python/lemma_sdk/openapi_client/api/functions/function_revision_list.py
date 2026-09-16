@@ -9,13 +9,29 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.function_revision_list_response import FunctionRevisionListResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     pod_id: UUID,
     function_name: str,
+    *,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
+
+    params: dict[str, Any] = {}
+
+    params["limit"] = limit
+
+    json_page_token: None | str | Unset
+    if isinstance(page_token, Unset):
+        json_page_token = UNSET
+    else:
+        json_page_token = page_token
+    params["page_token"] = json_page_token
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
@@ -23,6 +39,7 @@ def _get_kwargs(
             pod_id=quote(str(pod_id), safe=""),
             function_name=quote(str(function_name), safe=""),
         ),
+        "params": params,
     }
 
     return _kwargs
@@ -63,6 +80,8 @@ def sync_detailed(
     function_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | FunctionRevisionListResponse]:
     """List Function Revisions
 
@@ -71,6 +90,9 @@ def sync_detailed(
     Args:
         pod_id (UUID):
         function_name (str):
+        limit (int | Unset): Max revisions to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -83,6 +105,8 @@ def sync_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         function_name=function_name,
+        limit=limit,
+        page_token=page_token,
     )
 
     response = client.get_httpx_client().request(
@@ -97,6 +121,8 @@ def sync(
     function_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | FunctionRevisionListResponse | None:
     """List Function Revisions
 
@@ -105,6 +131,9 @@ def sync(
     Args:
         pod_id (UUID):
         function_name (str):
+        limit (int | Unset): Max revisions to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -118,6 +147,8 @@ def sync(
         pod_id=pod_id,
         function_name=function_name,
         client=client,
+        limit=limit,
+        page_token=page_token,
     ).parsed
 
 
@@ -126,6 +157,8 @@ async def asyncio_detailed(
     function_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | FunctionRevisionListResponse]:
     """List Function Revisions
 
@@ -134,6 +167,9 @@ async def asyncio_detailed(
     Args:
         pod_id (UUID):
         function_name (str):
+        limit (int | Unset): Max revisions to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -146,6 +182,8 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         pod_id=pod_id,
         function_name=function_name,
+        limit=limit,
+        page_token=page_token,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -158,6 +196,8 @@ async def asyncio(
     function_name: str,
     *,
     client: AuthenticatedClient | Client,
+    limit: int | Unset = 50,
+    page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | FunctionRevisionListResponse | None:
     """List Function Revisions
 
@@ -166,6 +206,9 @@ async def asyncio(
     Args:
         pod_id (UUID):
         function_name (str):
+        limit (int | Unset): Max revisions to return, up to 200. Page beyond that with
+            `page_token`. Default: 50.
+        page_token (None | str | Unset): `next_page_token` from the previous page.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -180,5 +223,7 @@ async def asyncio(
             pod_id=pod_id,
             function_name=function_name,
             client=client,
+            limit=limit,
+            page_token=page_token,
         )
     ).parsed

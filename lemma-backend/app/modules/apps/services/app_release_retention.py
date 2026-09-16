@@ -156,7 +156,16 @@ class AppReleaseRetention:
         if app is None:
             raise ValueError("app was deleted before retention could lock it")
         moment = now or datetime.now(timezone.utc)
-        releases = await self.repository.list_releases(app.id)
+        # Not `list_releases`: purged rows are tombstones whose bytes are
+        # already gone, and reading them made the plan's cost the app's whole
+        # deploy history rather than the handful retention can act on.
+        #
+        # It also takes them out of `retained` below, which is the point rather
+        # than a side effect. `_prunable_source_paths` keeps a source blob any
+        # retained release still points at -- and a purged release points at
+        # nothing, so counting one as a reference pinned a blob whose only
+        # referent had already been deleted, forever.
+        releases = await self.repository.list_unpurged_releases(app.id)
         prunable = select_prunable(
             releases,
             policy=policy or release_retention_policy(),

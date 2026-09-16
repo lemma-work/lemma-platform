@@ -76,6 +76,7 @@ document and the operation ID carries the API's spelling.
 | `AGENT` | Agents, conversations, tools, approvals |
 | `SURF` | Surfaces, webhooks, notifications, inboxes |
 | `CONN` | Connectors, auth configs, accounts, operations |
+| `BROWSER` | The agent's browser, signing in to sites, saved logins |
 | `ACCESS` | Permissions, grants, visibility, delegation |
 | `PACK` | Bundles, export, import, publish, share links, apps |
 | `OPS` | Usage, limits, deletion, retention, deployment posture |
@@ -207,6 +208,7 @@ diff.
 | [Agents and conversations](journeys/agents-and-conversations.md) | Put an agent on the work and talk to it |
 | [Surfaces and notifications](journeys/surfaces-and-notifications.md) | Reach the pod from Slack, Teams, Telegram, WhatsApp, email |
 | [Connectors and accounts](journeys/connectors-and-accounts.md) | Connect the systems the work actually lives in |
+| [Signing in to sites](journeys/signing-in-to-sites.md) | Get an agent past a login wall, once, and keep the way back in |
 | [Sharing and permissions](journeys/sharing-and-permissions.md) | Decide who and what can touch each resource |
 | [Packaging and reuse](journeys/packaging-and-reuse.md) | Export a pod, publish it, import someone else's |
 | [Operating a deployment](journeys/operating-a-deployment.md) | Watch usage, stay inside limits, delete cleanly |

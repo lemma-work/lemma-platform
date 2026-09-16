@@ -47,6 +47,7 @@ on:
       - Release Lemma Python SDK
       - Release Lemma TypeScript SDK
       - Release Lemma Terminal CLI
+      - Announce a release
     types: [completed]
   workflow_dispatch:
     inputs:

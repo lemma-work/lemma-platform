@@ -2722,7 +2722,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "lemma-agent-host"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -2759,7 +2759,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-desktop"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "hex",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-desktop-process"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "process-wrap",
  "tempfile",
@@ -2803,7 +2803,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-guestd"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "libc",
  "serde",
@@ -2813,14 +2813,14 @@ dependencies = [
 
 [[package]]
 name = "lemma-job-object"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "lemma-locald"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-private-file"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
@@ -2855,7 +2855,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-runtime"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -2863,7 +2863,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-runtime-manager"
-version = "0.7.2"
+version = "0.8.0"
 dependencies = [
  "getrandom 0.3.4",
  "lemma-desktop-process",

@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -89,7 +89,7 @@ help:
 	@echo "  make test-e2e          # run all e2e tests"
 	@echo "  make test-e2e-fast     # hermetic API/worker e2e (no slow/workspace/provider/local_cli),"
 	@echo "                         #   parallel via pytest-xdist (E2E_WORKERS=$(E2E_WORKERS); auto|0 to override)"
-	@echo "  make test-e2e-runtime  # run slow worker/workspace/local/provider e2e tests (serial)"
+	@echo "  make test-e2e-runtime  # exactly what backend-protected-e2e.yml runs (serial)"
 	@echo "  make test-module MODULE=pod"
 	@echo "  make coverage-unit     # unit coverage"
 	@echo "  make coverage-e2e      # e2e coverage"
@@ -100,11 +100,13 @@ help:
 	@echo "  make lint-session-scope # DB connection held across non-DB work"
 	@echo "  make lint-io-hygiene   # unbounded thread offloads / untimed aiohttp"
 	@echo "  make lint-unbounded    # unbounded queues/caches, CPU on the loop"
+	@echo "  make lint-unbounded-reads # collection reads with no ceiling"
 	@echo "  make lint-import-bound-defaults  # defaults a test cannot replace"
 	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
 	@echo "  make test-e2e-shard-ci SHARD=sandbox   # one CI shard, exactly as CI runs it"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
+	@echo "  make lint-migration-order  # one alembic head, numbers matching apply order"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
 	@echo "  make test-connection-scope # runtime: no connection held across non-DB work"
 	@echo "  make typecheck-critical # strict reliability/domain type gate"
@@ -211,9 +213,14 @@ test-e2e-real-llm:
 # locally to reproduce the protected lane failed on tests CI never runs, and
 # passed on none it does. That lane once did nothing at all for eleven days and
 # blocked every Desktop release; it should be reproducible in one command.
+#
+# What it does not select is argued in the workflow: `local_cli` needs an Agent
+# Host neither this target nor that job builds (`make desktop-agent-host-e2e`
+# does), and `benchmark` is a wall-clock budget owned by
+# `make benchmark-functions-docker`.
 test-e2e-runtime:
 	E2E_REAL=1 E2E_LLM_MODE=mock uv run pytest \
-		-m "e2e and (slow or workspace or indexing or local_cli or protected) and not provider" \
+		-m "e2e and (slow or workspace or indexing or protected) and not provider and not benchmark" \
 		-o timeout=300
 
 test-module:
@@ -473,6 +480,13 @@ lint-io-hygiene:
 lint-unbounded:
 	uv run python scripts/check_unbounded.py
 
+# Queries that read a collection with no limit, no in_() and no aggregate --
+# the shape behind twenty-five reads whose cost followed a tenant's data
+# rather than the caller's request. Ratcheted against
+# unbounded-reads-baseline.json.
+lint-unbounded-reads:
+	uv run python scripts/check_unbounded_reads.py
+
 # A default argument naming something tests replace by patching a module
 # attribute. Defaults bind at import, so the patch never reaches them -- and
 # the test usually still passes. No baseline: the rule is quiet by
@@ -497,6 +511,16 @@ lint-controller-types:
 # Ratcheted against swallowed-errors-baseline.json.
 lint-swallowed-errors:
 	uv run python scripts/check_swallowed_errors.py
+
+# Migration order gate (enforced in CI). One head — a second one makes
+# `alembic upgrade head` refuse to run at all — and filename numbers that match
+# apply order, so the directory still reads as a history. A long-lived branch
+# authored at position 21 and merged at 30 left two 0021s and two 0022s behind,
+# and a chain that read 22 -> 30 with no file missing.
+# Ratcheted by LEGACY_ID_POSITION_MISMATCH in the script: filenames are free to
+# rename, revision ids are not, because databases are stamped with them.
+lint-migration-order:
+	uv run python scripts/check_migration_order.py
 
 # In-subject test doubles (enforced in CI). A double in front of a collaborator
 # isolates the unit; one *inside* it certifies the half you did not write, so a
@@ -717,10 +741,28 @@ docker-reap:
 
 SANDBOX_REGISTRY  ?= ghcr.io/lemma-work
 SANDBOX_TAG       ?= dev
-SANDBOX_PLATFORM  ?= linux/amd64
+# A locally built workspace image targets the machine that will run it, which is
+# what `{{.Server.Arch}}` reports -- the *daemon's* architecture, not the CLI's.
+# Published images still cover both (`SANDBOX_PLATFORMS`), so this changes what a
+# developer builds, never what ships.
+#
+# It used to be pinned to linux/amd64, which on an Apple Silicon machine means
+# every process in the sandbox is emulated. That is not a small tax on a browser:
+# measured in an idle container on the same host, Chromium's cold launch is 4.4s
+# emulated against 0.33s native, `start-browser` 9.1s against 1.8s, and a cold
+# `open` 14.6s against 2.2s. Under the load of a sandbox that has just been
+# provisioned those multiply, which is how a browser tool with a 90s budget
+# timed out and fell back to fetching the page without a browser at all.
+# Evaluated lazily, so `make` targets that build nothing never shell out to
+# docker, and falling back to amd64 keeps a machine with no daemon running
+# building the same image it built before.
+SANDBOX_PLATFORM  ?= linux/$(or $(shell docker version --format '{{.Server.Arch}}' 2>/dev/null),amd64)
 SANDBOX_PLATFORMS ?= linux/amd64,linux/arm64
 # Function artifacts target the canonical x86-64 runtime ABI. Do not publish an
-# arm64 function image until the artifact builder emits an arm64 ABI.
+# arm64 function image until the artifact builder emits an arm64 ABI -- and for
+# the same reason do not build a local one either, so this keeps its own pin
+# rather than following the host the way the workspace image now does.
+SANDBOX_FUNCTION_PLATFORM  ?= linux/amd64
 SANDBOX_FUNCTION_PLATFORMS ?= linux/amd64
 SANDBOX_PYTHON_IMAGE ?= python:3.14.6-slim
 SANDBOX_NODE_IMAGE   ?= node:24.18.0-slim
@@ -753,7 +795,7 @@ sandbox-image-workspace:
 
 sandbox-image-function:
 	docker build \
-		--platform $(SANDBOX_PLATFORM) \
+		--platform $(SANDBOX_FUNCTION_PLATFORM) \
 		-f $(IMAGES_DIR)/Dockerfile.function \
 		--build-arg PYTHON_IMAGE=$(SANDBOX_PYTHON_IMAGE) \
 		-t $(FUNCTION_IMAGE):$(SANDBOX_TAG) \

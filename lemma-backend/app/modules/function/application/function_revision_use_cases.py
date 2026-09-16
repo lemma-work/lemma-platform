@@ -49,13 +49,20 @@ class FunctionRevisionUseCasesMixin:
         return FunctionRevisionService(service.repository, service.storage_factory)
 
     async def list_revisions(
-        self, *, pod_id: UUID, name: str, user_id: UUID, request: Request
-    ) -> list[RevisionListing]:
+        self,
+        *,
+        pod_id: UUID,
+        name: str,
+        user_id: UUID,
+        request: Request,
+        limit: int,
+        cursor: UUID | None,
+    ) -> tuple[list[RevisionListing], UUID | None]:
         async with pod_context_scope(
             self._uow_factory, request=request, user_id=user_id, pod_id=pod_id
         ) as scope:
             return await self._build_revisions(scope.uow).list_revisions(
-                pod_id, name, ctx=scope.ctx
+                pod_id, name, ctx=scope.ctx, limit=limit, cursor=cursor
             )
 
     async def get_revision(

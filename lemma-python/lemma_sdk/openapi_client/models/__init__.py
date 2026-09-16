@@ -93,6 +93,7 @@ _NAME_TO_MODULE = {
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest': 'agent_surface_slack_manifest_response_agent_surface_slack_manifest',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
+    'AnswerSignInRequest': 'answer_sign_in_request',
     'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
     'AppDetailResponse': 'app_detail_response',
@@ -126,6 +127,7 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'BrowserStatusResponse': 'browser_status_response',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -144,6 +146,7 @@ _NAME_TO_MODULE = {
     'ConnectorKindResponseSchema': 'connector_kind_response_schema',
     'ConnectorKindResponseSchemaConfigSchemaType0': 'connector_kind_response_schema_config_schema_type_0',
     'ConnectorKindResponseSchemaCredentialSchemaType0': 'connector_kind_response_schema_credential_schema_type_0',
+    'ConnectorKindResponseSchemaInstallConfigSchemaType0': 'connector_kind_response_schema_install_config_schema_type_0',
     'ConnectorListResponseSchema': 'connector_list_response_schema',
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
@@ -339,6 +342,7 @@ _NAME_TO_MODULE = {
     'OrganizationSlugAvailabilityResponse': 'organization_slug_availability_response',
     'OrganizationUpdateRequest': 'organization_update_request',
     'PartialApplyResponse': 'partial_apply_response',
+    'PendingSignInResponse': 'pending_sign_in_response',
     'PlanStepResponse': 'plan_step_response',
     'PlanStepResponseDetail': 'plan_step_response_detail',
     'PodConfig': 'pod_config',
@@ -420,6 +424,10 @@ _NAME_TO_MODULE = {
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
+    'SignInOutcomeResponse': 'sign_in_outcome_response',
+    'SignedUrlListResponse': 'signed_url_list_response',
+    'SignedUrlRevokeResponse': 'signed_url_revoke_response',
+    'SignedUrlSummary': 'signed_url_summary',
     'StepRecordResponse': 'step_record_response',
     'StepStatus': 'step_status',
     'SurfaceAdminConsentInfo': 'surface_admin_consent_info',
@@ -515,6 +523,10 @@ _NAME_TO_MODULE = {
     'WaitUntilNodePositionType0': 'wait_until_node_position_type_0',
     'WaitUntilNodeResponse': 'wait_until_node_response',
     'WaitUntilNodeResponsePositionType0': 'wait_until_node_response_position_type_0',
+    'WebLoginAuditEntry': 'web_login_audit_entry',
+    'WebLoginAuditResponse': 'web_login_audit_response',
+    'WebLoginListResponse': 'web_login_list_response',
+    'WebLoginResponse': 'web_login_response',
     'WebSearchRequest': 'web_search_request',
     'WebSearchResponse': 'web_search_response',
     'WidgetEmbedUrlResponse': 'widget_embed_url_response',
@@ -541,6 +553,9 @@ _NAME_TO_MODULE = {
     'WorkflowUpdateRequest': 'workflow_update_request',
     'WorkspaceAppAccessRequest': 'workspace_app_access_request',
     'WorkspaceAppAccessResponse': 'workspace_app_access_response',
+    'WorkspaceFileEntry': 'workspace_file_entry',
+    'WorkspaceFileEntryKind': 'workspace_file_entry_kind',
+    'WorkspaceFileListResponse': 'workspace_file_list_response',
 }
 
 if TYPE_CHECKING:
@@ -628,6 +643,7 @@ if TYPE_CHECKING:
     from .agent_surface_slack_manifest_response_agent_surface_slack_manifest import AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
+    from .answer_sign_in_request import AnswerSignInRequest
     from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
     from .app_detail_response import AppDetailResponse
@@ -661,6 +677,7 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .browser_status_response import BrowserStatusResponse
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -679,6 +696,7 @@ if TYPE_CHECKING:
     from .connector_kind_response_schema import ConnectorKindResponseSchema
     from .connector_kind_response_schema_config_schema_type_0 import ConnectorKindResponseSchemaConfigSchemaType0
     from .connector_kind_response_schema_credential_schema_type_0 import ConnectorKindResponseSchemaCredentialSchemaType0
+    from .connector_kind_response_schema_install_config_schema_type_0 import ConnectorKindResponseSchemaInstallConfigSchemaType0
     from .connector_list_response_schema import ConnectorListResponseSchema
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
@@ -874,6 +892,7 @@ if TYPE_CHECKING:
     from .organization_slug_availability_response import OrganizationSlugAvailabilityResponse
     from .organization_update_request import OrganizationUpdateRequest
     from .partial_apply_response import PartialApplyResponse
+    from .pending_sign_in_response import PendingSignInResponse
     from .plan_step_response import PlanStepResponse
     from .plan_step_response_detail import PlanStepResponseDetail
     from .pod_config import PodConfig
@@ -955,6 +974,10 @@ if TYPE_CHECKING:
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
+    from .sign_in_outcome_response import SignInOutcomeResponse
+    from .signed_url_list_response import SignedUrlListResponse
+    from .signed_url_revoke_response import SignedUrlRevokeResponse
+    from .signed_url_summary import SignedUrlSummary
     from .step_record_response import StepRecordResponse
     from .step_status import StepStatus
     from .surface_admin_consent_info import SurfaceAdminConsentInfo
@@ -1050,6 +1073,10 @@ if TYPE_CHECKING:
     from .wait_until_node_position_type_0 import WaitUntilNodePositionType0
     from .wait_until_node_response import WaitUntilNodeResponse
     from .wait_until_node_response_position_type_0 import WaitUntilNodeResponsePositionType0
+    from .web_login_audit_entry import WebLoginAuditEntry
+    from .web_login_audit_response import WebLoginAuditResponse
+    from .web_login_list_response import WebLoginListResponse
+    from .web_login_response import WebLoginResponse
     from .web_search_request import WebSearchRequest
     from .web_search_response import WebSearchResponse
     from .widget_embed_url_response import WidgetEmbedUrlResponse
@@ -1076,6 +1103,9 @@ if TYPE_CHECKING:
     from .workflow_update_request import WorkflowUpdateRequest
     from .workspace_app_access_request import WorkspaceAppAccessRequest
     from .workspace_app_access_response import WorkspaceAppAccessResponse
+    from .workspace_file_entry import WorkspaceFileEntry
+    from .workspace_file_entry_kind import WorkspaceFileEntryKind
+    from .workspace_file_list_response import WorkspaceFileListResponse
 
 
 def __getattr__(name: str):
@@ -1176,6 +1206,7 @@ __all__ = [
     'AgentSurfaceSlackManifestResponseAgentSurfaceSlackManifest',
     'AgentSurfaceStatus',
     'AgentToolset',
+    'AnswerSignInRequest',
     'AppBundleUploadRequest',
     'AppBundleUploadResponse',
     'AppDetailResponse',
@@ -1209,6 +1240,7 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'BrowserStatusResponse',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -1227,6 +1259,7 @@ __all__ = [
     'ConnectorKindResponseSchema',
     'ConnectorKindResponseSchemaConfigSchemaType0',
     'ConnectorKindResponseSchemaCredentialSchemaType0',
+    'ConnectorKindResponseSchemaInstallConfigSchemaType0',
     'ConnectorListResponseSchema',
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',
@@ -1422,6 +1455,7 @@ __all__ = [
     'OrganizationSlugAvailabilityResponse',
     'OrganizationUpdateRequest',
     'PartialApplyResponse',
+    'PendingSignInResponse',
     'PlanStepResponse',
     'PlanStepResponseDetail',
     'PodConfig',
@@ -1503,6 +1537,10 @@ __all__ = [
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',
+    'SignInOutcomeResponse',
+    'SignedUrlListResponse',
+    'SignedUrlRevokeResponse',
+    'SignedUrlSummary',
     'StepRecordResponse',
     'StepStatus',
     'SurfaceAdminConsentInfo',
@@ -1598,6 +1636,10 @@ __all__ = [
     'WaitUntilNodePositionType0',
     'WaitUntilNodeResponse',
     'WaitUntilNodeResponsePositionType0',
+    'WebLoginAuditEntry',
+    'WebLoginAuditResponse',
+    'WebLoginListResponse',
+    'WebLoginResponse',
     'WebSearchRequest',
     'WebSearchResponse',
     'WidgetEmbedUrlResponse',
@@ -1624,4 +1666,7 @@ __all__ = [
     'WorkflowUpdateRequest',
     'WorkspaceAppAccessRequest',
     'WorkspaceAppAccessResponse',
+    'WorkspaceFileEntry',
+    'WorkspaceFileEntryKind',
+    'WorkspaceFileListResponse',
 ]

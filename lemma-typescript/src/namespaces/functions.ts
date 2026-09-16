@@ -3,6 +3,7 @@ import type { CreateFunctionRequest } from "../openapi_client/models/CreateFunct
 import type { ExecuteFunctionRequest } from "../openapi_client/models/ExecuteFunctionRequest.js";
 import type { FunctionPermissionsReplaceRequest } from "../openapi_client/models/FunctionPermissionsReplaceRequest.js";
 import type { UpdateFunctionRequest } from "../openapi_client/models/UpdateFunctionRequest.js";
+import type { FunctionRevisionResponse } from "../openapi_client/models/FunctionRevisionResponse.js";
 import { FunctionsService } from "../openapi_client/services/FunctionsService.js";
 import type { RunFunctionOptions } from "../types.js";
 
@@ -40,9 +41,28 @@ export class FunctionsNamespace {
   };
 
   readonly revisions = {
-    /** This function's built revisions, newest first. */
-    list: (name: string) =>
-      this.client.request(() => FunctionsService.functionRevisionList(this.podId(), name)),
+    /** One page of this function's built revisions, newest first. */
+    list: (name: string, options?: { limit?: number; pageToken?: string | null }) =>
+      this.client.request(() =>
+        FunctionsService.functionRevisionList(
+          this.podId(),
+          name,
+          options?.limit,
+          options?.pageToken,
+        ),
+      ),
+
+    /** Every revision, newest first, paged to exhaustion. See `apps.allReleases`. */
+    listAll: async (name: string, pageSize = 200) => {
+      const items: FunctionRevisionResponse[] = [];
+      let pageToken: string | null | undefined;
+      for (;;) {
+        const page = await this.revisions.list(name, { limit: pageSize, pageToken });
+        items.push(...(page.items ?? []));
+        pageToken = page.next_page_token;
+        if (typeof pageToken !== "string" || !pageToken) return items;
+      }
+    },
 
     /** One revision, with its source and the schemas its code implements. */
     get: (name: string, revisionRef: string) =>

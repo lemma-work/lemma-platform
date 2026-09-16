@@ -1,7 +1,7 @@
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -9,7 +9,7 @@ from app.core.domain.message_bus import MessageBus
 from app.core.infrastructure.db.repository import SqlAlchemyRepository
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.connectors.domain.events import ConnectorConnectedEvent
-from app.modules.connectors.domain.account import AccountEntity
+from app.modules.connectors.domain.account import AccountEntity, AccountStatus
 from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
@@ -297,6 +297,28 @@ class AccountRepository(
             instance.is_default = True
             await self.session.flush()
         return await self._to_entity(instance)
+
+    async def mark_connected_for_reauth(self, auth_config_id: UUID) -> int:
+        """Flag every CONNECTED account on this install, and say how many.
+
+        One statement rather than a read of every account -- credentials and
+        `selectinload`ed connector included -- followed by an `update()` per row
+        that reads it back again. The read existed to filter on `status`, which
+        is a column the `WHERE` can filter on.
+
+        Deliberately still not a delete and not a credential wipe: the rows keep
+        their ids, grants and stored credentials, so anything referencing them
+        still resolves and the reconnect updates in place.
+        """
+        result = await self.session.execute(
+            update(Account)
+            .where(
+                Account.auth_config_id == auth_config_id,
+                Account.status == AccountStatus.CONNECTED.value,
+            )
+            .values(status=AccountStatus.REAUTH_REQUIRED.value)
+        )
+        return int(result.rowcount or 0)
 
     async def list_by_auth_config(
         self,
