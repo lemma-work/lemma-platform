@@ -896,8 +896,8 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
     assert len(speech_caps) == 1
     instructions = speech_caps[0].get_instructions()
     assert "Spoken replies" in instructions
-    assert "Do not also write the same words" in instructions
-    assert "Never echo it back" in instructions
+    assert "add text only for different information" in instructions
+    assert "without echoing them" in instructions
 
 
 @pytest.mark.anyio

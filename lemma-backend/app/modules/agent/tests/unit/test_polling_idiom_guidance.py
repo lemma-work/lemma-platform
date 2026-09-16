@@ -95,5 +95,5 @@ def test_the_agent_host_prompt_teaches_both_ways_of_waiting():
     assert "cannot suspend a turn" not in prompt
     # The two contracts are different in the one way that changes what the agent
     # should do, so the prompt has to distinguish them.
-    assert "keep you in this turn" in prompt
-    assert "ends this turn" in prompt
+    assert "pause this turn until the person answers" in prompt
+    assert "ends the turn and resumes later" in prompt

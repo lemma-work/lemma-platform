@@ -337,8 +337,8 @@ class TestNativeAndSandboxDirectories:
         self,
     ) -> None:
         prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
-        assert "Pod files are a third place" in prompt
-        assert "not scratch space" in prompt
+        assert "Pod files are a separate durable store" in prompt
+        assert "working files belong in the workspace" in prompt
 
 
 async def ping_tool(ctx: RunContext[BaseAgentContext]) -> str:

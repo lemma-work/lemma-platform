@@ -175,11 +175,11 @@ async def test_a_table_line_says_who_can_see_its_rows(
 
     ledger = next(line for line in brief.splitlines() if "team_ledger" in line)
     notes = next(line for line in brief.splitlines() if "my_notes" in line)
-    assert "RLS off" in ledger
-    assert "RLS on" in notes
+    assert "rls=off" in ledger
+    assert "rls=on" in notes
     # The column facts a write depends on, none of which used to render.
     assert "title:TEXT(required)" in ledger
-    assert '"what it is"' in ledger
+    assert '"what it is"' not in ledger
     # The system columns say `auto`, not `required`. That distinction is the
     # point: an agent that reads "required" on `created_at` supplies it and the
     # write comes back rejected.

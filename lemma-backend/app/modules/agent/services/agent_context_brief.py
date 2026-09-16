@@ -332,7 +332,15 @@ class AgentContextBriefBuilder:
                 rendered.extend(more_note(len(tables), table_total, "tables"))
             finally:
                 reset_current_context(token)
-        return ["\n## Tables", *rendered] if rendered else []
+        return (
+            [
+                "\n## Tables",
+                "Compact schemas; describe a table for column descriptions.",
+                *rendered,
+            ]
+            if rendered
+            else []
+        )
 
     async def _agent_lines(self, *, pod_id: UUID) -> list[str]:
         async with self.uow_factory() as uow:
@@ -530,15 +538,12 @@ class AgentContextBriefBuilder:
         lines = [
             "\n## Granted Resources",
             (
-                "These are pre-authorized for you — read, query, and act on them "
-                "directly without asking for approval. Only call request_approval if a "
-                "tool returns a permission error (403), or for an explicitly "
-                "destructive action."
+                "Resource grants below; the invoking user's permissions and "
+                "approval gates also apply. Describe tables for column descriptions."
             ),
         ]
         granted = list(perms_by_ref.items())
-        # Truncating a section headed "These are pre-authorized for you" without
-        # saying so means the agent asks for approval it already has.
+        # Omitted grants must not be mistaken for absent access.
         lines.extend(
             more_note(
                 min(len(granted), _MAX_RESOURCES), len(granted), "granted resources"

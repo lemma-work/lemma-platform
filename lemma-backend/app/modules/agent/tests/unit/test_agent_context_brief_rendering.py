@@ -28,20 +28,8 @@ def _column(name, type_, **kwargs):
     )
 
 
-class TestATableLineSaysWhoCanSeeTheRows:
-    """``enable_rls`` defaults to on, and the brief never said so.
-
-    The agent is told that anything with a status, an owner or a lifecycle
-    belongs in a table row it creates and updates. Create one without a thought
-    about RLS and each member sees only their own rows — so it builds the team's
-    ledger as one person's private notebook and reports that the team can now
-    see it.
-
-    Row scope and table visibility are two different facts, and the first
-    version of this line ran them together: it said "everyone sees the same
-    rows" for any RLS-off table, which promises read access to a table that may
-    be RESTRICTED.
-    """
+class TestCompactTableSchema:
+    """Compression preserves row scope independently of resource visibility."""
 
     def _table(self, *, enable_rls: bool, visibility: str | None = None):
         return SimpleNamespace(
@@ -52,35 +40,34 @@ class TestATableLineSaysWhoCanSeeTheRows:
             columns=[_column("id", "UUID")],
         )
 
-    def test_an_rls_table_says_rows_are_per_person(self):
+    def test_rls_is_explicit_when_enabled(self):
         line = brief_lines.table_line(self._table(enable_rls=True))
-        assert "RLS on" in line
-        assert "you see your own" in line
+        assert "rls=on" in line
 
-    def test_an_rls_table_does_not_claim_other_rows_do_not_exist(self):
-        """There is a permission-checked admin mode; the rows are not gone."""
-        line = brief_lines.table_line(self._table(enable_rls=True))
-        assert "admin mode" in line
+    def test_primary_key_is_not_assumed_to_be_id(self):
+        table = self._table(enable_rls=True)
+        table.primary_key_column = "ticket_number"
+        assert "pk=ticket_number" in brief_lines.table_line(table)
 
-    def test_a_shared_table_scopes_its_promise_to_who_can_read_it(self):
+    def test_rls_off_does_not_imply_public_visibility(self):
         line = brief_lines.table_line(self._table(enable_rls=False))
-        assert "RLS off" in line
-        assert "everyone who can read this table" in line
+        assert "rls=off" in line
+        assert "visibility=" not in line
 
     def test_visibility_is_stated_separately_from_row_scope(self):
         """Turning RLS off does not make a RESTRICTED table readable."""
         line = brief_lines.table_line(
             self._table(enable_rls=False, visibility="RESTRICTED")
         )
-        assert "visibility RESTRICTED" in line
-        assert "RLS off" in line
+        assert "visibility=RESTRICTED" in line
+        assert "rls=off" in line
 
     def test_a_table_that_does_not_say_is_read_as_the_default(self):
         """Absent means on, because that is what the datastore does with it."""
         bare = SimpleNamespace(
             table_name="tickets", primary_key_column="id", columns=[]
         )
-        assert "RLS on" in brief_lines.table_line(bare)
+        assert "rls=on" in brief_lines.table_line(bare)
 
 
 class TestAColumnCarriesWhatAWriteNeeds:
@@ -108,12 +95,17 @@ class TestAColumnCarriesWhatAWriteNeeds:
         )
         assert "pods.id" in spec
 
-    def test_the_builders_own_description_survives(self):
-        """The one place a pod explains its data model in words."""
+    def test_descriptions_do_not_expand_the_inventory(self):
+        """Full descriptions remain on the table's inspection endpoint."""
         spec = brief_lines.column_spec(
-            _column("status", "TEXT", description="open, held, or closed")
+            _column(
+                "status",
+                "TEXT",
+                required=True,
+                description="open, held, or closed" * 100,
+            )
         )
-        assert '"open, held, or closed"' in spec
+        assert spec == "status:TEXT(required)"
 
 
 class TestTheRunSaysWhetherAnybodyIsWaiting:

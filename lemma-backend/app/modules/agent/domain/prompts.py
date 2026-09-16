@@ -1,19 +1,14 @@
 """Base prompt composition for agent harnesses.
 
-Every agent's system prompt is composed the same way: the constitution and the
-pod section (identical for every run, so they cache), then a base prompt (the
+Every agent's system prompt is composed the same way: the pod resource map
+(identical for every run, so it caches), then a base prompt (the
 pod's own teammate, or a named agent), then a per-toolset guidance fragment for
 each toolset the agent actually has, then the agent/conversation instructions and
 the runtime context brief. Tool guidance lives once, in the fragment files mapped
 by ``FRAGMENT_BY_TOOLSET`` — the teammate is rich because it has every toolset,
 not because its base prompt restates each tool.
 
-The first two sections are the ones an agent cannot derive from anything else in
-front of it. ``constitution.md`` says what it is, whose authority it acts on, and
-what it will not do; ``the_pod.md`` says what a pod is made of, what a refusal
-code means, and that ``enable_rls`` defaults to on. Both used to be absent, so
-the base prompt was tactics with nothing underneath them and every new lesson
-arrived as another bullet.
+Resource authoring details live in skills; tool schemas describe arguments.
 """
 
 from __future__ import annotations
@@ -30,7 +25,6 @@ if TYPE_CHECKING:
     from app.modules.agent.domain.entities import Agent, Conversation
 
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
-_CONSTITUTION_PROMPT_PATH = _PROMPT_DIR / "constitution.md"
 _THE_POD_PROMPT_PATH = _PROMPT_DIR / "the_pod.md"
 _TEAMMATE_PROMPT_PATH = _PROMPT_DIR / "teammate.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
@@ -85,26 +79,8 @@ def _read_required_prompt(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def load_constitution_prompt() -> str:
-    """What this agent is, whose authority it acts on, and what it will not do.
-
-    First in every prompt and identical on every run, which is both why it can
-    be this long and why it has to stay stable: it sits ahead of everything a
-    provider caches.
-    """
-    return _read_required_prompt(_CONSTITUTION_PROMPT_PATH)
-
-
 def load_the_pod_prompt() -> str:
-    """What a pod is made of and what it is like to build and operate in one.
-
-    Second in every prompt. The resource model, the choosing heuristics, the
-    three refusal codes, and the ``enable_rls`` default all used to live only in
-    ``lemma-builder`` -- behind an instruction telling the agent not to load it
-    unless the user asked for a build. So an agent worked inside a pod all day
-    and was never told what one was, which is how it creates a per-user table
-    and calls it the team's ledger.
-    """
+    """Resource map shared by both agent kinds and harness paths."""
     return _read_required_prompt(_THE_POD_PROMPT_PATH)
 
 
@@ -216,10 +192,8 @@ def build_agent_instructions(
     wrong one.
     """
 
-    # The constitution and the pod section come before the base prompt and are
-    # the same bytes for every agent on every run, so they sit at the front of
-    # the cached prefix rather than behind anything that varies.
-    sections = [load_constitution_prompt(), load_the_pod_prompt()]
+    # Shared resource guidance stays ahead of agent-specific content for caching.
+    sections = [load_the_pod_prompt()]
 
     if conversation.is_pod_assistant:
         sections.append(load_teammate_base_prompt())

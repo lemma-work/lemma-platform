@@ -1991,14 +1991,14 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     )
 
     # Base prompt skill guidance is present...
-    assert "Don't load a skill for ordinary CLI use" in prompt
+    assert "Ordinary CLI and pod file operations are" in prompt
     # ...and the conversation instructions are appended under their own section.
     assert "# Conversation Instructions" in prompt
     assert "Use the task board screen as the current UI context." in prompt
     # Skill catalog guidance for the builder/user skills is present.
     assert "lemma-builder" in prompt
     assert "lemma-user" in prompt
-    assert "The workspace is the user's, not this conversation's" in prompt
+    assert "other conversations\nshare the workspace" in prompt
     assert "/me/<topic>/" in prompt
     assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
@@ -2030,17 +2030,15 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
         ctx=object(),
     )
 
-    # The constitution and the pod section come first and are the same for
-    # every run, so they sit at the front of the cached prefix. The base prompt
-    # follows them rather than opening the file.
-    assert prompt.startswith("# Working in Lemma")
-    assert "# The pod" in prompt
+    # The shared resource map is the stable prefix for both agent kinds.
+    assert prompt.startswith("# The pod")
     assert "You are the default AI agent for this Lemma pod" in prompt
     # Reply discipline is not keyed to a toolset: every agent replies, and the
     # reply is the one thing the person always sees. It rode in on the surface
     # fragment for a long time, which meant a run with no surface platform --
     # the web UI -- was told nothing about length or narration.
     assert "## Your reply is a chat message" in prompt
+    assert "`WIDGET`: use `path` to a pod file" in prompt
     assert "## Web research" in prompt
     # This used to assert the prompt contained
     # `lemma tools web-search "query terms" --limit 5` — a CLI command that
@@ -2156,7 +2154,7 @@ def test_pod_default_assistant_uses_rich_base_and_all_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("# Working in Lemma")
+    assert prompt.startswith("# The pod")
     assert "You are the default AI agent for this Lemma pod" in prompt
     assert "## Lemma CLI" in prompt
     assert "## Skills" in prompt
@@ -2180,9 +2178,8 @@ def test_user_agent_uses_lean_base_and_only_its_toolset_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    # Both agent kinds open on the same constitution and pod section; what
-    # differs is the base prompt after them.
-    assert prompt.startswith("# Working in Lemma")
+    # Both agent kinds open on the same resource map, followed by their role.
+    assert prompt.startswith("# The pod")
     assert "You are a named AI agent in a Lemma pod" in prompt
     assert "You are the default AI agent" not in prompt
     assert "## Lemma CLI" in prompt  # its one toolset's fragment
@@ -2206,7 +2203,7 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("# Working in Lemma")
+    assert prompt.startswith("# The pod")
     assert "You are a named AI agent in a Lemma pod" in prompt
     for fragment_marker in (
         "## Lemma CLI",

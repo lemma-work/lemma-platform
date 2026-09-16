@@ -182,15 +182,7 @@ def user_lines(profile: UserProfile, user_id: UUID) -> list[str]:
 
 
 def column_spec(column) -> str:
-    """One column, with the four facts that change what a write looks like.
-
-    It used to be ``name:type`` and nothing else, which loses all four: an agent
-    could not see that a column was required (so it wrote rows that came back
-    rejected), that one was system-managed (so it tried to set ``user_id`` and
-    ``created_at`` itself), which columns were foreign keys (so it could not see
-    how two tables related), or what the builder's own description said -- the
-    one place a pod explains its data model in words.
-    """
+    """Write constraints only; full descriptions are available on inspection."""
     type_name = getattr(column.type, "value", column.type)
     marks: list[str] = []
     if getattr(column, "system", False) or getattr(column, "auto", False):
@@ -206,9 +198,6 @@ def column_spec(column) -> str:
     spec = f"{column.name}:{type_name}"
     if marks:
         spec += "(" + " ".join(marks) + ")"
-    description = (getattr(column, "description", None) or "").strip()
-    if description:
-        spec += f' "{description}"'
     return spec
 
 
@@ -221,24 +210,12 @@ def table_line(table) -> str:
     suffix = (
         f" (+{hidden} more columns — describe the table to see them)" if hidden else ""
     )
-    # Two separate facts, and the first version ran them together. `enable_rls`
-    # decides which *rows* you see inside a table you can already read;
-    # `visibility` decides whether you can read the table at all. "RLS off —
-    # everyone sees the same rows" promised access this line had not checked, on
-    # a table that may be RESTRICTED. And "another member's row does not exist
-    # for them" is not true either: RLS tables have an explicit, permission-
-    # checked admin mode.
-    rows = (
-        "rows are per-person (RLS on): you see your own; reading across "
-        "everyone needs the admin mode, which is permission-checked"
-        if getattr(table, "enable_rls", True)
-        else "rows are shared (RLS off): everyone who can read this table sees "
-        "the same rows"
-    )
+    # Row filtering and resource visibility are independent settings.
+    rls = "on" if getattr(table, "enable_rls", True) else "off"
     visibility = str(getattr(table, "visibility", "") or "").upper()
-    who = f", visibility {visibility}" if visibility else ""
+    who = f"; visibility={visibility}" if visibility else ""
     return (
-        f"- {table.table_name} (pk: {table.primary_key_column}{who}; {rows}): "
+        f"- {table.table_name} (pk={table.primary_key_column}; rls={rls}{who}): "
         f"{columns}{suffix}"
     )
 
