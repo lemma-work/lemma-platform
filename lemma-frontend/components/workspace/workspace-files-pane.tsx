@@ -162,6 +162,25 @@ export function WorkspaceFilesPane({
     // before: the response counted the rest and offered no way to reach them.
     const [after, setAfter] = useState<string | undefined>(undefined);
 
+    // The conversation record is fetched, so the first render of this pane
+    // almost always has no `workspaceCwd` yet. `useState` takes its argument
+    // once, so without this the pane opened on `/workspace` and stayed there
+    // for the life of the mount -- which is the same "shows the wrong
+    // directory" bug in a new place, and the reason the fix has to follow the
+    // prop rather than merely seed from it.
+    //
+    // Adjusted during render against the previous value rather than in an
+    // effect: React documents this as the way to reset state when a prop
+    // changes, and it re-renders before painting instead of showing the wrong
+    // directory for a frame and fetching it.
+    const [homeSeen, setHomeSeen] = useState(home);
+    if (home !== homeSeen) {
+        setHomeSeen(home);
+        setDirectory(home);
+        setSelected(null);
+        setAfter(undefined);
+    }
+
     const { data, isPending, error, refetch, isFetching } = useWorkspaceFiles(
         directory,
         wake,

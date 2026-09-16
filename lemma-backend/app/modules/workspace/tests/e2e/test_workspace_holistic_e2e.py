@@ -643,13 +643,16 @@ async def test_an_agent_can_record_the_browser_and_get_a_playable_file(
         ExecCommandRequest(
             # Absolute, deliberately: the daemon resolves this path, not the
             # shell, and a relative one is silently written elsewhere.
+            # Every step silenced but the last, so stdout is the codec name and
+            # nothing else. Left unsilenced, `agent-browser` prints its own
+            # "Recording saved" over the answer being asserted on.
             cmd=(
                 f"mkdir -p $(dirname {take}) && "
-                f"agent-browser record start {take} && "
+                f"agent-browser record start {take} >/dev/null && "
                 "agent-browser open "
-                "'data:text/html,<h1 style=font-size:90px>Lemma</h1>' && "
+                "'data:text/html,<h1 style=font-size:90px>Lemma</h1>' >/dev/null && "
                 "for i in 1 2 3; do sleep 2; agent-browser get url >/dev/null; done && "
-                "agent-browser record stop && "
+                "agent-browser record stop >/dev/null && "
                 f"test -s {take} && "
                 "ffprobe -v error -select_streams v:0 "
                 f"-show_entries stream=codec_name -of csv=p=0 {take}"

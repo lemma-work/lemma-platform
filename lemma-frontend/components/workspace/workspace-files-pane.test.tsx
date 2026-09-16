@@ -51,4 +51,18 @@ describe('which directory the pane opens', () => {
         expect(asked.paths[0]).toBe('/workspace');
         expect(screen.getByRole('button', { name: 'Whole computer' })).toBeTruthy();
     });
+
+    it('follows the cwd when the conversation record arrives', () => {
+        // The pane almost always mounts before the record is fetched, so the
+        // first render has no cwd at all. `useState` takes its argument once —
+        // seeding from the prop is not following it, and without this the pane
+        // opened on /workspace and stayed there for the life of the mount.
+        const { rerender } = render(<WorkspaceFilesPane />);
+        expect(asked.paths[0]).toBe('/workspace');
+
+        rerender(<WorkspaceFilesPane workspaceCwd="/workspace/c/2026-09-16/quiet-harbour" />);
+
+        expect(asked.paths.at(-1)).toBe('/workspace/c/2026-09-16/quiet-harbour');
+        expect(screen.getByRole('button', { name: 'This conversation' })).toBeTruthy();
+    });
 });
