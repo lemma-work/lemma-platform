@@ -18,6 +18,7 @@ an upgrade is a separate protocol, not a method.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -84,6 +85,32 @@ _STRIPPED_REQUEST_HEADERS = frozenset(
         "upgrade",
     }
 )
+
+
+def _upstream_headers(
+    inbound: "Mapping[str, str]", fabric: "Mapping[str, str]"
+) -> dict[str, str]:
+    """What the sandbox is sent: the caller's headers, then the fabric's own.
+
+    The fabric's go last and therefore win. On E2B they are the per-sandbox
+    traffic token, without which a closed sandbox answers 403 -- and a caller
+    holding a signed link must not be able to displace the sandbox's doorkeeper
+    by sending a header of the same name.
+
+    A named function rather than a dict literal inside the handler because this
+    is the rule, and a rule with a name is one a test can hold without standing
+    a double in front of the handler's own collaborators.
+    """
+    return {
+        **{
+            name: value
+            for name, value in inbound.items()
+            if name.lower() not in _STRIPPED_REQUEST_HEADERS
+        },
+        **fabric,
+    }
+
+
 _STRIPPED_RESPONSE_HEADERS = frozenset(
     {
         "content-length",
@@ -257,11 +284,7 @@ async def proxy_sandbox_port(token: str, request: Request, path: str = "") -> Re
             request.method,
             target,
             params=request.query_params,
-            headers={
-                name: value
-                for name, value in request.headers.items()
-                if name.lower() not in _STRIPPED_REQUEST_HEADERS
-            },
+            headers=_upstream_headers(request.headers, endpoint.headers),
             content=await request.body(),
         )
     except httpx.HTTPError:

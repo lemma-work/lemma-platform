@@ -134,3 +134,36 @@ def test_the_proxy_is_not_behind_the_session_gate() -> None:
     from app.core.security import EXCLUDED_PATHS
 
     assert any(path.startswith("/workspace-ports") for path in EXCLUDED_PATHS)
+
+
+def test_the_proxy_carries_whatever_the_fabrics_own_door_needs() -> None:
+    """The request half has to send the headers `reach_port` hands back.
+
+    On E2B a closed sandbox answers 403 without its per-sandbox traffic token,
+    and `reach_port` returns it as `SandboxEndpoint.headers`. The WebSocket half
+    has always forwarded those; this half dropped them, and nothing noticed
+    because no sandbox had ever actually been created closed -- the flag meant
+    to close them raised `TypeError` and was never in effect.
+
+    Dropping ours was not the whole of it. The caller's headers were forwarded
+    verbatim, so a holder of a signed link could put their own
+    `e2b-traffic-access-token` on the request and have it passed to the sandbox
+    as the only one. The fabric's go last for that reason: the sandbox's
+    doorkeeper is not something the person holding the link gets to choose.
+    """
+    from app.modules.workspace.api.controllers.port_proxy_controller import (
+        _upstream_headers,
+    )
+
+    sent = _upstream_headers(
+        {
+            "e2b-traffic-access-token": "forged-by-the-caller",
+            "cookie": "lemma_session=hunter2",
+            "x-harmless": "kept",
+        },
+        {"e2b-traffic-access-token": "the-real-one"},
+    )
+
+    assert sent["e2b-traffic-access-token"] == "the-real-one"
+    assert sent["x-harmless"] == "kept"
+    assert "cookie" not in sent
