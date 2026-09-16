@@ -50,6 +50,7 @@ from pathlib import Path
 import re
 
 import httpx
+import websockets
 
 #: Chrome writes the port here on launch; the second line is the browser's own
 #: WebSocket path, which is not what a page-level client wants.
@@ -502,6 +503,103 @@ async def page_targets(*, port: int) -> list[dict[str, str]]:
         for target in targets
         if target.get("type") == "page" and target.get("id")
     ]
+
+
+#: How long a viewport read may take before the pane is left to fall back.
+#: Short on purpose: this runs between accepting a socket and showing anybody a
+#: picture, and a slow answer is worse than no answer.
+_VIEWPORT_TIMEOUT_SECONDS = 3.0
+
+
+async def _layout_metrics(socket_url: str) -> tuple[int, int] | None:
+    """One page's CSS viewport, over its own debugger socket."""
+    try:
+        async with asyncio.timeout(_VIEWPORT_TIMEOUT_SECONDS):
+            async with websockets.connect(socket_url) as cdp:
+                await cdp.send(json.dumps({"id": 1, "method": "Page.getLayoutMetrics"}))
+                # Read until our own reply: CDP interleaves events on the same
+                # socket, and taking the first message would take whichever one
+                # the page happened to fire.
+                while True:
+                    raw = await cdp.recv()
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8", "replace")
+                    message = json.loads(raw)
+                    if message.get("id") != 1:
+                        continue
+                    metrics = message.get("result") or {}
+                    break
+    except OSError, ValueError, TimeoutError, websockets.exceptions.WebSocketException:
+        return None
+
+    # `cssLayoutViewport` only. `layoutViewport` is device pixels, and handing
+    # those back as if they were CSS pixels is the same class of mistake this
+    # whole function exists to end: the pane would scale confidently by the
+    # wrong number instead of falling back to the picture and being wrong by a
+    # factor it at least has a comment about.
+    layout = metrics.get("cssLayoutViewport") or {}
+    width = int(layout.get("clientWidth") or 0)
+    height = int(layout.get("clientHeight") or 0)
+    return (width, height) if width and height else None
+
+
+async def viewport_size(*, port: int, target_id: str = "") -> tuple[int, int] | None:
+    """The page's own CSS pixels -- the space the stream dispatches input in.
+
+    Not the picture's. The screencast is scaled down to a cap box before it
+    leaves the sandbox, and the viewer is shown *that*, so a click has to be
+    scaled back up before it means anything. The viewer cannot work the factor
+    out for itself: the frame metadata carries a `deviceWidth`/`deviceHeight`
+    that is the cap box echoed back, not the page -- measured as 1280x720
+    against a 949x720 picture of a 1050x797 page, where no single scale relates
+    the two. Three coordinate bugs came out of trying to infer it. This asks.
+
+    `Page.getLayoutMetrics` rather than evaluating `innerWidth` in the page:
+    `Runtime.evaluate` would let anything that could reach this relay run
+    script in a page a person is signed in to, and the relay's whole security
+    case is that it cannot.
+
+    **Asks every page in the session, not only the one named.** The stream
+    follows the session's *active* tab and there is no inbound message that
+    changes which one that is, so `target_id` is a check that the caller and
+    the stream agree about which browser -- not a statement about which tab is
+    on screen. A tab that has never laid out answers with zeros, and answering
+    from it would be worse than not answering at all. Every page target in a
+    session is a tab in one window, so the one that does answer is reporting
+    the window the stream is showing.
+
+    `None` when nothing can be read, which leaves the pane on the picture's own
+    pixels -- wrong by the scale factor, which is what it did before this
+    existed, rather than broken.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=_VIEWPORT_TIMEOUT_SECONDS) as client:
+            response = await client.get(f"http://127.0.0.1:{port}/json")
+            response.raise_for_status()
+            targets = response.json()
+    except httpx.HTTPError, ValueError:
+        return None
+
+    pages = [
+        (str(target.get("id", "")), str(target.get("webSocketDebuggerUrl", "")))
+        for target in targets
+        if target.get("type") == "page" and target.get("webSocketDebuggerUrl")
+    ]
+    # The named one first, then the rest in the order Chrome listed them, which
+    # is most-recently-used first.
+    pages.sort(key=lambda page: page[0] != target_id)
+
+    for _id, socket_url in pages:
+        measured = await _layout_metrics(socket_url)
+        if measured is not None:
+            return measured
+
+    # Reported rather than swallowed: the pane still works without an answer,
+    # so this must not become a refusal -- but a pane whose clicks are off by
+    # the scale factor is exactly what this fixes, and silence here is what
+    # would make that hard to find again.
+    logging.getLogger(__name__).warning("the viewport could not be read")
+    return None
 
 
 async def open_url(url: str, *, session: str | None = None) -> None:

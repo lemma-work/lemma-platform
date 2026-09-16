@@ -565,23 +565,22 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
         assert refusal["code"] == "read_only", refusal
 
     async with websockets.connect(view_socket("control"), max_size=None) as driving:
-        # The page's own size, which the *stream server* reports on its own
-        # `status` and the relay forwards untouched. Nothing in a frame carries
-        # it: `metadata.deviceWidth`/`deviceHeight` is the cap box echoed back,
-        # and in this sandbox it does not even share the page's aspect ratio.
-        # Three coordinate bugs were attempts to infer this from a frame, so a
-        # viewer that has not been told it is a viewer that cannot click.
+        # The page Chrome actually laid out, measured in the sandbox and sent
+        # on the relay's own attach message. **Not** the stream server's own
+        # `status`, which also carries a `viewportWidth`/`viewportHeight` and
+        # is a different number: it reports the viewport that was *asked for*.
+        # Measured here as 1280x720 requested against 1050x853 laid out, with
+        # the click landing in the second -- under Xvfb the window does not
+        # always take the size it is given. `metadata.deviceWidth` is a third
+        # number again, the cap box, and the JPEG's own size a fourth.
         #
-        # Two things send a `status` here -- the relay on accepting the socket,
-        # which knows nothing about the page, and the stream server, which
-        # does -- so this reads until one carries the numbers.
-        page_width = page_height = 0
-        for _ in range(4):
+        # So this reads the relay's message specifically, by its `state`.
+        while True:
             attached = await _first(driving, "status")
-            page_width = int(attached.get("viewportWidth") or 0)
-            page_height = int(attached.get("viewportHeight") or 0)
-            if page_width and page_height:
+            if attached.get("state"):
                 break
+        page_width = int(attached.get("viewportWidth") or 0)
+        page_height = int(attached.get("viewportHeight") or 0)
         assert page_width and page_height, attached
 
         first = await _first(driving, "frame")
@@ -622,11 +621,19 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
                     }
                 )
             )
-        navigated = await _first(driving, "url")
-        assert navigated["url"].endswith("/next.html"), (
-            f"{navigated} -- aimed at {aimed} on a {page_width}x{page_height} page "
+        where = (
+            f"aimed at {aimed} on a {page_width}x{page_height} page "
             f"from a {picture_width}x{picture_height} picture"
         )
+        # The numbers, whichever way this fails. A bare `TimeoutError` here
+        # says only that the click did not navigate, which is the one thing
+        # already known -- and every coordinate bug in this feature has been
+        # diagnosed by comparing these four numbers.
+        try:
+            navigated = await _first(driving, "url")
+        except TimeoutError:
+            raise AssertionError(f"no navigation -- {where}")
+        assert navigated["url"].endswith("/next.html"), f"{navigated} -- {where}"
 
 
 async def test_an_agent_can_record_the_browser_and_get_a_playable_file(

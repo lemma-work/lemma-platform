@@ -698,3 +698,173 @@ def test_one_viewer_leaving_does_not_release_another_viewers_wheel(
 
     relay_app._release_the_wheel(second)
     assert not relay_app.wheel_path("conv-abc").exists()
+
+
+# ---------------------------------------------------------------------------
+# The size of the page, which a frame does not say
+# ---------------------------------------------------------------------------
+
+
+class _FakeCdp:
+    """A page target's debugger socket, answering one method."""
+
+    def __init__(self, reply: dict) -> None:
+        self.reply = reply
+        self.sent: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(raw)
+
+    async def recv(self) -> str:
+        # An event first, on the same socket, because CDP interleaves them --
+        # and taking the first message rather than matching the id is how this
+        # would read whatever the page happened to fire.
+        if len(self.sent) == 1:
+            self.sent.append("read")
+            return json.dumps({"method": "Page.frameNavigated", "params": {}})
+        return json.dumps(self.reply)
+
+
+def _fake_targets(monkeypatch, targets: list[dict]) -> None:
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict]:
+            return targets
+
+    class _Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, _url: str) -> "_Response":
+            return _Response()
+
+    monkeypatch.setattr(chrome.httpx, "AsyncClient", _Client)
+
+
+async def test_the_viewport_is_the_pages_css_pixels_not_the_devices(
+    monkeypatch,
+) -> None:
+    """The measurement the pane cannot make for itself.
+
+    A click arrives as a fraction of the picture and has to be scaled up into
+    the page before the stream will dispatch it anywhere. `layoutViewport` is
+    device pixels; `cssLayoutViewport` is the space input is in, and on a page
+    with a scale factor the two differ -- which is the same class of mistake
+    this function exists to end.
+    """
+    _fake_targets(
+        monkeypatch,
+        [{"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"}],
+    )
+    cdp = _FakeCdp(
+        {
+            "id": 1,
+            "result": {
+                "layoutViewport": {"clientWidth": 1280, "clientHeight": 720},
+                "cssLayoutViewport": {"clientWidth": 1050, "clientHeight": 797},
+            },
+        }
+    )
+    monkeypatch.setattr(chrome.websockets, "connect", lambda _url: cdp)
+
+    assert await chrome.viewport_size(port=9222, target_id="T1") == (1050, 797)
+    assert json.loads(cdp.sent[0])["method"] == "Page.getLayoutMetrics"
+
+
+async def test_a_browser_that_will_not_say_leaves_the_pane_to_fall_back(
+    monkeypatch,
+) -> None:
+    """`None`, not a raise and not a zero.
+
+    The pane's fallback is the picture's own pixels -- off by the scale factor,
+    which is what it did before anybody asked. Raising here would turn a pane
+    that works imperfectly into one that does not attach at all, and a zero
+    would put every click in the top-left corner.
+    """
+    _fake_targets(monkeypatch, [{"type": "page", "id": "T1"}])
+
+    assert await chrome.viewport_size(port=9222, target_id="T1") is None
+
+
+async def test_device_pixels_are_not_handed_back_as_css_pixels(monkeypatch) -> None:
+    """`layoutViewport` is device pixels, and there is no fallback to it.
+
+    Handing those back would have the pane scale confidently by the wrong
+    number -- the same class of mistake this function exists to end. `None`
+    instead, which leaves it on the picture's pixels: wrong by a factor it at
+    least has a comment about.
+    """
+    _fake_targets(
+        monkeypatch,
+        [{"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"}],
+    )
+    monkeypatch.setattr(
+        chrome.websockets,
+        "connect",
+        lambda _url: _FakeCdp(
+            {
+                "id": 1,
+                "result": {
+                    "layoutViewport": {"clientWidth": 1280, "clientHeight": 720}
+                },
+            }
+        ),
+    )
+
+    assert await chrome.viewport_size(port=9222, target_id="T1") is None
+
+
+async def test_a_tab_that_has_never_laid_out_does_not_end_the_search(
+    monkeypatch,
+) -> None:
+    """The stream shows the session's active tab, and nothing here knows which.
+
+    `target_id` is a check that the caller and the stream agree about which
+    *browser*; it says nothing about which tab is on screen. So the named tab
+    can be one that has never rendered, which answers with zeros -- and
+    stopping there would leave the pane with no measurement at all when a
+    sibling in the same window could have said. Every page target in a session
+    is a tab in one window, so the one that answers is reporting the window the
+    stream is showing.
+    """
+    _fake_targets(
+        monkeypatch,
+        [
+            {"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"},
+            {"type": "page", "id": "T2", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T2"},
+        ],
+    )
+    replies = {
+        "ws://127.0.0.1:1/T1": {
+            "id": 1,
+            "result": {"cssLayoutViewport": {"clientWidth": 0, "clientHeight": 0}},
+        },
+        "ws://127.0.0.1:1/T2": {
+            "id": 1,
+            "result": {"cssLayoutViewport": {"clientWidth": 1050, "clientHeight": 797}},
+        },
+    }
+    asked: list[str] = []
+
+    def _connect(url: str):
+        asked.append(url)
+        return _FakeCdp(replies[url])
+
+    monkeypatch.setattr(chrome.websockets, "connect", _connect)
+
+    assert await chrome.viewport_size(port=9222, target_id="T1") == (1050, 797)
+    assert asked == ["ws://127.0.0.1:1/T1", "ws://127.0.0.1:1/T2"], asked

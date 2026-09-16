@@ -36,8 +36,8 @@ export interface ViewerFrame {
     pictureWidth: number;
     pictureHeight: number;
     /**
-     * The page's own CSS pixels, from the stream's own `status` message, and
-     * the space every input message must be in.
+     * The page's own CSS pixels, measured in the sandbox and sent on the
+     * relay's attach message, and the space every input message must be in.
      *
      * The two differ: the stream encodes within the caps the image sets
      * (`AGENT_BROWSER_STREAM_MAX_WIDTH` / `_MAX_HEIGHT`), so a 1050x797 page
@@ -49,9 +49,18 @@ export interface ViewerFrame {
      * ones do not, so it presented as "clicks sometimes work" rather than as a
      * broken mapping.
      *
-     * `0` before the first `status` arrives, or from a sandbox image whose
-     * stream server predates the field, which leaves input in the picture's
-     * pixels: still wrong by the scale factor, but no worse than before.
+     * Note the stream server sends a `viewportWidth`/`viewportHeight` of its
+     * own and it is **not** this number: it reports the viewport that was
+     * *asked for*, not the one Chrome laid out. Measured in one sandbox --
+     * requested 1280x720, actually laid out 1050x853, and a click lands in the
+     * second. Under Xvfb the window cannot always take the size it is given
+     * and the two diverge silently. `agent-browser`'s own dashboard maps into
+     * the requested one, so it has this bug too; it only shows when they
+     * disagree.
+     *
+     * `0` before the relay has measured, or from an image that predates the
+     * measurement, which leaves input in the picture's pixels -- wrong by the
+     * scale factor, but no worse than before.
      */
     viewportWidth: number;
     viewportHeight: number;
@@ -94,8 +103,8 @@ const NON_TEXT_KEYS = new Set([
  *
  * The result is in the *page's* pixels, because that is what the stream server
  * dispatches: it does not scale input back out of the picture's space. The
- * page's size arrives on the stream's own `status` message — it cannot be
- * inferred from a frame, and three coordinate bugs came of trying.
+ * page's size arrives on the relay's attach message — it cannot be inferred
+ * from a frame, and four coordinate bugs came of trying.
  *
  * With no measurement, this falls back to the picture's own pixels. That is
  * wrong by the scale factor and is what the pane did before the relay was
@@ -327,7 +336,7 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
     let attempt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let latest: Omit<ViewerFrame, 'bitmap'> | null = null;
-    //: The page's own pixels, from the stream's `status`. Connection-level
+    //: The page's own pixels, from the relay's attach message. Connection-level
     //: rather than per-frame because that is where it arrives, and reset on
     //: every connect so a reconnect to a differently-sized page does not keep
     //: the old one.
@@ -404,17 +413,22 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                 attempt = 0;
                 // And the one thing a frame cannot tell us: the size of the
                 // page the picture is of, which is the space input goes in.
-                // `agent-browser`'s stream server puts it here and its own
-                // dashboard reads it from exactly this field, which is why
-                // nothing downstream measures it.
                 //
-                // Only when it carries numbers. Two things send a `status`:
-                // the relay, on accepting the socket, which knows nothing
-                // about the page, and the stream server, which does. Taking
-                // every status would let the first zero out the second.
-                const width = Number(message.viewportWidth) || 0;
-                const height = Number(message.viewportHeight) || 0;
-                if (width && height) viewport = { width, height };
+                // **Only from the relay's own status**, which is what `state`
+                // identifies. The stream server sends a `status` carrying
+                // `viewportWidth`/`viewportHeight` too, and taking that one is
+                // a bug: it reports the viewport that was *asked for*, and
+                // under Xvfb the window does not always get it. Measured in
+                // one sandbox as 1280x720 asked for against 1050x853 laid out,
+                // with the click landing in the second — so the stream's own
+                // numbers would put every click a fifth of the way past the
+                // right edge, onto nothing.
+                if (typeof message.state === 'string') {
+                    viewport = {
+                        width: Number(message.viewportWidth) || 0,
+                        height: Number(message.viewportHeight) || 0,
+                    };
+                }
                 return;
             }
             if (message.type === 'url' && options.onNavigated) {
