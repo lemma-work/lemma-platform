@@ -798,3 +798,73 @@ async def test_a_browser_that_will_not_say_leaves_the_pane_to_fall_back(
     _fake_targets(monkeypatch, [{"type": "page", "id": "T1"}])
 
     assert await chrome.viewport_size(port=9222, target_id="T1") is None
+
+
+async def test_device_pixels_are_not_handed_back_as_css_pixels(monkeypatch) -> None:
+    """`layoutViewport` is device pixels, and there is no fallback to it.
+
+    Handing those back would have the pane scale confidently by the wrong
+    number -- the same class of mistake this function exists to end. `None`
+    instead, which leaves it on the picture's pixels: wrong by a factor it at
+    least has a comment about.
+    """
+    _fake_targets(
+        monkeypatch,
+        [{"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"}],
+    )
+    monkeypatch.setattr(
+        chrome.websockets,
+        "connect",
+        lambda _url: _FakeCdp(
+            {
+                "id": 1,
+                "result": {
+                    "layoutViewport": {"clientWidth": 1280, "clientHeight": 720}
+                },
+            }
+        ),
+    )
+
+    assert await chrome.viewport_size(port=9222, target_id="T1") is None
+
+
+async def test_a_tab_that_has_never_laid_out_does_not_end_the_search(
+    monkeypatch,
+) -> None:
+    """The stream shows the session's active tab, and nothing here knows which.
+
+    `target_id` is a check that the caller and the stream agree about which
+    *browser*; it says nothing about which tab is on screen. So the named tab
+    can be one that has never rendered, which answers with zeros -- and
+    stopping there would leave the pane with no measurement at all when a
+    sibling in the same window could have said. Every page target in a session
+    is a tab in one window, so the one that answers is reporting the window the
+    stream is showing.
+    """
+    _fake_targets(
+        monkeypatch,
+        [
+            {"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"},
+            {"type": "page", "id": "T2", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T2"},
+        ],
+    )
+    replies = {
+        "ws://127.0.0.1:1/T1": {
+            "id": 1,
+            "result": {"cssLayoutViewport": {"clientWidth": 0, "clientHeight": 0}},
+        },
+        "ws://127.0.0.1:1/T2": {
+            "id": 1,
+            "result": {"cssLayoutViewport": {"clientWidth": 1050, "clientHeight": 797}},
+        },
+    }
+    asked: list[str] = []
+
+    def _connect(url: str):
+        asked.append(url)
+        return _FakeCdp(replies[url])
+
+    monkeypatch.setattr(chrome.websockets, "connect", _connect)
+
+    assert await chrome.viewport_size(port=9222, target_id="T1") == (1050, 797)
+    assert asked == ["ws://127.0.0.1:1/T1", "ws://127.0.0.1:1/T2"], asked

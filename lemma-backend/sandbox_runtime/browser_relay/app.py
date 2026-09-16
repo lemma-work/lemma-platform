@@ -386,9 +386,10 @@ def create_app() -> FastAPI:
         # the page. Three coordinate bugs were attempts to infer this; the
         # relay can simply ask, so it does.
         attached: dict[str, object] = {"type": "status", "state": "attached"}
-        measured = await viewport_size(
-            port=port, target_id=target or _first_target_id(open_targets) or ""
-        )
+        # `target` and nothing else: which tab the stream is showing is not
+        # something this knows, so `viewport_size` asks the named one first and
+        # then its siblings rather than being handed a guess here.
+        measured = await viewport_size(port=port, target_id=target)
         if measured is not None:
             attached["viewportWidth"], attached["viewportHeight"] = measured
         await websocket.send_json(attached)
