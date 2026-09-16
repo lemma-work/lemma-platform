@@ -35,6 +35,10 @@ from uuid import UUID
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.authorization.factory import create_authorization_data_service
+from app.modules.agent.services.brief_seams import (
+    AuthorizationFactory,
+    RepositoryFactory,
+)
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.entities import Agent
@@ -80,7 +84,11 @@ def schedule_line(summary: PodScheduleSummary) -> str:
             when += f" ({zone})"
     elif summary.schedule_type == "DATASTORE":
         table = config.get("table_name") or "a table"
-        operations = config.get("operations") or []
+        # `config` is free-form JSON off the row, so the shape is checked rather
+        # than assumed: a malformed `operations` should read as "any change",
+        # not raise while rendering somebody's prompt.
+        raw = config.get("operations")
+        operations = raw if isinstance(raw, (list, tuple)) else []
         verbs = ", ".join(str(op).lower() for op in operations) or "any change"
         when = f"on {verbs} in `{table}`"
     else:
@@ -176,10 +184,35 @@ def _apps_line(apps: list[PodAppSummary]) -> list[str]:
 
 
 class AgentSelfBriefBuilder:
-    """Renders ``## You``: what this agent is, and what is configured for it."""
+    """Renders ``## You``: what this agent is, and what is configured for it.
 
-    def __init__(self, uow_factory: UnitOfWorkFactory):
+    ``repository`` and ``authorization`` are constructor seams rather than
+    module names a test reaches in and replaces. A double patched into this
+    module stands inside the thing under test and survives a rename that should
+    have failed it; passed in, it is a collaborator like any other.
+    """
+
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        *,
+        repository: RepositoryFactory | None = None,
+        authorization: AuthorizationFactory | None = None,
+    ):
         self.uow_factory = uow_factory
+        # Resolved at call time, not bound here: a default argument is
+        # evaluated once at import, so a test replacing the module name
+        # afterwards never reaches it -- and the test still passes,
+        # because a real collaborator failing looks like a fake one
+        # failing. `None` means "whatever the module says when asked".
+        self._repository = repository
+        self._authorization = authorization
+
+    def _repo_factory(self) -> RepositoryFactory:
+        return self._repository or AgentContextBriefRepository
+
+    def _authz_factory(self) -> AuthorizationFactory:
+        return self._authorization or create_authorization_data_service
 
     async def build(
         self,
@@ -198,18 +231,22 @@ class AgentSelfBriefBuilder:
                 # visibility and owner, so pod membership does not entitle this
                 # user to all of them -- and a schedule's instruction is free
                 # text somebody wrote.
-                ctx = await create_authorization_data_service(uow).build_user_context(
+                ctx = await self._authz_factory()(uow).build_user_context(
                     user_id=user_id, pod_id=pod_id
                 )
-                repo = AgentContextBriefRepository(uow)
+                repo = self._repo_factory()(uow)
                 schedules, schedule_total = await repo.list_schedules(
                     pod_id=pod_id, ctx=ctx, limit=MAX_SCHEDULES
                 )
                 # Surfaces are pod-level channel configuration with no owner or
                 # visibility of their own, so there is nothing to filter them by.
                 surfaces = await repo.list_surfaces(pod_id=pod_id, limit=MAX_SURFACES)
+                # One more than we render, so "+N more" can be honest without
+                # reading every app in the pod.
                 apps = (
-                    await repo.list_apps(pod_id=pod_id, ctx=ctx) if is_default else []
+                    await repo.list_apps(pod_id=pod_id, ctx=ctx, limit=MAX_APPS + 1)
+                    if is_default
+                    else []
                 )
         except READ_FAILED:
             logger.warning(

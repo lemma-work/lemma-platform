@@ -18,7 +18,6 @@ from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.datastore.contracts import DatastoreFileNotFoundError
 from app.modules.agent.services import agent_context_brief as brief_mod
 from app.modules.agent.services import agent_memory_brief as memory_mod
-from app.modules.agent.services import agent_self_brief as self_mod
 from app.modules.agent.infrastructure.context_brief_repository import UserProfile
 from app.modules.pod.contracts.members import PodProfile
 from app.modules.schedule.contracts.pod_summaries import PodScheduleSummary
@@ -95,8 +94,9 @@ class _FakeBriefRepo:
         assert ctx is not None, "schedules must be filtered by the caller's context"
         return ([], 0)
 
-    async def list_apps(self, *, pod_id, ctx):
+    async def list_apps(self, *, pod_id, ctx, limit):
         assert ctx is not None, "apps must be filtered by the caller's context"
+        assert limit > 0, "apps must be read a page at a time, not all of them"
         return []
 
     async def list_surfaces(self, **kwargs):
@@ -151,22 +151,15 @@ class _FakeFileService:
 
 @pytest.fixture
 def stubbed(monkeypatch):
-    monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _FakeBriefRepo)
-    # `## You` is built in its own module off its own import of the repository,
-    # so patching the brief module alone leaves the real one wired in behind it.
-    monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _FakeBriefRepo)
-    monkeypatch.setattr(
-        self_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
-    )
+    # The repository is a constructor argument, so tests build the subject with
+    # a double rather than replacing a name inside it -- see `_builder` below.
     monkeypatch.setattr(brief_mod, "AgentRepository", _FakeListRepo)
+
     # `function`'s published operation, not a name bound in the subject: a
     # double inside the module under test certifies the half you did not write.
     monkeypatch.setattr(
         "app.modules.function.contracts.agent_tools.list_pod_functions",
         _no_functions,
-    )
-    monkeypatch.setattr(
-        brief_mod, "create_authorization_data_service", lambda uow: _FakeAuthzService()
     )
 
     # The member directory opens its own unit of work through `pod`, so it has
@@ -208,6 +201,21 @@ def stubbed(monkeypatch):
     yield agents_md
 
 
+def _builder(factory=None, *, repository=_FakeBriefRepo):
+    """The subject, with its collaborators injected rather than patched in.
+
+    The authorization service has to come through the constructor too: it is a
+    default argument, bound when the function was defined, so replacing the
+    module attribute after import does nothing at all. That failed silently for
+    one commit, which is the argument for the seam.
+    """
+    return AgentContextBriefBuilder(
+        factory or RecordingUoWFactory(),
+        repository=repository,
+        authorization=lambda uow: _FakeAuthzService(),
+    )
+
+
 def _named_agent(kind: AgentKind = AgentKind.USER):
     return SimpleNamespace(
         id=uuid4(),
@@ -238,7 +246,7 @@ def _conversation(is_pod_assistant: bool):
 
 async def test_named_agent_brief_never_overlaps_uows(stubbed):
     factory = RecordingUoWFactory()
-    builder = AgentContextBriefBuilder(factory)
+    builder = _builder(factory)
     brief = await builder.build(
         agent=_named_agent(),
         conversation=_conversation(False),
@@ -252,7 +260,7 @@ async def test_named_agent_brief_never_overlaps_uows(stubbed):
 
 async def test_default_assistant_brief_never_overlaps_uows(stubbed):
     factory = RecordingUoWFactory()
-    builder = AgentContextBriefBuilder(factory)
+    builder = _builder(factory)
     await builder.build(
         agent=_pod_default_agent(),  # the assistant -> full inventory path
         conversation=_conversation(True),
@@ -269,7 +277,7 @@ async def test_brief_is_cached_second_call_opens_no_uow(stubbed, monkeypatch):
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
     )
     factory = RecordingUoWFactory()
-    builder = AgentContextBriefBuilder(factory)
+    builder = _builder(factory)
     agent = _named_agent()
     conv = _conversation(False)
     uid, pid = uuid4(), uuid4()
@@ -296,7 +304,7 @@ async def test_a_new_conversation_reuses_the_cached_brief(stubbed, monkeypatch):
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
     )
     factory = RecordingUoWFactory()
-    builder = AgentContextBriefBuilder(factory)
+    builder = _builder(factory)
     agent = _named_agent()
     uid, pid = uuid4(), uuid4()
 
@@ -328,7 +336,7 @@ async def test_the_two_brief_shapes_never_share_a_cache_entry(stubbed, monkeypat
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
     )
     factory = RecordingUoWFactory()
-    builder = AgentContextBriefBuilder(factory)
+    builder = _builder(factory)
     uid, pid = uuid4(), uuid4()
 
     granted = await builder.build(
@@ -351,7 +359,7 @@ async def test_brief_cache_disabled_with_zero_ttl(stubbed, monkeypatch):
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 0
     )
     factory = RecordingUoWFactory()
-    builder = AgentContextBriefBuilder(factory)
+    builder = _builder(factory)
     agent = _named_agent()
     conv = _conversation(False)
     uid, pid = uuid4(), uuid4()
@@ -369,7 +377,7 @@ async def test_the_memory_section_is_absent_without_the_memory_toolset(stubbed):
     An agent that was never granted it should not be told it has folders to
     keep facts in.
     """
-    brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+    brief = await _builder().build(
         agent=_named_agent(),
         conversation=_conversation(False),
         user_id=uuid4(),
@@ -385,7 +393,7 @@ async def test_the_memory_section_is_absent_without_a_way_to_reach_pod_files(
 ):
     """MEMORY carries no tools, so on its own it is a promise the agent cannot
     keep — told to write durable facts, given nothing to write with."""
-    brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+    brief = await _builder().build(
         agent=_named_agent(),
         conversation=_conversation(False),
         user_id=uuid4(),
@@ -399,7 +407,7 @@ async def test_the_memory_section_is_absent_without_a_way_to_reach_pod_files(
 @pytest.mark.parametrize("file_toolset", [AgentToolset.WORKSPACE_CLI, AgentToolset.POD])
 async def test_memory_appears_once_the_agent_can_write_a_file(stubbed, file_toolset):
     """Either file surface is enough — the shell or the pod tools."""
-    brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+    brief = await _builder().build(
         agent=_named_agent(),
         conversation=_conversation(False),
         user_id=uuid4(),
@@ -430,7 +438,7 @@ async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatc
             return rendered[0]
 
     monkeypatch.setattr(brief_mod, "AgentMemoryBriefBuilder", _StubMemoryBuilder)
-    builder = AgentContextBriefBuilder(RecordingUoWFactory())
+    builder = _builder()
     kwargs = {
         "agent": _named_agent(),
         "conversation": _conversation(False),
@@ -599,11 +607,9 @@ class TestTheAgentIsToldWhoItIs:
                     created_at=datetime(2026, 3, 4, tzinfo=timezone.utc),
                 )
 
-        monkeypatch.setattr(brief_mod, "AgentContextBriefRepository", _Repo)
-        monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)
         agent = _pod_default_agent()
 
-        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+        brief = await _builder(repository=_Repo).build(
             agent=agent,
             conversation=_conversation(True),
             user_id=uuid4(),
@@ -620,7 +626,7 @@ class TestTheAgentIsToldWhoItIs:
     async def test_a_named_agent_is_named_as_one(self, stubbed):
         agent = _named_agent()
 
-        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+        brief = await _builder().build(
             agent=agent,
             conversation=_conversation(False),
             user_id=uuid4(),
@@ -658,9 +664,7 @@ class TestTheAgentIsToldWhoItIs:
             async def list_schedules(self, *, pod_id, ctx, limit):
                 return ([mine, theirs], 2)
 
-        monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)
-
-        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+        brief = await _builder(repository=_Repo).build(
             agent=agent,
             conversation=_conversation(True),
             user_id=uuid4(),
@@ -681,10 +685,9 @@ class TestTheAgentIsToldWhoItIs:
             async def list_schedules(self, *, pod_id, ctx, limit):
                 raise OperationalError("select", {}, Exception("no connection"))
 
-        monkeypatch.setattr(self_mod, "AgentContextBriefRepository", _Repo)
         agent = _pod_default_agent()
 
-        brief = await AgentContextBriefBuilder(RecordingUoWFactory()).build(
+        brief = await _builder(repository=_Repo).build(
             agent=agent,
             conversation=_conversation(True),
             user_id=uuid4(),

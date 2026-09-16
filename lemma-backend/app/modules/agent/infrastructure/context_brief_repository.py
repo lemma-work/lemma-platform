@@ -81,9 +81,11 @@ class AgentContextBriefRepository:
             session=self._session, pod_id=pod_id, ctx=ctx, limit=limit
         )
 
-    async def list_apps(self, *, pod_id: UUID, ctx: Context) -> list[PodAppSummary]:
+    async def list_apps(
+        self, *, pod_id: UUID, ctx: Context, limit: int
+    ) -> list[PodAppSummary]:
         return await list_readable_app_summaries(
-            session=self._session, pod_id=pod_id, ctx=ctx
+            session=self._session, pod_id=pod_id, ctx=ctx, limit=limit
         )
 
     async def list_surfaces(

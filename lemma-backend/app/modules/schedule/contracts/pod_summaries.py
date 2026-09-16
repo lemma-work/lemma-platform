@@ -71,23 +71,31 @@ def _readable(ctx: Context):
     )
 
 
-async def list_schedule_summaries(
-    *, session, pod_id: UUID, ctx: Context, limit: int
-) -> tuple[list[PodScheduleSummary], int]:
-    """The non-internal schedules this context may read, and how many there are.
+async def _readable_total(*, session, pod_id: UUID, ctx: Context) -> int:
+    """How many of this pod's schedules this context may read.
 
-    ``ctx`` is required rather than optional. An optional authorization context
-    is one a caller forgets, and the thing it is protecting here is the free
-    text somebody wrote into a private schedule's instruction.
+    Its own function, with one statement in it, because a count and a page of
+    rows in the same function defeat the unbounded-read gate: the ``limit`` sits
+    on one of the two selects and the check cannot tell which. That gate's own
+    docstring names the bug it is for -- a loader that hid an unbounded read of
+    every run behind a count over their messages.
     """
-    where = (
-        Schedule.pod_id == pod_id,
-        Schedule.is_internal.is_(False),
-        _readable(ctx),
-    )
-    total = (
-        await session.execute(select(func.count()).select_from(Schedule).where(*where))
+    return (
+        await session.execute(
+            select(func.count())
+            .select_from(Schedule)
+            .where(
+                Schedule.pod_id == pod_id,
+                Schedule.is_internal.is_(False),
+                _readable(ctx),
+            )
+        )
     ).scalar_one()
+
+
+async def _readable_page(
+    *, session, pod_id: UUID, ctx: Context, limit: int
+) -> list[PodScheduleSummary]:
     rows = (
         await session.execute(
             select(
@@ -99,7 +107,11 @@ async def list_schedule_summaries(
                 Schedule.is_active,
                 Schedule.config,
             )
-            .where(*where)
+            .where(
+                Schedule.pod_id == pod_id,
+                Schedule.is_internal.is_(False),
+                _readable(ctx),
+            )
             .order_by(Schedule.created_at.desc())
             .limit(limit)
         )
@@ -123,4 +135,22 @@ async def list_schedule_summaries(
             is_active,
             config,
         ) in rows
-    ], int(total)
+    ]
+
+
+async def list_schedule_summaries(
+    *, session, pod_id: UUID, ctx: Context, limit: int
+) -> tuple[list[PodScheduleSummary], int]:
+    """The non-internal schedules this context may read, and how many there are.
+
+    ``ctx`` is required rather than optional. An optional authorization context
+    is one a caller forgets, and the thing it is protecting here is the free
+    text somebody wrote into a private schedule's instruction.
+
+    The total goes through the same filter as the rows: a count over everything
+    would tell the reader how many schedules they are not allowed to see.
+    """
+    return (
+        await _readable_page(session=session, pod_id=pod_id, ctx=ctx, limit=limit),
+        await _readable_total(session=session, pod_id=pod_id, ctx=ctx),
+    )

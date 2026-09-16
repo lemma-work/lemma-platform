@@ -81,6 +81,7 @@ async def list_readable_app_summaries(
     session,
     pod_id: UUID,
     ctx: Context,
+    limit: int,
 ) -> list[PodAppSummary]:
     """One pod's apps, filtered to what this context may actually read.
 
@@ -90,6 +91,10 @@ async def list_readable_app_summaries(
     an agent's runtime brief, where the reader is one user and an app carries
     its own visibility and owner. An optional ``ctx`` would be the version a
     caller forgets to pass.
+
+    ``limit`` is required for the same reason. The brief caps what it renders,
+    but capping the render is not capping the read -- the first version of this
+    fetched every app in the pod and then showed twelve.
     """
     actions = allowed_actions_expr(
         ctx=ctx,
@@ -113,6 +118,7 @@ async def list_readable_app_summaries(
                 allowed_actions_contains(actions, Permissions.APP_READ),
             )
             .order_by(AppModel.name)
+            .limit(limit)
         )
     ).all()
     return [

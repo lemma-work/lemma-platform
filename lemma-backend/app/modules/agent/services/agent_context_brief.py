@@ -63,6 +63,10 @@ from app.modules.datastore.contracts.agent_tools import (
 from app.modules.function.contracts import agent_tools as function_tools
 from app.modules.pod.contracts.directory import list_pod_members
 from app.core.authorization.factory import create_authorization_data_service
+from app.modules.agent.services.brief_seams import (
+    AuthorizationFactory,
+    RepositoryFactory,
+)
 
 _MAX_TABLES = 50
 _MAX_MEMBERS = 25
@@ -150,8 +154,35 @@ def _member_line(member) -> str:
 
 
 class AgentContextBriefBuilder:
-    def __init__(self, uow_factory: UnitOfWorkFactory):
+    """Assembles the runtime brief.
+
+    ``repository`` is a constructor seam, and the self-brief it builds takes the
+    same one: a double patched into either module sits inside the subject rather
+    than in front of a collaborator, and goes on passing through a rename that
+    ought to have failed.
+    """
+
+    def __init__(
+        self,
+        uow_factory: UnitOfWorkFactory,
+        *,
+        repository: RepositoryFactory | None = None,
+        authorization: AuthorizationFactory | None = None,
+    ):
         self.uow_factory = uow_factory
+        # Resolved at call time, not bound here: a default argument is
+        # evaluated once at import, so a test replacing the module name
+        # afterwards never reaches it -- and the test still passes,
+        # because a real collaborator failing looks like a fake one
+        # failing. `None` means "whatever the module says when asked".
+        self._repository = repository
+        self._authorization = authorization
+
+    def _repo_factory(self) -> RepositoryFactory:
+        return self._repository or AgentContextBriefRepository
+
+    def _authz_factory(self) -> AuthorizationFactory:
+        return self._authorization or create_authorization_data_service
 
     async def build(
         self,
@@ -228,7 +259,7 @@ class AgentContextBriefBuilder:
     ) -> str:
         # uow 1: plain identity reads (no authorization context needed).
         async with self.uow_factory() as uow:
-            repo = AgentContextBriefRepository(uow)
+            repo = self._repo_factory()(uow)
             pod = await repo.get_pod_profile(pod_id)
             profile = await repo.get_user_profile(user_id)
         lines = [
@@ -243,7 +274,11 @@ class AgentContextBriefBuilder:
         lines.extend(user_lines(profile, user_id))
 
         lines.extend(
-            await AgentSelfBriefBuilder(self.uow_factory).build(
+            await AgentSelfBriefBuilder(
+                self.uow_factory,
+                repository=self._repository,
+                authorization=self._authorization,
+            ).build(
                 agent=agent,
                 pod=pod,
                 pod_id=pod_id,
@@ -285,7 +320,7 @@ class AgentContextBriefBuilder:
         # The datastore read needs the authorization context; build ctx in this
         # uow and render the rows (lazy column access) before it closes.
         async with self.uow_factory() as uow:
-            ctx = await create_authorization_data_service(uow).build_user_context(
+            ctx = await self._authz_factory()(uow).build_user_context(
                 user_id=user_id, pod_id=pod_id
             )
             token = set_current_context(ctx)
@@ -368,10 +403,10 @@ class AgentContextBriefBuilder:
         to read every workflow in it.
         """
         async with self.uow_factory() as uow:
-            ctx = await create_authorization_data_service(uow).build_user_context(
+            ctx = await self._authz_factory()(uow).build_user_context(
                 user_id=user_id, pod_id=pod_id
             )
-            workflows, total = await AgentContextBriefRepository(uow).list_workflows(
+            workflows, total = await self._repo_factory()(uow).list_workflows(
                 pod_id=pod_id, ctx=ctx, limit=_MAX_RESOURCES
             )
         if not workflows:
@@ -408,7 +443,7 @@ class AgentContextBriefBuilder:
         """Best-effort grounding, in its own uow so the storage walk is alone."""
         try:
             async with self.uow_factory() as uow:
-                ctx = await create_authorization_data_service(uow).build_user_context(
+                ctx = await self._authz_factory()(uow).build_user_context(
                     user_id=user_id, pod_id=pod_id
                 )
                 token = set_current_context(ctx)
@@ -440,7 +475,7 @@ class AgentContextBriefBuilder:
     ) -> list[str]:
         # uow 1: grants + name resolution (plain queries).
         async with self.uow_factory() as uow:
-            repo = AgentContextBriefRepository(uow)
+            repo = self._repo_factory()(uow)
             rows = await repo.get_agent_grants(pod_id=pod_id, agent_id=agent.id)
             if not rows:
                 return [
@@ -478,7 +513,7 @@ class AgentContextBriefBuilder:
         table_summaries: dict[str, str] = {}
         if granted_table_names:
             async with self.uow_factory() as uow:
-                ctx = await create_authorization_data_service(uow).build_user_context(
+                ctx = await self._authz_factory()(uow).build_user_context(
                     user_id=user_id, pod_id=pod_id
                 )
                 token = set_current_context(ctx)
