@@ -71,19 +71,65 @@ def _shipped_modules(copies: list[str]) -> set[str]:
     return shipped
 
 
-def _imports_of(module: str) -> set[str]:
-    """Which `sandbox_runtime.*` names one shipped module imports."""
+def _is_a_module(dotted: str) -> bool:
+    """Whether this name is a file or package on disk, rather than something in one.
+
+    `from sandbox_runtime import tasks` and `from sandbox_runtime import x` are
+    the same shape to the parser; only the filesystem says which one names a
+    module the image has to carry.
+    """
+    root = BACKEND / dotted.replace(".", "/")
+    return root.with_suffix(".py").is_file() or (root / "__init__.py").is_file()
+
+
+def _source_of(module: str) -> Path | None:
     path = BACKEND / (module.replace(".", "/") + ".py")
-    if not path.is_file():
-        path = BACKEND / module.replace(".", "/") / "__init__.py"
-    if not path.is_file():
+    if path.is_file():
+        return path
+    package = BACKEND / module.replace(".", "/") / "__init__.py"
+    return package if package.is_file() else None
+
+
+def _imports_of(module: str) -> set[str]:
+    """Which `sandbox_runtime.*` modules one shipped module needs to exist.
+
+    Three forms, and for a while only the first was seen:
+
+    * ``from sandbox_runtime.tasks import f`` -- the module is `node.module`.
+    * ``from sandbox_runtime import tasks`` -- `node.module` is only the
+      *package*, which every template ships anyway as `__init__.py`. The module
+      that has to be carried is named in `node.names`, so a template omitting
+      `tasks.py` passed. Added when the name resolves to a file or package on
+      disk, because that is what separates a module from a function.
+    * ``from ..tasks import f`` -- `node.module` is `tasks` and does not start
+      with `sandbox_runtime` at all, so it was not even looked at. Resolved
+      against the package this module lives in.
+    """
+    source = _source_of(module)
+    if source is None:
         return set()
+    package = (
+        module.rsplit(".", 1)[0]
+        if _source_of(module) != (BACKEND / module.replace(".", "/") / "__init__.py")
+        else module
+    )
+
     needed: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
-            "sandbox_runtime"
-        ):
-            needed.add(node.module or "")
+    for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = package.split(".")
+                climbed = base[: len(base) - (node.level - 1)] or base[:1]
+                resolved = ".".join([*climbed, *([node.module] if node.module else [])])
+            else:
+                resolved = node.module or ""
+            if not resolved.startswith("sandbox_runtime"):
+                continue
+            needed.add(resolved)
+            for alias in node.names:
+                member = f"{resolved}.{alias.name}"
+                if _is_a_module(member):
+                    needed.add(member)
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.startswith("sandbox_runtime"):
