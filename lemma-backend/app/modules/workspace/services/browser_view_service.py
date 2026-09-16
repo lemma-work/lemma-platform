@@ -286,10 +286,14 @@ async def _require_private(relay, *, doing: str) -> None:
     that evaluates script. Loading somebody's saved session into a browser
     behind that is handing their account to whoever finds the address.
 
-    So the two paths that put a session into a browser refuse. Watching is not
-    refused: a viewer reaches the browser through this API over an
-    authenticated socket, and nothing about the sandbox's own address changes
-    what that person is already entitled to see.
+    So all three paths into that browser refuse: loading a saved login, opening
+    one for a sign-in, and attaching a viewer -- the last because attaching is
+    also how somebody drives, and a password typed into a browser behind an
+    open dashboard is the same exposure as a session loaded into one. An
+    earlier draft of this argued that watching was safe because the viewer
+    arrives over an authenticated socket. That is true of the socket and beside
+    the point: what leaks is the sandbox's own address, which nothing about the
+    viewer's credentials closes.
     """
     try:
         public = await relay.endpoint_is_public()

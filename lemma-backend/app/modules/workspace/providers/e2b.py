@@ -277,7 +277,14 @@ class E2BSandboxProvider(E2BOpsMixin):
                 lifecycle=self._lifecycle(spec.kind),
                 metadata=self._identity_metadata(spec),
                 envs=dict(spec.env),
-                allow_public_traffic=self._config.allow_public_traffic,
+                # On `network`, not as an argument of its own. `create` takes
+                # its extra keywords as `Unpack[ApiParams]` and hands them
+                # straight to `ConnectionConfig(**opts)`, which rejects what it
+                # does not know -- so a top-level `allow_public_traffic=` does
+                # not get ignored, it raises `TypeError` and no sandbox is made
+                # at all. `SandboxNetworkOpts` is a total=False TypedDict, so
+                # naming this one key leaves egress exactly as it was.
+                network={"allow_public_traffic": self._config.allow_public_traffic},
                 **self._api(),
             )
 
