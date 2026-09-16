@@ -37,6 +37,10 @@ from app.modules.web_login.services.sign_in import (
 )
 
 SITE = "https://app.example.com"
+#: Whose conversation it is. Named rather than a fresh `uuid4()` per call site
+#: because the service now compares it against the caller, and two anonymous
+#: uuids that happen not to match is the bug these tests exist to catch.
+OWNER = uuid4()
 COOKIES = [{"name": "sid", "value": "s3cret", "domain": "app.example.com"}]
 
 
@@ -232,6 +236,25 @@ class _Browser:
         self.closed = True
 
 
+#: `_service(owner=...)` left alone means "the caller owns it". Spelled as a
+#: sentinel rather than `None`, because `None` is itself an answer the real
+#: lookup gives -- a conversation that no longer exists -- and the two must not
+#: collapse into each other.
+_ITS_THEIRS = object()
+
+GONE = None
+
+
+class _Owner:
+    """Whose conversation the service is being asked about."""
+
+    def __init__(self, owner: object = _ITS_THEIRS) -> None:
+        self.owner = OWNER if owner is _ITS_THEIRS else owner
+
+    async def __call__(self, _uow, _conversation_id):
+        return self.owner
+
+
 class _Resume:
     """What the service uses to close the pause a sign-in was raised for.
 
@@ -253,6 +276,7 @@ def _service(
     browser: _Browser,
     resume: "_Resume | None" = None,
     waiting: object | None = None,
+    owner: object = _ITS_THEIRS,
 ) -> SignInService:
     """The real service, with a session that records instead of a database."""
 
@@ -277,6 +301,7 @@ def _service(
         browser=browser,
         resume=resume or _Resume(),
         read_pause=waiting if waiting is not None else _Waiting(),
+        owner_of=_Owner(owner),
     )
 
 
@@ -292,7 +317,7 @@ async def _answer(
     return await _service(session, browser, resume).answer(
         conversation_id=uuid4(),
         tool_call_id="call-1",
-        user_id=uuid4(),
+        user_id=OWNER,
         signed_in=signed_in,
         force=force,
     )
@@ -526,7 +551,7 @@ async def test_answering_a_link_nothing_is_waiting_on_is_refused() -> None:
         await _service(session, _Browser(), waiting=_NothingWaiting()).answer(
             conversation_id=uuid4(),
             tool_call_id="call-1",
-            user_id=uuid4(),
+            user_id=OWNER,
             signed_in=True,
         )
 
@@ -541,7 +566,7 @@ async def test_answering_a_different_pause_than_the_link_names_is_refused() -> N
         ).answer(
             conversation_id=uuid4(),
             tool_call_id="call-1",
-            user_id=uuid4(),
+            user_id=OWNER,
             signed_in=True,
         )
 
@@ -598,7 +623,7 @@ async def test_answering_resolves_the_pause_the_agent_is_waiting_on() -> None:
     ).answer(
         conversation_id=conversation,
         tool_call_id="call-1",
-        user_id=uuid4(),
+        user_id=OWNER,
         signed_in=True,
     )
 
@@ -735,10 +760,67 @@ async def test_answering_hands_the_session_to_the_agents_browser() -> None:
     await _service(session, browser).answer(
         conversation_id=conversation,
         tool_call_id="call-1",
-        user_id=uuid4(),
+        user_id=OWNER,
         signed_in=True,
     )
 
     handed = [call for call in browser.loaded if call["session"]]
     assert handed, "the capture reached the agent's browser"
     assert handed[-1]["session"] == f"conv-{conversation.hex}"
+
+
+# ---------------------------------------------------------------------------
+# A link is a lookup, not a credential
+# ---------------------------------------------------------------------------
+
+
+async def test_a_stranger_cannot_read_what_somebody_is_being_asked_to_sign_in_to() -> (
+    None
+):
+    """The ids in a sign-in URL name a pause; they do not grant access to it.
+
+    A sign-in link goes out over WhatsApp and email, where it is forwarded and
+    where unfurlers fetch it before any person does. If holding the two ids
+    were enough, the origin and the agent's stated reason -- which site, and
+    what it is being used for -- would be readable by anybody who had seen one.
+    """
+    found = await _service(_Session(), _Browser(), owner=uuid4()).pending(
+        conversation_id=uuid4(), user_id=OWNER
+    )
+
+    assert found is None, "somebody else's pause is not readable"
+
+
+async def test_a_stranger_cannot_answer_somebody_elses_sign_in() -> None:
+    """Reading it is the smaller half. Answering resolves a pause in the
+    owner's name: it tells their run to carry on, or declines on their behalf,
+    and on the signed-in branch it captures whatever the browser holds and
+    stores it as their login.
+    """
+    resume = _Resume()
+    session = _Session()
+
+    with pytest.raises(SignInNotPending):
+        await _service(
+            session,
+            _Browser(state={"cookies": COOKIES, "origins": []}),
+            resume,
+            owner=uuid4(),
+        ).answer(
+            conversation_id=uuid4(),
+            tool_call_id="call-1",
+            user_id=OWNER,
+            signed_in=True,
+        )
+
+    assert resume.calls == [], "no pause was resolved"
+    assert session.logins == [], "nothing was stored against the caller"
+
+
+async def test_a_conversation_that_is_gone_is_not_anybodys() -> None:
+    """`None` from the owner lookup must not read as "no owner, so anyone"."""
+    found = await _service(_Session(), _Browser(), owner=GONE).pending(
+        conversation_id=uuid4(), user_id=OWNER
+    )
+
+    assert found is None

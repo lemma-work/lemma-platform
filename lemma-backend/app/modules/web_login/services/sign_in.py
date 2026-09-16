@@ -32,8 +32,10 @@ from app.modules.web_login.domain.entities import (
 from app.modules.web_login.infrastructure.repository import WebLoginRepository
 from app.modules.web_login.services.origin import normalize_origin
 from app.modules.web_login.services.pauses import (
+    OwnerOfConversation,
     ReadPause,
     ResumePause,
+    owner_through_contracts,
     pending_through_contracts,
     resume_through_approvals,
 )
@@ -79,6 +81,7 @@ class SignInService:
         browser: object | None = None,
         resume: "ResumePause | None" = None,
         read_pause: "ReadPause | None" = None,
+        owner_of: "OwnerOfConversation | None" = None,
     ) -> None:
         self._uow_factory = uow_factory
         self._browser_override = browser
@@ -93,6 +96,12 @@ class SignInService:
         #: row holding an origin, a reason and a status is three facts the
         #: paused tool call already has.
         self._read_pause = read_pause or pending_through_contracts
+        #: Whose conversation this is. The ids in a sign-in URL are a lookup,
+        #: not a credential, and this is the line that makes that true: without
+        #: it, anybody holding a conversation id and a tool call id could read
+        #: what site somebody else is being asked to sign in to, and answer for
+        #: them.
+        self._owner_of = owner_of or owner_through_contracts
 
     @property
     def _browser(self):
@@ -293,12 +302,21 @@ class SignInService:
         There is no row to read. The paused tool call carries the origin and the
         reason the agent gave, and its still being unresolved is what "waiting"
         means -- so the three facts a sign-in page needs are the pause.
+
+        `None` for a conversation somebody else owns, and this is the only
+        place that check lives -- `answer` reaches the pause through here, so
+        both routes are scoped by the one comparison.
         """
         async with self._uow_factory() as uow:
+            owner = await self._owner_of(uow, conversation_id)
+            if owner != user_id:
+                # Deliberately indistinguishable from "nothing is waiting": the
+                # caller is told this link is spent either way, and saying which
+                # would tell a stranger that the conversation exists.
+                return None
             paused = await self._read_pause(uow, conversation_id)
         if paused is None:
             return None
-        del user_id  # the caller has already matched the conversation's owner
         origin = str(paused.tool_args.get("origin") or "")
         if not origin:
             return None
