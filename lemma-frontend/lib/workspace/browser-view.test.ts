@@ -47,45 +47,6 @@ describe('mapping a click onto the page', () => {
         expect(bottomOfImage.y).toBe(800);
     });
 
-    it('answers in the page\'s pixels, not the picture\'s', () => {
-        // The bug this function existed to fix, and then caused. The stream
-        // encodes within the image's caps, so the picture is smaller than the
-        // page -- measured in a real sandbox, a 1050x797 page arrives as a
-        // 949x720 JPEG. Input is dispatched against the *page*, so answering in
-        // picture pixels put every click about a tenth of the way up and to the
-        // left. Large targets absorb that; a cookie banner's Allow does not,
-        // which is why it read as "clicks sometimes work".
-        const streamed = {
-            pictureWidth: 949,
-            pictureHeight: 720,
-            deviceWidth: 1050,
-            deviceHeight: 797,
-        };
-        // A pane the same shape as the picture: no letterbox, so the only thing
-        // under test is which space the answer is in.
-        const rect = { left: 0, top: 0, width: 949, height: 720 };
-
-        expect(toFramePoint(rect, streamed, { clientX: 949, clientY: 720 })).toEqual({
-            x: 1050,
-            y: 797,
-        });
-        // The real button from the experiment: page (822,711) hit, picture
-        // (743,642) missed.
-        const aimed = toFramePoint(rect, streamed, { clientX: 743, clientY: 642 });
-        expect(aimed).toEqual({ x: 822, y: 711 });
-    });
-
-    it('falls back to the picture when a frame carries no metadata', () => {
-        // Better roughly right than every click at 0,0.
-        const rect = { left: 0, top: 0, width: 949, height: 720 };
-        expect(
-            toFramePoint(rect, { pictureWidth: 949, pictureHeight: 720 }, {
-                clientX: 949,
-                clientY: 720,
-            }),
-        ).toEqual({ x: 949, y: 720 });
-    });
-
     it('maps the centre to the centre', () => {
         const rect = { left: 0, top: 0, width: 800, height: 800 };
         const point = toFramePoint(rect, frame, { clientX: 400, clientY: 400 });

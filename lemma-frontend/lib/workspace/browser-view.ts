@@ -123,10 +123,23 @@ export const toFramePoint = (
     const across = (event.clientX - rect.left - offsetX) / drawnWidth;
     const down = (event.clientY - rect.top - offsetY) / drawnHeight;
 
-    // Falling back to the picture's size keeps a frame that somehow arrived
-    // without metadata roughly usable, rather than sending every click to 0,0.
-    const width = frame.deviceWidth || frame.pictureWidth;
-    const height = frame.deviceHeight || frame.pictureHeight;
+    // The picture's own pixels, and a known-incomplete answer.
+    //
+    // `metadata.deviceWidth`/`deviceHeight` are *not* usable as the input space,
+    // which took three goes to establish. In one sandbox they were 1050x797
+    // against a 949x720 picture -- a clean 0.904 scale, aspect preserved, and
+    // an experiment there showed the server wanted those page pixels. In
+    // another they were 1280x720 against the same 949x720 picture, where the
+    // aspect ratios do not match at all, so no single scale can be right and
+    // mapping to them puts a click off the right edge.
+    //
+    // Whatever relates the two lives inside the screencast, and this viewer
+    // cannot see it. `agent-browser`'s own dashboard renders the same stream
+    // and takes input correctly because it is the same codebase; this is a
+    // reimplementation of it that has now produced three coordinate bugs. The
+    // fix is to stop reimplementing, not to find a fourth constant.
+    const width = frame.pictureWidth;
+    const height = frame.pictureHeight;
     return {
         x: Math.max(0, Math.min(width, Math.round(across * width))),
         y: Math.max(0, Math.min(height, Math.round(down * height))),
