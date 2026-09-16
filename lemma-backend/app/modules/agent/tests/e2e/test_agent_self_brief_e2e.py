@@ -1,4 +1,4 @@
-"""What a teammate is told about itself, against a real database.
+"""What an agent is told about itself, against a real database.
 
 Every unit test around ``## You`` and the inventory runs against a stubbed
 repository, so all of them would keep passing if a column name were wrong, a
@@ -8,8 +8,9 @@ hand-written reads across four modules; this is the test that runs them.
 
 Three claims:
 
-  * the teammate wears the pod's name, and its tenure is the pod's start date;
-  * a schedule wired to it reads back as its own standing work, and a table
+  * the default agent answers to the pod's name, and its start date is the
+    pod's;
+  * a schedule configured to start it reads back as its own, and a table
     created shared says so on the line the agent reads;
   * the whole brief survives a pod with nothing in it, which is the state every
     pod is in on its first day.
@@ -64,7 +65,7 @@ async def _create_pod(authenticated_client, fixed_test_org, name: str) -> dict:
     return response.json()
 
 
-async def _teammate_brief(*, pod_id: str, user_id: str) -> str:
+async def _default_agent_brief(*, pod_id: str, user_id: str) -> str:
     """The brief a fresh conversation with the pod's own agent would carry."""
     uow_factory = SessionUnitOfWorkFactory(async_session_maker)
     async with uow_factory() as uow:
@@ -84,18 +85,18 @@ async def _teammate_brief(*, pod_id: str, user_id: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_the_teammate_is_told_the_pods_name_and_purpose(
+async def test_the_default_agent_is_told_the_pods_name_and_purpose(
     authenticated_client, fixed_test_org, fixed_test_user
 ):
-    """The pod is the teammate, so the pod's name is the name it answers to.
+    """The default agent answers to the pod's name.
 
-    Rendering the platform's default responder name here would introduce every
-    teammate in an organization as the same person.
+    Rendering the platform's default responder name here would give every pod
+    in an organization the same one.
     """
     name = f"support-{uuid4().hex[:8]}"
     pod = await _create_pod(authenticated_client, fixed_test_org, name)
 
-    brief = await _teammate_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
+    brief = await _default_agent_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
 
     assert "## You" in brief
     assert f"**{name}**" in brief
@@ -106,7 +107,7 @@ async def test_the_teammate_is_told_the_pods_name_and_purpose(
 
 
 @pytest.mark.asyncio
-async def test_a_schedule_wired_to_the_teammate_is_its_own_standing_work(
+async def test_a_schedule_configured_to_start_the_agent_is_named_as_its_own(
     authenticated_client, fixed_test_org, fixed_test_user
 ):
     """The reads behind this are hand-written; only a real pod runs them."""
@@ -128,9 +129,9 @@ async def test_a_schedule_wired_to_the_teammate_is_its_own_standing_work(
         status.HTTP_201_CREATED,
     ), response.text
 
-    brief = await _teammate_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
+    brief = await _default_agent_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
 
-    assert "Standing work wired to you:" in brief
+    assert "Schedules configured to start you:" in brief
     assert "morning-sweep" in brief
     assert "cron `0 9 * * 1-5`" in brief
     assert "Check for stale rows" in brief
@@ -170,7 +171,7 @@ async def test_a_table_line_says_who_can_see_its_rows(
             status.HTTP_201_CREATED,
         ), response.text
 
-    brief = await _teammate_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
+    brief = await _default_agent_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
 
     ledger = next(line for line in brief.splitlines() if "team_ledger" in line)
     notes = next(line for line in brief.splitlines() if "my_notes" in line)
@@ -201,7 +202,7 @@ async def test_an_empty_pod_still_renders_a_whole_brief(
         authenticated_client, fixed_test_org, f"empty-{uuid4().hex[:8]}"
     )
 
-    brief = await _teammate_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
+    brief = await _default_agent_brief(pod_id=pod["id"], user_id=fixed_test_user["id"])
 
     assert brief.startswith("# Runtime Context")
     assert "## You" in brief
@@ -280,10 +281,10 @@ async def test_a_members_brief_excludes_another_members_private_schedule(
         "only meaningful while an agent schedule defaults to PERSONAL"
     )
 
-    owner_brief = await _teammate_brief(pod_id=pod_id, user_id=owner["id"])
+    owner_brief = await _default_agent_brief(pod_id=pod_id, user_id=owner["id"])
     assert "owners-private-sweep" in owner_brief, "the owner should see their own"
 
-    peer_brief = await _teammate_brief(pod_id=pod_id, user_id=peer["id"])
+    peer_brief = await _default_agent_brief(pod_id=pod_id, user_id=peer["id"])
     assert "owners-private-sweep" not in peer_brief
     assert "SECRET-INSTRUCTION-DO-NOT-LEAK" not in peer_brief
     # The count is filtered too: a total taken over everything would tell the
