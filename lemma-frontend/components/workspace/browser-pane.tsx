@@ -13,6 +13,7 @@ import {
     keyEventFor,
     openBrowserView,
     textAsCharEvents,
+    mouseEventFor,
     toFramePoint,
     wheelEventFor,
 } from '@/lib/workspace/browser-view';
@@ -113,31 +114,7 @@ export function BrowserPane({
         (type: 'mousePressed' | 'mouseReleased' | 'mouseMoved') =>
             (event: React.MouseEvent<HTMLCanvasElement>) => {
                 if (!controlling) return;
-                const point = pointFor(event);
-                sendInput({
-                    type: 'input_mouse',
-                    eventType: type,
-                    x: point.x,
-                    y: point.y,
-                    button: ['left', 'middle', 'right'][event.button] ?? 'left',
-                    // The DOM's own bitmask, which is already exactly the CDP
-                    // contract: which buttons are held *now*, as opposed to
-                    // `button`, which is what this event is about.
-                    //
-                    // Both hand-written answers were wrong in opposite
-                    // directions. A constant 1 said the button was still down
-                    // on release, so the page saw a press that never ended and
-                    // a cookie banner's Allow took focus and did nothing. Then
-                    // 1-on-press-only reported no button held during a move,
-                    // which is a drag reported as a hover -- no text selection,
-                    // no slider, no drag-and-drop.
-                    //
-                    // `event.buttons` is 1 while dragging, 0 on hover, and 0 on
-                    // the release that ends a click, because that is what it
-                    // means. There was never a rule to infer.
-                    buttons: event.buttons,
-                    clickCount: type === 'mouseMoved' ? 0 : event.detail || 1,
-                });
+                sendInput(mouseEventFor(type, pointFor(event), event));
             },
         [controlling, pointFor, sendInput],
     );
@@ -241,10 +218,29 @@ export function BrowserPane({
                     )}
                     onMouseDown={(event) => {
                         canvasRef.current?.focus();
+                        // The page hears the whole of the press, including the
+                        // part that happens outside this element. Without it a
+                        // drag off the canvas -- past the edge of a banner, out
+                        // of a dropdown, or simply a sloppy click near the
+                        // bezel -- delivers a press with no release, and the
+                        // page goes on believing the button is held: the next
+                        // click extends a selection instead of pressing
+                        // anything, which is the shape of "the popup will not
+                        // go away".
+                        event.currentTarget.setPointerCapture?.(
+                            (event as unknown as React.PointerEvent).pointerId,
+                        );
                         onMouse('mousePressed')(event);
                     }}
                     onMouseUp={onMouse('mouseReleased')}
                     onMouseMove={onMouse('mouseMoved')}
+                    onContextMenu={(event) => {
+                        // The press and release already went to the page, which
+                        // draws its own menu inside the picture. Letting this
+                        // through as well opens *this* browser's menu on top of
+                        // the canvas, over a menu the person cannot reach.
+                        if (controlling) event.preventDefault();
+                    }}
                     onWheel={onWheel}
                     onKeyDown={onKey}
                     onKeyUp={onKey}

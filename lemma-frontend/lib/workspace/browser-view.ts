@@ -36,8 +36,8 @@ export interface ViewerFrame {
     pictureWidth: number;
     pictureHeight: number;
     /**
-     * The page's own CSS pixels, measured in the sandbox and sent on the
-     * attach message, and the space every input message must be in.
+     * The page's own CSS pixels, from the stream's own `status` message, and
+     * the space every input message must be in.
      *
      * The two differ: the stream encodes within the caps the image sets
      * (`AGENT_BROWSER_STREAM_MAX_WIDTH` / `_MAX_HEIGHT`), so a 1050x797 page
@@ -49,9 +49,9 @@ export interface ViewerFrame {
      * ones do not, so it presented as "clicks sometimes work" rather than as a
      * broken mapping.
      *
-     * `0` when the sandbox could not measure it, which leaves input in the
-     * picture's pixels: still wrong by the scale factor, but no worse than
-     * before it was asked for.
+     * `0` before the first `status` arrives, or from a sandbox image whose
+     * stream server predates the field, which leaves input in the picture's
+     * pixels: still wrong by the scale factor, but no worse than before.
      */
     viewportWidth: number;
     viewportHeight: number;
@@ -94,8 +94,8 @@ const NON_TEXT_KEYS = new Set([
  *
  * The result is in the *page's* pixels, because that is what the stream server
  * dispatches: it does not scale input back out of the picture's space. The
- * page's size is measured in the sandbox and arrives on the attach message —
- * it cannot be inferred from a frame, and three coordinate bugs came of trying.
+ * page's size arrives on the stream's own `status` message — it cannot be
+ * inferred from a frame, and three coordinate bugs came of trying.
  *
  * With no measurement, this falls back to the picture's own pixels. That is
  * wrong by the scale factor and is what the pane did before the relay was
@@ -211,6 +211,47 @@ export const keyEventFor = (event: {
 };
 
 /**
+ * A mouse event as the page needs to receive it.
+ *
+ * Built here rather than inline in the pane so it is one object with one set of
+ * rules, and so those rules are testable. Three of them were learned the hard
+ * way:
+ *
+ * `buttons` is the DOM's own bitmask, which is already exactly the CDP
+ * contract: which buttons are held *now*, as opposed to `button`, which is what
+ * this event is about. Both hand-written answers were wrong in opposite
+ * directions — a constant 1 said the button was still down on release, so the
+ * page saw a press that never ended and a cookie banner's Allow took focus and
+ * did nothing; then 1-on-press-only reported no button held during a move,
+ * which is a drag reported as a hover.
+ *
+ * `clickCount` is the DOM's `detail`, so a double-click arrives as one. Zero on
+ * a move, because a move is not a click.
+ *
+ * `modifiers` for the same reason the keyboard sends them: without it a
+ * ctrl-click or shift-click is an ordinary click, so "open in new tab" and
+ * range-select silently do the wrong thing. The keyboard and wheel paths
+ * carried this from the start and the mouse path did not.
+ */
+export const mouseEventFor = (
+    type: 'mousePressed' | 'mouseReleased' | 'mouseMoved',
+    point: { x: number; y: number },
+    event: {
+        button: number; buttons: number; detail?: number;
+        altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean;
+    },
+): Record<string, unknown> => ({
+    type: 'input_mouse',
+    eventType: type,
+    x: point.x,
+    y: point.y,
+    button: ['left', 'middle', 'right'][event.button] ?? 'left',
+    buttons: event.buttons,
+    clickCount: type === 'mouseMoved' ? 0 : event.detail || 1,
+    modifiers: modifiersOf(event),
+});
+
+/**
  * A wheel event, in the sign convention Chrome expects.
  *
  * The same one the DOM uses: positive `deltaY` scrolls the page down. Negating
@@ -286,10 +327,10 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
     let attempt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let latest: Omit<ViewerFrame, 'bitmap'> | null = null;
-    //: The page's own pixels, from the attach message. Connection-level rather
-    //: than per-frame because that is where it arrives, and reset on every
-    //: connect so a reconnect to a differently-sized page does not keep the
-    //: old one.
+    //: The page's own pixels, from the stream's `status`. Connection-level
+    //: rather than per-frame because that is where it arrives, and reset on
+    //: every connect so a reconnect to a differently-sized page does not keep
+    //: the old one.
     let viewport = { width: 0, height: 0 };
 
     const send = (message: Record<string, unknown>) => {
@@ -363,12 +404,17 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                 attempt = 0;
                 // And the one thing a frame cannot tell us: the size of the
                 // page the picture is of, which is the space input goes in.
-                // Absent from an older sandbox image, in which case every
-                // frame reports 0 and `toFramePoint` falls back.
-                viewport = {
-                    width: Number(message.viewportWidth) || 0,
-                    height: Number(message.viewportHeight) || 0,
-                };
+                // `agent-browser`'s stream server puts it here and its own
+                // dashboard reads it from exactly this field, which is why
+                // nothing downstream measures it.
+                //
+                // Only when it carries numbers. Two things send a `status`:
+                // the relay, on accepting the socket, which knows nothing
+                // about the page, and the stream server, which does. Taking
+                // every status would let the first zero out the second.
+                const width = Number(message.viewportWidth) || 0;
+                const height = Number(message.viewportHeight) || 0;
+                if (width && height) viewport = { width, height };
                 return;
             }
             if (message.type === 'url' && options.onNavigated) {

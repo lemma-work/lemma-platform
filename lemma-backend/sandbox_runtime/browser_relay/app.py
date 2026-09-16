@@ -48,7 +48,6 @@ from .chrome import (
     open_url,
     page_targets,
     stream_port,
-    viewport_size,
     stream_socket_url,
 )
 from .stream_proxy import CONTROL, VIEW, pump
@@ -379,20 +378,13 @@ def create_app() -> FastAPI:
             return
 
         await websocket.accept()
-        # The page's own pixels, sent once on attach. A viewer is shown a
-        # scaled-down picture and has to scale a click back up before it means
-        # anything, and nothing in the frame itself says by how much --
-        # `metadata.deviceWidth`/`deviceHeight` is the cap box echoed back, not
-        # the page. Three coordinate bugs were attempts to infer this; the
-        # relay can simply ask, so it does.
-        attached: dict[str, object] = {"type": "status", "state": "attached"}
-        # `target` and nothing else: which tab the stream is showing is not
-        # something this knows, so `viewport_size` asks the named one first and
-        # then its siblings rather than being handed a guess here.
-        measured = await viewport_size(port=port, target_id=target)
-        if measured is not None:
-            attached["viewportWidth"], attached["viewportHeight"] = measured
-        await websocket.send_json(attached)
+        # This relay's own status, and deliberately nothing more than "the
+        # socket is up". The stream server sends its own `status` the moment it
+        # attaches, carrying `viewportWidth`/`viewportHeight` -- the page's own
+        # pixels, which is the one thing a viewer needs and cannot work out
+        # from a frame. `pump` forwards it untouched, so there is nothing to
+        # measure or re-send here.
+        await websocket.send_json({"type": "status", "state": "attached"})
 
         # Background: the keepalive outlives no request and belongs to the
         # browser rather than to whoever opened this socket.

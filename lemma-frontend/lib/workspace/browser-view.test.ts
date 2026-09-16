@@ -16,6 +16,7 @@ import {
     keyEventFor,
     reconnectDelayMs,
     textAsCharEvents,
+    mouseEventFor,
     toFramePoint,
     wheelEventFor,
 } from './browser-view';
@@ -129,6 +130,52 @@ describe('mapping a click onto the page', () => {
             x: 743,
             y: 642,
         });
+    });
+});
+
+describe('mouse', () => {
+    const at = { x: 100, y: 200 };
+    const plain = {
+        button: 0, buttons: 1, detail: 1,
+        altKey: false, ctrlKey: false, metaKey: false, shiftKey: false,
+    };
+
+    it('carries the held-button bitmask rather than inferring one', () => {
+        // A drag is a move with the button still down. Reporting 0 there makes
+        // it a hover: no text selection, no slider, no drag-and-drop. Reporting
+        // 1 on the release makes it a press that never ends.
+        expect(mouseEventFor('mouseMoved', at, { ...plain, buttons: 1 }).buttons).toBe(1);
+        expect(
+            mouseEventFor('mouseReleased', at, { ...plain, buttons: 0 }).buttons,
+        ).toBe(0);
+    });
+
+    it('sends modifiers, so a ctrl-click is not an ordinary click', () => {
+        // The keyboard and wheel paths carried these from the start and the
+        // mouse path did not, so every shift-click was a plain click: no range
+        // select, and "open in new tab" opened in this one.
+        const held = mouseEventFor('mousePressed', at, {
+            ...plain, ctrlKey: true, shiftKey: true,
+        });
+        expect(held.modifiers).toBe(2 | 8);
+        expect(mouseEventFor('mousePressed', at, plain).modifiers).toBe(0);
+    });
+
+    it('passes a double-click through as one, and a move as no click at all', () => {
+        expect(
+            mouseEventFor('mousePressed', at, { ...plain, detail: 2 }).clickCount,
+        ).toBe(2);
+        expect(mouseEventFor('mouseMoved', at, plain).clickCount).toBe(0);
+    });
+
+    it('names the button the event is about', () => {
+        expect(mouseEventFor('mousePressed', at, { ...plain, button: 2 }).button).toBe(
+            'right',
+        );
+        // Anything the DOM invents is a left click rather than a crash.
+        expect(mouseEventFor('mousePressed', at, { ...plain, button: 9 }).button).toBe(
+            'left',
+        );
     });
 });
 

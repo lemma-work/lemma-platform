@@ -565,15 +565,23 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
         assert refusal["code"] == "read_only", refusal
 
     async with websockets.connect(view_socket("control"), max_size=None) as driving:
-        # The page's own size, which the relay measures and sends on attach.
-        # Nothing in a frame carries it: `metadata.deviceWidth`/`deviceHeight`
-        # is the cap box echoed back, and in this sandbox it does not even
-        # share the page's aspect ratio. Three coordinate bugs were attempts to
-        # infer this number from a frame, so a viewer that has not been told it
-        # is a viewer that cannot click, and this asserts it arrives.
-        attached = await _first(driving, "status")
-        page_width = int(attached.get("viewportWidth") or 0)
-        page_height = int(attached.get("viewportHeight") or 0)
+        # The page's own size, which the *stream server* reports on its own
+        # `status` and the relay forwards untouched. Nothing in a frame carries
+        # it: `metadata.deviceWidth`/`deviceHeight` is the cap box echoed back,
+        # and in this sandbox it does not even share the page's aspect ratio.
+        # Three coordinate bugs were attempts to infer this from a frame, so a
+        # viewer that has not been told it is a viewer that cannot click.
+        #
+        # Two things send a `status` here -- the relay on accepting the socket,
+        # which knows nothing about the page, and the stream server, which
+        # does -- so this reads until one carries the numbers.
+        page_width = page_height = 0
+        for _ in range(4):
+            attached = await _first(driving, "status")
+            page_width = int(attached.get("viewportWidth") or 0)
+            page_height = int(attached.get("viewportHeight") or 0)
+            if page_width and page_height:
+                break
         assert page_width and page_height, attached
 
         first = await _first(driving, "frame")
