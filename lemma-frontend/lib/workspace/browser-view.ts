@@ -31,27 +31,36 @@ export interface ViewerFrame {
      * The picture's own pixels: what the canvas is sized to and what the
      * hit-testing is done against, because the picture is what is on screen.
      *
-     * Not what input is sent in. See `deviceWidth`.
+     * Not what input is sent in. See `viewportWidth`.
      */
     pictureWidth: number;
     pictureHeight: number;
     /**
-     * The page's own pixels, from `metadata.deviceWidth` / `deviceHeight`, and
-     * the space every input message must be in.
+     * The page's own CSS pixels, measured in the sandbox and sent on the
+     * attach message, and the space every input message must be in.
      *
      * The two differ: the stream encodes within the caps the image sets
      * (`AGENT_BROWSER_STREAM_MAX_WIDTH` / `_MAX_HEIGHT`), so a 1050x797 page
-     * arrives as a 949x720 JPEG. An earlier version of this file asserted, at
-     * length, that the server scaled input back out of the picture's space
-     * itself and that this metadata was therefore unused. That was wrong, and
-     * the comment saying so was the most confident thing in the file.
+     * arrives as a 949x720 JPEG. Settled by experiment rather than by reading:
+     * a 44x22 button at page (800,700) in a real sandbox, clicked through the
+     * stream socket twice. Page coordinates (822,711) set the title; picture
+     * coordinates (743,642) did nothing. Every click was landing about a tenth
+     * of the way up and to the left -- which large targets absorb and small
+     * ones do not, so it presented as "clicks sometimes work" rather than as a
+     * broken mapping.
      *
-     * Settled by experiment rather than by reading: a 44x22 button at page
-     * (800,700) in a real sandbox, clicked through the stream socket twice.
-     * Page coordinates (822,711) set the title; picture coordinates (743,642)
-     * did nothing. Every click was landing about a tenth of the way up and to
-     * the left -- which large targets absorb and small ones do not, so it
-     * presented as "clicks sometimes work" rather than as a broken mapping.
+     * `0` when the sandbox could not measure it, which leaves input in the
+     * picture's pixels: still wrong by the scale factor, but no worse than
+     * before it was asked for.
+     */
+    viewportWidth: number;
+    viewportHeight: number;
+    /**
+     * `metadata.deviceWidth` / `deviceHeight`, kept because it is on the wire
+     * and useful in a bug report -- and *not* the input space, which took
+     * three goes to establish. It is the cap box echoed back: in one sandbox
+     * 1280x720 against a 949x720 picture of a 1050x797 page, where the aspect
+     * ratios do not even match, so no single scale can relate the two.
      */
     deviceWidth: number;
     deviceHeight: number;
@@ -83,20 +92,23 @@ const NON_TEXT_KEYS = new Set([
  * box is therefore not the picture's box. Mapping against the element is the
  * bug that made every click land near, but not on, what was aimed at.
  *
- * The result is in the picture's pixels, which is what the stream server
- * expects: it knows how it scaled the frame and scales input back the same way.
- * Sending the page's coordinates instead — which the frame's metadata also
- * carries, and which are larger — puts the pointer past the picture's right
- * edge, where it hits nothing. That failed silently: a click that lands on no
- * element looks exactly like input that never arrived.
+ * The result is in the *page's* pixels, because that is what the stream server
+ * dispatches: it does not scale input back out of the picture's space. The
+ * page's size is measured in the sandbox and arrives on the attach message —
+ * it cannot be inferred from a frame, and three coordinate bugs came of trying.
+ *
+ * With no measurement, this falls back to the picture's own pixels. That is
+ * wrong by the scale factor and is what the pane did before the relay was
+ * asked; it fails silently, because a click that lands on no element looks
+ * exactly like input that never arrived.
  */
 export const toFramePoint = (
     rect: { left: number; top: number; width: number; height: number },
     frame: {
         pictureWidth: number;
         pictureHeight: number;
-        deviceWidth?: number;
-        deviceHeight?: number;
+        viewportWidth?: number;
+        viewportHeight?: number;
     },
     event: { clientX: number; clientY: number },
 ): { x: number; y: number } => {
@@ -123,23 +135,13 @@ export const toFramePoint = (
     const across = (event.clientX - rect.left - offsetX) / drawnWidth;
     const down = (event.clientY - rect.top - offsetY) / drawnHeight;
 
-    // The picture's own pixels, and a known-incomplete answer.
-    //
-    // `metadata.deviceWidth`/`deviceHeight` are *not* usable as the input space,
-    // which took three goes to establish. In one sandbox they were 1050x797
-    // against a 949x720 picture -- a clean 0.904 scale, aspect preserved, and
-    // an experiment there showed the server wanted those page pixels. In
-    // another they were 1280x720 against the same 949x720 picture, where the
-    // aspect ratios do not match at all, so no single scale can be right and
-    // mapping to them puts a click off the right edge.
-    //
-    // Whatever relates the two lives inside the screencast, and this viewer
-    // cannot see it. `agent-browser`'s own dashboard renders the same stream
-    // and takes input correctly because it is the same codebase; this is a
-    // reimplementation of it that has now produced three coordinate bugs. The
-    // fix is to stop reimplementing, not to find a fourth constant.
-    const width = frame.pictureWidth;
-    const height = frame.pictureHeight;
+    // The page, when the sandbox managed to measure it; the picture otherwise.
+    // Note that both fall out of the *fraction* above, so the picture's size
+    // never enters the answer except as that fallback -- which is the shape
+    // that makes this checkable: one number in, one number out, and the only
+    // question is which space it is in.
+    const width = frame.viewportWidth || frame.pictureWidth;
+    const height = frame.viewportHeight || frame.pictureHeight;
     return {
         x: Math.max(0, Math.min(width, Math.round(across * width))),
         y: Math.max(0, Math.min(height, Math.round(down * height))),
@@ -284,6 +286,11 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
     let attempt = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let latest: Omit<ViewerFrame, 'bitmap'> | null = null;
+    //: The page's own pixels, from the attach message. Connection-level rather
+    //: than per-frame because that is where it arrives, and reset on every
+    //: connect so a reconnect to a differently-sized page does not keep the
+    //: old one.
+    let viewport = { width: 0, height: 0 };
 
     const send = (message: Record<string, unknown>) => {
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -293,6 +300,7 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
 
     const connect = () => {
         if (closed) return;
+        viewport = { width: 0, height: 0 };
         options.onState('connecting');
         socket = new WebSocket(
             viewSocketUrl({
@@ -333,6 +341,8 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                     latest = {
                         pictureWidth: bitmap.naturalWidth || bitmap.width,
                         pictureHeight: bitmap.naturalHeight || bitmap.height,
+                        viewportWidth: viewport.width,
+                        viewportHeight: viewport.height,
                         deviceWidth: Number(metadata.deviceWidth) || 0,
                         deviceHeight: Number(metadata.deviceHeight) || 0,
                     };
@@ -351,6 +361,14 @@ export function openBrowserView(options: ViewerOptions): ViewerHandle {
                 // Not a picture, so not yet "live" — but proof the connection
                 // works, which is what the backoff counts.
                 attempt = 0;
+                // And the one thing a frame cannot tell us: the size of the
+                // page the picture is of, which is the space input goes in.
+                // Absent from an older sandbox image, in which case every
+                // frame reports 0 and `toFramePoint` falls back.
+                viewport = {
+                    width: Number(message.viewportWidth) || 0,
+                    height: Number(message.viewportHeight) || 0,
+                };
                 return;
             }
             if (message.type === 'url' && options.onNavigated) {
