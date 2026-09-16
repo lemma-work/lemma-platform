@@ -120,17 +120,22 @@ export function BrowserPane({
                     x: point.x,
                     y: point.y,
                     button: ['left', 'middle', 'right'][event.button] ?? 'left',
-                    // What is held *now*, which is the CDP contract and not
-                    // "which button this event is about". A release reports 0
-                    // because nothing is held after it -- reporting 1 there
-                    // said the button was still down, so the page saw a press
-                    // that never ended and never produced a click. A cookie
-                    // banner's Allow took focus and did nothing.
+                    // The DOM's own bitmask, which is already exactly the CDP
+                    // contract: which buttons are held *now*, as opposed to
+                    // `button`, which is what this event is about.
                     //
-                    // A hover is not a drag either: reporting a held button on
-                    // every move made pages with sliders and canvases think one
-                    // was.
-                    buttons: type === 'mousePressed' ? 1 : 0,
+                    // Both hand-written answers were wrong in opposite
+                    // directions. A constant 1 said the button was still down
+                    // on release, so the page saw a press that never ended and
+                    // a cookie banner's Allow took focus and did nothing. Then
+                    // 1-on-press-only reported no button held during a move,
+                    // which is a drag reported as a hover -- no text selection,
+                    // no slider, no drag-and-drop.
+                    //
+                    // `event.buttons` is 1 while dragging, 0 on hover, and 0 on
+                    // the release that ends a click, because that is what it
+                    // means. There was never a rule to infer.
+                    buttons: event.buttons,
                     clickCount: type === 'mouseMoved' ? 0 : event.detail || 1,
                 });
             },

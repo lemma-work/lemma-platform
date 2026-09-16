@@ -817,7 +817,9 @@ export function SignInCard({
   const signedIn = asString(body.outcome) === "signed_in";
   const kept = body.saved === true;
 
-  let host = origin;
+  // `new URL` throws on anything that is not absolute, and the origin comes
+  // from the agent.
+  let host: string;
   try {
     host = new URL(origin).host || origin;
   } catch {
