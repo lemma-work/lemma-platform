@@ -16,7 +16,11 @@ type Tab = 'files' | 'browser';
  * starts a browser if none is running, and a panel that did that on render
  * would hold a few hundred megabytes open for as long as it was on screen.
  */
-export function ComputerPanel({ conversationId }: { conversationId?: string }) {
+export function ComputerPanel({
+    workspaceCwd,
+}: {
+    workspaceCwd?: string;
+}) {
     const [tab, setTab] = useState<Tab>('files');
 
     return (
@@ -42,15 +46,12 @@ export function ComputerPanel({ conversationId }: { conversationId?: string }) {
 
             <div className="min-h-0 flex-1">
                 {tab === 'files' ? (
-                    <WorkspaceFilesPane conversationId={conversationId} />
+                    <WorkspaceFilesPane workspaceCwd={workspaceCwd} />
                 ) : (
-                    /* Named, so the pane watches *this* conversation's browser.
-                       Without it every pane attached to the sandbox's default
-                       session, which is shared by every agent this person runs
-                       -- so one conversation's pane showed another's browsing,
-                       and a login granted for one task was visible to all of
-                       them. */
-                    <BrowserPane conversationId={conversationId} />
+                    // VNC shows this person's whole sandbox display, shared by
+                    // every conversation's agent -- there is no per-conversation
+                    // session for a pane here to be scoped to any more.
+                    <BrowserPane />
                 )}
             </div>
         </div>

@@ -4566,6 +4566,12 @@
             "format": "uuid",
             "title": "User Id",
             "type": "string"
+          },
+          "workspace_cwd": {
+            "description": "The conversation's working directory in the sandbox. This is where the agent's shell starts and where its files land, so it is the directory a file pane should be showing.",
+            "readOnly": true,
+            "title": "Workspace Cwd",
+            "type": "string"
           }
         },
         "required": [
@@ -4574,6 +4580,7 @@
           "pod_id",
           "created_at",
           "updated_at",
+          "workspace_cwd",
           "pod_cwd"
         ],
         "title": "ConversationResponse",
@@ -5483,6 +5490,23 @@
           "columns"
         ],
         "title": "CreateTableRequest",
+        "type": "object"
+      },
+      "CurrentPageUrlResponse": {
+        "properties": {
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "CurrentPageUrlResponse",
         "type": "object"
       },
       "DataStoreWorkflowStartConfigInput": {
@@ -18808,6 +18832,12 @@
             },
             "title": "Entries",
             "type": "array"
+          },
+          "exists": {
+            "default": true,
+            "description": "False when the directory is not there. A directory that does not exist and one that is merely empty used to answer identically, which is why a pane pointed at the wrong path looked like a working, empty folder rather than a mistake.",
+            "title": "Exists",
+            "type": "boolean"
           },
           "next_after": {
             "anyOf": [
@@ -37157,6 +37187,56 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "access"
+        }
+      }
+    },
+    "/workspace/browser/current-page-url": {
+      "get": {
+        "description": "Polled by the sign-in page while its VNC pane is open.\n\nVNC is pixels, not events -- it carries no navigation signal the way the\nJSON stream this replaced did with its `url` message on every\nnavigation. This is what the anti-phishing host display on\n`sign-in-to-site/[conversationId]/[toolCallId]/page.tsx` reads instead,\nso a person mid-SSO-redirect still sees which site they are actually on.",
+        "operationId": "workspace.browser.current_page_url",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "origin",
+            "required": true,
+            "schema": {
+              "title": "Origin",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentPageUrlResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What page a sign-in's browser is actually showing",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "current_page_url"
         }
       }
     },

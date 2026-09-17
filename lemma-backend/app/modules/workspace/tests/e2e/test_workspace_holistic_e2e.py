@@ -375,82 +375,276 @@ async def test_the_browser_starts_again_after_its_x_server_dies_uncleanly(
     assert "xvfb-up" in (again.stdout or ""), again
 
 
-#: Two pages, served from inside the sandbox, with the link in the right-hand
-#: fifth of the window.
-#:
-#: Deliberately not a link that fills the viewport, which is what this started
-#: as. A full-window target is hit by any arithmetic at all, and the arithmetic
-#: is the part that was wrong. A frame carries two sizes: `metadata.deviceWidth`
-#: / `deviceHeight`, which is the page, and the JPEG's own pixels, which is the
-#: picture -- and they differ, measured, as 1280x720 against 985x800, because
-#: the stream encodes within the caps the image sets. Input goes in the
-#: *picture's* space, because the stream server scales it back out of the frame
-#: itself. Aiming with the page's numbers sends x=1242 at a picture 985 wide,
-#: which lands past its right edge and clicks nothing -- and a click that hits
-#: no element is indistinguishable from input that never arrived.
+#: Two pages, served from inside the sandbox. The link is the page's one
+#: focusable element -- reached by `Tab` and activated by `Return`, never by
+#: aiming a click at it -- so neither its size nor its position matters to
+#: this test at all; `background` gives it a colour nothing else in either
+#: page uses only so a human glancing at the pane can still see it.
 VIEW_SITE_PORT = 18077
 VIEW_SITE = f"http://127.0.0.1:{VIEW_SITE_PORT}"
-#: Where the link starts, as a fraction of the width.
-VIEW_LINK_FROM = 0.8
-#: Where the test clicks, as a fraction of the picture's width.
-VIEW_CLICK_AT = 0.97
-_VIEW_PAGES = """set -e
+VIEW_LINK_RGB = (0xE6, 0x7E, 0x22)
+#: What `_find_page_point` scans the framebuffer for, to find anywhere on the
+#: page to click -- not the link's own colour, the page's. Saturated and far
+#: from any of grey, white, or the other two colours here on purpose: a first
+#: version used pale, close-together tones (`#cde`/`#edc`, differing only in
+#: byte order) that Chrome's own colour management shifts a few units in
+#: rendering (dumping raw sample pixels came back `(211,227,253)` for a
+#: requested `(204,221,238)`), and that same shift was enough to put
+#: `next.html`'s pale background within this test's tolerance of ordinary
+#: light-grey browser chrome -- a click and keypresses this test sent in
+#: *view* mode, which the relay must silently drop, read as "navigated" only
+#: because the colour check the test asserted with matched the browser's own
+#: toolbar. A saturated colour has no such near miss to make.
+VIEW_BG_RGB = (0x00, 0x96, 0x88)
+#: The page navigated to. Nothing here rendering as this, or as `VIEW_BG_RGB`
+#: or `VIEW_LINK_RGB`, within tolerance is what makes it trustworthy as
+#: "navigation happened" -- not merely "arrived at" a colour used elsewhere.
+VIEW_NEXT_BG_RGB = (0x9B, 0x27, 0xB0)
+_VIEW_PAGES = f"""set -e
 mkdir -p /tmp/lemma-view-site
 cat > /tmp/lemma-view-site/index.html <<'HTML'
-<html><head><title>Watch me</title></head><body style="margin:0;background:#cde">
-<a href="/next.html" style="position:fixed;top:0;right:0;width:20vw;height:100vh;background:#9ab">right edge</a>
+<html><head><title>Watch me</title></head><body style="margin:0;background:rgb({VIEW_BG_RGB[0]},{VIEW_BG_RGB[1]},{VIEW_BG_RGB[2]})">
+<a href="/next.html" style="position:fixed;top:0;right:0;width:40vw;height:100vh;background:rgb({VIEW_LINK_RGB[0]},{VIEW_LINK_RGB[1]},{VIEW_LINK_RGB[2]})"></a>
 </body></html>
 HTML
 cat > /tmp/lemma-view-site/next.html <<'HTML'
-<html><head><title>Driven</title></head><body style="margin:0;background:#edc">arrived</body></html>
+<html><head><title>Driven</title></head><body style="margin:0;background:rgb({VIEW_NEXT_BG_RGB[0]},{VIEW_NEXT_BG_RGB[1]},{VIEW_NEXT_BG_RGB[2]})">arrived</body></html>
 HTML
 setsid nohup python3 -m http.server PORT --directory /tmp/lemma-view-site \
     >/tmp/lemma-view-site.log 2>&1 </dev/null &
 """
 
 
-def _jpeg_size(raw: bytes) -> tuple[int, int]:
-    """The picture's real pixel size, read out of its own header.
+class _RfbReader:
+    """A buffered byte reader over a WebSocket carrying RFB.
 
-    Not `metadata.deviceWidth`: that is the size of the *page*, and the two are
-    different numbers whenever the stream has encoded within its caps -- which
-    is the ordinary case, not an edge one. Parsed here rather than with an
-    imaging library so this test needs nothing the backend does not already
-    have.
+    RFB message boundaries and WebSocket frame boundaries are unrelated here
+    -- the relay forwards whatever `websockify` hands it, chunked however
+    `websockify`'s own reads from `x11vnc` happened to land -- so a caller
+    that needs exactly N bytes cannot assume one `recv()` provides them.
     """
-    at = 2  # past the start-of-image marker
-    while at < len(raw):
-        if raw[at] != 0xFF:
-            raise AssertionError(f"not a JPEG segment at byte {at}")
-        marker = raw[at + 1]
-        # SOF0..SOF15, excluding the four that are not frame headers.
-        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-            height = int.from_bytes(raw[at + 5 : at + 7], "big")
-            width = int.from_bytes(raw[at + 7 : at + 9], "big")
-            return width, height
-        at += 2 + int.from_bytes(raw[at + 2 : at + 4], "big")
-    raise AssertionError("no frame header in this JPEG")
+
+    def __init__(self, socket) -> None:
+        self._socket = socket
+        self._buf = b""
+
+    async def exact(self, n: int) -> bytes:
+        while len(self._buf) < n:
+            more = await self._socket.recv()
+            self._buf += more if isinstance(more, bytes) else more.encode()
+        chunk, self._buf = self._buf[:n], self._buf[n:]
+        return chunk
 
 
-async def _first(socket, kind: str, *, timeout: float = 30.0):
-    """The next message of one kind, acking frames on the way past.
+class _RfbInfo:
+    def __init__(self, width: int, height: int, pixel_format: bytes) -> None:
+        self.width = width
+        self.height = height
+        self.bpp = pixel_format[0]
+        self.big_endian = pixel_format[2] != 0
+        self.red_max = int.from_bytes(pixel_format[4:6], "big")
+        self.green_max = int.from_bytes(pixel_format[6:8], "big")
+        self.blue_max = int.from_bytes(pixel_format[8:10], "big")
+        self.red_shift = pixel_format[10]
+        self.green_shift = pixel_format[11]
+        self.blue_shift = pixel_format[12]
 
-    Ack pacing means the stream sends one frame and then waits, so a reader that
-    skips frames without acknowledging them stops the stream dead and then times
-    out waiting for the message it actually came for.
+
+async def _rfb_handshake(reader: _RfbReader, socket) -> _RfbInfo:
+    """RFB 3.8's handshake, down to the one security type this relay offers.
+
+    `x11vnc` is started with `-nopw` (see `start-browser.sh`), so the only
+    security type on offer is 1 (None) -- there is no password this test
+    could supply even if it wanted to skip this.
     """
-    import asyncio
-    import json
+    version = await reader.exact(12)
+    assert version.startswith(b"RFB 003."), version
+    await socket.send(b"RFB 003.008\n")
 
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        remaining = deadline - asyncio.get_running_loop().time()
-        message = json.loads(await asyncio.wait_for(socket.recv(), timeout=remaining))
-        if message.get("type") == kind:
-            return message
-        if message.get("type") == "frame":
-            await socket.send(json.dumps({"type": "ack", "seq": message.get("seq")}))
-    raise AssertionError(f"no {kind!r} message arrived within {timeout}s")
+    n_types = (await reader.exact(1))[0]
+    if n_types == 0:
+        reason_len = int.from_bytes(await reader.exact(4), "big")
+        reason = await reader.exact(reason_len)
+        raise AssertionError(f"security handshake refused: {reason!r}")
+    types = await reader.exact(n_types)
+    assert 1 in types, f"no None security type on offer: {types!r}"
+    await socket.send(bytes([1]))
+    result = int.from_bytes(await reader.exact(4), "big")
+    assert result == 0, f"security handshake failed with result {result}"
+
+    await socket.send(bytes([1]))  # ClientInit: shared-flag
+    # width(2) + height(2) + pixel-format(16) -- the name-length that follows
+    # is a separate, fourth field, not part of this one.
+    server_init = await reader.exact(20)
+    width = int.from_bytes(server_init[0:2], "big")
+    height = int.from_bytes(server_init[2:4], "big")
+    name_len = int.from_bytes(await reader.exact(4), "big")
+    await reader.exact(name_len)
+    return _RfbInfo(width, height, server_init[4:20])
+
+
+async def _request_raw_framebuffer(socket, info: _RfbInfo) -> None:
+    """Ask for one full, non-incremental update, in Raw encoding only.
+
+    Raw is the one encoding every RFB server must support, and forcing it
+    (rather than accepting whatever `x11vnc` would otherwise choose) keeps
+    this test from needing a decoder for Tight, Hextile, or anything else.
+    """
+    set_encodings = (
+        b"\x02\x00" + (1).to_bytes(2, "big") + (0).to_bytes(4, "big", signed=True)
+    )
+    await socket.send(set_encodings)
+    request = (
+        b"\x03\x00"
+        + (0).to_bytes(2, "big")
+        + (0).to_bytes(2, "big")
+        + info.width.to_bytes(2, "big")
+        + info.height.to_bytes(2, "big")
+    )
+    await socket.send(request)
+
+
+async def _read_framebuffer(reader: _RfbReader, info: _RfbInfo) -> bytearray:
+    """One FramebufferUpdate's rectangles, placed into a full-screen canvas.
+
+    Placed by each rectangle's own `x`/`y` rather than assumed to be one
+    rectangle covering the whole request: nothing in the protocol promises
+    that, only that the union of what is sent covers what was asked for.
+    """
+    n = info.bpp // 8
+    canvas = bytearray(info.width * info.height * n)
+    msg_type = (await reader.exact(1))[0]
+    assert msg_type == 0, f"expected a FramebufferUpdate (0), got {msg_type}"
+    await reader.exact(1)  # padding
+    n_rects = int.from_bytes(await reader.exact(2), "big")
+    for _ in range(n_rects):
+        header = await reader.exact(12)
+        x = int.from_bytes(header[0:2], "big")
+        y = int.from_bytes(header[2:4], "big")
+        w = int.from_bytes(header[4:6], "big")
+        h = int.from_bytes(header[6:8], "big")
+        encoding = int.from_bytes(header[8:12], "big", signed=True)
+        assert encoding == 0, f"expected Raw encoding (0), got {encoding}"
+        row_bytes = w * n
+        for row in range(h):
+            row_data = await reader.exact(row_bytes)
+            offset = ((y + row) * info.width + x) * n
+            canvas[offset : offset + row_bytes] = row_data
+    return canvas
+
+
+def _color_planes(canvas: bytes, info: _RfbInfo) -> tuple:
+    """The framebuffer as three same-shaped int arrays, one per channel.
+
+    Numpy, not a pure-Python scan: everything built on this runs over up to a
+    full 1440x960 framebuffer on every retry, and a per-pixel Python loop over
+    that many pixels is slow enough to matter here.
+    """
+    import numpy as np
+
+    n = info.bpp // 8
+    byte_index = {shift: shift // 8 for shift in (0, 8, 16, 24)}
+    if info.big_endian:
+        byte_index = {shift: (info.bpp - 8 - shift) // 8 for shift in byte_index}
+
+    arr = np.frombuffer(bytes(canvas), dtype=np.uint8).reshape(
+        info.height, info.width, n
+    )
+
+    def channel(shift: int, maxval: int):
+        plane = arr[:, :, byte_index[shift]].astype(np.int32)
+        return plane * 255 // maxval if maxval and maxval != 255 else plane
+
+    return (
+        channel(info.red_shift, info.red_max),
+        channel(info.green_shift, info.green_max),
+        channel(info.blue_shift, info.blue_max),
+    )
+
+
+def _find_page_point(
+    canvas: bytes,
+    *,
+    info: _RfbInfo,
+    background_rgb: tuple[int, int, int],
+    tolerance: int = 40,
+) -> tuple[int, int] | None:
+    """A point squarely inside the page, found without matching the link at all.
+
+    Squarely inside, not on the link's own edge: this is only ever used to
+    click somewhere the page will accept focus, not to click the link itself
+    -- the link is activated by keyboard afterwards (`Tab` then `Return`),
+    once a click anywhere on the page has given the page's own document
+    focus, rather than by aiming at coordinates on it. A first version of
+    this test aimed for a point on the link directly, computed from the
+    page's own right edge; it proved unreliable to reproduce even after
+    widening the link to forty percent of the window and re-deriving that
+    edge from the median matching row, and was replaced by this, once it
+    was clear that the actual gap was never precision at the pixel this
+    test finds so much as focus, which a click anywhere on the document
+    settles regardless of exactly where it lands.
+    """
+    red, green, blue = _color_planes(canvas, info)
+    match = (
+        (abs(red - background_rgb[0]) <= tolerance)
+        & (abs(green - background_rgb[1]) <= tolerance)
+        & (abs(blue - background_rgb[2]) <= tolerance)
+    )
+    import numpy as np
+
+    ys, xs = np.nonzero(match)
+    if len(xs) == 0:
+        return None
+    return int(np.median(xs)), int(np.median(ys))
+
+
+def _background_fraction(
+    canvas: bytes, *, info: _RfbInfo, rgb: tuple[int, int, int], tolerance: int = 40
+) -> float:
+    """How much of the screen is close to `rgb` -- proof a page arrived.
+
+    A fraction of the whole display, not of Chrome's own window: this test
+    never learns the window's bounds, only points on it, so there is nothing
+    narrower to divide by. `#cde` and `#edc` each cover most of their own
+    page, so "most of the display" and "almost none of it" are the only two
+    outcomes either page produces here, comfortably apart at any reasonable
+    threshold.
+    """
+    import numpy as np
+
+    red, green, blue = _color_planes(canvas, info)
+    match = (
+        (abs(red - rgb[0]) <= tolerance)
+        & (abs(green - rgb[1]) <= tolerance)
+        & (abs(blue - rgb[2]) <= tolerance)
+    )
+    return float(np.count_nonzero(match)) / match.size
+
+
+async def _click(socket, x: int, y: int) -> None:
+    """A PointerEvent press and release at `(x, y)`, button-mask bit 0 (left)."""
+    for mask in (1, 0):
+        await socket.send(
+            b"\x05" + bytes([mask]) + x.to_bytes(2, "big") + y.to_bytes(2, "big")
+        )
+
+
+#: X11 keysyms for `_key_press`.
+_KEYSYM_TAB = 0xFF09
+_KEYSYM_RETURN = 0xFF0D
+
+
+async def _key_press(socket, keysym: int) -> None:
+    """A KeyEvent press and release for `keysym`.
+
+    type(1)=4, down-flag(1), padding(2), keysym(4, big-endian) -- the RFB
+    KeyEvent message this relay's own `_KEY_EVENT_MSG` in the unit tests is
+    modelled on.
+    """
+    for down in (1, 0):
+        await socket.send(
+            b"\x04" + bytes([down]) + b"\x00\x00" + keysym.to_bytes(4, "big")
+        )
 
 
 async def test_a_person_watches_the_agents_browser_and_then_drives_it(
@@ -463,28 +657,50 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     """The live view, through every layer that carries it.
 
     Nothing else covers this. The relay is tested against a fake browser, the
-    viewer's arithmetic in jsdom, and the controller against a fake relay -- and
-    the feature shipped with the pane attached to a *different browser* than the
-    one the agent was using, which every one of those suites was happy with.
+    controller against a fake relay, and the pane's own arithmetic went away
+    entirely with the move to VNC -- RFB owns rendering and input capture, so
+    there is no client-side mapping left for a unit test to protect. What is
+    still only proven end to end is that the two ends of the socket really do
+    share one screen: a page is opened in the workspace's shared (default)
+    browser session, a viewer attaches over VNC to the real display it is
+    running on, and a click sent down that same socket lands where that
+    browser can see it.
 
-    So this runs the real path end to end: the agent's own browser tool opens a
-    page, a socket is opened against the API the way the pane opens it, and a
-    real JPEG of that page comes back. Then it takes control and clicks, and the
-    page navigates -- which is only possible if the input reached the same
-    Chrome the picture came from.
+    Opened with `agent-browser` directly, over a shell command, rather than
+    through the agent's own `browser_open` tool: that tool scopes every
+    conversation to its own named session and profile on purpose (`app/
+    modules/workspace/domain/browser_context.py`'s `agent_session` -- so one
+    conversation's agent never inherits another's cookies), and `/vnc` has no
+    way to name a session at all -- it shows the shared *default* session's
+    display, which is what a plain "watch this computer's browser" panel is
+    for. A conversation's own agent browsing is a different, not-yet-viewable
+    browser entirely; this test is about the shared one.
 
-    It also pins the one rule the relay adds to `agent-browser`'s protocol: a
-    viewer who is watching may not type. That refusal is the whole difference
-    between "watch the agent work" and "anyone with the socket drives".
+    It also pins the one rule the relay adds to RFB: a viewer who is only
+    watching may not move the mouse or press a key. That refusal is the whole
+    difference between "watch the agent work" and "anyone with the socket
+    drives".
+
+    VNC shows the shared display whole, not a picture cropped to one page --
+    a deliberate limitation of this feature, not a bug -- so this test does
+    not know where in the framebuffer Chrome's window actually sits, or
+    exactly what colour a flat CSS fill actually renders as there. It works
+    around both: a click anywhere on the page (`_find_page_point` locates one
+    by the page's own background, not by anything to do with the link) gives
+    the document focus, from which `Tab` reaches the link -- the page's only
+    focusable element -- and `Return` activates it, so no coordinate ever has
+    to land on the link itself. Whether that landed is read off the same
+    picture too, by how much of the display now looks like the page navigated
+    to -- not by asking Chrome's own DevTools protocol, which answers about
+    whichever tab CDP picks first and was, in practice, as often the
+    browser's own blank first tab as the page this test opened.
     """
     del configure_workspace_api_url
-    import base64
-    import json
+    import asyncio
 
     import websockets
 
-    from app.modules.agent.tools.browser.browser import open_internal
-    from app.modules.agent.tools.browser.models import BrowserOpenRequest
+    from sandbox_runtime.browser_relay.app import CLOSE_NO_BROWSER
 
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
 
@@ -493,7 +709,7 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
         ExecCommandRequest(
             cmd=_VIEW_PAGES.replace("PORT", str(VIEW_SITE_PORT)),
             timeout_seconds=60,
-            comment="Serve a page with a full-window link",
+            comment="Serve a page with a distinctly-coloured link",
         ),
     )
     assert served.success, served
@@ -515,11 +731,36 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
         interval_seconds=1.0,
     )
 
-    # Opened with the agent's own tool, in the agent's own session. The viewer
-    # below names only the conversation, so if the two ever stop agreeing about
-    # which browser that is, the frame will be of the wrong one -- or of nothing.
-    opened = await open_internal(ctx, BrowserOpenRequest(url=f"{VIEW_SITE}/"))
-    assert opened.success, opened
+    # A killed-and-restarted browser, not just an opened page: a sandbox this
+    # test resumed (its own container reused across a run of this suite, or a
+    # prior test in this module) can already have a default-session Chrome
+    # open to something else entirely, X11 window stacking under this image's
+    # no-window-manager display being what it is -- so a fresh, single window
+    # is worth the cost of forcing one rather than trusting whatever was
+    # already on screen. `start-browser` starting with a URL is exactly this
+    # module's own `test_the_browser_starts_again_after_its_x_server_dies_
+    # uncleanly` pattern, and it re-idempotently starts x11vnc/websockify too.
+    await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            cmd="pkill -9 -x Xvfb 2>/dev/null; pkill -9 chromium 2>/dev/null; sleep 1; true",
+            timeout_seconds=30,
+            comment="Clear whatever was already on the shared display",
+        ),
+    )
+    opened = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            cmd=(
+                "AGENT_BROWSER_SESSION=workspace "
+                "AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile "
+                f"start-browser {VIEW_SITE}/"
+            ),
+            timeout_seconds=60,
+            comment="Open a page in the shared default session VNC watches",
+        ),
+    )
+    assert opened.success and "Watch me" in (opened.stdout or ""), opened
 
     # In the query string, which is how the pane authenticates: a browser
     # cannot put a header on a WebSocket handshake, and the desktop app's
@@ -528,77 +769,191 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     base = backend_server["host_base_url"].replace("http://", "ws://", 1)
 
     def view_socket(mode: str) -> str:
-        return (
-            f"{base}/workspace/browser/view?mode={mode}"
-            f"&conversation={ctx.conversation_id}&access_token={token}"
+        return f"{base}/workspace/browser/view?mode={mode}&access_token={token}"
+
+    async def find_page_point(socket, reader: _RfbReader) -> tuple[int, int, _RfbInfo]:
+        """Anywhere on the real page, once Chrome has painted it.
+
+        The first update after a fresh connection can arrive before the
+        compositor has painted anything at all -- a blank framebuffer, not a
+        broken one -- so this polls a few more requests on the same
+        connection rather than trusting the very first one.
+        """
+        info = await _rfb_handshake(reader, socket)
+
+        async def probe():
+            await _request_raw_framebuffer(socket, info)
+            canvas = await _read_framebuffer(reader, info)
+            return _find_page_point(canvas, info=info, background_rgb=VIEW_BG_RGB)
+
+        found = await eventually(
+            label="the page rendering on the shared display",
+            probe=probe,
+            done=lambda found: found is not None,
+            timeout_seconds=10.0,
+            interval_seconds=0.5,
+        )
+        return found[0], found[1], info
+
+    async def connect_and_find_page(mode: str) -> tuple:
+        """A connection already past a point on the page, retrying the
+        connection itself when the relay was not ready for it yet.
+
+        `open_internal` above returns once Chrome answers a CDP command --
+        which can be moments before the relay's own liveness check (a
+        recorded-port file, read and then probed independently) sees the same
+        browser as up. A `CLOSE_NO_BROWSER` this soon after opening is that
+        gap, not a real refusal, so it is worth one more try rather than
+        failing on it -- anything else closes the connection and propagates
+        immediately, by raising a type `eventually` was not told to retry.
+        """
+
+        async def probe():
+            socket = await websockets.connect(view_socket(mode), max_size=None)
+            reader = _RfbReader(socket)
+            try:
+                x, y, info = await find_page_point(socket, reader)
+            except websockets.exceptions.ConnectionClosedError as exc:
+                await socket.close()
+                if exc.code == CLOSE_NO_BROWSER:
+                    raise
+                raise RuntimeError(f"the relay refused this connection: {exc}") from exc
+            else:
+                return socket, reader, x, y, info
+
+        return await eventually(
+            label="a VNC connection the relay is ready to serve",
+            probe=probe,
+            done=lambda _: True,
+            timeout_seconds=45.0,
+            interval_seconds=0.5,
+            retry_exceptions=(websockets.exceptions.ConnectionClosedError,),
         )
 
-    async with websockets.connect(view_socket("view"), max_size=None) as watching:
-        frame = await _first(watching, "frame")
-        picture = base64.b64decode(frame["data"])
-        # A JPEG, not an empty string dressed up as one: the two bytes are the
-        # start-of-image marker, and a black or absent screen would still have
-        # them, so the size floor is what says something was actually drawn.
-        assert picture[:2] == b"\xff\xd8", picture[:16]
-        assert len(picture) > 2_000, len(picture)
-        assert frame["metadata"]["deviceWidth"] > 0
+    async def next_page_fraction() -> float:
+        """How much of the display now looks like the page navigated to.
 
-        # Watching means watching. This is the relay's own rule -- the stream
-        # server itself takes input from whoever connects to it.
-        await watching.send(
-            json.dumps(
-                {
-                    "type": "input_mouse",
-                    "eventType": "mousePressed",
-                    "x": 10,
-                    "y": 10,
-                    "button": "left",
-                    "buttons": 1,
-                    "clickCount": 1,
-                }
-            )
-        )
-        refusal = await _first(watching, "error")
-        assert refusal["code"] == "read_only", refusal
+        A fresh view-mode connection every call, not a long-lived one reused
+        across many polls: some request/response cycle among the dozen or so
+        `eventually` below can drive through a connection this test kept open
+        left it a message ahead of or behind where `_read_framebuffer` next
+        expected to be reading -- reproduced by reusing one connection across
+        repeated polls and gone the moment each poll opened its own instead.
+        A fresh RFB handshake costs one extra round trip, well inside the
+        interval `eventually` already waits between polls.
+        """
+        socket = await websockets.connect(view_socket("view"), max_size=None)
+        try:
+            reader = _RfbReader(socket)
+            info = await _rfb_handshake(reader, socket)
+            await _request_raw_framebuffer(socket, info)
+            canvas = await _read_framebuffer(reader, info)
+            return _background_fraction(canvas, info=info, rgb=VIEW_NEXT_BG_RGB)
+        finally:
+            await socket.close()
 
-    async with websockets.connect(view_socket("control"), max_size=None) as driving:
-        first = await _first(driving, "frame")
-        await driving.send(json.dumps({"type": "ack", "seq": first.get("seq")}))
+    watching, _watch_reader, x, y, _view_info = await connect_and_find_page("view")
+    try:
+        # Watching means watching. This is the relay's own rule -- RFB itself
+        # takes input from whoever connects to it, so the refusal has to be
+        # behavioral rather than a message: the click and the keys below must
+        # not land.
+        await _click(watching, x, y)
+        await _key_press(watching, _KEYSYM_TAB)
+        await _key_press(watching, _KEYSYM_RETURN)
+        await asyncio.sleep(2)
+        assert await next_page_fraction() < 0.1, (
+            "a view-mode click or keypress navigated the page"
+        )
+    finally:
+        await watching.close()
 
-        page_width = int(first["metadata"]["deviceWidth"])
-        page_height = int(first["metadata"]["deviceHeight"])
-        picture_width, picture_height = _jpeg_size(base64.b64decode(first["data"]))
-        assert picture_width and picture_height
+    driving, _drive_reader, x, y, _drive_info = await connect_and_find_page("control")
+    try:
+        # A click anywhere on the page, not on the link: this test does not
+        # know precisely where the link renders (see `_find_page_point`), only
+        # that a document click gives the page itself keyboard focus, from
+        # which `Tab` reaches its one focusable element -- the link -- and
+        # `Return` activates it, same as a person tabbing to a link and
+        # pressing enter would.
+        await _click(driving, x, y)
+        await _key_press(driving, _KEYSYM_TAB)
+        await _key_press(driving, _KEYSYM_RETURN)
+    finally:
+        await driving.close()
 
-        # In the picture's pixels, which is the only space input is ever in.
-        aimed = (
-            round(picture_width * VIEW_CLICK_AT),
-            round(picture_height / 2),
-        )
-        assert aimed[0] >= picture_width * VIEW_LINK_FROM, aimed
-        # The same aim expressed against the page would be off the picture
-        # entirely. Asserted so that a future frame whose two sizes happen to
-        # agree says so, rather than passing while proving nothing.
-        assert page_width * VIEW_CLICK_AT > picture_width, (
-            "the picture is no smaller than the page here, so this no longer "
-            f"distinguishes the two spaces ({picture_width} vs {page_width})"
-        )
-        for event in ("mousePressed", "mouseReleased"):
-            await driving.send(
-                json.dumps(
-                    {
-                        "type": "input_mouse",
-                        "eventType": event,
-                        "x": aimed[0],
-                        "y": aimed[1],
-                        "button": "left",
-                        "buttons": 1,
-                        "clickCount": 1,
-                    }
-                )
-            )
-        navigated = await _first(driving, "url")
-        assert navigated["url"].endswith("/next.html"), (
-            f"{navigated} -- aimed at {aimed} on a {page_width}x{page_height} page "
-            f"from a {picture_width}x{picture_height} picture"
-        )
+    # A bare timeout here says only that the click did not navigate, which is
+    # the one thing already known -- but there is no coordinate arithmetic
+    # left in this feature for a failure to be diagnosed by, the way the old
+    # picture-vs-page numbers used to be needed for.
+    await eventually(
+        label="the click navigating to the next page",
+        probe=next_page_fraction,
+        done=lambda fraction: fraction > 0.3,
+        timeout_seconds=30,
+        interval_seconds=1.0,
+    )
+
+
+async def test_an_agent_can_record_the_browser_and_get_a_playable_file(
+    authenticated_client,
+    fixed_test_org,
+    fixed_test_user,
+    configure_workspace_api_url,
+):
+    """Recording is a capability of the image, so only the image can prove it.
+
+    `agent-browser record` has existed all along and the browser skill has
+    documented it with a worked example; it shells out to `ffmpeg`, which the
+    workspace image did not install, so every attempt failed and no test
+    noticed because nothing ever tried.
+
+    Two things are asserted rather than one, because the second is how this
+    fails quietly. `record stop` reports `Recording saved` whether or not a file
+    was written -- a relative path is resolved by the browser daemon rather than
+    by the caller's shell and lands somewhere nobody looks -- so "the CLI said
+    it worked" is not evidence. `ffprobe` reading a video stream out of the file
+    is.
+    """
+    del configure_workspace_api_url
+    ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
+
+    started = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            cmd="start-browser about:blank",
+            timeout_seconds=120,
+            comment="Start the sandbox browser",
+        ),
+    )
+    assert started.success, started
+
+    take = "/workspace/recording-e2e/take.webm"
+    recorded = await exec_command_internal(
+        ctx,
+        ExecCommandRequest(
+            # Absolute, deliberately: the daemon resolves this path, not the
+            # shell, and a relative one is silently written elsewhere.
+            # Every step silenced but the last, so stdout is the codec name and
+            # nothing else. Left unsilenced, `agent-browser` prints its own
+            # "Recording saved" over the answer being asserted on.
+            cmd=(
+                f"mkdir -p $(dirname {take}) && "
+                f"agent-browser record start {take} >/dev/null && "
+                "agent-browser open "
+                "'data:text/html,<h1 style=font-size:90px>Lemma</h1>' >/dev/null && "
+                "for i in 1 2 3; do sleep 2; agent-browser get url >/dev/null; done && "
+                "agent-browser record stop >/dev/null && "
+                f"test -s {take} && "
+                "ffprobe -v error -select_streams v:0 "
+                f"-show_entries stream=codec_name -of csv=p=0 {take}"
+            ),
+            timeout_seconds=180,
+            comment="Record a short browser session and read it back",
+        ),
+    )
+
+    assert recorded.success, recorded
+    assert recorded.exit_code == 0, recorded.stderr
+    # A codec name means ffprobe found a video stream, not merely a file.
+    assert recorded.stdout.strip() in {"vp8", "vp9"}, recorded.stdout

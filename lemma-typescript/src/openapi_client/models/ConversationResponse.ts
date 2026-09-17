@@ -33,4 +33,8 @@ export type ConversationResponse = {
     type?: ConversationType;
     updated_at: string;
     user_id: string;
+    /**
+     * The conversation's working directory in the sandbox. This is where the agent's shell starts and where its files land, so it is the directory a file pane should be showing.
+     */
+    readonly workspace_cwd: string;
 };

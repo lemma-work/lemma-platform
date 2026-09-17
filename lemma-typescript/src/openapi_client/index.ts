@@ -123,6 +123,7 @@ export type { CreateOpenAICompatibleRuntimeProfileRequest } from './models/Creat
 export type { CreateRecordRequest } from './models/CreateRecordRequest.js';
 export type { CreateScheduleRequest } from './models/CreateScheduleRequest.js';
 export type { CreateTableRequest } from './models/CreateTableRequest.js';
+export type { CurrentPageUrlResponse } from './models/CurrentPageUrlResponse.js';
 export type { DatastoreCountResponse } from './models/DatastoreCountResponse.js';
 export { DatastoreDataType } from './models/DatastoreDataType.js';
 export type { DatastoreFileUploadRequest } from './models/DatastoreFileUploadRequest.js';

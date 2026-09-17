@@ -82,6 +82,11 @@ async def test_somebody_elses_request_is_not_found(world) -> None:
     A stranger, and the owner of a link that was forwarded to them, get the
     same answer as somebody who invented the id: not found. Anything else would
     tell a holder of a guessed id that they had guessed right.
+
+    What this half proves is the invented id. Raising a real pause needs a run
+    that stops on one, so the branch that turns *somebody else's* conversation
+    into the same 404 is proved against the service in
+    `test_sign_in_service.py::test_a_stranger_cannot_read_what_somebody_is_being_asked_to_sign_in_to`.
     """
     alice = await world.person("priya")
     await alice.api.expect(
@@ -96,6 +101,8 @@ async def test_somebody_elses_request_is_not_found(world) -> None:
 @proves("PS-BROWSER-012")
 @covers("web_login.sign_in.answer")
 async def test_finishing_somebody_elses_request_is_refused(world) -> None:
+    """As above, the owned-by-somebody-else branch is proved against the
+    service, in `test_a_stranger_cannot_answer_somebody_elses_sign_in`."""
     alice = await world.person("priya")
     await alice.api.expect(
         "POST",

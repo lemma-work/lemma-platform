@@ -16,11 +16,7 @@ import pytest
 
 from sandbox_runtime.browser_relay import chrome, state
 from sandbox_runtime.browser_relay.app import TOKEN_PATH, create_app
-from sandbox_runtime.browser_relay.stream_proxy import (
-    CONTROL,
-    VIEW,
-    viewer_message_allowed,
-)
+from sandbox_runtime.browser_relay.stream_proxy import CONTROL, VIEW
 
 # No module-level `pytest.mark.asyncio`: pytest-asyncio runs in auto mode here,
 # so async tests are collected without it, and marking the synchronous ones in
@@ -142,82 +138,6 @@ async def test_the_absolute_wrapper_is_preferred_over_the_bare_name(
     argv = chrome.agent_browser_argv("get", "cdp-url", session="workspace")
     assert argv[0] == "/usr/local/bin/agent-browser"
     assert argv[1:3] == ["--session", "workspace"]
-
-
-# ---------------------------------------------------------------------------
-# What a viewer may send
-# ---------------------------------------------------------------------------
-#
-# The frame protocol itself is `agent-browser`'s, not ours -- we proxy its
-# session-scoped stream rather than driving CDP. What is still ours, and so
-# what is tested here, is the one rule the stream server does not know about:
-# a viewer who asked to watch may not type.
-
-
-def _allowed(message: dict, *, mode: str) -> bool:
-    ok, _ = viewer_message_allowed(json.dumps(message), mode=mode)
-    return ok
-
-
-def _refusal(message: dict, *, mode: str) -> dict | None:
-    _, refusal = viewer_message_allowed(json.dumps(message), mode=mode)
-    return refusal
-
-
-def test_watching_cannot_type() -> None:
-    """The stream server takes input from whoever connects.
-
-    It has no notion of a read-only viewer, so `view` mode is enforced here --
-    the only place that knows which mode was asked for. Without it, "watch"
-    and "drive" would be the same socket with a different label.
-    """
-    for kind in ("input_mouse", "input_keyboard", "input_touch"):
-        assert _allowed({"type": kind}, mode=VIEW) is False
-        assert _refusal({"type": kind}, mode=VIEW)["code"] == "read_only"
-
-
-def test_driving_can_type_and_touch() -> None:
-    """Touch included: it is what makes a sign-in work on a phone, and it is
-    something the hand-rolled screencast never had."""
-    for kind in ("input_mouse", "input_keyboard", "input_touch"):
-        assert _allowed({"type": kind}, mode=CONTROL) is True
-
-
-def test_pacing_and_acks_are_allowed_to_a_watcher() -> None:
-    """Capping your own frame rate is not driving the page."""
-    for kind in ("config", "ack", "screencast_start", "screencast_stop"):
-        assert _allowed({"type": kind}, mode=VIEW) is True
-
-
-def test_anything_outside_the_vocabulary_is_refused_in_words() -> None:
-    """Matched against a set, not a prefix.
-
-    `input_*` as a prefix test would silently admit whatever the next release
-    of the CLI adds under that name. And a message dropped in silence looks to
-    a client exactly like a browser that has stopped.
-    """
-    assert _allowed({"type": "input_something_new"}, mode=CONTROL) is False
-    assert _refusal({"type": "Runtime.evaluate"}, mode=CONTROL)["code"] == (
-        "unknown_message"
-    )
-
-
-def test_unreadable_messages_are_never_forwarded() -> None:
-    ok, refusal = viewer_message_allowed("{not json", mode=CONTROL)
-    assert ok is False
-    assert refusal["code"] == "unreadable"
-    ok, _ = viewer_message_allowed('"a string"', mode=CONTROL)
-    assert ok is False
-
-
-def test_the_stream_url_paces_from_the_opening_frame() -> None:
-    """`pacing` and `maxFps` go on the URL because the CLI's own help says that
-    is the only way to cover the first frame; a config message arrives too
-    late to pace it."""
-    url = chrome.stream_socket_url(41234, max_fps=15)
-    assert url.startswith("ws://127.0.0.1:41234/?")
-    assert "pacing=ack" in url
-    assert "maxFps=15" in url
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +265,7 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/browser:ensure",
         "/state:save",
         "/state:load",
-        "/session",
+        "/vnc",
     } <= served
     # Asserted as an equality on the state routes, not a subset: `/state:clear`
     # was here and nothing ever called it, all the way down through the client
@@ -356,6 +276,11 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/state:load",
     }
     assert not {p for p in served if p.startswith("/cdp")}
+    # `/session` proxied `agent-browser`'s own JSON/JPEG stream server. VNC
+    # replaced it outright rather than living beside it, so a route this
+    # relay no longer needs is exactly the surface the docstring above warns
+    # against leaving behind.
+    assert "/session" not in served
 
 
 # ---------------------------------------------------------------------------
@@ -510,71 +435,9 @@ def test_the_same_session_always_gets_the_same_profile() -> None:
     )
 
 
-async def test_input_for_a_dead_stream_ends_the_socket_rather_than_vanishing() -> None:
-    """A person typing into a picture has to be told.
-
-    The old CDP path wrapped its dispatch in `suppress(Exception)`: with the
-    socket to Chrome gone, clicks and keystrokes vanished with nothing on screen
-    and nothing in the log. Forwarding to a dead stream now raises out of the
-    pump, the viewer's socket closes, and the pane says the connection dropped
-    and reconnects -- which is the truth.
-    """
-    from sandbox_runtime.browser_relay.stream_proxy import pump
-
-    class _DeadStream:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            await asyncio.sleep(3600)
-
-        async def send(self, _raw):
-            raise ConnectionResetError("the stream went away")
-
-    sent: list[str] = []
-    incoming = [json.dumps({"type": "input_mouse", "eventType": "mousePressed"})]
-
-    async def receive_text():
-        return incoming.pop(0) if incoming else None
-
-    await pump(
-        _DeadStream(), mode=CONTROL, send_text=sent.append, receive_text=receive_text
-    )
-
-    # The pump returned rather than hanging: the caller closes the socket, and
-    # nothing was quietly dropped on the floor.
-    assert sent == []
-
-
-async def test_a_refusal_reaches_the_viewer_without_touching_the_stream() -> None:
-    """Refused input is answered, not dropped."""
-    from sandbox_runtime.browser_relay.stream_proxy import pump
-
-    forwarded: list[str] = []
-
-    class _Stream:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-        async def send(self, raw):
-            forwarded.append(raw)
-
-    sent: list[str] = []
-    incoming = [json.dumps({"type": "input_keyboard", "eventType": "keyDown"})]
-
-    async def receive_text():
-        return incoming.pop(0) if incoming else None
-
-    await pump(_Stream(), mode=VIEW, send_text=sent.append, receive_text=receive_text)
-
-    assert forwarded == []
-    assert json.loads(sent[0])["code"] == "read_only"
-
-
-def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) -> None:
+def test_a_refused_vnc_viewer_is_told_which_refusal_it_was(
+    monkeypatch, tmp_path
+) -> None:
     """The close code has to survive the sandbox wall, or the pane loops.
 
     A close sent before `accept()` is not a close -- ASGI turns it into a
@@ -593,7 +456,7 @@ def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) ->
 
     client = _client(monkeypatch, tmp_path)
     with client.websocket_connect(
-        "/session?session=../../etc",
+        "/vnc?session=../../etc",
         headers={"X-Lemma-Relay-Token": "token-abc"},
     ) as socket:
         with pytest.raises(WebSocketDisconnect) as refused:
@@ -601,20 +464,274 @@ def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) ->
     assert refused.value.code == CLOSE_UNAUTHENTICATED
 
 
-def test_a_viewer_without_the_token_is_refused_the_same_way(
+def test_a_vnc_viewer_without_the_token_is_refused_the_same_way(
     monkeypatch, tmp_path
 ) -> None:
-    """The socket is the one route a browser opens, so it is the one that has to
-    refuse in a code rather than in a status nobody can read."""
+    """`/vnc` is a second door into the same signed-in browser, so it gets the
+    same refusal, not a weaker one because it is newer."""
     from starlette.websockets import WebSocketDisconnect
 
     from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
 
     client = _client(monkeypatch, tmp_path)
-    with client.websocket_connect("/session") as socket:
+    with client.websocket_connect("/vnc") as socket:
         with pytest.raises(WebSocketDisconnect) as refused:
             socket.receive_text()
     assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_vnc_viewer_with_an_unknown_mode_is_refused(monkeypatch, tmp_path) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
+
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?mode=drive", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_vnc_viewer_is_refused_when_no_browser_is_running(
+    monkeypatch, tmp_path
+) -> None:
+    """No live Chrome means nothing on `:99` worth showing, and the browser is
+    told so with a code it treats as "asleep", not "dropped, retry"."""
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_NO_BROWSER
+    from sandbox_runtime.browser_relay.chrome import BrowserNotRunning
+
+    async def fake_live_port(session=None):
+        raise BrowserNotRunning("no chrome here")
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_NO_BROWSER
+
+
+def test_a_vnc_viewer_is_checked_against_its_own_session_not_the_default(
+    monkeypatch, tmp_path
+) -> None:
+    """The bug this pins: a sign-in's Chrome runs in its own named session,
+    not the default one -- `ensure_browser` starts it there, with its own
+    profile and its own port. Checking `live_port()` with no session, as the
+    route first shipped, asks whether the *default* session's Chrome is
+    running and finds nothing, so a person landed on a sign-in page mid-flow
+    was told "no browser running" about a browser that was on screen at the
+    time. This is only reachable if the check passes for the *named* session
+    and still fails for the default one.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+    from sandbox_runtime.browser_relay.chrome import BrowserNotRunning
+
+    async def fake_live_port(session=None):
+        if session != "login-example.com":
+            raise BrowserNotRunning("no chrome in this session")
+        return 12345
+
+    class _RefusingConnect:
+        # `websockets.connect(...)` is used as an async context manager, not
+        # merely awaited -- this stands in for its shape rather than a bare
+        # coroutine. Nothing about reaching websockify is under test here,
+        # only that the liveness check passed for the right session: failing
+        # fast at the next step, with its own distinct close code, is what
+        # proves the refusal above did not fire.
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            raise OSError("no websockify in this test")
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app.websockets, "connect", _RefusingConnect)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?session=login-example.com",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+    assert closed.value.code == CLOSE_UPSTREAM_GONE
+
+
+#: Correctly-sized fake RFB client messages, by the protocol's own fixed and
+#: header-driven lengths -- a real message, not a plausible-looking prefix of
+#: one, is what the smuggling test below needs a legitimate message to be.
+_SET_PIXEL_FORMAT_MSG = bytes([0]) + b"\x00" * 19  # type + pad(3) + format(16)
+_FRAMEBUFFER_UPDATE_REQUEST_MSG = bytes([3]) + b"\x00" * 9
+_POINTER_EVENT_MSG = bytes([5]) + b"\x00" * 5
+_KEY_EVENT_MSG = bytes([4]) + b"\x00" * 7
+_CLIENT_CUT_TEXT_MSG = bytes([6, 0, 0, 0, 0, 0, 0, 0])  # empty text, length 0
+
+#: The three client-side steps of an RFB handshake, correctly sized -- every
+#: test below that exercises `pump_binary` past its first three messages needs
+#: these first, or its real messages are themselves mistaken for handshake
+#: steps by length and refused before ever reaching the view-safe check.
+_FAKE_HANDSHAKE = [b"RFB 003.008\n", bytes([1]), bytes([1])]
+
+
+class _RecordingUpstream:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+
+    def __aiter__(self):
+        async def _empty():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        return _empty()
+
+    async def send(self, data: bytes) -> None:
+        self.sent.append(data)
+
+
+def _receiver_over(frames: list[bytes]):
+    async def receive_bytes() -> bytes | None:
+        if frames:
+            return frames.pop(0)
+        return None
+
+    return receive_bytes
+
+
+async def test_a_viewer_watching_over_vnc_cannot_type() -> None:
+    """`view` mode forwards only the messages that ask for a picture, and
+    drops a `KeyEvent`, a `PointerEvent`, and a `ClientCutText` outright --
+    nothing in this product pastes from view mode, so admitting the message
+    class on the promise a caller happens not to use it would be exactly the
+    allowlist erosion the module warns against."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    inbound = [
+        *_FAKE_HANDSHAKE,
+        _FRAMEBUFFER_UPDATE_REQUEST_MSG,
+        _POINTER_EVENT_MSG,
+        _KEY_EVENT_MSG,
+        _CLIENT_CUT_TEXT_MSG,
+        _SET_PIXEL_FORMAT_MSG,
+    ]
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(inbound),
+    )
+    assert upstream.sent == [
+        *_FAKE_HANDSHAKE,
+        _FRAMEBUFFER_UPDATE_REQUEST_MSG,
+        _SET_PIXEL_FORMAT_MSG,
+    ]
+
+
+async def test_a_view_mode_frame_cannot_smuggle_a_second_message() -> None:
+    """The vulnerability this closes: a first version of this filter looked
+    only at a frame's first byte, on the assumption that one WebSocket frame
+    carries exactly one RFB message. That assumption holds for noVNC; it does
+    not hold for whatever a viewer's socket actually is, and nothing stops a
+    frame from carrying a legitimate message's bytes followed by a
+    `PointerEvent` the byte-0 check never sees. RFB is a byte stream to the
+    server on the other end, which has no notion of WebSocket frame
+    boundaries -- so a smuggled message reached it exactly as if it had been
+    sent openly. The fix drops the *whole* frame rather than forwarding a
+    prefix of it, because forwarding the legitimate-looking part is what let
+    the rest ride along in the first place."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    smuggled = _FRAMEBUFFER_UPDATE_REQUEST_MSG + _POINTER_EVENT_MSG
+    upstream = _RecordingUpstream()
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over([*_FAKE_HANDSHAKE, smuggled]),
+    )
+    assert upstream.sent == _FAKE_HANDSHAKE
+
+
+async def _noop_send(_data: bytes) -> None:
+    pass
+
+
+async def test_a_viewer_driving_over_vnc_can_type() -> None:
+    """Driving mode does not run messages through the view-safe check at
+    all -- the wheel lease is what gates who may be in this mode, not a
+    per-message filter, so a real message's exact byte layout does not
+    matter here the way it does for the view-mode tests above."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    inbound = [*_FAKE_HANDSHAKE, _POINTER_EVENT_MSG, _KEY_EVENT_MSG]
+
+    await pump_binary(
+        upstream,
+        mode=CONTROL,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(inbound),
+    )
+    assert upstream.sent == [*_FAKE_HANDSHAKE, _POINTER_EVENT_MSG, _KEY_EVENT_MSG]
+
+
+async def test_the_handshake_passes_through_before_any_view_safe_check() -> None:
+    """The regression this pins: a viewer's RFB handshake reply -- the
+    ProtocolVersion string, the chosen security type, ClientInit -- carries no
+    message-type byte the way every later client-to-server message does, so
+    `_view_mode_messages` cannot recognise any of it and, before this was
+    handled specially, silently dropped every one of the three steps. The
+    viewer's reply never reached the server, which never answered, and the
+    connection hung waiting for bytes that were never coming -- discovered by
+    running the real relay end to end, not by any of the tests above, none of
+    which sent a handshake at all."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(
+            [*_FAKE_HANDSHAKE, _FRAMEBUFFER_UPDATE_REQUEST_MSG]
+        ),
+    )
+    assert upstream.sent == [*_FAKE_HANDSHAKE, _FRAMEBUFFER_UPDATE_REQUEST_MSG]
+
+
+async def test_a_handshake_step_of_the_wrong_length_is_refused() -> None:
+    """Passing the handshake through by length, rather than leaving it
+    unfiltered by mode, closes the smuggling window that would otherwise
+    reopen here: a step padded with trailing bytes is refused outright, the
+    same as an unrecognised message type is once the handshake is behind it,
+    rather than having its extra bytes ride along to the server."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    padded_client_init = _FAKE_HANDSHAKE[2] + _POINTER_EVENT_MSG
+
+    await pump_binary(
+        upstream,
+        mode=CONTROL,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over([*_FAKE_HANDSHAKE[:2], padded_client_init]),
+    )
+    assert upstream.sent == _FAKE_HANDSHAKE[:2]
 
 
 def test_a_conversation_cannot_rename_the_default_session(monkeypatch) -> None:

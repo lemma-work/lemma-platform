@@ -4,22 +4,95 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/shared/empty-state';
-import { Input } from '@/components/ui/input';
 import { Monitor } from '@/components/ui/icons';
-import {
-    type ViewerFrame,
-    type ViewerHandle,
-    type ViewerState,
-    keyEventFor,
-    openBrowserView,
-    textAsCharEvents,
-    toFramePoint,
-    wheelEventFor,
-} from '@/lib/workspace/browser-view';
+import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { reconnectDelayMs, vncSocketUrl } from '@/lib/workspace/browser-view';
 import { cn } from '@/lib/utils';
 
+import type NoVncClient from '@novnc/novnc';
+
+type PaneState = 'connecting' | 'live' | 'lost' | 'refused' | 'no-browser' | 'unsupported' | 'stale-image';
+
+//: Why a socket closed, in numbers a client can branch on -- matches
+//: `browser_view_controller.py`'s `CLOSE_*` constants exactly. Read off the
+//: WebSocket's own `close` event, not RFB's `disconnect` event: RFB reports
+//: only `{clean: boolean}`, which cannot tell "the browser is not running"
+//: (retrying is right -- the agent may start one) from "you are not signed
+//: in" (retrying with the same expired token can never succeed). Losing this
+//: distinction was a real regression from the JPEG pane, which had it: every
+//: disconnect retried forever, including an expired session, which looked
+//: exactly like "the connection dropped" repeating with no way out.
+const CLOSE_UNAUTHENTICATED = 4401;
+const CLOSE_ORIGIN_REFUSED = 4403;
+const CLOSE_NO_BROWSER = 4409;
+const CLOSE_UNSUPPORTED = 4422;
+const CLOSE_STALE_IMAGE = 4426;
+
+const closeCodeToState = (code: number): PaneState => {
+    switch (code) {
+        case CLOSE_UNAUTHENTICATED:
+        case CLOSE_ORIGIN_REFUSED:
+            return 'refused';
+        case CLOSE_NO_BROWSER:
+            return 'no-browser';
+        case CLOSE_UNSUPPORTED:
+            return 'unsupported';
+        case CLOSE_STALE_IMAGE:
+            return 'stale-image';
+        default:
+            return 'lost';
+    }
+};
+
+//: States a fresh connection attempt cannot fix: wrong or expired
+//: credentials, a fabric that cannot do this at all, or an image missing the
+//: relay. Retrying will not change any of these until something outside this
+//: component does -- signing in again, replacing the image -- so retrying
+//: forever just repeats the same failure while telling the person otherwise.
+const TERMINAL_STATES: ReadonlySet<PaneState> = new Set(['refused', 'unsupported', 'stale-image']);
+
+//: X11 keysyms for the two keys a synthetic paste needs. Lowercase ASCII
+//: letters are their own keysym in this space, so `v` needs no table lookup.
+const XK_CONTROL_L = 0xffe3;
+const XK_LOWER_V = 0x76;
+
 /**
- * The agent's browser, live.
+ * Ctrl+V, sent as real key events, once the remote clipboard already holds
+ * the text.
+ *
+ * `clipboardPasteFrom` only sets the VNC clipboard -- it does not type
+ * anything, the same way copying something to your own clipboard does not
+ * paste it anywhere by itself. Letting the browser's own Ctrl+V reach the
+ * remote session through RFB's ordinary keyboard capture races that write: a
+ * keydown can arrive at the server before the clipboard message does, and
+ * paste whatever the remote clipboard held a moment earlier -- which is what
+ * "paste doesn't work" usually was. Sending the clipboard write and then this
+ * keystroke, in that order, from the same place, is what removes the race
+ * rather than narrowing it.
+ */
+function sendCtrlV(rfb: NoVncClient): void {
+    rfb.sendKey(XK_CONTROL_L, 'ControlLeft', true);
+    rfb.sendKey(XK_LOWER_V, 'KeyV', true);
+    rfb.sendKey(XK_LOWER_V, 'KeyV', false);
+    rfb.sendKey(XK_CONTROL_L, 'ControlLeft', false);
+}
+
+//: How often the sign-in page's anti-phishing host display is refreshed.
+//: VNC carries no navigation signal of its own -- it is pixels, not events --
+//: so this is what stands in for the JSON stream's old `onNavigated` message.
+//: Only polled when `onNavigated` is actually passed, which today is only the
+//: sign-in page: an ordinary watch/drive pane has nothing that reads it.
+const NAVIGATION_POLL_MS = 1500;
+
+/**
+ * The agent's browser, live, over VNC.
+ *
+ * A real X11 display rather than a screenshot pipeline: what is on screen and
+ * where a click lands are the same numbers noVNC already uses internally, so
+ * there is no coordinate space here to get wrong -- unlike the CDP-JPEG
+ * pipeline this replaced, which needed a client/picture/page coordinate
+ * translation for every input event and still mis-clicked. Paste is a real
+ * synced clipboard rather than a synthesized keystroke, for the same reason.
  *
  * Watching by default. Driving is a deliberate act — the toggle exists so that
  * a person reading a page cannot type into it by accident, and so that the
@@ -28,157 +101,160 @@ import { cn } from '@/lib/utils';
 export function BrowserPane({
     origin,
     accessToken,
-    conversationId,
     autoControl = false,
     onNavigated,
 }: {
+    /** A site to steer the browser to before attaching, and the session that
+     *  steer lands in: naming one means a sign-in. Without it this shows
+     *  whatever this person's sandbox already has open -- VNC is the whole
+     *  shared display, not a session-scoped tab, so there is nothing else to
+     *  ask for. */
     origin?: string;
     accessToken?: string;
-    /** Whose browser this is. A conversation has its own, separate from every
-     *  other conversation this person runs; a sign-in page names an `origin`
-     *  instead and gets the session belonging to that site. */
-    conversationId?: string;
     autoControl?: boolean;
+    /** Called with the page the browser is actually showing, polled rather
+     *  than pushed -- see `NAVIGATION_POLL_MS`. Only meaningful alongside
+     *  `origin`: nothing here knows the current page without one to ask the
+     *  relay's `/targets` about. */
     onNavigated?: (url: string) => void;
 }) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const viewerRef = useRef<ViewerHandle | null>(null);
-    const frameRef = useRef<ViewerFrame | null>(null);
-    const [state, setState] = useState<ViewerState>('connecting');
+    const containerRef = useRef<HTMLDivElement>(null);
+    const rfbRef = useRef<NoVncClient | null>(null);
+    const [state, setState] = useState<PaneState>('connecting');
     const [controlling, setControlling] = useState(autoControl);
-    // Whether keystrokes are actually going to the page. This is the canvas's
-    // DOM focus, and it is the whole difference between driving and appearing
-    // to drive: a person who takes control and types without clicking the
-    // picture first sends every keystroke to whatever had focus -- on the
-    // conversation screen, the message box. Nothing said so, so the browser
-    // looked broken while it was working.
+    // Whether keystrokes are actually going to the page. RFB moves focus to
+    // the remote session on click by default, but "driving" being on is not
+    // the same claim as "this element currently has the keyboard" -- a person
+    // who takes control without having clicked the picture yet is told which
+    // of the two is true rather than shown a control that quietly does
+    // nothing until they discover the click on their own.
     const [keyboardIsHere, setKeyboardIsHere] = useState(false);
 
-    const paint = useCallback((frame: ViewerFrame) => {
-        frameRef.current = frame;
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        // Sized to the *picture*, not to the page it is of. The stream encodes
-        // within the image's caps, so the JPEG is routinely smaller than the
-        // viewport -- and a canvas sized to the viewport left the picture in
-        // one corner of it with the rest transparent, which `object-contain`
-        // then letterboxed as though the empty part were part of the shot.
-        canvas.width = frame.pictureWidth;
-        canvas.height = frame.pictureHeight;
-        canvas.getContext('2d')?.drawImage(frame.bitmap, 0, 0);
-    }, []);
-
-    // Taking control points the keyboard at the page, without waiting for a
-    // click on it. Deliberate rather than incidental: "Take control" is a
-    // person saying they want to type here, and making them click the picture
-    // first to be heard is a rule nobody can see.
     useEffect(() => {
-        if (!controlling) return;
-        const frame = requestAnimationFrame(() => canvasRef.current?.focus());
-        return () => cancelAnimationFrame(frame);
-    }, [controlling]);
+        const container = containerRef.current;
+        if (!container) return;
 
-    useEffect(() => {
-        const viewer = openBrowserView({
-            mode: controlling ? 'control' : 'view',
-            origin,
-            accessToken,
-            conversationId,
-            onFrame: paint,
-            onState: setState,
-            onNavigated,
-        });
-        viewerRef.current = viewer;
-        return () => {
-            viewer.close();
-            viewerRef.current = null;
+        let cancelled = false;
+        let attempt = 0;
+        let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const connect = async () => {
+            if (cancelled) return;
+            setState('connecting');
+            // Loaded on connect rather than imported at module scope: the
+            // library reaches for `document`/`WebSocket` at import time, which
+            // a server render has neither of.
+            let RFB: typeof NoVncClient;
+            try {
+                ({ default: RFB } = await import('@novnc/novnc'));
+            } catch {
+                if (cancelled) return;
+                setState('lost');
+                retryTimer = setTimeout(connect, reconnectDelayMs(attempt++));
+                return;
+            }
+            if (cancelled) return;
+            container.replaceChildren();
+
+            // Owned here rather than handed to RFB as a URL string, purely so
+            // this can read the real close code -- see `closeCodeToState`.
+            // `addEventListener`, not `.onclose =`: RFB's own `attach()` sets
+            // `.onclose` directly on whatever channel it is given, which
+            // would silently replace a same-named assignment made here.
+            const socket = new WebSocket(
+                vncSocketUrl({ mode: controlling ? 'control' : 'view', origin, accessToken }),
+            );
+            let closeCode = 1000;
+            socket.addEventListener('close', (event) => {
+                closeCode = event.code;
+            });
+
+            const rfb = new RFB(container, socket);
+            rfb.viewOnly = !controlling;
+            rfb.scaleViewport = true;
+            rfb.background = 'var(--bg-canvas)';
+            rfb.addEventListener('connect', () => {
+                attempt = 0;
+                setState('live');
+            });
+            rfb.addEventListener('disconnect', () => {
+                // Guarded on identity: toggling `controlling` tears this
+                // instance down and starts a new one in the same tick, and
+                // the socket closing does not happen synchronously with
+                // that -- the resulting event arrives after the new instance
+                // is already the one in `rfbRef`. Without this check, that
+                // late event nulled a *live* ref out from under it, so every
+                // paste and keystroke after the first "Take control" landed
+                // on `rfbRef.current === null` while the picture kept
+                // rendering the new connection's frames regardless -- there
+                // was nothing wrong to see, only a ref pointing at nothing.
+                if (rfbRef.current !== rfb) return;
+                rfbRef.current = null;
+                if (cancelled) return;
+                const next = closeCodeToState(closeCode);
+                setState(next);
+                setKeyboardIsHere(false);
+                if (TERMINAL_STATES.has(next)) return;
+                retryTimer = setTimeout(connect, reconnectDelayMs(attempt++));
+            });
+            rfbRef.current = rfb;
         };
-    }, [controlling, origin, accessToken, conversationId, paint, onNavigated]);
 
-    // Sent as-is: these already are `agent-browser` stream messages, and the
-    // relay forwards them rather than translating. It refuses input outright
-    // when the socket is in view mode, so "watching" is not enforced here.
-    const sendInput = useCallback((event: Record<string, unknown>) => {
-        viewerRef.current?.send(event);
+        // `focusin`/`focusout`, not RFB events -- it dispatches neither. What
+        // actually happens on click is `canvas.focus()`, a real DOM focus
+        // change, and these are that change's bubbling form. Native listeners
+        // rather than a prop on the canvas because RFB owns that element; it
+        // is created and destroyed inside `connect()`, so the container is
+        // the one thing here with a stable identity to listen on.
+        const onFocusIn = () => setKeyboardIsHere(true);
+        const onFocusOut = () => setKeyboardIsHere(false);
+        container.addEventListener('focusin', onFocusIn);
+        container.addEventListener('focusout', onFocusOut);
+
+        connect();
+        return () => {
+            cancelled = true;
+            container.removeEventListener('focusin', onFocusIn);
+            container.removeEventListener('focusout', onFocusOut);
+            if (retryTimer) clearTimeout(retryTimer);
+            rfbRef.current?.disconnect();
+            rfbRef.current = null;
+        };
+    }, [controlling, origin, accessToken]);
+
+    // Polled rather than pushed: VNC is pixels, not events, so there is no
+    // message on the wire to react to the way the JSON stream's `url`
+    // message let this be. Only runs when somebody asked for it and only
+    // while there is a site to ask the relay about.
+    useEffect(() => {
+        if (!onNavigated || !origin) return;
+        let cancelled = false;
+        const poll = async () => {
+            try {
+                const found = await getLemmaClient().workspace.browserCurrentPageUrl(origin);
+                if (!cancelled && found.url) onNavigated(found.url);
+            } catch {
+                // Best effort: a missed poll is a stale host label for
+                // another `NAVIGATION_POLL_MS`, not a reason to stop.
+            }
+        };
+        const interval = setInterval(poll, NAVIGATION_POLL_MS);
+        poll();
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+        };
+    }, [onNavigated, origin]);
+
+    const onPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+        const rfb = rfbRef.current;
+        if (!rfb || rfb.viewOnly) return;
+        const text = event.clipboardData.getData('text');
+        if (!text) return;
+        event.preventDefault();
+        rfb.clipboardPasteFrom(text);
+        sendCtrlV(rfb);
     }, []);
-
-    const pointFor = useCallback((event: { clientX: number; clientY: number }) => {
-        const canvas = canvasRef.current;
-        const frame = frameRef.current;
-        if (!canvas || !frame) return { x: 0, y: 0 };
-        return toFramePoint(canvas.getBoundingClientRect(), frame, event);
-    }, []);
-
-    const onMouse = useCallback(
-        (type: 'mousePressed' | 'mouseReleased' | 'mouseMoved') =>
-            (event: React.MouseEvent<HTMLCanvasElement>) => {
-                if (!controlling) return;
-                const point = pointFor(event);
-                sendInput({
-                    type: 'input_mouse',
-                    eventType: type,
-                    x: point.x,
-                    y: point.y,
-                    button: ['left', 'middle', 'right'][event.button] ?? 'left',
-                    // A hover is not a drag. Reporting a held button on every
-                    // move made pages with sliders and canvases think one was.
-                    buttons: type === 'mouseMoved' ? 0 : 1,
-                    clickCount: type === 'mouseMoved' ? 0 : event.detail || 1,
-                });
-            },
-        [controlling, pointFor, sendInput],
-    );
-
-    const onWheel = useCallback(
-        (event: React.WheelEvent<HTMLCanvasElement>) => {
-            if (!controlling) return;
-            sendInput(wheelEventFor(pointFor(event), event));
-        },
-        [controlling, pointFor, sendInput],
-    );
-
-    const onKey = useCallback(
-        (event: React.KeyboardEvent<HTMLCanvasElement>) => {
-            if (!controlling) return;
-            // Escape is the way out of the canvas for somebody using a
-            // keyboard; swallowing it would trap them here.
-            if (event.key === 'Escape') return;
-            event.preventDefault();
-            sendInput(keyEventFor(event as unknown as Parameters<typeof keyEventFor>[0]));
-        },
-        [controlling, sendInput],
-    );
-
-    /** Text the page receives, a character at a time.
-     *
-     * Used by the paste handler and by the text bar, whose own reason is that a
-     * phone's keyboard reports no usable key events to a canvas.
-     */
-    const typeText = useCallback(
-        (text: string) => {
-            for (const message of textAsCharEvents(text)) sendInput(message);
-        },
-        [sendInput],
-    );
-
-    /** What the person pasted, as text the page receives.
-     *
-     * The sandbox has its own clipboard and it is empty, so forwarding ctrl-V
-     * as a key combination pastes nothing. This is the sign-in journey's most
-     * common single action -- almost nobody types a password by hand any more,
-     * they paste it out of a manager -- so it cannot be the one thing that does
-     * not work.
-     */
-    const onPaste = useCallback(
-        (event: React.ClipboardEvent<HTMLCanvasElement>) => {
-            if (!controlling) return;
-            const text = event.clipboardData.getData('text');
-            if (!text) return;
-            event.preventDefault();
-            typeText(text);
-        },
-        [controlling, typeText],
-    );
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-2">
@@ -204,40 +280,24 @@ export function BrowserPane({
                 </Button>
             </div>
 
-            <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-canvas)]">
-                <canvas
-                    ref={canvasRef}
-                    tabIndex={controlling ? 0 : -1}
+            <div
+                className={cn(
+                    'relative min-h-0 flex-1 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-canvas)] [&_canvas]:h-full [&_canvas]:w-full [&_canvas]:object-contain [&_canvas]:outline-none',
+                    controlling && 'cursor-crosshair',
+                    // A visible edge while the keyboard is pointed here.
+                    controlling && keyboardIsHere && 'ring-2 ring-[var(--action-primary)] ring-inset',
+                )}
+            >
+                <div
+                    ref={containerRef}
+                    className="h-full w-full"
+                    onPaste={onPaste}
                     role={controlling ? 'application' : 'img'}
                     aria-label={
                         controlling
-                            ? 'The agent’s browser. Click and type to drive it. Press Escape to leave.'
+                            ? 'The agent’s browser. Click and type to drive it.'
                             : 'The agent’s browser, live'
                     }
-                    className={cn(
-                        'h-full w-full object-contain outline-none',
-                        controlling && 'cursor-crosshair',
-                        // A visible edge while the keyboard is pointed here.
-                        // `outline-none` above is deliberate -- the browser's
-                        // own focus ring is drawn around the *element*, which
-                        // includes the letterbox bars, so it sits away from the
-                        // picture on most pane shapes and reads as a bug.
-                        controlling &&
-                            keyboardIsHere &&
-                            'ring-2 ring-[var(--action-primary)] ring-inset',
-                    )}
-                    onMouseDown={(event) => {
-                        canvasRef.current?.focus();
-                        onMouse('mousePressed')(event);
-                    }}
-                    onMouseUp={onMouse('mouseReleased')}
-                    onMouseMove={onMouse('mouseMoved')}
-                    onWheel={onWheel}
-                    onKeyDown={onKey}
-                    onKeyUp={onKey}
-                    onPaste={onPaste}
-                    onFocus={() => setKeyboardIsHere(true)}
-                    onBlur={() => setKeyboardIsHere(false)}
                 />
 
                 {state !== 'live' ? (
@@ -251,43 +311,11 @@ export function BrowserPane({
                     </div>
                 ) : null}
             </div>
-
-            {controlling ? (
-                <form
-                    className="flex items-center gap-2 px-1"
-                    onSubmit={(event) => {
-                        event.preventDefault();
-                        const input = event.currentTarget.elements.namedItem(
-                            'text',
-                        ) as HTMLInputElement | null;
-                        if (input) {
-                            typeText(input.value);
-                            input.value = '';
-                            // Back to the page. Sending from the bar and then
-                            // finding that the next keystroke went nowhere is
-                            // the same silent failure in miniature.
-                            canvasRef.current?.focus();
-                        }
-                    }}
-                >
-                    {/* A phone's keyboard reports no key events to a canvas, so
-                        without this there is no way to type on one at all. */}
-                    <Input
-                        name="text"
-                        placeholder="Type here, then press Send"
-                        aria-label="Type into the agent’s browser"
-                        className="min-w-0 flex-1"
-                    />
-                    <Button type="submit" variant="secondary" size="xs">
-                        Send
-                    </Button>
-                </form>
-            ) : null}
         </div>
     );
 }
 
-const TITLES: Record<ViewerState, string> = {
+const TITLES: Record<PaneState, string> = {
     connecting: 'Connecting…',
     live: '',
     'no-browser': 'The browser is not running',
@@ -297,12 +325,13 @@ const TITLES: Record<ViewerState, string> = {
     lost: 'The connection dropped',
 };
 
-const DESCRIPTIONS: Record<ViewerState, string> = {
+const DESCRIPTIONS: Record<PaneState, string> = {
     connecting: 'Waking the computer and starting its browser. The first time takes a moment.',
     live: '',
     'no-browser': 'It starts when the agent opens a page, or when you take control.',
     unsupported: 'This kind of sandbox cannot show a live browser.',
-    'stale-image': 'It is running an older image with no browser channel. Restart it to pick up the current one.',
+    'stale-image':
+        'It is running an older image with no VNC channel. Restart it to pick up the current one.',
     refused: 'Sign in again and reopen this panel.',
     lost: 'Reconnecting.',
 };

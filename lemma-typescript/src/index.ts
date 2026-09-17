@@ -78,6 +78,7 @@ export {
   isToolInvocationActive,
   isUserApprovalToolName,
   isAskUserToolName,
+  isSignInToolName,
   isUserInteractionToolName,
   isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,

@@ -47,10 +47,8 @@ from .chrome import (
     live_port,
     open_url,
     page_targets,
-    stream_port,
-    stream_socket_url,
 )
-from .stream_proxy import CONTROL, VIEW, pump
+from .stream_proxy import CONTROL, VIEW, pump_binary
 from .state import (
     StateOperationFailed,
     load_session,
@@ -63,6 +61,12 @@ from .state import (
 TOKEN_PATH = Path(os.environ.get("LEMMA_RELAY_TOKEN_FILE", "/tmp/lemma-relay/token"))
 
 DEFAULT_PORT = int(os.environ.get("LEMMA_BROWSER_RELAY_PORT", "4850"))
+
+#: Where websockify fronts x11vnc, on this same loopback -- both started by
+#: `start-browser.sh` alongside Xvfb. Read at request time like the rest of
+#: this file's config, not cached, in case a resumed sandbox is handed a
+#: different value than the one it was created with.
+VNC_WS_PORT = int(os.environ.get("LEMMA_BROWSER_VNC_WS_PORT", "5901"))
 
 #: The session a viewer watches when no particular one is named.
 #:
@@ -78,14 +82,9 @@ DEFAULT_PORT = int(os.environ.get("LEMMA_BROWSER_RELAY_PORT", "4850"))
 #: is reading the page.
 _KEEPALIVE_SECONDS = 45.0
 
-#: A frame from the stream server. Bounded so a page cannot make one viewer's
+#: A frame from `websockify`. Bounded so a page cannot make one viewer's
 #: socket into this process's memory problem.
-_MAX_STREAM_FRAME_BYTES = 8 * 1024 * 1024
-
-#: The ceiling this relay asks the stream for. A person watching a browser is
-#: reading a page, not watching a film; past this the bytes buy nothing and a
-#: phone pays for them. A client may ask for fewer with a `config` message.
-_MAX_FPS = 15
+_MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 CLOSE_UNAUTHENTICATED = 4401
 CLOSE_NO_BROWSER = 4409
@@ -243,9 +242,20 @@ def create_app() -> FastAPI:
         return {"chrome": "running"}
 
     @app.get("/targets", dependencies=[Depends(require_token)])
-    async def targets() -> dict:
+    async def targets(
+        session: str = Query(default=""),
+        domain: str = Query(default=""),
+    ) -> dict:
+        """Open pages in one session, named the same way `/browser:ensure` is.
+
+        `session`/`domain` resolve exactly as they do there -- a caller asking
+        after a sign-in's own session passes `domain`, not a name it would
+        have to reconstruct. Defaults to the default session, which is what
+        every caller before this one wanted.
+        """
+        session_name = _session_name(session or None, domain or None)
         try:
-            port = await live_port()
+            port = await live_port(session_name)
             return {"targets": await page_targets(port=port)}
         except BrowserNotRunning:
             raise HTTPException(status_code=409, detail="the browser is not running")
@@ -305,18 +315,29 @@ def create_app() -> FastAPI:
         except StateOperationFailed as exc:
             raise HTTPException(status_code=409, detail=str(exc))
 
-    @app.websocket("/session")
-    async def session_socket(
+    @app.websocket("/vnc")
+    async def vnc_socket(
         websocket: WebSocket,
-        target: str = Query(default=""),
-        session: str = Query(default=""),
         mode: str = Query(default=VIEW),
+        session: str = Query(default=""),
     ) -> None:
-        """One viewer, watching or driving one page.
+        """One viewer of this sandbox's whole display, over VNC.
 
-        Every refusal goes through `_refuse`, which accepts the socket before
-        closing it -- that is the only way the reason survives as a close code
-        rather than as an HTTP status nobody downstream can read.
+        Names no target: all of a sandbox's `agent-browser` sessions share
+        one Xvfb display, so VNC shows whatever is on `:99`, not a
+        CDP-selected tab. In practice only one session's browser is normally
+        alive at a time -- the idle timeout retires the rest -- so this is
+        the accepted trade rather than a bug; per-session display isolation
+        is future work.
+
+        `session` is not a selector either -- it cannot be, for the same
+        reason -- but it is still read, for the one thing that still needs a
+        session name even though the picture does not: the driving lease.
+        The caller resolves it beforehand (`/browser:ensure`'s reply says
+        which session a steer actually landed in) and passes that back here
+        so the agent's own script, which checks the lease for *its* session
+        before acting, is not told a login session's wheel is free while a
+        person is visibly turning it on this same screen.
         """
         if not _authenticate(websocket.headers.get("x-lemma-relay-token", "")):
             await _refuse(
@@ -326,7 +347,6 @@ def create_app() -> FastAPI:
         if mode not in (VIEW, CONTROL):
             await _refuse(websocket, CLOSE_UNAUTHENTICATED, f"{mode!r} is not a mode")
             return
-
         session_name = session or DEFAULT_SESSION
         if session_name != DEFAULT_SESSION and not is_safe_session(session_name):
             await _refuse(
@@ -334,66 +354,33 @@ def create_app() -> FastAPI:
             )
             return
         try:
-            port = await live_port(session_name)
-            open_targets = await page_targets(port=port)
+            # `session_name`, not the bare default: a sign-in's Chrome runs in
+            # its own named session (its own profile, its own port), and
+            # `live_port()` with no argument checks only the default one's.
+            # Checking the wrong session here reported "no browser running"
+            # about a browser that was on screen at the time -- the picture
+            # is shared, but whether *a* Chrome process is up is still asked
+            # per session, and the login session's was never the one asked.
+            await live_port(session_name)
         except BrowserNotRunning as exc:
-            await _refuse(
-                websocket, CLOSE_NO_BROWSER, f"no browser in {session_name!r}: {exc}"
-            )
-            return
-
-        # A target id only means anything against the Chrome that minted it.
-        # Sessions are separate browsers on separate ports, so a caller that
-        # worked out the session one way and the target another produces an id
-        # this browser has never heard of. The stream itself would not notice:
-        # it is session-scoped and follows that session's active tab, so a
-        # mismatched target would stream somebody a *different browser* and look
-        # entirely healthy doing it. That is the bug this feature shipped with,
-        # and this is the check that makes it impossible: the two halves of the
-        # answer have to agree here, or nobody is attached at all.
-        #
-        # What it is not is a selector. The stream shows the active tab, and
-        # there is no inbound message that changes which one that is.
-        known = {found["id"] for found in open_targets}
-        if target and target not in known:
-            await _refuse(
-                websocket,
-                CLOSE_NO_BROWSER,
-                f"target {target} is not open in {session_name!r}",
-            )
-            return
-
-        if not (target or _first_target_id(open_targets)):
-            await _refuse(
-                websocket, CLOSE_NO_BROWSER, f"no page open in {session_name!r}"
-            )
-            return
-
-        try:
-            stream = await stream_port(session=session_name)
-        except BrowserNotRunning as exc:
-            await _refuse(
-                websocket, CLOSE_NO_BROWSER, f"no stream in {session_name!r}: {exc}"
-            )
+            await _refuse(websocket, CLOSE_NO_BROWSER, f"no browser running: {exc}")
             return
 
         await websocket.accept()
-        await websocket.send_json({"type": "status", "state": "attached"})
-
-        # Background: the keepalive outlives no request and belongs to the
-        # browser rather than to whoever opened this socket.
-        keepalive_task = create_background_task(_keepalive_loop(session_name))
+        # Watching is not a command, so without this the agent's idle timeout
+        # retires the browser out from under somebody reading the page.
+        keepalive_task = create_background_task(_keepalive_loop(DEFAULT_SESSION))
         driving = _take_the_wheel(session_name) if mode == CONTROL else None
         try:
             async with websockets.connect(
-                stream_socket_url(stream, max_fps=_MAX_FPS),
-                max_size=_MAX_STREAM_FRAME_BYTES,
-            ) as stream_socket:
-                await pump(
-                    stream_socket,
+                f"ws://127.0.0.1:{VNC_WS_PORT}/",
+                max_size=_MAX_FRAME_BYTES,
+            ) as upstream:
+                await pump_binary(
+                    upstream,
                     mode=mode,
-                    send_text=websocket.send_text,
-                    receive_text=_receiver(websocket),
+                    send_bytes=websocket.send_bytes,
+                    receive_bytes=_receiver_bytes(websocket),
                 )
         except OSError, websockets.exceptions.WebSocketException:
             with suppress(RuntimeError):
@@ -410,24 +397,24 @@ def create_app() -> FastAPI:
     return app
 
 
-def _receiver(websocket: WebSocket):
-    async def receive_text() -> str | None:
+def _receiver_bytes(websocket: WebSocket):
+    async def receive_bytes() -> bytes | None:
         message = await websocket.receive()
         if message["type"] == "websocket.disconnect":
             return None
-        return message.get("text")
+        data = message.get("bytes")
+        if data is not None:
+            return data
+        text = message.get("text")
+        return text.encode() if text is not None else b""
 
-    return receive_text
+    return receive_bytes
 
 
 async def _keepalive_loop(session: str) -> None:
     while True:
         await asyncio.sleep(_KEEPALIVE_SECONDS)
         await keepalive(session=session)
-
-
-def _first_target_id(targets: list[dict[str, str]]) -> str:
-    return targets[0]["id"] if targets else ""
 
 
 def _best_target(targets: list[dict[str, str]], origin: str | None) -> dict[str, str]:

@@ -21,7 +21,7 @@ import type {
 import {
   buildDisplayMessageRows,
   findPendingUserApprovalInvocation,
-  isAskUserToolName,
+  isAskUserToolName, isSignInToolName,
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
@@ -367,6 +367,11 @@ export function AssistantExperienceView({
   const pendingInteractionCallId = activePendingApprovalInvocation?.toolCallId ?? null;
   const pendingInteractionIsAsk = !!activePendingApprovalInvocation
     && isAskUserToolName(activePendingApprovalInvocation.toolName);
+  // A sign-in is neither: there is nothing to approve and nothing to answer,
+  // so "Approve or reject to continue" tells the person to do something the
+  // card does not offer.
+  const pendingInteractionIsSignIn = !!activePendingApprovalInvocation
+    && isSignInToolName(activePendingApprovalInvocation.toolName);
   const scrollToPendingInteraction = useCallback(() => {
     if (!pendingInteractionCallId) return;
     document
@@ -597,9 +602,11 @@ export function AssistantExperienceView({
           onClick={scrollToPendingInteraction}
           className="h-auto px-0 text-xs font-normal"
         >
-          {pendingInteractionIsAsk
-            ? "Answer the question to continue"
-            : "Approve or reject to continue"}
+          {pendingInteractionIsSignIn
+            ? "Sign in to continue"
+            : pendingInteractionIsAsk
+              ? "Answer the question to continue"
+              : "Approve or reject to continue"}
         </Button>
       ) : null}
       {showComposerStatus && runStatusModel ? (

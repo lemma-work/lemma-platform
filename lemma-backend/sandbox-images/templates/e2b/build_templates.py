@@ -78,6 +78,10 @@ def workspace_template():
         .from_template("code-interpreter-v1")
         .apt_install(
             [
+                # `agent-browser record` shells out to ffmpeg. See the note in
+                # Dockerfile.workspace; the two images have to agree on this or
+                # recording works on one fabric and not the other.
+                "ffmpeg",
                 "fonts-dejavu-core",
                 "fonts-liberation",
                 "libasound2t64",

@@ -21,6 +21,9 @@ class WorkspaceFileListResponse:
     Attributes:
         path (str): The directory that was listed.
         entries (list[WorkspaceFileEntry] | Unset):
+        exists (bool | Unset): False when the directory is not there. A directory that does not exist and one that is
+            merely empty used to answer identically, which is why a pane pointed at the wrong path looked like a working,
+            empty folder rather than a mistake. Default: True.
         next_after (None | str | Unset): Pass as `after` to get the next page. Null when this is the last one. A
             directory with more entries than fit was previously a dead end: the rest could be counted and never reached.
         sleeping (bool | Unset): True when the workspace is paused and was not woken to answer. Entries are empty; ask
@@ -30,6 +33,7 @@ class WorkspaceFileListResponse:
 
     path: str
     entries: list[WorkspaceFileEntry] | Unset = UNSET
+    exists: bool | Unset = True
     next_after: None | str | Unset = UNSET
     sleeping: bool | Unset = False
     truncated: bool | Unset = False
@@ -44,6 +48,8 @@ class WorkspaceFileListResponse:
             for entries_item_data in self.entries:
                 entries_item = entries_item_data.to_dict()
                 entries.append(entries_item)
+
+        exists = self.exists
 
         next_after: None | str | Unset
         if isinstance(self.next_after, Unset):
@@ -64,6 +70,8 @@ class WorkspaceFileListResponse:
         )
         if entries is not UNSET:
             field_dict["entries"] = entries
+        if exists is not UNSET:
+            field_dict["exists"] = exists
         if next_after is not UNSET:
             field_dict["next_after"] = next_after
         if sleeping is not UNSET:
@@ -89,6 +97,8 @@ class WorkspaceFileListResponse:
 
                 entries.append(entries_item)
 
+        exists = d.pop("exists", UNSET)
+
         def _parse_next_after(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -105,6 +115,7 @@ class WorkspaceFileListResponse:
         workspace_file_list_response = cls(
             path=path,
             entries=entries,
+            exists=exists,
             next_after=next_after,
             sleeping=sleeping,
             truncated=truncated,

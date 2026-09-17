@@ -181,6 +181,7 @@ _NAME_TO_MODULE = {
     'CreateScheduleRequestFilterOutputSchemaType0': 'create_schedule_request_filter_output_schema_type_0',
     'CreateTableRequest': 'create_table_request',
     'CreateTableRequestConfigType0': 'create_table_request_config_type_0',
+    'CurrentPageUrlResponse': 'current_page_url_response',
     'DataStoreWorkflowStartConfigInput': 'data_store_workflow_start_config_input',
     'DataStoreWorkflowStartConfigOutput': 'data_store_workflow_start_config_output',
     'DataStoreWorkflowStartInput': 'data_store_workflow_start_input',
@@ -731,6 +732,7 @@ if TYPE_CHECKING:
     from .create_schedule_request_filter_output_schema_type_0 import CreateScheduleRequestFilterOutputSchemaType0
     from .create_table_request import CreateTableRequest
     from .create_table_request_config_type_0 import CreateTableRequestConfigType0
+    from .current_page_url_response import CurrentPageUrlResponse
     from .data_store_workflow_start_config_input import DataStoreWorkflowStartConfigInput
     from .data_store_workflow_start_config_output import DataStoreWorkflowStartConfigOutput
     from .data_store_workflow_start_input import DataStoreWorkflowStartInput
@@ -1294,6 +1296,7 @@ __all__ = [
     'CreateScheduleRequestFilterOutputSchemaType0',
     'CreateTableRequest',
     'CreateTableRequestConfigType0',
+    'CurrentPageUrlResponse',
     'DataStoreWorkflowStartConfigInput',
     'DataStoreWorkflowStartConfigOutput',
     'DataStoreWorkflowStartInput',

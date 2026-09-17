@@ -11,6 +11,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
 | `workspace.browser.access` | POST | `/workspace/apps/browser/access` | Create workspace browser access URL |
+| `workspace.browser.current_page_url` | GET | `/workspace/browser/current-page-url` | What page a sign-in's browser is actually showing |
 | `workspace.browser.status` | GET | `/workspace/browser/status` | Whether the workspace browser can be watched |
 | `workspace.files.content` | GET | `/workspace/files:content` | Read workspace file content |
 | `workspace.files.list` | GET | `/workspace/files` | List workspace files |
@@ -101,6 +102,18 @@ The pages the workspace browser has open, so a viewer knows what there is to
 watch. Empty rather than an error when the browser is not running: a workspace
 whose browser has been shed for idleness or memory is the ordinary resting
 state.
+
+## `workspace.browser.current_page_url`
+
+What page the browser signing in to `origin` is actually showing, for the
+anti-phishing display on the sign-in page to poll. Scoped to the requesting
+user's own sandbox the same way every operation here is -- there is no other
+identifier a caller could pass. `null`, not an error, whenever nothing can be
+read (the sandbox asleep, the browser not up, the fabric unreachable): this
+renders next to a live picture, so it answers with "nothing to show yet"
+rather than breaking the page. Never wakes a sandbox or starts a browser --
+only a sign-in beginning does that, elsewhere -- so polling it costs nothing
+extra to a session already idle.
 
 ## The browser stream (websocket)
 

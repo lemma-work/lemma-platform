@@ -7,6 +7,8 @@ open sockets.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 
@@ -67,11 +69,20 @@ class _FakeService:
         self.opened: list[dict] = []
         self.closed = False
 
-    async def open_session(self, user_id, *, mode, origin=None, session=None):
-        self.opened.append({"user_id": user_id, "mode": mode, "origin": origin})
+    async def open_vnc_session(
+        self, user_id, *, mode, origin=None, conversation_id=None
+    ):
+        self.opened.append(
+            {
+                "user_id": user_id,
+                "mode": mode,
+                "origin": origin,
+                "conversation_id": conversation_id,
+            }
+        )
         if self.fail is not None:
             raise self.fail
-        return "ws://sandbox.test/session?target=t1", {"X-Lemma-Relay-Token": "t"}
+        return "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}
 
     async def status(self, user_id):
         return {"state": "stopped"}
@@ -218,3 +229,187 @@ async def test_a_relay_that_cannot_say_is_not_treated_as_public() -> None:
             raise OSError("no route to the sandbox")
 
     await module._require_private(_Unreachable(public=True), doing="sign in to a site")
+
+
+# ---------------------------------------------------------------------------
+# Which session a plain watch/drive lands in
+# ---------------------------------------------------------------------------
+
+
+class _VncRelay(_Relay):
+    """A relay that remembers what `ensure_browser` and `vnc_socket_url` were
+    asked for, without touching a real sandbox."""
+
+    def __init__(self) -> None:
+        super().__init__(public=False)
+        self.ensured: dict | None = None
+
+    async def ensure_browser(self, *, origin, session, domain):
+        self.ensured = {"origin": origin, "session": session, "domain": domain}
+        return {"session": session or "workspace"}
+
+    async def vnc_socket_url(self, *, mode, session):
+        return f"ws://sandbox.test/vnc?mode={mode}&session={session}", {}
+
+
+def _service_with_relay(relay: _VncRelay):
+    """`BrowserViewService`, its own sandbox resolution replaced with `relay`.
+
+    `_relay` is the one method here that touches a real sandbox -- everything
+    `open_vnc_session` decides afterwards is what this test is about, so that
+    is the seam, not a double planted inside `open_vnc_session` itself.
+    """
+    from app.modules.workspace.services import browser_view_service as module
+
+    class _Service(module.BrowserViewService):
+        async def _relay(self, user_id, *, start):
+            return relay
+
+    return _Service()
+
+
+async def test_a_plain_watch_with_a_conversation_lands_in_that_conversations_session() -> (
+    None
+):
+    """`run_browser_script` puts every agent browser command in
+    `agent_session(conversation_id)` -- its own session and profile, so one
+    conversation's agent never inherits another's cookies. A plain watch/drive
+    naming that same conversation has to resolve the same session, or it
+    finds nothing the agent touched."""
+    from app.modules.workspace.contracts.browser import agent_session
+
+    relay = _VncRelay()
+    conversation_id = uuid4()
+    await _service_with_relay(relay).open_vnc_session(
+        uuid4(), mode="view", conversation_id=conversation_id
+    )
+    assert relay.ensured == {
+        "origin": None,
+        "session": agent_session(conversation_id),
+        "domain": None,
+    }
+
+
+async def test_a_plain_watch_with_no_conversation_lands_in_the_shared_default_session() -> (
+    None
+):
+    relay = _VncRelay()
+    await _service_with_relay(relay).open_vnc_session(uuid4(), mode="view")
+    assert relay.ensured == {"origin": None, "session": None, "domain": None}
+
+
+async def test_a_sign_ins_own_site_session_wins_over_a_conversation() -> None:
+    """`save_login_state` reads a sign-in's capture back by the site's own
+    domain-derived session name -- a conversation id present alongside
+    `origin` must not steer it into the conversation's session instead."""
+
+    relay = _VncRelay()
+    await _service_with_relay(relay).open_vnc_session(
+        uuid4(),
+        mode="view",
+        origin="https://example.com",
+        conversation_id=uuid4(),
+    )
+    assert relay.ensured == {
+        "origin": "https://example.com",
+        "session": None,
+        "domain": "example.com",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Hanging up
+# ---------------------------------------------------------------------------
+
+
+class _WebSocketThatIsAlreadyGone:
+    """A socket whose handshake never completed, which is what production had.
+
+    `close()` raises `AttributeError` from inside uvicorn's own close path --
+    `'WebSocketProtocol' object has no attribute 'transfer_data_task'` -- when
+    the client went away before the refusal was written. Reproduced by type
+    rather than by message: the point is that it is not a `RuntimeError`.
+    """
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    def __init__(self, raises: BaseException | None = None) -> None:  # noqa: F811
+        self.accepted = False
+        self.close_attempts = 0
+        self.raises = raises or AttributeError(
+            "'WebSocketProtocol' object has no attribute 'transfer_data_task'"
+        )
+
+    async def close(self, code: int) -> None:
+        self.close_attempts += 1
+        raise self.raises
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_cannot_be_delivered_is_not_an_error_of_its_own() -> None:
+    """The close path guessed `RuntimeError` and got `AttributeError`.
+
+    So refusing a socket whose client had already gone raised, uvicorn logged
+    "Exception in ASGI application", and the pane -- which saw an error instead
+    of its close code -- reconnected and asked again. "The browser is not
+    running" is the ordinary resting state of an idle workspace, and it was
+    reaching people as a crash loop.
+    """
+    socket = _WebSocketThatIsAlreadyGone()
+
+    await view._refuse(socket, view.CLOSE_NO_BROWSER)
+
+    assert socket.accepted, "a close before accept never carries its code"
+    assert socket.close_attempts == 1, "the refusal was attempted"
+
+
+@pytest.mark.asyncio
+async def test_collecting_the_keep_awake_task_does_not_raise() -> None:
+    """Every close of the browser pane logged an unhandled ASGI error.
+
+    The keep-awake task is cancelled when the socket ends and then awaited, so
+    that a cancelled task is collected rather than outliving the request. That
+    await is *guaranteed* to raise `CancelledError` -- and it was collected
+    under `suppress(Exception)`, which does not catch it, because
+    `CancelledError` is a `BaseException`. So uvicorn logged a stack trace for
+    the ordinary act of stopping watching.
+
+    A real task, really cancelled: the bug was entirely in which exception the
+    suppression named, so a stand-in that raised something else would have
+    proved nothing.
+    """
+    import asyncio
+
+    async def _forever() -> None:
+        await asyncio.sleep(3600)
+
+    task = asyncio.get_running_loop().create_task(_forever())
+    await asyncio.sleep(0)  # let it reach the sleep
+
+    await view._collect(task)
+
+    assert task.cancelled(), "collected means finished, not merely asked to stop"
+
+
+@pytest.mark.asyncio
+async def test_every_way_a_socket_is_seen_to_end_is_handled() -> None:
+    """The set has been corrected twice from production; this is what pins it.
+
+    `RuntimeError` was the original guess. `AttributeError` was found crashing
+    refusals in dev. `WebSocketDisconnect` was found crashing them again in a
+    local run against E2B that was meant to confirm the first fix -- and it is
+    the *ordinary* case, because by the time a refusal is written the person may
+    simply have navigated away.
+    """
+    from fastapi import WebSocketDisconnect
+
+    for failure in (
+        RuntimeError("socket is not connected"),
+        AttributeError("'WebSocketProtocol' object has no attribute ..."),
+        OSError("transport gone"),
+        WebSocketDisconnect(code=1006),
+    ):
+        socket = _WebSocketThatIsAlreadyGone(failure)
+        await view._refuse(socket, view.CLOSE_NO_BROWSER)
+        assert socket.close_attempts == 1, f"{type(failure).__name__} was not handled"
