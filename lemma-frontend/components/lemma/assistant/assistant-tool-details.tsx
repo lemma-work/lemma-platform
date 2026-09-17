@@ -171,6 +171,7 @@ export function ToolDetailsPanel({
           <SignInCard
             invocation={interactionInvocation}
             conversationId={activeConversationId}
+            onNavigateResource={onNavigateResource}
           />
         ) : isAskUserToolName(toolName) ? (
           <AskUserCard

@@ -800,9 +800,18 @@ export function ComposerAskUserPanel({
 export function SignInCard({
   invocation,
   conversationId,
+  onNavigateResource,
 }: {
   invocation: AssistantToolInvocation;
   conversationId: string | null;
+  /** Opens the computer panel in place. Absent only where this card is
+   *  rendered outside the conversation shell, which is what the `href`
+   *  fallback below is for. */
+  onNavigateResource?: (
+    resourceType: string,
+    resourceId: string,
+    meta?: Record<string, unknown>,
+  ) => void;
 }) {
   const args = (invocation.args || {}) as ToolCardArgs;
   const origin = asString(args.origin) || "";
@@ -857,9 +866,27 @@ export function SignInCard({
 
       {isResolved ? null : href ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button asChild size="sm">
-            <a href={href}>Sign in to {host}</a>
-          </Button>
+          {/* Opens the computer panel beside the conversation when there is
+              one to open, and only falls back to the standalone page when
+              there is not — a link that replaces the whole page is the right
+              answer from an email, and the wrong one from a chat the person
+              is in the middle of. */}
+          {onNavigateResource && conversationId ? (
+            <Button
+              size="sm"
+              onClick={() =>
+                onNavigateResource("sign_in", invocation.toolCallId, {
+                  conversationId,
+                })
+              }
+            >
+              Sign in to {host}
+            </Button>
+          ) : (
+            <Button asChild size="sm">
+              <a href={href}>Sign in to {host}</a>
+            </Button>
+          )}
           <span className="text-xs text-[var(--text-tertiary)]">
             Opens {host} in the agent&rsquo;s browser. Your password is never sent
             to Lemma.

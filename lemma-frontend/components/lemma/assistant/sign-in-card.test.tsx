@@ -24,12 +24,36 @@ describe('a waiting sign-in', () => {
         expect(isUserInteractionToolName('browser_sign_in')).toBe(true);
     });
 
-    it('offers a link to the page that can actually resolve it', () => {
+    it('opens the computer panel in place rather than leaving the conversation', () => {
+        // The bug this pins: the card was a bare `<a href>`, so answering a
+        // sign-in threw the whole page away and replaced the conversation the
+        // person was reading with a standalone route. The panel is already
+        // beside them; the card now asks for it.
+        const navigations: Array<[string, string, Record<string, unknown> | undefined]> = [];
+        render(
+            <SignInCard
+                invocation={paused}
+                conversationId="conv-1"
+                onNavigateResource={(type, id, meta) => navigations.push([type, id, meta])}
+            />,
+        );
+
+        screen.getByRole('button', { name: /Sign in to asur\.work/ }).click();
+
+        expect(navigations).toEqual([
+            ['sign_in', 'call_abc123', { conversationId: 'conv-1' }],
+        ]);
+        // No link at all: a click that also navigated would take the page away
+        // a moment after opening the panel.
+        expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('falls back to the standalone page where there is no panel to open', () => {
         render(<SignInCard invocation={paused} conversationId="conv-1" />);
 
         const link = screen.getByRole('link', { name: /Sign in to asur\.work/ });
-        // The same destination the Slack and Telegram links use, so the two
-        // paths are one page rather than two implementations.
+        // The same destination the Slack and Telegram links use, so somebody
+        // outside the app shell still reaches a page that can resolve it.
         expect(link.getAttribute('href')).toBe('/sign-in-to-site/conv-1/call_abc123');
         expect(screen.getByText('reading your pods')).toBeTruthy();
     });
