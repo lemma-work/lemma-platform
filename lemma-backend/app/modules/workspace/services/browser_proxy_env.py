@@ -42,7 +42,12 @@ def provisioning_env(
         pool = workspace_settings.browser_proxy_urls
     if not pool:
         return {}
-    return {"LEMMA_BROWSER_PROXY_URL": random.choice(pool).get_secret_value()}
+    # `AGENT_BROWSER_PROXY`, not a Lemma-owned name: agent-browser reads this
+    # env var itself (falling back to it ahead of `HTTP_PROXY`/`ALL_PROXY`),
+    # parses out any inline `user:pass@host:port`, and answers Chrome's CDP
+    # `Fetch.authRequired` with the credentials -- so a credentialed proxy
+    # works without this codebase touching CDP at all.
+    return {"AGENT_BROWSER_PROXY": random.choice(pool).get_secret_value()}
 
 
 __all__ = ["provisioning_env"]

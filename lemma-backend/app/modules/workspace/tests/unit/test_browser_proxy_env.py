@@ -43,7 +43,7 @@ def test_a_function_sandbox_never_gets_a_proxy() -> None:
 def test_a_workspace_sandbox_gets_one_proxy_from_the_pool() -> None:
     pool = [SecretStr("http://a:8080"), SecretStr("http://b:8080")]
     env = provisioning_env(SandboxKind.WORKSPACE, pool=pool)
-    assert env["LEMMA_BROWSER_PROXY_URL"] in {"http://a:8080", "http://b:8080"}
+    assert env["AGENT_BROWSER_PROXY"] in {"http://a:8080", "http://b:8080"}
 
 
 def test_an_empty_pool_assigns_nothing() -> None:

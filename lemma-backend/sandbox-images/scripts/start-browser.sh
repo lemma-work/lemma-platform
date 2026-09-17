@@ -45,14 +45,17 @@ rm -f \
 # then -- a new resume can land on a different sandbox instance -- must reach
 # Chrome's next launch, not wait for a profile that happens not to exist yet.
 CHROME_ARGS="--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
-if [ -n "${LEMMA_BROWSER_PROXY_URL:-}" ]; then
-  # Chrome ignores inline `user:pass` in `--proxy-server` outright, so this is
-  # for IP-allowlisted proxies only; a credentialed proxy needs CDP
-  # `Fetch.authRequired` handling this script cannot add. The WebRTC flag
-  # matters more than it looks: without it, the sandbox's real IP is visible
-  # to any page in ICE candidates gathered outside the proxy, which defeats
-  # the point of having one.
-  CHROME_ARGS="${CHROME_ARGS},--proxy-server=${LEMMA_BROWSER_PROXY_URL},--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+if [ -n "${AGENT_BROWSER_PROXY:-}" ]; then
+  # `AGENT_BROWSER_PROXY` (comma-separated below is Chrome's own args syntax,
+  # not this one -- agent-browser reads that env var itself) can carry inline
+  # `user:pass@host:port`: agent-browser parses the credentials out before
+  # ever putting the server on Chrome's command line and answers Chrome's CDP
+  # `Fetch.authRequired` event with them, so a credentialed proxy works with
+  # no special handling here. The WebRTC flag still needs adding ourselves --
+  # without it, the sandbox's real IP is visible to any page in ICE
+  # candidates gathered outside the proxy, which defeats the point of having
+  # one.
+  CHROME_ARGS="${CHROME_ARGS},--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
 fi
 mkdir -p "$(dirname "$CONFIG_PATH")"
 cat > "$CONFIG_PATH" <<EOF

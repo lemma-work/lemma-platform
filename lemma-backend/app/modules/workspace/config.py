@@ -154,14 +154,14 @@ class WorkspaceSettings(BaseSettings):
         default_factory=list,
         validation_alias=AliasChoices("WORKSPACE_BROWSER_PROXY_URLS"),
         description=(
-            "Comma-separated pool of proxy URLs (e.g. "
-            "http://residential-proxy.example:8080). `_provision` assigns one "
-            "at random to each new workspace sandbox as `LEMMA_BROWSER_PROXY_URL`, "
-            "which `start-browser.sh` turns into Chrome's `--proxy-server`. "
-            "IP-allowlisted proxies only for now -- Chrome does not honour "
-            "inline `user:pass` in `--proxy-server` at all, and credentialed "
-            "proxies need CDP `Fetch.authRequired` handling nothing here does "
-            "yet. `SecretStr`, not `str`: a proxy URL names infrastructure an "
+            "Comma-separated pool of proxy URLs, credentials inline where the "
+            "proxy needs them (e.g. http://user:pass@residential-proxy.example:8080). "
+            "`_provision` assigns one at random to each new workspace sandbox "
+            "as `AGENT_BROWSER_PROXY`, which agent-browser reads directly -- it "
+            "parses out the credentials before putting the server on Chrome's "
+            "command line and answers Chrome's CDP `Fetch.authRequired` with "
+            "them itself, so a credentialed proxy needs nothing further here. "
+            "`SecretStr`, not `str`: a proxy URL names infrastructure an "
             "operator may not want in a log line, same as any other credential "
             "in this file."
         ),
