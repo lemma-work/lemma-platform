@@ -92,6 +92,43 @@ class ObstoreDatastoreStorage:
         async for chunk in response.stream():
             yield bytes(chunk)
 
+    async def open_download(
+        self,
+        source_blob_name: str,
+        *,
+        byte_range: tuple[int, int] | None = None,
+    ) -> tuple[int, AsyncIterator[bytes]]:
+        """Open an object for streaming. Returns ``(total size, chunks)``.
+
+        ``byte_range`` is half-open ``[start, end)``. The size returned is the
+        **whole** object's, not the range's — that is what ``Content-Range``
+        reports and what a client needs to know how much more there is.
+
+        Distinct from ``iter_download`` because opening the object is what tells
+        us whether it exists and how big it is. A caller that must answer 404 or
+        set ``Content-Length`` *before* the first byte of a 200 goes out needs
+        both facts up front, which an iterator alone cannot give it.
+        """
+        options = {"range": byte_range} if byte_range is not None else None
+        try:
+            response = await obs.get_async(
+                self.store, source_blob_name, options=options
+            )
+        except Exception as exc:
+            if self._is_missing_object_error(exc):
+                raise DatastoreObjectNotFoundError(
+                    f"Storage object not found: {source_blob_name}"
+                ) from exc
+            raise
+
+        size = int(response.meta["size"])
+
+        async def _chunks() -> AsyncIterator[bytes]:
+            async for chunk in response.stream():
+                yield bytes(chunk)
+
+        return size, _chunks()
+
     async def get_signed_url(self, blob_name: str, expires_hours: int = 1) -> str:
         return await obs.sign_async(
             self.store, "GET", blob_name, expires_in=timedelta(hours=expires_hours)
@@ -108,6 +145,43 @@ class ObstoreDatastoreStorage:
                 "datastore.storage.deleting_datastore_file_s.propagated", exc_info=True
             )
             raise DatastoreInfrastructureError("Failed to delete file")
+
+    async def copy_prefix(self, source_prefix: str, destination_prefix: str) -> int:
+        """Copy every object under one prefix to another, and say how many.
+
+        Copy rather than move, and the difference is the whole point: the source
+        stays until somebody decides it is safe to drop it. A move here deleted
+        a renamed file's converted output before the row naming it had been
+        committed, so a persistence failure rolled the path back and left the
+        file readable with its artifacts gone.
+
+        Defined once on the obstore base, so every backend gets it: the listing
+        it needs is the same listing ``delete_prefix`` below already does.
+        """
+        sources: list[str] = []
+        try:
+            async for batch in self.store.list_async(prefix=source_prefix):
+                sources.extend(
+                    item["path"]
+                    for item in batch
+                    if isinstance(item, dict) and item.get("path")
+                )
+            if not sources:
+                return 0
+            for source in sources:
+                suffix = source[len(source_prefix) :].lstrip("/")
+                await obs.copy_async(
+                    self.store, source, f"{destination_prefix}{suffix}"
+                )
+            return len(sources)
+        except Exception as exc:
+            if self._is_missing_object_error(exc):
+                return 0
+            logger.debug(
+                "datastore.storage.copying_datastore_prefix_s.propagated",
+                exc_info=True,
+            )
+            raise DatastoreInfrastructureError("Failed to copy folder contents")
 
     async def delete_prefix(self, prefix: str) -> int:
         deleted_paths: list[str] = []

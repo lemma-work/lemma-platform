@@ -1,0 +1,103 @@
+"""Saved site logins, and a durable record of what is done with them.
+
+``web_logins`` is one person's own way back in to a site Lemma has no connector
+for. ``origin`` is plaintext and indexed while ``secret`` is encrypted JSONB, for
+the same reason ``accounts.external_ref`` is: choosing which login to inject
+means asking "which row is for this origin", and that question has to be
+answerable without decrypting every row the person owns.
+
+The unique constraint on ``(user_id, origin)`` makes a second login for the same
+site a *replacement* rather than an addition. An agent handed two sessions for
+one site has no way to choose between them, and picking the newer one silently is
+how a person ends up signed in as somebody they did not mean to be.
+
+Only a *session* is ever stored -- never a password. `connectors-and-accounts.md`
+promises the system "shall never ask them for their provider password", and a
+password is a different class of secret: reused across sites, and not revocable
+without changing it everywhere. `status` is how a session that has stopped
+working says so before a run fails on it.
+
+There is deliberately no table for a *pending* sign-in. The paused tool call is
+that record: it already carries the origin and the reason, and its being
+unresolved is what "waiting" means. A row saying the same three things was the
+first shape of this and the two drifted -- most sharply on status, where a stale
+tab could move the row while the agent had been told the opposite.
+
+``web_login_audit`` is net-new in a broader sense: nothing in this codebase kept
+a durable audit trail before, and a credential store is the wrong place to
+discover that. Its own table rather than a log line, because the question it
+answers — what has been done with my saved logins — has to outlive log retention
+and be answerable to the person whose credentials they are. It carries no secret
+and no page content.
+
+It is keyed by ``origin`` rather than by a foreign key to ``web_logins``, and
+that is the point: "it was removed" is precisely the event somebody comes here
+to find, so the trail for a site has to outlive the row for it. An origin is
+also what the person searches by, and it is what every writer already has in
+hand -- a nullable id, by contrast, would have been NULL on the one event that
+matters most.
+
+Append-only, so there is no ``updated_at``: a row that is never updated does not
+get a column saying when it last was.
+
+Revision ID: 0035_saved_site_logins
+Revises: 0034_ref_prefix_indexes
+"""
+
+from __future__ import annotations
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision = "0035_saved_site_logins"
+down_revision = "0034_ref_prefix_indexes"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "web_logins",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.Column("origin", sa.String(length=255), nullable=False),
+        sa.Column(
+            "status", sa.String(length=16), nullable=False, server_default="ACTIVE"
+        ),
+        sa.Column("secret", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("user_id", "origin", name="uq_web_logins_user_origin"),
+    )
+    op.create_index("ix_web_logins_user_id", "web_logins", ["user_id"], unique=False)
+
+    op.create_table(
+        "web_login_audit",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.Column("conversation_id", sa.Uuid(), nullable=True),
+        sa.Column("origin", sa.String(length=255), nullable=False),
+        sa.Column("action", sa.String(length=32), nullable=False),
+        sa.Column("outcome", sa.String(length=32), nullable=False),
+        sa.Column("detail", sa.String(length=500), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_web_login_audit_user_created",
+        "web_login_audit",
+        ["user_id", "created_at"],
+        unique=False,
+    )
+
+
+def downgrade() -> None:
+    op.drop_index("ix_web_login_audit_user_created", table_name="web_login_audit")
+    op.drop_table("web_login_audit")
+    op.drop_index("ix_web_logins_user_id", table_name="web_logins")
+    op.drop_table("web_logins")

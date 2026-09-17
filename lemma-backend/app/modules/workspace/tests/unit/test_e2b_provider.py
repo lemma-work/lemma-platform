@@ -775,8 +775,11 @@ async def test_a_published_port_resolves_to_a_sandbox_host(
     provider: E2BSandboxProvider,
 ) -> None:
     instance = await provider.create(_spec(uuid4()))
-    url = await provider.port_base_url(instance, port=4848, deadline_at=_deadline())
-    assert url.startswith("https://4848-")
+    endpoint = await provider.reach_port(instance, port=4848, deadline_at=_deadline())
+    assert endpoint.url.startswith("https://4848-")
+    # An E2B host is a name on the internet. With no traffic token in front of
+    # it, `public` is the only thing telling a caller so.
+    assert endpoint.public is True
 
 
 async def test_the_sweep_only_claims_sandboxes_carrying_our_metadata(

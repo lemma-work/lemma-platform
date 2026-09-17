@@ -10,6 +10,8 @@ from app.core.api.pagination import parse_uuid_page_token
 from app.core.redaction import is_sensitive_key
 from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
+from app.modules.connectors.domain.auth_config import AuthConfigSource
+from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.api.schemas import (
     AuthConfigCreateSchema,
     AuthConfigListResponseSchema,
@@ -72,6 +74,25 @@ def _is_secret_field(key: object) -> bool:
     if name.endswith(_PUBLIC_SUFFIXES):
         return False
     return is_sensitive_key(key)
+
+
+def _redact_composio_config(value: dict | None) -> dict | None:
+    """Every value masked, whatever its key is called.
+
+    A Composio install carries an org config only when Composio holds no
+    credentials for the toolkit, and then the config *is* the third party's
+    app credentials -- derived from that toolkit's own auth-config-creation
+    fields, so the key names are Composio's and vary per toolkit. `client_id`
+    and `client_secret` are the common pair, but a toolkit is free to ask for
+    `consumer_key` or a signing secret under any name it likes, and the
+    sensitive-key heuristic cannot be complete over a set it does not control.
+
+    Same answer as `_TENANT_KEYED_MAPS`, for the same reason: mask by position.
+    The reader sees which fields are set, never what they are set to.
+    """
+    if value is None:
+        return None
+    return {key: _masked_wholesale(item) for key, item in value.items()}
 
 
 def _redact_config(value: dict | None) -> dict | None:
@@ -137,7 +158,12 @@ def _response_from_entity(
     whether they are healthy, stays visible to everyone.
     """
     data = entity.model_dump(mode="json")
-    data["config"] = _redact_config(data.get("config")) if include_config else None
+    if not include_config:
+        data["config"] = None
+    elif _is_composio_org_custom(entity):
+        data["config"] = _redact_composio_config(data.get("config"))
+    else:
+        data["config"] = _redact_config(data.get("config"))
     # The install's own scheme, resolved by the service. Not derivable from the
     # entity: an MCP install is OAuth when its server said so at create time,
     # and `config` -- the only place that is written down -- is withheld from
@@ -145,6 +171,14 @@ def _response_from_entity(
     # this install.
     data["auth_scheme"] = auth_scheme
     return AuthConfigResponseSchema.model_validate(data)
+
+
+def _is_composio_org_custom(entity) -> bool:
+    """An install holding the org's own credentials for a brokered toolkit."""
+    return (
+        getattr(entity, "kind", None) is ConnectorKind.COMPOSIO
+        and getattr(entity, "config_source", None) is AuthConfigSource.ORG_CUSTOM
+    )
 
 
 async def _one_auth_scheme(connector_service, auth_config) -> str | None:

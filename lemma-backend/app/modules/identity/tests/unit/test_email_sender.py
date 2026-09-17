@@ -17,6 +17,7 @@ from app.core.email.email_sender import (
 
 class _FakeSMTP:
     kwargs: dict = {}
+    credentials: tuple = ()
     fail = False
 
     def __init__(self, **kwargs):
@@ -28,9 +29,13 @@ class _FakeSMTP:
     async def __aexit__(self, *_args):
         return None
 
-    async def login(self, _user, _password):
+    async def login(self, user, password):
         if self.fail:
             raise OSError("SMTP unavailable")
+        # aiosmtplib encodes both credentials before putting them on the wire.
+        # Doing the same here is what makes a SecretStr that never got
+        # unwrapped fail in the test instead of only in production.
+        type(self).credentials = (user.encode("utf-8"), password.encode("utf-8"))
 
     async def send_message(self, _message):
         return None
@@ -142,7 +147,7 @@ def test_explicit_smtp_configuration_takes_precedence_over_resend(monkeypatch):
     monkeypatch.setattr(settings, "smtp_host", "smtp.example.com")
     monkeypatch.setattr(settings, "smtp_port", 587)
     monkeypatch.setattr(settings, "smtp_user", "explicit-user")
-    monkeypatch.setattr(settings, "smtp_password", "explicit-password")
+    monkeypatch.setattr(settings, "smtp_password", SecretStr("explicit-password"))
     monkeypatch.setattr(settings, "smtp_from_email", "mail@example.com")
     monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key"))
 
@@ -152,3 +157,34 @@ def test_explicit_smtp_configuration_takes_precedence_over_resend(monkeypatch):
     assert sender.smtp_port == 587
     assert sender.smtp_user == "explicit-user"
     assert sender.from_email == "mail@example.com"
+    # aiosmtplib encodes the password on login, so a SecretStr that reached
+    # this far unwrapped would fail there and nowhere else.
+    assert sender.smtp_password.encode("utf-8") == b"explicit-password"
+
+
+def test_resend_key_without_sender_address_is_rejected(monkeypatch):
+    """No sender must fail loudly. Resend only accepts a verified domain, so
+    there is no address we could default to that would actually deliver."""
+    monkeypatch.setattr(settings, "email_transport", "smtp")
+    monkeypatch.setattr(settings, "smtp_user", None)
+    monkeypatch.setattr(settings, "smtp_password", None)
+    monkeypatch.setattr(settings, "smtp_from_email", None)
+    monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key"))
+    monkeypatch.setattr(settings, "resend_from_email", None)
+
+    assert not settings.is_email_configured()
+    with pytest.raises(EmailNotConfiguredError):
+        EmailSender.from_settings()
+
+
+def test_explicit_smtp_without_sender_address_is_rejected(monkeypatch):
+    monkeypatch.setattr(settings, "email_transport", "smtp")
+    monkeypatch.setattr(settings, "smtp_host", "smtp.example.com")
+    monkeypatch.setattr(settings, "smtp_user", "explicit-user")
+    monkeypatch.setattr(settings, "smtp_password", SecretStr("explicit-password"))
+    monkeypatch.setattr(settings, "smtp_from_email", None)
+    monkeypatch.setattr(settings, "resend_api_key", None)
+    monkeypatch.setattr(settings, "resend_from_email", None)
+
+    with pytest.raises(EmailNotConfiguredError):
+        EmailSender.from_settings()

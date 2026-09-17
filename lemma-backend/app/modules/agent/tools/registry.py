@@ -7,6 +7,7 @@ from pydantic_ai.toolsets import AbstractToolset
 from app.modules.agent.tools.context import ConversationContext
 
 from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.tools.browser.pydantic_adapter import browser_toolset
 from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
@@ -28,6 +29,7 @@ from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
 # they were created with — no implicit defaults are added.
 POD_DEFAULT_AGENT_TOOLSETS = (
     AgentToolset.WORKSPACE_CLI,
+    AgentToolset.BROWSER,
     AgentToolset.POD,
     AgentToolset.USER_INTERACTION,
     AgentToolset.SKILLS,
@@ -51,6 +53,7 @@ POD_DEFAULT_AGENT_TOOLSETS = (
 
 _TOOLSET_BY_NAME: dict[AgentToolset, AbstractToolset[ConversationContext]] = {
     AgentToolset.WORKSPACE_CLI: workspace_cli_toolset,
+    AgentToolset.BROWSER: browser_toolset,
     AgentToolset.SKILLS: skills_toolset,
     AgentToolset.WEB_SEARCH: web_search_toolset,
     AgentToolset.USER_INTERACTION: user_interaction_toolset,
@@ -98,6 +101,11 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # tool is the worst of both.
     AgentToolset.MESSAGING,
     AgentToolset.SNOOZE,
+    # Driving a page is a deliberate step past `web_fetch`, which already covers
+    # ordinary research in the visible prefix. Five schemas in front of every
+    # chat to cover the minority of turns that open a browser is the trade
+    # `test_pod_default_visible_toolset_is_slim` exists to refuse.
+    AgentToolset.BROWSER,
 )
 EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = tuple(
     _TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS

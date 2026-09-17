@@ -15,11 +15,16 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
+from app.modules.datastore.config import datastore_settings
 from app.modules.test_support.e2e_authz import create_role_visibility_context
 
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
 pytestmark = pytest.mark.e2e
+
+
+def _ids(search_result: dict) -> set[str]:
+    return {item["file_id"] for item in search_result.get("items", [])}
 
 
 async def _index(index_datastore_file, file_entity: dict) -> None:
@@ -251,3 +256,147 @@ class TestAgentMemoryIsolation:
         # Nor can they find it by searching for something only it contains.
         found = await other.search_files(token)
         assert note["id"] not in {item["file_id"] for item in found["items"]}
+
+
+class TestSearchScopeBranches:
+    """Search narrows its chunk query two ways, and both must hide the same files.
+
+    Chunks live in a database that holds no authorization data and cannot be
+    joined to the file table, so the answer travels as an array of ids. Search
+    used to build that array by reading *every* file row in the pod, on every
+    query. It now sends the array only while it is short enough to send, and
+    otherwise runs the chunk query unnarrowed and authorizes the rows that come
+    back.
+
+    Which branch runs is decided by one number in configuration, so the two are
+    a pair that can drift apart without anything failing: the fast one is the
+    one that ships, and the other is reached only by pods large enough that
+    nobody is running the test suite against them. Flipping the ceiling is the
+    whole point of these tests.
+    """
+
+    @pytest.mark.asyncio
+    async def test_both_branches_return_the_same_results(
+        self,
+        authenticated_client: AsyncClient,
+        async_client: AsyncClient,
+        fixed_test_org,
+        index_datastore_file,
+        monkeypatch,
+    ):
+        ctx = await create_role_visibility_context(
+            authenticated_client,
+            async_client,
+            fixed_test_org,
+            pod_name_prefix="datastore-scope-branches",
+            custom_role="SCOPE_BRANCH",
+        )
+        pod_id = ctx["pod_id"]
+        owner = DatastoreApi(authenticated_client, pod_id)
+        other = DatastoreApi(async_client, pod_id, ctx["custom_viewer"])
+
+        token = f"ZZBranch{uuid4().hex[:8]}"
+        shared = await owner.upload_file(
+            "shared-note.md",
+            f"{token} readable by the whole pod".encode(),
+            directory_path="/",
+        )
+        personal = await owner.upload_file(
+            "private-note.md",
+            f"{token} readable by nobody else".encode(),
+            directory_path="/me",
+        )
+        await _index(index_datastore_file, shared)
+        await _index(index_datastore_file, personal)
+
+        # Enumerated: the readable set fits under the ceiling and goes into the
+        # chunk query, so the hidden file is never a candidate.
+        monkeypatch.setattr(
+            datastore_settings, "datastore_search_readable_id_pushdown_limit", 10_000
+        )
+        enumerated = await other.search_files(token)
+
+        # Post-filtered: the ceiling is below the readable set, so the chunk
+        # query runs unnarrowed, returns the hidden file among its candidates,
+        # and the authorization read is the only thing that drops it.
+        monkeypatch.setattr(
+            datastore_settings, "datastore_search_readable_id_pushdown_limit", 0
+        )
+        post_filtered = await other.search_files(token)
+
+        assert _ids(enumerated) == {shared["id"]}, enumerated
+        assert _ids(post_filtered) == _ids(enumerated), (
+            "the two branches disagree about what this caller may find:\n"
+            f"  only enumerated:    {_ids(enumerated) - _ids(post_filtered)}\n"
+            f"  only post-filtered: {_ids(post_filtered) - _ids(enumerated)}"
+        )
+        assert personal["id"] not in _ids(post_filtered), (
+            "an unnarrowed chunk query returned another user's personal file "
+            "and nothing dropped it"
+        )
+
+        # The owner still finds both, whichever branch runs -- a filter that
+        # hid everything would satisfy the equality above.
+        assert _ids(await owner.search_files(token)) == {shared["id"], personal["id"]}
+
+    @pytest.mark.asyncio
+    async def test_a_readable_match_survives_a_pool_full_of_private_ones(
+        self,
+        authenticated_client: AsyncClient,
+        async_client: AsyncClient,
+        fixed_test_org,
+        index_datastore_file,
+        monkeypatch,
+    ):
+        """Post-filtering is not the last word, and it was written as if it were.
+
+        The argument for it said a caller over the pushdown ceiling reads most
+        of the pod, so almost every candidate is readable. That does not
+        follow. Being over the ceiling is an absolute count; the recall a
+        post-filter loses is a *fraction* -- six thousand readable files in a
+        pod of ten million is over the ceiling with a fraction near zero, and
+        the whole candidate pool comes back unreadable.
+
+        This is that shape in miniature: every row the capped pool can hold is
+        private to someone else, and one readable file matches further down.
+        Post-filtering alone answers nothing. The searcher widens to the exact
+        readable set instead, which is unbounded and is what being right costs.
+        """
+        ctx = await create_role_visibility_context(
+            authenticated_client,
+            async_client,
+            fixed_test_org,
+            pod_name_prefix="datastore-scope-widen",
+            custom_role="SCOPE_WIDEN",
+        )
+        pod_id = ctx["pod_id"]
+        owner = DatastoreApi(authenticated_client, pod_id)
+        other = DatastoreApi(async_client, pod_id, ctx["custom_viewer"])
+
+        token = f"ZZWiden{uuid4().hex[:8]}"
+        # Ranked above the readable one by repetition, so the capped pool is
+        # filled with rows this caller may not see rather than by luck.
+        for index in range(6):
+            private = await owner.upload_file(
+                f"private-{index}.md",
+                f"{token} {token} {token} {token} {token}".encode(),
+                directory_path="/me",
+            )
+            await _index(index_datastore_file, private)
+        shared = await owner.upload_file(
+            "shared.md",
+            f"a note mentioning {token} once".encode(),
+            directory_path="/",
+        )
+        await _index(index_datastore_file, shared)
+
+        # Below the readable set, so the scope is not enumerated up front.
+        monkeypatch.setattr(
+            datastore_settings, "datastore_search_readable_id_pushdown_limit", 0
+        )
+        found = await other.search_files(token, limit=1)
+
+        assert _ids(found) == {shared["id"]}, (
+            "the capped candidate pool was all private, and the readable match "
+            "further down was never returned"
+        )

@@ -785,10 +785,12 @@ def _import_e2e_models() -> None:
     from app.modules.pod_bundle.infrastructure import models as pod_bundle_models
     from app.modules.schedule.infrastructure import models as schedule_models
     from app.modules.usage.infrastructure import models as usage_models
+    from app.modules.web_login.infrastructure import models as web_login_models
     from app.modules.workflow.infrastructure import models as workflow_models
     from app.modules.workspace.infrastructure import models as workspace_models
 
     _ = (
+        web_login_models,
         workspace_models,
         agent_runtime_models,
         event_models,

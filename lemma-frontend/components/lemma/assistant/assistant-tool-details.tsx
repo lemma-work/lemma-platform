@@ -9,7 +9,7 @@
 import { useState, type ReactNode } from "react";
 import {
   formatDurationCompact,
-  isAskUserToolName,
+  isAskUserToolName, isSignInToolName,
   isLongRunningToolResult,
   isToolInvocationActive,
   isUserInteractionToolName,
@@ -40,7 +40,7 @@ import {
   isCurrentBrowserHref,
 } from "./assistant-resource-cards";
 import {
-  AskUserCard,
+  AskUserCard, SignInCard,
   InlineUserApprovalCall,
   UserApprovalCard,
 } from "./assistant-approval-cards";
@@ -50,6 +50,7 @@ import type {
   AssistantToolInvocation,
 } from "lemma-sdk/react";
 import type { AssistantToolRenderArgs } from "./assistant-types";
+import { copyText } from "@/lib/clipboard";
 import type {
   ToolCardArgs,
   ToolCardResult,
@@ -166,7 +167,12 @@ export function ToolDetailsPanel({
   if (isRenderableUserInteractionInvocation(interactionInvocation)) {
     return (
       <div className="mt-1.5">
-        {isAskUserToolName(toolName) ? (
+        {isSignInToolName(toolName) ? (
+          <SignInCard
+            invocation={interactionInvocation}
+            conversationId={activeConversationId}
+          />
+        ) : isAskUserToolName(toolName) ? (
           <AskUserCard
             invocation={interactionInvocation}
             onResolveUserApproval={onResolveUserApproval}
@@ -687,7 +693,7 @@ export function TextBlockWithCopy({
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }

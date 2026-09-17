@@ -22,6 +22,7 @@
     "allow-apply-operator-config",
     "allow-discover-provider-models",
     "allow-sharing-action",
+    "allow-prepare-sandbox-image",
     "allow-close-local-settings",
     "allow-confirm-destructive-action",
     "allow-confirm-settings-changes",

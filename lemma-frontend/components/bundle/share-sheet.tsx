@@ -38,6 +38,7 @@ import { usePod } from '@/lib/hooks/use-pods';
 import { useTables } from '@/lib/hooks/use-datastores';
 import { useQuery } from '@tanstack/react-query';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { copyText } from '@/lib/clipboard';
 
 interface ShareSheetProps {
     podId: string;
@@ -288,7 +289,7 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
 
     async function copy(text: string, label: string) {
         try {
-            await navigator.clipboard.writeText(text);
+            await copyText(text);
             toast.success(`${label} copied`);
         } catch {
             toast.error('Could not copy to clipboard');

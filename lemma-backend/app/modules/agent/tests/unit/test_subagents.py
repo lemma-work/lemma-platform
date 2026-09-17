@@ -254,8 +254,9 @@ async def test_list_children_returns_owned_children_with_status(monkeypatch):
         def __init__(self, uow):
             del uow
 
-        async def get(self, agent_id):
-            return None
+        async def get_many(self, agent_ids):
+            del agent_ids
+            return {}
 
     monkeypatch.setattr(subagent_module, "ConversationRepository", _Repo)
     monkeypatch.setattr(subagent_module, "AgentRepository", _AgentRepo)

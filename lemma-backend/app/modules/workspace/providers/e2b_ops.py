@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 
@@ -35,6 +36,7 @@ from sandbox_runtime.errors import (
 )
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
+    ProviderCapability,
     ProviderGone,
     ProviderInstance,
 )
@@ -42,6 +44,8 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
+from app.modules.workspace.providers.e2b_paths import resolve_real_path
+from app.modules.workspace.providers.e2b_reach import E2BReachMixin
 from app.modules.workspace.providers.e2b_process_index import (
     ENTRY_TTL_SECONDS,
     decode_pid,
@@ -55,6 +59,10 @@ from app.modules.workspace.providers.e2b_process_lifetime import (
     watch_for_exit,
 )
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
+
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 WORKSPACE_MOUNT = "/workspace"
 
@@ -74,13 +82,17 @@ def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
     return snapshot.state in _FINISHED_PROCESS_STATES
 
 
-class E2BOpsMixin:
+class E2BOpsMixin(E2BReachMixin):
     """The `SandboxOpsProvider` half of the E2B provider.
 
     A mixin rather than a collaborator because the ops protocol is defined on
     the provider itself, and splitting it into an object the provider forwards
     to would add a layer that exists only to satisfy a line count.
     """
+
+    capabilities = frozenset(
+        {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
+    )
 
     async def _remember_pid(
         self,
@@ -320,10 +332,22 @@ class E2BOpsMixin:
     async def stat_file(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
     ) -> FileStat:
+        """Where this path really is, and whether it is a link.
+
+        E2B's file SDK answers neither, and the files API's containment check
+        needs both -- see `e2b_paths.resolve_real_path`, which is where that is
+        explained and where the boundary is enforced.
+        """
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors(path):
             info = await sandbox.files.get_info(path)
-        return _to_stat(info)
+        stat = _to_stat(info)
+        resolved, is_link = await resolve_real_path(sandbox, path)
+        return replace(
+            stat,
+            path=resolved,
+            kind=FileKind.SYMLINK if is_link else stat.kind,
+        )
 
     async def list_files(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
@@ -559,17 +583,6 @@ class E2BOpsMixin:
         # Nothing to forget is success.
         with sdk_best_effort():
             await sandbox.files.remove(f"/tmp/lemma-python-{session_id}.pkl")
-
-    # ------------------------------------------------------------------
-    # Ports
-    # ------------------------------------------------------------------
-
-    async def port_base_url(
-        self, instance: ProviderInstance, *, port: int, deadline_at: datetime
-    ) -> str:
-        sandbox = await self._connect(instance.provider_id)
-        with sdk_errors():
-            return f"https://{sandbox.get_host(port)}"
 
 
 def _to_stat(entry) -> FileStat:

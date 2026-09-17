@@ -82,7 +82,7 @@ async def trim_streams_to_budget(
         except RedisError, TypeError, ValueError:
             logger.warning(
                 "redis.stream.over_budget.degraded",
-                stream=stream,
+                stream_name=stream,
                 memory_bytes=0,
                 budget_bytes=budget,
                 reason="memory_unreadable",
@@ -100,7 +100,7 @@ async def trim_streams_to_budget(
             # reading it.
             logger.warning(
                 "redis.stream.over_budget.degraded",
-                stream=stream,
+                stream_name=stream,
                 memory_bytes=before,
                 budget_bytes=budget,
                 reason="consumer_progress_unreadable",
@@ -114,7 +114,7 @@ async def trim_streams_to_budget(
             if groups:
                 logger.warning(
                     "redis.stream.over_budget.degraded",
-                    stream=stream,
+                    stream_name=stream,
                     memory_bytes=before,
                     budget_bytes=budget,
                     reason="consumer_progress_unreadable",
@@ -128,7 +128,7 @@ async def trim_streams_to_budget(
         except RedisError, TypeError, ValueError:
             logger.warning(
                 "redis.stream.over_budget.degraded",
-                stream=stream,
+                stream_name=stream,
                 memory_bytes=before,
                 budget_bytes=budget,
                 reason="trim_failed",
@@ -142,7 +142,7 @@ async def trim_streams_to_budget(
             # entries that remain are unread. Say so rather than trimming them.
             logger.warning(
                 "redis.stream.over_budget.degraded",
-                stream=stream,
+                stream_name=stream,
                 memory_bytes=after,
                 budget_bytes=budget,
                 reason="unread_entries_exceed_budget",

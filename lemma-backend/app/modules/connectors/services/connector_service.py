@@ -66,8 +66,8 @@ from app.modules.connectors.services.account_revocation import revoke_one
 from app.modules.connectors.services.auth.mcp_install_authorization import (
     negotiate_mcp_authorization,
 )
-from app.modules.connectors.services.auth_config_schemas import (
-    default_auth_config_schema,
+from app.modules.connectors.services.catalog_enrichment import (
+    enrich_connector_defaults,
 )
 from app.modules.connectors.services.auth_install_resolver import (
     install_auth_schemes,
@@ -137,6 +137,11 @@ class ConnectorService:
         self.auth_config_operation_repository = auth_config_operation_repository
         self._kind_dispatcher = None
 
+    #: How much of a vendor's error text to carry back. Long enough for the
+    #: sentence that names the cause, short enough that a stack trace or an HTML
+    #: error page cannot ride out in an API response.
+    _UPSTREAM_MESSAGE_LIMIT = 400
+
     def _exception_details(self, exc: Exception) -> dict | None:
         details: dict[str, object] = {"error_type": type(exc).__name__}
         status_code = getattr(exc, "status_code", None)
@@ -145,6 +150,14 @@ class ConnectorService:
         code = getattr(exc, "code", None)
         if isinstance(code, str) and len(code) <= 100:
             details["upstream_code"] = code
+        # The one thing worth reading, and it used to be dropped. A Composio
+        # auth-config failure answers "Composio does not have managed
+        # credentials for this toolkit" -- the whole explanation, in one
+        # sentence -- and the caller saw `error_type` and a status code. This is
+        # the vendor's own API error, not anything a user typed.
+        message = str(exc).strip()
+        if message:
+            details["upstream_message"] = message[: self._UPSTREAM_MESSAGE_LIMIT]
         return details
 
     async def _fetch_account_profile(
@@ -314,55 +327,7 @@ class ConnectorService:
         self,
         connector: ConnectorEntity,
     ) -> ConnectorEntity:
-        capabilities = []
-        for capability in connector.kinds:
-            # "LEMMA" means any kind we serve ourselves, matching
-            # _lemma_capability above -- narrowing to the package spec left
-            # every other native kind's system_default_available always false.
-            if capability.kind is not ConnectorKind.COMPOSIO:
-                has_system_default = (
-                    capability.auth_scheme != AuthScheme.OAUTH2
-                    or self.system_oauth_config.has_default_oauth_config(connector)
-                )
-                # Resolved, not read, so the API matches the connect flow: a
-                # stored URL may still carry an env placeholder to fill.
-                resolved_oauth2_defaults = (
-                    self.system_oauth_config.resolve_oauth2_defaults(connector)
-                )
-                capabilities.append(
-                    capability.model_copy(
-                        update={
-                            "system_default_available": has_system_default,
-                            "oauth2_defaults": resolved_oauth2_defaults,
-                            "auth_config_schema": (
-                                capability.auth_config_schema
-                                if capability.auth_config_schema is not None
-                                else default_auth_config_schema(
-                                    capability.auth_scheme, connector.id
-                                )
-                            ),
-                        }
-                    )
-                )
-                continue
-            if isinstance(capability, ComposioProviderCapability):
-                # Composio runs on Lemma's own Composio account, so the system
-                # default is always there.
-                #
-                # `auth_config_schema` is deliberately left as the catalog
-                # stored it. For a non-OAuth toolkit it is the *account's*
-                # credential form, not an org install config, so replacing it
-                # with `default_auth_config_schema` (client_id/client_secret)
-                # or blanking it to None would empty the connect dialog for
-                # every API-key toolkit -- freshdesk, metabase, posthog and the
-                # rest -- with no error to show for it.
-                capabilities.append(
-                    capability.model_copy(update={"system_default_available": True})
-                )
-                continue
-            capabilities.append(capability)
-
-        return connector.model_copy(update={"kinds": capabilities})
+        return enrich_connector_defaults(connector, self.system_oauth_config)
 
     def _validate_auth_config_request(
         self,
@@ -708,9 +673,14 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.debug(
+            # Warning, not debug. A deployment running at LOG_LEVEL=INFO drops a
+            # debug line before it is formatted, so the only trace of a failed
+            # connect was the 500 in the access log -- which is how a toolkit
+            # that could never be connected went unnoticed in two environments.
+            logger.warning(
                 "connectors.connector_service.get_connector_authorization_url.propagated",
                 error_type=type(exc).__name__,
+                connector_id=connector.id,
                 exc_info=True,
             )
             raise OAuthWorkflowError(

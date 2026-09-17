@@ -130,7 +130,11 @@ def _a_provider_is_stood_in(stack) -> bool:
 
 
 @scenario("An admin installs a connector and its operations are discovered")
-@proves("PS-CONN-010", "PS-CONN-030")
+# PS-CONN-013 too: this installs the generic `openapi` catalog entry against a
+# spec the suite serves, which is exactly how an org connects an API nobody has
+# written a connector for. The operations asserted below came from that spec,
+# not from the catalog.
+@proves("PS-CONN-010", "PS-CONN-013", "PS-CONN-030")
 @covers(
     "connector.auth_config.create",
     "connector.auth_config.list",

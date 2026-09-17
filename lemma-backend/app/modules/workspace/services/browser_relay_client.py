@@ -1,0 +1,356 @@
+"""Talking to the browser relay inside a sandbox.
+
+The one place that knows the relay exists. Everything above it -- the view
+controller, the sign-in flow -- asks this for a browser, a session, or a socket,
+and never learns which fabric the sandbox is on.
+
+The token is derived, not stored: HMAC of a configured key over the sandbox's
+provider id, the same arrangement the workspace runtime uses. That means
+delivering it again after a resume produces the same value, so re-delivery is
+idempotent and there is no per-sandbox secret to keep in a table and rotate.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import suppress
+from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
+from urllib.parse import quote
+
+import httpx
+
+from app.core.log.log import get_logger
+from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.providers.base import (
+    ProviderCapability,
+    ProviderInstance,
+    SandboxEndpoint,
+    require_capability,
+)
+from app.modules.workspace.providers.profiles import WORKSPACE_BROWSER_RELAY_PORT
+from sandbox_runtime.errors import SandboxCapabilityUnsupported
+
+logger = get_logger(__name__)
+
+#: Where the relay reads its token. Matches `browser_relay/app.py`, and is
+#: deliberately outside `/tmp/lemma-browser` so quiesce does not take it.
+RELAY_TOKEN_PATH = "/tmp/lemma-relay/token"
+
+RELAY_TOKEN_HEADER = "X-Lemma-Relay-Token"
+
+#: A cold browser start is minutes on an emulated image; `browser:ensure` is
+#: allowed to take that long because the alternative is telling somebody their
+#: browser will not start while it is still coming up.
+_ENSURE_TIMEOUT_SECONDS = 300.0
+_QUICK_TIMEOUT_SECONDS = 30.0
+
+
+class BrowserRelayUnavailable(RuntimeError):
+    """The relay did not answer, or this image does not have one."""
+
+
+def relay_token(provider_id: str) -> str:
+    """The shared secret for one sandbox's relay.
+
+    Derived rather than random so that re-delivering it to a resumed sandbox
+    yields the same value -- the sandbox may have been paused for a week and
+    come back with the file intact, or come back without it, and both have to
+    work without anyone recording which.
+    """
+    key = workspace_settings.runtime_credential_key
+    if not key:
+        raise BrowserRelayUnavailable(
+            "no runtime credential key is configured, so no relay token can be made"
+        )
+    return hmac.new(
+        key.encode(), f"browser-relay:{provider_id}".encode(), hashlib.sha256
+    ).hexdigest()
+
+
+def _state_target(*, domain: str, session: str | None) -> dict[str, str]:
+    """Which browser a capture is read from or written into.
+
+    The relay has always accepted either; this client only ever sent `domain`,
+    so every load went into the site's *login* session -- including the loads
+    meant for the browser the agent actually works in. That is the whole of the
+    bug where a person signed in, the state was kept, and the next run browsed
+    signed out: the cookies were in a Chrome nothing else opened.
+    """
+    return {"session": session} if session else {"domain": domain}
+
+
+class BrowserRelayClient:
+    """One sandbox's relay, reached through whatever door its fabric has."""
+
+    def __init__(self, provider, instance: ProviderInstance) -> None:
+        self._provider = provider
+        self._instance = instance
+        self._token = relay_token(instance.provider_id)
+
+    async def _endpoint(self, *, deadline_seconds: float) -> SandboxEndpoint:
+        require_capability(self._provider, ProviderCapability.PORT_REACH)
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)
+        return await self._provider.reach_port(
+            self._instance, port=WORKSPACE_BROWSER_RELAY_PORT, deadline_at=deadline
+        )
+
+    async def deliver_token(self) -> None:
+        """Put the token where the relay reads it.
+
+        Called before the first use in a session rather than at create: a
+        sandbox that has been resumed has a filesystem that may or may not still
+        carry it, and asking is more expensive than writing.
+        """
+        require_capability(self._provider, ProviderCapability.SECRET_DELIVERY)
+        deadline = datetime.now(timezone.utc) + timedelta(
+            seconds=_QUICK_TIMEOUT_SECONDS
+        )
+        await self._provider.deliver_secret(
+            self._instance,
+            path=RELAY_TOKEN_PATH,
+            value=self._token.encode(),
+            deadline_at=deadline,
+        )
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, object] | None = None,
+        timeout: float = _QUICK_TIMEOUT_SECONDS,
+    ) -> httpx.Response:
+        endpoint = await self._endpoint(deadline_seconds=timeout)
+        headers = {**endpoint.headers, RELAY_TOKEN_HEADER: self._token}
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                return await client.request(
+                    method,
+                    f"{endpoint.url.rstrip('/')}{path}",
+                    headers=headers,
+                    json=json_body,
+                )
+        except httpx.HTTPError as exc:
+            # An image built before the relay existed answers nothing on this
+            # port. Said as its own sentence because the remedy is different:
+            # not "retry", but "this sandbox is running an older image".
+            raise BrowserRelayUnavailable(
+                f"the browser relay did not answer: {type(exc).__name__}"
+            ) from exc
+
+    async def health(self, *, start: bool = False) -> str:
+        """`running`, `stopped`, or raises if the relay itself is not there.
+
+        `start` runs the relay's own start script first if nothing answers.
+        Through `start_process`, which every provider implements -- so the
+        same one call brings the relay up on Docker's runtime, on E2B's SDK
+        and in the desktop guest, with no per-fabric branch and no start
+        command baked into an image that has none.
+
+        "Nothing answers" is two different things depending on the fabric, and
+        for a while this only knew one of them. On Docker a port with no
+        listener refuses the connection, so `_request` raises. On E2B nothing
+        refuses: the edge is always there and answers for the sandbox, so an
+        unopened port comes back as a perfectly valid `502`. That took the
+        `except` out of the picture entirely -- `ensure_running` was never
+        reached, and the relay could not be started on E2B at all.
+        """
+        try:
+            response = await self._request("GET", "/health")
+            if _nothing_is_listening(response):
+                raise BrowserRelayUnavailable(
+                    f"the browser relay answered {response.status_code}"
+                )
+        except BrowserRelayUnavailable:
+            if not start:
+                raise
+            await self.ensure_running()
+            response = await self._request("GET", "/health")
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(
+                f"the browser relay answered {response.status_code}"
+            )
+        return str(response.json().get("chrome", "stopped"))
+
+    async def ensure_running(self) -> None:
+        """Start the relay process, and wait for it to answer.
+
+        Started on demand rather than with the sandbox because it is only
+        wanted by somebody looking at a browser, and a workspace that never
+        opens a page should not carry the process.
+        """
+        from uuid import uuid4
+
+        from sandbox_runtime.protocol import StartProcessRequest
+
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=60)
+        await self._provider.start_process(
+            self._instance,
+            StartProcessRequest(
+                operation_id=uuid4(),
+                shell_command="start-browser-relay",
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=4096,
+                deadline_at=deadline,
+            ),
+            deadline_at=deadline,
+        )
+
+        # uvicorn binds in well under a second; this bound is for a container
+        # still finding its feet, not for a healthy start.
+        for _ in range(40):
+            await asyncio.sleep(0.25)
+            with suppress(BrowserRelayUnavailable):
+                response = await self._request("GET", "/health")
+                if response.status_code == 200:
+                    return
+        raise BrowserRelayUnavailable("the browser relay did not start")
+
+    async def ensure_browser(
+        self,
+        *,
+        origin: str | None = None,
+        session: str | None = None,
+        domain: str | None = None,
+    ) -> dict[str, object]:
+        """Start the browser if needed, put it on `origin`, and say which page.
+
+        The origin is what makes a person arriving at a link land on the site
+        they were told about. Without it they get whatever the browser last had
+        open, which after an idle retirement is a blank page.
+
+        The reply names the session the target belongs to. Callers must use
+        that rather than working the name out again: a target id is only
+        meaningful against the Chrome that minted it.
+        """
+        await self.health(start=True)
+        response = await self._request(
+            "POST",
+            "/browser:ensure",
+            json_body={"origin": origin, "session": session, "domain": domain},
+            timeout=_ENSURE_TIMEOUT_SECONDS,
+        )
+        if response.status_code == 409:
+            raise BrowserRelayUnavailable(_detail(response))
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(
+                f"the browser relay answered {response.status_code}"
+            )
+        return response.json()
+
+    async def save_state(
+        self, *, domain: str, session: str | None = None
+    ) -> dict[str, object]:
+        """Read a browser session out, by name or by the site it belongs to.
+
+        `session` names one exactly; `domain` lets the relay name the site's own
+        login session. Both, because reading and writing are not symmetrical
+        here: a capture is taken from the browser the person signed in to, and
+        loaded into the browser the agent works in.
+        """
+        response = await self._request(
+            "POST",
+            "/state:save",
+            json_body=_state_target(domain=domain, session=session),
+            timeout=120.0,
+        )
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        state = response.json().get("state")
+        return state if isinstance(state, dict) else {}
+
+    async def load_state(
+        self, state: dict[str, object], *, domain: str, session: str | None = None
+    ) -> None:
+        response = await self._request(
+            "POST",
+            "/state:load",
+            json_body={"state": state, **_state_target(domain=domain, session=session)},
+            timeout=120.0,
+        )
+        if response.status_code not in (200, 204):
+            raise BrowserRelayUnavailable(_detail(response))
+
+    async def vnc_socket_url(
+        self, *, mode: str, session: str | None = None
+    ) -> tuple[str, dict[str, str]]:
+        """Where to attach for a VNC view of the sandbox's whole display.
+
+        No target in the query: VNC shows the shared Xvfb display rather than
+        one CDP-selected tab, so there is nothing to name. `session` is not a
+        selector either -- it cannot be, for the same reason -- it is only
+        which name the driving lease is recorded under, so the agent's own
+        script (which checks a lease for *its* session before acting) is not
+        told a login session's wheel is free while a person is visibly
+        driving it on this same shared screen. Callers pass the session
+        `ensure_browser` actually resolved, not one they derive themselves.
+        """
+        endpoint = await self._endpoint(deadline_seconds=_QUICK_TIMEOUT_SECONDS)
+        base = endpoint.url.rstrip("/")
+        scheme = "wss" if base.startswith("https") else "ws"
+        host = base.split("://", 1)[-1]
+        query = f"mode={quote(mode, safe='')}"
+        if session:
+            query += f"&session={quote(session, safe='')}"
+        headers = {**endpoint.headers, RELAY_TOKEN_HEADER: self._token}
+        return f"{scheme}://{host}/vnc?{query}", headers
+
+    async def targets(self, *, domain: str | None = None) -> list[dict[str, object]]:
+        """Open pages in one session, named the same way `ensure_browser` is.
+
+        Used to read back the page a VNC-attached browser is actually on --
+        VNC carries no signal of its own for that, unlike the JSON stream
+        this replaced, which sent a `url` message on every navigation.
+        """
+        path = f"/targets?domain={quote(domain, safe='')}" if domain else "/targets"
+        response = await self._request("GET", path)
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        found = response.json().get("targets")
+        return found if isinstance(found, list) else []
+
+    async def endpoint_is_public(self) -> bool:
+        """Whether this sandbox's ports are on the internet behind only a token."""
+        endpoint = await self._endpoint(deadline_seconds=_QUICK_TIMEOUT_SECONDS)
+        return endpoint.public
+
+
+def _nothing_is_listening(response: httpx.Response) -> bool:
+    """Whether this answer means "no process has the port", not "the relay said no".
+
+    E2B's edge answers for the sandbox whether or not anything is bound, and
+    says which case it is in the body::
+
+        502 {"message": "The sandbox is running but port is not open", ...}
+
+    So the `502` is the fabric's way of spelling what a connection refusal
+    spells on Docker, and both have to reach `ensure_running`. Only `502`, and
+    deliberately not every 5xx: a relay that is up and failing should be
+    reported, not silently restarted, and the second probe after a start
+    attempt still surfaces whatever it finds.
+    """
+    return response.status_code == 502
+
+
+def _detail(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return f"the browser relay answered {response.status_code}"
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return str(detail or f"the browser relay answered {response.status_code}")
+
+
+__all__ = [
+    "BrowserRelayClient",
+    "BrowserRelayUnavailable",
+    "RELAY_TOKEN_HEADER",
+    "RELAY_TOKEN_PATH",
+    "SandboxCapabilityUnsupported",
+    "relay_token",
+]

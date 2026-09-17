@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -23,22 +23,15 @@ from app.modules.agent_surfaces.infrastructure.models import (
     AgentSurface,
     AgentSurfaceConversationLinkModel,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
+    active_surfaces_of_type,
+    in_a_live_pod,
+    routing_surfaces,
+)
 from app.modules.pod.contracts.orm import Pod
 from app.modules.agent.contracts.conversations import (
     merge_conversation_metadata as merge_agent_conversation_metadata,
 )
-
-
-#: A surface belongs to a pod, and a deleted pod has no business answering on
-#: it. `PS-OPS-020` says deleting a pod stops the work it was doing and keeps it
-#: stopped -- and a surface is the one piece of standing work that keeps running
-#: without anybody in Lemma asking it to, because the trigger comes from
-#: outside. The surface row itself stays ACTIVE on purpose: deletion is soft, so
-#: nothing is rewritten and an undelete would restore a working surface. What
-#: changes is that the pod is joined and checked here, once, rather than by each
-#: of the ingress paths remembering to.
-def _in_a_live_pod():
-    return (Pod.id == AgentSurface.pod_id) & (Pod.is_deleted.is_(False))
 
 
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
@@ -139,19 +132,34 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         return model.to_entity() if model else None
 
     async def list_active_by_type(self, surface_type: str) -> list[AgentSurfaceEntity]:
-        # Stable ordering so surface selection is deterministic when a sender
-        # resolves to several candidate surfaces on a shared bot/number (the
-        # ingress tiebreak relies on this order).
-        stmt = (
-            select(AgentSurface)
-            .where(
-                AgentSurface.surface_type == surface_type,
-                AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
+        """Every live surface of one platform. **No production caller, by design.**
+
+        This was the read every routing path started from, and narrowing them
+        left it with no caller and no place on the port -- an unnarrowed read is
+        not something a routing path should be able to reach for. It stays here
+        as the oracle the equivalence tests compare against: they filter this in
+        Python and assert `list_active_for_routing` returns the same rows.
+        """
+        result = await self.session.execute(active_surfaces_of_type(surface_type))
+        return [model.to_entity() for model in result.scalars().all()]
+
+    async def list_active_for_routing(
+        self,
+        surface_type: str,
+        *,
+        surface_ids: Collection[UUID] | None = None,
+        external_workspace_id: str | None = None,
+        system_credentials_only: bool = False,
+    ) -> list[AgentSurfaceEntity]:
+        """The live surfaces an inbound event could be for; see `routing_surfaces`."""
+        result = await self.session.execute(
+            routing_surfaces(
+                surface_type,
+                surface_ids=surface_ids,
+                external_workspace_id=external_workspace_id,
+                system_credentials_only=system_credentials_only,
             )
-            .join(Pod, _in_a_live_pod())
-            .order_by(AgentSurface.created_at, AgentSurface.id)
         )
-        result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
     async def list_active_native_receiver_surfaces(
@@ -168,7 +176,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 ),
                 AgentSurface.status == AgentSurfaceStatus.ACTIVE.value,
             )
-            .join(Pod, _in_a_live_pod())
+            .join(Pod, in_a_live_pod())
             .order_by(AgentSurface.surface_type, AgentSurface.id)
         )
         result = await self.session.execute(stmt)

@@ -388,7 +388,7 @@ async def test_the_sweep_reads_real_metadata_without_claiming_strangers(
 
 async def test_a_real_published_port_resolves(provider: E2BSandboxProvider) -> None:
     instance = await _create(provider, uuid4())
-    url = await provider.port_base_url(instance, port=8080, deadline_at=_deadline())
+    url = await provider.reach_port(instance, port=8080, deadline_at=_deadline())
     assert url.startswith("https://8080-")
 
 

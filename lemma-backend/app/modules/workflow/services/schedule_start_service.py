@@ -117,14 +117,30 @@ def _conversation_metadata(
     account and not the App installation: the sandbox's `git` and `gh` act as
     the person, so the work an agent pushes is attributed to whoever owns the
     repository rather than to a bot nobody recognises.
+
+    ``started_by`` is always set, and it is the only way a run can tell that
+    nobody is waiting for it. A schedule-started run used to be indistinguishable
+    from somebody typing -- same conversation shape, same prompt -- so the agent
+    would reach for ``ask_user`` at six in the morning and hang until the run
+    timed out, and would hold a finding back for a reply nobody was going to
+    read. ``agent_context_brief`` renders this into the run's own brief.
     """
+    started: FiringMetadata = {
+        "started_by": "SCHEDULE",
+        "schedule_type": getattr(
+            schedule.schedule_type, "value", str(schedule.schedule_type)
+        ),
+    }
+    if schedule.name:
+        started["schedule_name"] = schedule.name
+
     repo = (metadata or {}).get("repo")
-    if not isinstance(repo, dict) or not repo:
-        return None
-    bound = dict(repo)
-    if schedule.account_id is not None:
-        bound["account_id"] = str(schedule.account_id)
-    return {"repo": bound}
+    if isinstance(repo, dict) and repo:
+        bound = dict(repo)
+        if schedule.account_id is not None:
+            bound["account_id"] = str(schedule.account_id)
+        started["repo"] = bound
+    return started
 
 
 class ScheduleStartService:
@@ -260,10 +276,11 @@ class ScheduleStartService:
             return
 
         trigger = self._build_trigger(
-            schedule.schedule_type.value if schedule.schedule_type else None,
+            schedule,
             payload=payload,
             metadata=metadata,
             llm_output=llm_output,
+            source_occurred_at=source_occurred_at,
         )
 
         if schedule.workflow_id is not None:
@@ -345,21 +362,55 @@ class ScheduleStartService:
 
     def _build_trigger(
         self,
-        schedule_type: str | None,
+        schedule,
         *,
         payload: dict,
         metadata: dict | None,
         llm_output: dict | None,
+        source_occurred_at: datetime | None,
     ) -> TriggerContext:
+        """The event, as the target will read it.
+
+        The three sources converge here, which is why the facts about the
+        *firing itself* belong here too. A `TIME` schedule carried none of them:
+        its payload is empty (nothing writes one) and its metadata was `None`,
+        so a cron-started run was handed three empty objects and had to infer
+        from its instruction alone that it had been woken by a clock, let alone
+        which occurrence. `scheduled_at` has ridden on `ScheduleFired` the whole
+        time and simply never reached the target.
+
+        Into `metadata` rather than `payload`: `payload` is the event body and
+        belongs to the source -- a changed row, a webhook delivery -- while
+        metadata is already "what the source chose to say about the delivery".
+        Workflows read these as `start.metadata.*` alongside `table_name` and
+        the rest, which they could not do before either.
+        """
+        schedule_type = schedule.schedule_type.value if schedule.schedule_type else None
         trigger_type = {
             "TIME": WorkflowStartType.SCHEDULED,
             "WEBHOOK": WorkflowStartType.EVENT,
             "DATASTORE": WorkflowStartType.DATASTORE_EVENT,
         }.get(schedule_type or "", WorkflowStartType.SCHEDULED)
+        fire_metadata: FiringMetadata = {
+            **(metadata or {}),
+            "schedule_id": str(schedule.id),
+            "schedule_name": schedule.name,
+            "trigger_type": schedule_type or trigger_type.value,
+            "fired_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if source_occurred_at is not None:
+            # The occurrence this fire is *for*, which is not the same as the
+            # moment it ran: a redrive, a retry or a busy queue can put minutes
+            # between them, and an agent asked to summarise "yesterday" needs
+            # the former.
+            fire_metadata["scheduled_for"] = source_occurred_at.isoformat()
+        timezone_name = (schedule.config or {}).get("timezone")
+        if isinstance(timezone_name, str) and timezone_name:
+            fire_metadata["timezone"] = timezone_name
         return TriggerContext(
             trigger_type=trigger_type,
             payload=payload or {},
-            metadata=metadata or {},
+            metadata=fire_metadata,
             llm_output=llm_output or {},
         )
 

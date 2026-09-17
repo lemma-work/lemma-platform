@@ -14,10 +14,12 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceMode,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.services import telegram_mini_app_service
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAlreadyExistsError,
     AgentSurfaceCredentialConflictError,
     AgentSurfaceNotFoundError,
+    AgentSurfaceError,
     AgentSurfaceValidationError,
 )
 from app.modules.agent_surfaces.services.surface_service import (
@@ -87,7 +89,16 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
         lambda *_args, **_kwargs: client,
     )
 
+    deferred: list = []
+    repo.uow.after_commit = deferred.append
+
     await service.sync_telegram_mini_app(surface)
+
+    # The Telegram round trips are registered, not run: the transaction that
+    # created the surface is still open at this point.
+    assert client.call.await_count == 0
+    assert len(deferred) == 1
+    await deferred[0]()
 
     mini_app_resolver.assert_awaited_once_with(
         uow=repo.uow,
@@ -104,6 +115,67 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
         "help",
         "retry",
     }
+
+
+async def test_a_telegram_outage_no_longer_discards_the_surface() -> None:
+    """The deliberate behaviour change that came with moving the calls.
+
+    Missing credentials still abort the write -- that is the caller's to fix. A
+    `setMyCommands` that fails after the commit does not: the surface is already
+    durable and usable, only its command list and menu button are unset, and
+    throwing it away because Telegram was briefly unavailable is the worse
+    outcome.
+
+    The failing client is injected, which is what made `client_factory` a
+    parameter: a double in front of the collaborator rather than inside the
+    module under test.
+    """
+
+    def _exploding(*_args, **_kwargs):
+        client = AsyncMock()
+        client.call.side_effect = AgentSurfaceError("telegram is down")
+        return client
+
+    plan = telegram_mini_app_service.TelegramMiniAppSync(
+        credentials={"bot_token": "secret"},
+        menu_button={"type": "commands"},
+    )
+
+    # The transport half still raises: absorbing is a decision made above it,
+    # not something baked into the call.
+    with pytest.raises(AgentSurfaceError):
+        await telegram_mini_app_service.apply_telegram_mini_app_sync(
+            plan, client_factory=_exploding
+        )
+
+    # What actually runs after the commit absorbs it.
+    await telegram_mini_app_service.apply_mini_app_sync_absorbing_outages(
+        plan, surface_id=uuid4(), client_factory=_exploding
+    )
+
+
+async def test_missing_credentials_still_abort_before_the_commit(monkeypatch):
+    """The error a user can act on must keep rolling the write back."""
+    repo = AsyncMock()
+    deferred: list = []
+    repo.uow.after_commit = deferred.append
+    credential_resolver = AsyncMock()
+    credential_resolver.for_surface.return_value = {"bot_token": "  "}
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=AsyncMock(),
+        credential_resolver=credential_resolver,
+    )
+    surface = _surface_entity(
+        pod_id=uuid4(),
+        surface_type=SurfacePlatform.TELEGRAM,
+        config=SurfaceConfig(telegram={"app_name": "pocket-desk"}),
+    )
+
+    with pytest.raises(AgentSurfaceValidationError):
+        await service.sync_telegram_mini_app(surface)
+
+    assert deferred == [], "nothing may be scheduled when the write is aborting"
 
 
 async def test_create_surface(monkeypatch):

@@ -461,15 +461,37 @@ def test_display_resource_validates_widget_form_and_table_payloads():
         is None
     )
 
-    # path is FILE-only now; WIDGET no longer accepts it.
-    assert "path is only valid for FILE" in _payload_error(
-        type=DisplayResourceType.WIDGET, path="/pod/widget.html"
+    # A WIDGET names a pod file holding its HTML -- the source the agent can go
+    # back and edit, which is why it is the preferred one.
+    assert (
+        validate_display_payload(
+            DisplayResourceRequest(
+                type=DisplayResourceType.WIDGET, path="/me/c/2026-09-15/pulse.html"
+            )
+        )
+        is None
     )
-    # Providing both widget payloads is rejected.
-    assert "exactly one of public_url or content" in _payload_error(
+    # A workspace path is still nobody else's to read, widget or file.
+    assert "sandbox path" in _payload_error(
+        type=DisplayResourceType.WIDGET, path="/workspace/c/pulse.html"
+    )
+    # Still exactly one source, now of three.
+    assert "exactly one of path, content, or public_url" in _payload_error(
         type=DisplayResourceType.WIDGET,
         public_url="https://example.com/widget",
         content="<div>chart</div>",
+    )
+    assert "exactly one of path, content, or public_url" in _payload_error(
+        type=DisplayResourceType.WIDGET,
+        path="/me/c/2026-09-15/pulse.html",
+        content="<div>chart</div>",
+    )
+    assert "exactly one of path, content, or public_url" in _payload_error(
+        type=DisplayResourceType.WIDGET
+    )
+    # And path still belongs to nothing else.
+    assert "only valid for FILE and WIDGET" in _payload_error(
+        type=DisplayResourceType.TABLE, name="expenses", path="/me/x.html"
     )
 
     # FORM has been removed: the enum no longer carries it, and user input is
@@ -1109,7 +1131,19 @@ def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
     assert "list `/workspace/c/`" not in prompt
 
 
-def test_workspace_directory_falls_back_to_conversation_path():
+def test_workspace_directory_falls_back_to_the_resolved_location():
+    """A context with no cwd still names the directory the tools use.
+
+    This asserted `/workspace/conversations/{id}` — a path shape the platform
+    stopped making when the cwd moved into conversation metadata with a
+    `/workspace/c/{date}/{slug}` default. The test was pinning the stale answer
+    in place, so the one section whose job is to say where the agent is pointed
+    at a directory that does not exist.
+    """
+    from app.modules.agent.services.workspace_location import (
+        resolve_workspace_location,
+    )
+
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4(), agent_id=uuid4())
     agent = Agent(
         pod_id=conversation.pod_id,
@@ -1122,7 +1156,8 @@ def test_workspace_directory_falls_back_to_conversation_path():
     prompt = build_agent_instructions(
         agent=agent, conversation=conversation, ctx=SimpleNamespace()
     )
-    assert f"/workspace/conversations/{conversation.id}" in prompt
+    assert resolve_workspace_location(conversation).cwd in prompt
+    assert "/workspace/conversations/" not in prompt
 
 
 def test_pod_assistant_prompt_states_working_directory():
@@ -1956,14 +1991,14 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     )
 
     # Base prompt skill guidance is present...
-    assert "Don't load a skill for ordinary CLI use" in prompt
+    assert "Ordinary CLI and pod file operations are" in prompt
     # ...and the conversation instructions are appended under their own section.
     assert "# Conversation Instructions" in prompt
     assert "Use the task board screen as the current UI context." in prompt
     # Skill catalog guidance for the builder/user skills is present.
     assert "lemma-builder" in prompt
     assert "lemma-user" in prompt
-    assert "The workspace is the user's, not this conversation's" in prompt
+    assert "other conversations\nshare the workspace" in prompt
     assert "/me/<topic>/" in prompt
     assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
@@ -1995,13 +2030,15 @@ def test_default_pod_assistant_prompt_uses_base_file_without_extra_instruction()
         ctx=object(),
     )
 
-    assert prompt.startswith("You are the assistant for this Lemma pod")
-    assert "## Where the work lands" in prompt
+    # The shared resource map is the stable prefix for both agent kinds.
+    assert prompt.startswith("# The pod")
+    assert "You are the default AI agent for this Lemma pod" in prompt
     # Reply discipline is not keyed to a toolset: every agent replies, and the
     # reply is the one thing the person always sees. It rode in on the surface
     # fragment for a long time, which meant a run with no surface platform --
     # the web UI -- was told nothing about length or narration.
     assert "## Your reply is a chat message" in prompt
+    assert "`WIDGET`: use `path` to a pod file" in prompt
     assert "## Web research" in prompt
     # This used to assert the prompt contained
     # `lemma tools web-search "query terms" --limit 5` — a CLI command that
@@ -2117,7 +2154,8 @@ def test_pod_default_assistant_uses_rich_base_and_all_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("You are the assistant for this Lemma pod")
+    assert prompt.startswith("# The pod")
+    assert "You are the default AI agent for this Lemma pod" in prompt
     assert "## Lemma CLI" in prompt
     assert "## Skills" in prompt
     assert "## Web research" in prompt
@@ -2140,8 +2178,10 @@ def test_user_agent_uses_lean_base_and_only_its_toolset_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("You are a Lemma agent")
-    assert "You are a Lemma pod assistant" not in prompt
+    # Both agent kinds open on the same resource map, followed by their role.
+    assert prompt.startswith("# The pod")
+    assert "You are a named AI agent in a Lemma pod" in prompt
+    assert "You are the default AI agent" not in prompt
     assert "## Lemma CLI" in prompt  # its one toolset's fragment
     assert "## Web research" not in prompt
     assert "## Skills" not in prompt
@@ -2163,7 +2203,8 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
         agent=agent, conversation=conversation, ctx=object()
     )
 
-    assert prompt.startswith("You are a Lemma agent")
+    assert prompt.startswith("# The pod")
+    assert "You are a named AI agent in a Lemma pod" in prompt
     for fragment_marker in (
         "## Lemma CLI",
         "## Web research",

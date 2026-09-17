@@ -1,6 +1,6 @@
 """Configuration owned by the durable event transport."""
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
@@ -149,6 +149,33 @@ class EventTransportSettings(BaseSettings):
     redis_stream_snapshot_interval_seconds: float = Field(default=300.0, ge=0)
     redis_stream_stale_consumer_seconds: int = Field(default=900, ge=1)
     consumer_group_reconcile_interval_seconds: float = Field(default=30.0, ge=0)
+    redis_stream_group_reap_after_seconds: int = Field(
+        default=86_400,
+        ge=0,
+        description=(
+            "How long a consumer group must go unclaimed by every process in "
+            "the fleet -- with nothing pending, nothing delivered, and no "
+            "consumer that is not idle -- before it counts as abandoned. Must "
+            "be far larger than "
+            "``consumer_group_reconcile_interval_seconds``, which is how often "
+            "a live process renews its claim, and larger than any rollout or "
+            "planned outage: a group destroyed while its deployment is merely "
+            "down loses its pending-entries list. 0 disables the reaper. Env: "
+            "``REDIS_STREAM_GROUP_REAP_AFTER_SECONDS``."
+        ),
+    )
+    redis_stream_group_destroy_enabled: bool = Field(
+        default=False,
+        description=(
+            "Whether an abandoned group is destroyed or only reported. Off by "
+            "default, which is the point: the warning names every candidate, so "
+            "the set can be read against what is expected before anything is "
+            "deleted. XGROUP DESTROY removes the group's pending-entries list "
+            "with it, and a wrong answer here is unrecoverable, so this earns "
+            "its observation period rather than assuming one. Env: "
+            "``REDIS_STREAM_GROUP_DESTROY_ENABLED``."
+        ),
+    )
     event_completed_retention_days: int = Field(
         default=7,
         ge=1,
@@ -181,6 +208,30 @@ class EventTransportSettings(BaseSettings):
             "behaviour. Keep it well under the cron period."
         ),
     )
+
+    @model_validator(mode="after")
+    def _reap_window_outlives_a_claim(self) -> "EventTransportSettings":
+        """A reap window shorter than the renewal interval reaps live groups.
+
+        The reaper's only evidence that a group is still wanted is a claim
+        renewed every ``consumer_group_reconcile_interval_seconds``. If the
+        window is shorter than that, every claim looks stale in the gap between
+        one renewal and the next -- so a perfectly healthy group with an empty
+        backlog becomes a candidate, and with destruction enabled it loses its
+        pending-entries list. The default is 24h against 30s, but these are two
+        independent environment variables and nothing otherwise relates them.
+
+        Zero still disables the reaper; that is not a short window, it is none.
+        """
+        window = self.redis_stream_group_reap_after_seconds
+        interval = self.consumer_group_reconcile_interval_seconds
+        if window and window < interval:
+            raise ValueError(
+                "redis_stream_group_reap_after_seconds must be 0 (disabled) or "
+                f"at least consumer_group_reconcile_interval_seconds ({interval}); "
+                f"got {window}. A shorter window reaps groups that are alive."
+            )
+        return self
 
     def stream_maxlen_for(self, stream: str) -> int | None:
         default = self.redis_stream_maxlen

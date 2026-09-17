@@ -5,4 +5,5 @@
 import type { FunctionRevisionResponse } from './FunctionRevisionResponse.js';
 export type FunctionRevisionListResponse = {
     items: Array<FunctionRevisionResponse>;
+    next_page_token?: (string | null);
 };

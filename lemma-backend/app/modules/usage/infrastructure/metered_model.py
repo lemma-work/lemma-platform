@@ -34,7 +34,7 @@ from app.modules.usage.infrastructure.provider_retries import (
     confirmed_rejection,
 )
 from app.modules.usage.infrastructure.request_features import (
-    priceable_text_request,
+    priceable_request,
 )
 from app.modules.usage.services.metering_scope import current_metering_scope
 
@@ -172,8 +172,11 @@ class MeteredModel(WrapperModel):
             effective.get("max_tokens") or scope.settings.usage_request_output_ceiling
         )
         _, prepared_parameters = self.wrapped.prepare_request(effective, parameters)
-        priceable = priceable_text_request(
-            messages, prepared_parameters, effective
+        priceable = priceable_request(
+            messages,
+            prepared_parameters,
+            effective,
+            prices_images_as_text=pricing.prices_images_as_text,
         ) and not _compound_billing(effective)
         request_id, occurred_at, limited = await meter.before(priceable=priceable)
         if limited:

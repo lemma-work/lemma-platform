@@ -74,6 +74,19 @@ Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
 
+## Prompt context
+
+Prompts combine a compact pod resource map, the agent's role, reply guidance,
+and fragments for its enabled toolsets. Resource authoring details live in
+skills. Agent and conversation instructions follow
+the static guidance; runtime context and the task list follow those to preserve
+the cached prefix. In-process capabilities and Agent Host use the same fragments.
+
+Table summaries include primary keys, column types and write constraints,
+foreign keys, RLS, and visibility. Column descriptions are available through
+table inspection rather than repeated in every prompt. Omission counts mark
+truncated inventories and schemas.
+
 ## Key dependencies
 
 - Pod/identity: tenant, membership, authorization, delegation.

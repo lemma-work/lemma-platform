@@ -114,6 +114,20 @@ ENV PYTHONUNBUFFERED=1 \
     # sheds the browser before anything else decides what to do with it, and a
     # research batch mid-flight never sees it: every capture is a command.
     AGENT_BROWSER_IDLE_TIMEOUT_MS=120000 \
+    # What the live view costs on the wire. The stream server caps frames at
+    # these before they leave the sandbox, so a phone is not sent a 1600px
+    # picture to draw into a 400px pane -- the saving is in pixels never
+    # encoded, not in bytes dropped later. A viewer can ask for fewer frames
+    # still with a `config` message; it cannot ask for more than this.
+    AGENT_BROWSER_STREAM_QUALITY=60 \
+    AGENT_BROWSER_STREAM_MAX_WIDTH=1280 \
+    AGENT_BROWSER_STREAM_MAX_HEIGHT=800 \
+    # Loopback-only ports for the VNC view of `:99`. `LEMMA_BROWSER_VNC_PORT`
+    # is x11vnc's own raw VNC socket; `LEMMA_BROWSER_VNC_WS_PORT` is
+    # websockify's WebSocket front door onto it. The relay is the only thing
+    # that ever dials either -- see the comment on the apt-get line above.
+    LEMMA_BROWSER_VNC_PORT=5900 \
+    LEMMA_BROWSER_VNC_WS_PORT=5901 \
     LEMMA_RUNTIME_TOKEN_FILE=/run/lemma-bootstrap/token \
     LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated \
     GH_CONFIG_DIR=/tmp/lemma-gh \
@@ -129,7 +143,21 @@ ENV PYTHONUNBUFFERED=1 \
     # survives to the next conversation.
     PNPM_HOME=/workspace/.pnpm \
     UV_CACHE_DIR=/workspace/.uv-cache \
-    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/opt/lemma-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    # `/usr/local/bin` before the npm bin directory, because that is where the
+    # `lemma-node-tool` wrappers live and being found is the whole of their job.
+    # With the npm directory first, a bare `agent-browser` resolved to the raw
+    # package shim, which cannot bootstrap -- so the wrapper written to stop
+    # exactly two errors,
+    #
+    #     ⚠ config file not found: /tmp/lemma-browser/config.json
+    #     Missing X server or $DISPLAY
+    #
+    # was unreachable for every caller that typed the bare name, which is every
+    # agent and the skill's own examples. `browser_relay/chrome.py` names this
+    # trap in a comment and works around it by spelling the path absolutely;
+    # the shell an agent gets had no such workaround, and reported both errors
+    # in a real transcript.
+    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \
@@ -138,13 +166,19 @@ RUN apt-get update \
         ca-certificates \
         chromium \
         curl \
+        # Recording. `agent-browser record` shells out to ffmpeg and fails
+        # without it, which is the whole reason an agent could not produce a
+        # video: the CLI has had `record start|stop` all along and the browser
+        # skill documents it with a worked example. Encodes webm with libvpx
+        # and mp4 with libx264, both of which Debian's ffmpeg carries. Measured
+        # at 93 packages and 159 MB on top of what Chromium already pulls in.
+        ffmpeg \
         fonts-dejavu-core \
         fonts-liberation \
         git \
         libasound2t64 \
         libatk-bridge2.0-0t64 \
         libatk1.0-0t64 \
-        libatomic1 \
         libatspi2.0-0t64 \
         libcairo2 \
         libcups2t64 \
@@ -158,6 +192,14 @@ RUN apt-get update \
         ripgrep \
         socat \
         tini \
+        # The human-facing view of the same Xvfb display. `x11vnc` shares
+        # `:99` with Chromium rather than opening a second one; `websockify`
+        # is what turns its raw VNC socket into something a browser can open
+        # a WebSocket to. Neither is ever published -- both stay loopback,
+        # reached only through the relay, the same treatment raw CDP gets and
+        # for the same reason (see `browser_relay/app.py`).
+        websockify \
+        x11vnc \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
 
@@ -232,21 +274,24 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/contracts.py /app/sandbox_runtime/contracts.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/browser_relay /app/sandbox_runtime/browser_relay
 COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
 COPY lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
+COPY lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
 COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
 COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
 RUN ln -sf /opt/lemma-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
 RUN chmod 0755 \
         /usr/local/bin/start-workspace-runtime \
         /usr/local/bin/start-browser \
+        /usr/local/bin/start-browser-relay \
         /usr/local/bin/save-webpage \
         /usr/local/lib/webpage-to-markdown.mjs \
     && python -m compileall -q /app/sandbox_runtime
 
 WORKDIR /workspace
 USER 10001:10001
-EXPOSE 8080 4848
+EXPOSE 8080 4848 4850
 
 ENTRYPOINT ["tini", "--"]
 CMD ["start-workspace-runtime"]

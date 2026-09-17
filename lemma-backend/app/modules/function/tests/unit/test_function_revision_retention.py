@@ -54,10 +54,45 @@ def _function(**overrides):
 def _retention(function, revisions, *, in_flight=frozenset()):
     repo = AsyncMock()
     repo.get_for_update.return_value = function
+    # The double filters the way the repository's statement does; see the app
+    # twin for why handing retention more than production would is a trap.
+    repo.list_unpurged_revisions.return_value = [
+        revision for revision in revisions if revision.purged_at is None
+    ]
     repo.list_revisions.return_value = revisions
     repo.revision_hashes_with_runs_in_flight.return_value = set(in_flight)
     storage = AsyncMock()
     return FunctionRevisionRetention(repo, Mock(return_value=storage)), repo, storage
+
+
+@pytest.mark.asyncio
+async def test_retention_reads_only_the_revisions_it_can_act_on():
+    """A tombstone is not a candidate, so reading it was pure cost.
+
+    This sweep runs after every save and the rows are never deleted, so the old
+    read grew with the function's whole lifetime to choose from a set that never
+    exceeds `max_keep`. The plan must be identical with fifty tombstones in the
+    table and with none.
+    """
+    function = _function()
+    # Seeds are hex: the entity's own pattern requires a real sha256.
+    live = _revision(function.id, 99, seed="ff")
+    prunable = _revision(function.id, 98, seed="ee")
+    function.revision_hash = live.revision_hash
+    tombstones = []
+    for number in range(1, 51):
+        purged = _revision(function.id, number, seed=f"{number:x}d")
+        purged.pruned_at = NOW - timedelta(days=200)
+        purged.purged_at = NOW - timedelta(days=199)
+        tombstones.append(purged)
+
+    retention, repo, _storage = _retention(function, [*tombstones, prunable, live])
+    plan = await retention.plan(function, policy=_TIGHT, now=NOW)
+
+    repo.list_revisions.assert_not_called()
+    assert plan.version_ids == (prunable.id,), (
+        "a purged revision was re-selected, or the live one was missed"
+    )
 
 
 @pytest.mark.asyncio
@@ -134,3 +169,38 @@ async def test_a_sweep_never_issues_a_bare_prefix_delete():
     await retention.execute(plan)
 
     assert all(call.args[0] for call in storage.delete_prefix.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_a_shared_source_directory_is_not_deleted_out_from_under_a_live_revision():
+    """Redeploying identical bytes gives two revisions one directory.
+
+    `code_path` is `revisions/<content hash>/function.py`, and `record_revision`
+    allows a new unpruned revision to carry a hash an older pruned one already
+    has. Pruning the old row deleted the directory, which is the live
+    revision's source -- and a *retried* prune of a long-pruned row does it to
+    whatever shares the hash now.
+
+    The apps twin has guarded exactly this since it was written, with a comment
+    saying legacy releases may share a source path. This side computed the
+    prefix straight off every doomed row.
+    """
+    function_id = uuid4()
+    shared = "abc"  # hex, so it satisfies the revision-hash pattern
+    old = _revision(function_id, 1, seed=shared, age_days=400)
+    old.pruned_at = NOW - timedelta(days=1)
+    live = _revision(function_id, 2, seed=shared, age_days=0)
+    assert old.code_path == live.code_path, "the fixture is not sharing a directory"
+
+    function = _function(id=function_id, revision_hash=live.revision_hash)
+    retention, _, _ = _retention(function, [old, live])
+
+    plan = await retention.plan(function, policy=_TIGHT, now=NOW)
+
+    assert old.id in plan.version_ids, (
+        "the pruned revision is still the one being cleaned up"
+    )
+    assert plan.source_prefixes == (), (
+        "the live revision's source directory was scheduled for deletion "
+        "because a pruned revision happened to share its content hash"
+    )

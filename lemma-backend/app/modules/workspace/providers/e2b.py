@@ -34,7 +34,6 @@ deadline. Errors here are classified and raised, not absorbed.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
@@ -49,6 +48,7 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
     ProviderStorageKind,
 )
+from app.modules.workspace.providers.e2b_connections import SandboxConnections
 from app.modules.workspace.providers.e2b_common import (
     budget_until,
     ensure_serving,
@@ -61,30 +61,16 @@ from app.modules.workspace.providers.e2b_common import (
     every_page as _every_page,
 )
 from app.modules.workspace.providers.profiles import profile_for
+from app.modules.workspace.providers.e2b_config import (
+    CLOSED_TO_THE_INTERNET,
+    E2BProviderConfig,
+)
 from app.modules.workspace.providers.e2b_ops import E2BOpsMixin
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
 logger = get_logger(__name__)
 
 WORKSPACE_MOUNT = "/workspace"
-
-
-@dataclass(frozen=True, slots=True)
-class E2BProviderConfig:
-    api_key: str
-    workspace_template: str
-    function_template: str
-    # Namespaces every metadata key this provider writes and queries, making a
-    # provider blind to sandboxes labelled by another namespace. Required, not
-    # defaulted: a shared default is what let two deployments on one E2B team
-    # read each other's sandboxes as unowned orphans and destroy them. See
-    # `provider_factory.resolve_metadata_namespace`.
-    metadata_namespace: str
-    # How long E2B keeps a sandbox alive without contact. The service touches
-    # activity on use, so this is a backstop against leaking compute when the
-    # backend dies, not the primary idle policy.
-    sandbox_timeout_seconds: int = 60 * 30
-    domain: str | None = None
 
 
 class E2BSandboxProvider(E2BOpsMixin):
@@ -99,6 +85,8 @@ class E2BSandboxProvider(E2BOpsMixin):
         self._config = config
         self._output = output or E2BOutputBuffer()
         self._watchers: set[asyncio.Task[None]] = set()
+        #: One live connection per sandbox. See `e2b_connections`.
+        self._connections = SandboxConnections()
 
     # ------------------------------------------------------------------
     # SDK access, imported lazily so a Docker-only deployment never loads it
@@ -295,6 +283,7 @@ class E2BSandboxProvider(E2BOpsMixin):
                 lifecycle=self._lifecycle(spec.kind),
                 metadata=self._identity_metadata(spec),
                 envs=dict(spec.env),
+                network=CLOSED_TO_THE_INTERNET,
                 **self._api(),
             )
 
@@ -404,8 +393,17 @@ class E2BSandboxProvider(E2BOpsMixin):
         # Functions keep memory -- same rule as `_lifecycle` uses for timeouts.
         keep_memory = kind is SandboxKind.FUNCTION
         sandbox = await self._connect(instance.provider_id)
-        with sdk_errors():
-            await sandbox.pause(keep_memory=keep_memory, **self._api())
+        try:
+            with sdk_errors():
+                await sandbox.pause(keep_memory=keep_memory, **self._api())
+        finally:
+            # A held connection to a sandbox this process has just paused is a
+            # connection to something that is no longer running, and connecting
+            # is what resumes it. Keeping it would make the next operation act
+            # as though the sandbox were up and fail -- which is exactly what
+            # `test_a_paused_sandbox_is_found_and_resumed` caught when the hold
+            # was first added.
+            self._forget(instance.provider_id)
 
     async def destroy(self, name: str, *, deadline_at: datetime) -> None:
         """Kill a sandbox, addressed either by container name or by E2B id.
@@ -433,8 +431,14 @@ class E2BSandboxProvider(E2BOpsMixin):
             # that is the outcome destroy was asking for.
             return
         sandbox = await self._connect(provider_id)
-        with sdk_errors():
-            await sandbox.kill(**self._api())
+        try:
+            with sdk_errors():
+                await sandbox.kill(**self._api())
+        finally:
+            # Whether or not the kill succeeded, this process must stop handing
+            # out a connection to it. In the failure case the next caller
+            # re-connects and finds out honestly.
+            self._forget(provider_id)
 
     # ------------------------------------------------------------------
     # Storage
@@ -576,20 +580,20 @@ class E2BSandboxProvider(E2BOpsMixin):
     async def _connect(self, provider_id: str):
         """Reach a sandbox, resuming it if it is paused.
 
-        The timeout is not optional. Connecting is what re-arms the lease, and
-        the SDK's own rule is that "the timeout will update only if the new
-        timeout is longer than the existing one" -- so passing nothing does not
-        mean "leave it alone", it means "five minutes", the SDK's default. A
-        workspace resumed after days therefore came back with a five-minute
-        lease, and every process inside it died together when that elapsed. That
-        is what a caller sees as three tool calls returning 502 at the same
-        instant, several minutes into a turn that was working.
+        The timeout is not optional, and is held rather than re-sent per call:
+        `e2b_connections` owns both rules and the reasons for them.
         """
-        # Both arms of the old branch raised the same thing; sdk_errors is
-        # what that code was spelling out by hand.
-        with sdk_errors():
-            return await self._sdk.connect(
-                provider_id,
-                timeout=self._config.sandbox_timeout_seconds,
-                **self._api(),
-            )
+
+        async def open() -> object:
+            with sdk_errors():
+                return await self._sdk.connect(
+                    provider_id,
+                    timeout=self._config.sandbox_timeout_seconds,
+                    **self._api(),
+                )
+
+        return await self._connections.get(provider_id, open)
+
+    def _forget(self, provider_id: str) -> None:
+        """Drop a held connection, for a sandbox this process has just ended."""
+        self._connections.forget(provider_id)

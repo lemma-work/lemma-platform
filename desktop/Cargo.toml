@@ -46,7 +46,7 @@ default-members = ["."]
 [workspace.package]
 # One version for six crates. Release used to rewrite desktop/Cargo.toml alone,
 # so the moment the other five moved in here they would have drifted silently.
-version = "0.7.2"
+version = "0.8.0"
 
 [workspace.dependencies]
 # Hoisted because feature unification makes the *emergent* feature set of a
@@ -95,6 +95,8 @@ hex = "0.4"
 reqwest = { workspace = true }
 sha2 = { workspace = true }
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+tauri-plugin-dialog = "2.7.3"
+uuid = { version = "1.23.3", features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

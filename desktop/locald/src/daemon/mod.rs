@@ -16,7 +16,8 @@ use crate::config_operations::{ConfigOperation, ConfigOperations};
 use crate::host_process::HostProcessManager;
 use crate::lifecycle::Lifecycle;
 use crate::managed_runtime::{
-    ManagedRuntimeBootstrap, ManagedRuntimeController, ProbeOutcome, SANDBOX_IMAGES_UNSUPPORTED,
+    ManagedRuntimeBootstrap, ManagedRuntimeController, ProbeOutcome, SandboxImageStatus,
+    SANDBOX_IMAGES_UNSUPPORTED,
 };
 use crate::native_host_pack;
 use crate::operator_config::{OperatorConfigStore, OperatorConfigUpdate};

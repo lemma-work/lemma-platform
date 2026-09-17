@@ -28,6 +28,13 @@ pub(crate) fn run() {
             None,
         ))
         .plugin(tauri_plugin_deep_link::init())
+        // For the Rust API, not the JavaScript one — same reasoning as the note
+        // about `tauri-plugin-process` below. No webview is granted its
+        // commands: the folder picker works precisely because the *shell* is
+        // what asks, so a person's click in a native dialog is the consent that
+        // lets an agent work in their project. A granted JS surface would let a
+        // page raise one on its own, which is the property being protected.
+        .plugin(tauri_plugin_dialog::init())
         // Deliberately not `tauri-plugin-process` alongside it. That plugin
         // exists to expose `relaunch` to JavaScript; the flow here is driven
         // from Rust and `AppHandle::restart()` is core, so adding it would
@@ -65,6 +72,11 @@ pub(crate) fn run() {
             agent_host_ui::agent_host_action,
             agent_host_ui::agent_host_status,
             agent_host_ui::sandbox_image_status,
+            operator_settings::prepare_sandbox_image,
+            conversation_folders::conversation_folder,
+            conversation_folders::bind_conversation_folder,
+            conversation_folders::unbind_conversation_folder,
+            conversation_folders::adopt_conversation_folder,
             agent_host_ui::agent_host_start,
             agent_host_ui::agent_host_pair,
             agent_host_ui::agent_host_refresh,

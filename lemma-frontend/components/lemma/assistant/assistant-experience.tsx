@@ -21,7 +21,7 @@ import type {
 import {
   buildDisplayMessageRows,
   findPendingUserApprovalInvocation,
-  isAskUserToolName,
+  isAskUserToolName, isSignInToolName,
   latestPlanSummary,
   latestUserIndex,
 } from "lemma-sdk";
@@ -95,6 +95,7 @@ import {
   AssistantExperienceConversation,
 } from "./assistant-experience-conversation";
 import { AssistantExperienceComposer } from "./assistant-experience-composer";
+import { AssistantQueuedSteers } from "./assistant-queued-steers";
 import { agentHostBridge, useIsDesktopShell } from "@/lib/desktop/agent-host-bridge";
 import { isLocalAgentSignInFailure } from "@/components/agents/agent-runtime-helpers";
 // getActiveToolBanner moved to assistant-format; re-export to preserve the API.
@@ -242,6 +243,9 @@ export function AssistantExperienceView({
   const centerEmptyConversation = emptyStateFillsViewport && isConversationEmpty;
   const sendMessage = controller.sendMessage;
   const steerMessage = controller.steerMessage;
+  const queuedSteers = controller.queuedSteers ?? [];
+  const sendQueuedSteersNow = controller.sendQueuedSteersNow;
+  const discardQueuedSteer = controller.discardQueuedSteer;
   const uploadFiles = controller.uploadFiles;
   const loadOlderMessages = controller.loadOlderMessages;
   const setConversationModel = controller.setConversationModel;
@@ -363,6 +367,11 @@ export function AssistantExperienceView({
   const pendingInteractionCallId = activePendingApprovalInvocation?.toolCallId ?? null;
   const pendingInteractionIsAsk = !!activePendingApprovalInvocation
     && isAskUserToolName(activePendingApprovalInvocation.toolName);
+  // A sign-in is neither: there is nothing to approve and nothing to answer,
+  // so "Approve or reject to continue" tells the person to do something the
+  // card does not offer.
+  const pendingInteractionIsSignIn = !!activePendingApprovalInvocation
+    && isSignInToolName(activePendingApprovalInvocation.toolName);
   const scrollToPendingInteraction = useCallback(() => {
     if (!pendingInteractionCallId) return;
     document
@@ -593,9 +602,11 @@ export function AssistantExperienceView({
           onClick={scrollToPendingInteraction}
           className="h-auto px-0 text-xs font-normal"
         >
-          {pendingInteractionIsAsk
-            ? "Answer the question to continue"
-            : "Approve or reject to continue"}
+          {pendingInteractionIsSignIn
+            ? "Sign in to continue"
+            : pendingInteractionIsAsk
+              ? "Answer the question to continue"
+              : "Approve or reject to continue"}
         </Button>
       ) : null}
       {showComposerStatus && runStatusModel ? (
@@ -731,6 +742,13 @@ export function AssistantExperienceView({
             isConversationBusy={isConversationBusy}
           />
         </div>
+
+        <AssistantQueuedSteers
+          items={queuedSteers}
+          onSendNow={sendQueuedSteersNow ? () => void sendQueuedSteersNow() : undefined}
+          onDiscard={discardQueuedSteer}
+          className={composerWidthClassName}
+        />
 
         <AssistantExperienceComposer
           composerTone={composerTone}

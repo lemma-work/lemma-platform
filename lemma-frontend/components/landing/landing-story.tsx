@@ -4,6 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { ArrowRight, Check, Copy } from "@/components/ui/icons";
+import { copyText } from "@/lib/clipboard";
+import { toast } from "sonner";
 import {
   PUBLIC_TEMPLATES,
   templateCoverPath,
@@ -292,7 +294,15 @@ export function BuildSection() {
   const [copied, setCopied] = useState<PromptTarget | null>(null);
 
   const copyPrompt = async (target: PromptTarget) => {
-    await navigator.clipboard.writeText(buildPrompts[target]);
+    // `copyText` rejects when neither clipboard path is available, which is the
+    // ordinary case in a webview without a secure context. Unhandled, that was
+    // a rejected promise and a button that appeared to do nothing.
+    try {
+      await copyText(buildPrompts[target]);
+    } catch {
+      toast.error('Could not copy to clipboard');
+      return;
+    }
     setCopied(target);
     window.setTimeout(() => {
       setCopied((current) => (current === target ? null : current));

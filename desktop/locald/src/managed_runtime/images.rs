@@ -18,6 +18,14 @@ pub const SANDBOX_IMAGES_FAILED: &str = "failed";
 /// to warm. Terminal, so the workspace stops asking rather than polling a
 /// question nothing will ever answer.
 pub const SANDBOX_IMAGES_UNSUPPORTED: &str = "unsupported";
+/// There is a guest that could hold the image, and nobody has asked for it.
+///
+/// Also terminal, and for the same reason as `UNSUPPORTED`: the workspace has
+/// its answer and stops asking. The distinction matters to Settings rather
+/// than to the poll -- this is the one state where offering to fetch the image
+/// makes sense, because it is the only one where a fetch is both possible and
+/// not already happening.
+pub const SANDBOX_IMAGES_NOT_PREPARED: &str = "not-prepared";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,6 +173,25 @@ impl ManagedRuntimeController {
             };
             controller.publish_sandbox_images(status, &report);
         }));
+    }
+
+    /// Record that nothing is fetching the image, and hand back what to say.
+    ///
+    /// Not a plain assignment: `ready` and a fetch already in flight are both
+    /// better answers than "nobody asked". Recovery re-announces after a
+    /// restart, and overwriting a running download there would have told the
+    /// workspace to stop watching one that was still going.
+    pub fn note_sandbox_images_not_prepared(&self) -> SandboxImageStatus {
+        let mut current = self
+            .sandbox_images
+            .lock()
+            .expect("sandbox image status poisoned");
+        if current.state == SANDBOX_IMAGES_DOWNLOADING || current.state == SANDBOX_IMAGES_READY {
+            return current.clone();
+        }
+        let status = SandboxImageStatus::new(SANDBOX_IMAGES_NOT_PREPARED, "");
+        *current = status.clone();
+        status
     }
 
     /// Take the warm-up, or decline because one is already running.

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LemmaClient } from "../client.js";
 import type { Conversation } from "../types.js";
 import { useAssistantController, type UseAssistantControllerResult } from "../react/index.js";
+import { forgetQueuedSteersInMemory } from "../react/queued-steers.js";
 
 /**
  * Sending a follow-up into a run that is already working.
@@ -138,6 +139,8 @@ afterEach(async () => {
   }
   document.body.innerHTML = "";
   vi.restoreAllMocks();
+  // Module-level, so it outlives a test unless it is cleared here.
+  forgetQueuedSteersInMemory();
 });
 
 describe("steering a run that is already working", () => {

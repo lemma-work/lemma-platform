@@ -78,6 +78,10 @@ class _SurfaceService:
         self.messages.append({"approval": kwargs})
         return self.send_result
 
+    async def send_sign_in_prompt_for_conversation(self, **kwargs):
+        self.messages.append({"sign_in": kwargs})
+        return self.send_result
+
 
 def _observer(service: _SurfaceService) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
@@ -1137,3 +1141,49 @@ async def test_a_one_line_surface_folds_a_multi_line_tool_comment():
     await observer.on_event(event, conversation, SimpleNamespace())
 
     assert service.progress[-1]["progress_text"] == "Rendering the scene at 1080p"
+
+
+async def test_a_paused_sign_in_reaches_the_surface_as_a_link():
+    """A run stuck at a login wall has to reach the person wherever they are.
+
+    It did not. `_handle_waiting_event` recognised `ask_user` and
+    `request_approval` and returned early on anything else, so a paused
+    `browser_sign_in` was delivered nowhere -- the run waited for ever and the
+    only way to find out was to already be looking at the conversation.
+
+    Sent as a link rather than through the approval path on purpose: Approve and
+    Deny are not answers to "please sign in to this site".
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+
+    await observer._handle_waiting_event(
+        AgentEvent(
+            type=AgentEventType.WAITING,
+            data={
+                "kind": "browser_sign_in",
+                "tool_call_id": "call_signin_1",
+                "conversation_id": str(uuid4()),
+            },
+        ),
+        _conversation("SLACK"),
+    )
+
+    assert [key for message in service.messages for key in message] == ["sign_in"]
+    assert service.messages[0]["sign_in"]["tool_call_id"] == "call_signin_1"
+
+
+async def test_a_pause_this_surface_does_not_render_is_left_alone():
+    """Something new that pauses a run must not be delivered as a sign-in."""
+    service = _SurfaceService()
+    observer = _observer(service)
+
+    await observer._handle_waiting_event(
+        AgentEvent(
+            type=AgentEventType.WAITING,
+            data={"kind": "something_else", "tool_call_id": "x"},
+        ),
+        _conversation("SLACK"),
+    )
+
+    assert service.messages == []

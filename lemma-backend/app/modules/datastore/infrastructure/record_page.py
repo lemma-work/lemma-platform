@@ -59,10 +59,27 @@ async def rows_and_total(
     limit: int,
     offset: int,
 ) -> tuple[Sequence[Any], int]:
-    """Return at most ``limit`` rows plus the table's exact total."""
+    """Return at most ``limit`` rows plus the table's exact total.
+
+    The list asks for ``limit + 1``. Getting fewer than that back means this is
+    the last page, and the total is then arithmetic rather than a second query:
+    ``OFFSET`` only returns a row when at least that many precede it, so a
+    non-empty page at offset N proves N rows come before it.
+
+    An **empty** page proves nothing of the kind, and that is the exception. It
+    is what a caller gets for reading past the end -- an offset chosen by hand,
+    a token gone stale behind a delete, or paging that a narrower filter has
+    outrun -- and the arithmetic then reports the offset itself as the table's
+    size. Two rows, `offset=100`, and the answer was "100 records".
+
+    Offset zero is still arithmetic: no rows and nothing before them is a total
+    of zero, which is true and costs nothing to say.
+    """
     rows = (await session.execute(text(list_sql), params)).fetchall()
-    if len(rows) <= limit:
+    if rows and len(rows) <= limit:
         return rows, offset + len(rows)
+    if not rows and not offset:
+        return rows, 0
     counted = await session.execute(
         text(count_sql),
         {key: value for key, value in params.items() if key not in ("limit", "offset")},

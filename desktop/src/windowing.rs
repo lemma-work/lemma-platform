@@ -39,6 +39,39 @@ pub(crate) fn restore_dock_presence(app: &AppHandle) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn restore_dock_presence(_app: &AppHandle) {}
 
+/// Bring a window to the front, rather than merely making it visible.
+///
+/// `show()` un-hides a window. On macOS it does not make the *application*
+/// active, so a window shown while something else is frontmost stays behind it
+/// — and a Dock or menu Quit is exactly that case. The quit confirmation was
+/// created correctly, focused its own webview correctly, and appeared behind
+/// whatever the person was actually looking at, so the app read as having
+/// ignored them.
+///
+/// The steps are passed in so the order can be tested. It is the order that
+/// went wrong: focusing the overlay is not focusing the window that holds it,
+/// and neither is showing it.
+pub(crate) fn bring_to_front(
+    show: impl FnOnce() -> Result<(), String>,
+    unminimize: impl FnOnce() -> Result<(), String>,
+    focus: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    show()?;
+    // A minimized window cannot take focus, and a restore that fails is not a
+    // reason to skip asking: the window may not have been minimized at all.
+    let _ = unminimize();
+    focus()
+}
+
+/// The same three steps against a real window.
+pub(crate) fn bring_window_to_front(window: &tauri::Window) -> Result<(), String> {
+    bring_to_front(
+        || window.show().map_err(|error| error.to_string()),
+        || window.unminimize().map_err(|error| error.to_string()),
+        || window.set_focus().map_err(|error| error.to_string()),
+    )
+}
+
 pub(crate) fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
     // Rebuilt rather than refused when it is missing. The window is destroyed
@@ -62,9 +95,9 @@ pub(crate) fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> 
     // Before showing, so the icon and the window arrive together rather than
     // the window appearing under a Dock that has not noticed yet.
     restore_dock_presence(app);
-    let _ = window.show();
-    let _ = window.set_focus();
-    Ok(())
+    // Reported rather than discarded: a window that would not show or take
+    // focus has not opened, and returning `Ok` there told the caller it had.
+    bring_window_to_front(&window)
 }
 
 /// Should a `ready` event navigate the main window to `workspace`?

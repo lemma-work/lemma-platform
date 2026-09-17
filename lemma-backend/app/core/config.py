@@ -597,9 +597,8 @@ class Settings(BaseSettings):
             "is correct when one endpoint carries both event types."
         ),
     )
-    # No default. A fallback sender is not configuration: it makes an
-    # unconfigured deployment send password resets from a domain it may not own,
-    # which fails DMARC silently and locks people out with no error anywhere.
+    # Required alongside RESEND_API_KEY, and no default is possible: Resend only
+    # accepts a sender on a domain verified for that account.
     resend_from_email: Optional[str] = Field(
         default=None,
         description="Sender address used with the Resend SMTP relay",
@@ -1256,7 +1255,8 @@ class Settings(BaseSettings):
                 self.smtp_from_email,
             ]
         )
-        return bool(explicit_smtp or reveal_secret(self.resend_api_key))
+        resend = reveal_secret(self.resend_api_key) and self.resend_from_email
+        return bool(explicit_smtp or resend)
 
     def resolve_browser_sdk_path(self) -> Optional[Path]:
         """Locate the built browser SDK bundle served to no-build apps.

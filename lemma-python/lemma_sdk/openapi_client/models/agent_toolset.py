@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class AgentToolset(str, Enum):
+    BROWSER = "BROWSER"
     CONNECTORS = "CONNECTORS"
     MEMORY = "MEMORY"
     MESSAGING = "MESSAGING"

@@ -122,6 +122,20 @@ class FakeE2B:
     # the provider was passing neither.
     created_lifecycles: list[Any] = field(default_factory=list)
     connect_timeouts: list[float | None] = field(default_factory=list)
+    #: Whether each create asked for public traffic. Recorded for the same
+    #: reason as the lifecycles above: E2B defaults it to *open*, so a fake that
+    #: swallowed the argument could not tell "the provider closed this" from
+    #: "the provider said nothing" -- and saying nothing is what puts a signed-in
+    #: browser on a public URL.
+    created_public_traffic: list[bool | None] = field(default_factory=list)
+    #: Every keyword `create` was called with, so a test can bind them
+    #: against the real SDK's signature rather than against this stand-in's.
+    created_kwargs: list[dict[str, object]] = field(default_factory=list)
+    #: The per-sandbox traffic token E2B mints when a sandbox is created with
+    #: public traffic disabled. `None` models the older, open arrangement, which
+    #: is what every sandbox created before that flag still has -- and what the
+    #: provider must report as `public` rather than quietly assume away.
+    traffic_access_token: str | None = None
     # Small, so every listing test crosses a page boundary.
     list_page_size: int = 2
     _next: int = 0
@@ -280,10 +294,53 @@ class FakeE2B:
                 timeout=None,
                 metadata=None,
                 envs=None,
-                volume_mounts=None,
+                secure=True,
+                allow_internet_access=True,
+                mcp=None,
+                network=None,
                 lifecycle=None,
-                **_kwargs,
+                volume_mounts=None,
+                logger=None,
+                # `AsyncSandbox.create` takes its remaining keywords as
+                # `Unpack[ApiParams]` and passes them to `ConnectionConfig`,
+                # which raises `TypeError` on a name it does not know. Spelling
+                # those names out here instead of a `**_kwargs` catch-all is
+                # what makes this double fail the way production fails: the
+                # previous signature invented an `allow_public_traffic`
+                # parameter the SDK has never had at any version, so the test
+                # asserting sandboxes were closed passed for months against a
+                # call that could only ever have raised.
+                api_key=None,
+                api_url=None,
+                api_headers=None,
+                domain=None,
+                debug=None,
+                headers=None,
+                proxy=None,
+                request_timeout=None,
+                sandbox_url=None,
+                validate_api_key=None,
             ):
+                world.created_public_traffic.append(
+                    (network or {}).get("allow_public_traffic")
+                )
+                world.created_kwargs.append(
+                    {
+                        "template": template,
+                        "timeout": timeout,
+                        "metadata": metadata,
+                        "envs": envs,
+                        "secure": secure,
+                        "allow_internet_access": allow_internet_access,
+                        "mcp": mcp,
+                        "network": network,
+                        "lifecycle": lifecycle,
+                        "volume_mounts": volume_mounts,
+                        "logger": logger,
+                        "api_key": api_key,
+                        "domain": domain,
+                    }
+                )
                 world._next += 1
                 sandbox_id = f"e2b-{world._next}"
                 world.sandboxes[sandbox_id] = FakeSandboxInfo(
@@ -350,6 +407,10 @@ class FakeE2B:
 
             def get_host(self, port):
                 return f"{port}-{self.sandbox_id}.e2b.test"
+
+            @property
+            def traffic_access_token(self):
+                return world.traffic_access_token
 
             def runtime_status(self, port):
                 """What the runtime port would answer, without serving HTTP.

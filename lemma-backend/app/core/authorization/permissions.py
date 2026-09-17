@@ -83,6 +83,7 @@ class Permissions:
     CONNECTOR_MANAGE: ClassVar[str] = "connector.manage"
     CONNECTOR_ACCOUNT_USE: ClassVar[str] = "connector_account.use"
     CONNECTOR_ACCOUNT_MANAGE: ClassVar[str] = "connector_account.manage"
+    WEB_LOGIN_USE: ClassVar[str] = "web_login.use"
     CONNECTOR_AUTH_CONFIG_MANAGE: ClassVar[str] = "connector_auth_config.manage"
 
 
@@ -305,6 +306,12 @@ PERMISSION_DEFINITIONS: tuple[PermissionDefinition, ...] = (
         "Manage connected connector accounts",
     ),
     PermissionDefinition(
+        Permissions.WEB_LOGIN_USE,
+        PermissionScope.POD,
+        "web_login",
+        "Sign in to a saved site with a stored session",
+    ),
+    PermissionDefinition(
         Permissions.CONNECTOR_AUTH_CONFIG_MANAGE,
         PermissionScope.ORG,
         "connector_auth_config",
@@ -345,6 +352,7 @@ POD_USER_PERMISSIONS: frozenset[str] = frozenset(
         Permissions.CONVERSATION_WRITE,
         Permissions.CONNECTOR_USE,
         Permissions.CONNECTOR_ACCOUNT_USE,
+        Permissions.WEB_LOGIN_USE,
     }
 )
 POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(

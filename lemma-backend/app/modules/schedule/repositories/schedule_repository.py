@@ -32,6 +32,9 @@ from app.modules.schedule.domain.value_objects import (
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.repositories.schedule_filters import list_filters
 from app.core.log.log import get_logger
+from app.modules.schedule.repositories.schedule_config_sql import (
+    datastore_operations_array,
+)
 
 logger = get_logger(__name__)
 
@@ -475,8 +478,22 @@ class ScheduleRepository(ScheduleRepositoryInterface):
     ) -> List[ScheduleEntity]:
         """Find pod table schedules matching the event properties.
 
-        Operation matching happens in Python on the typed entity. Operations
-        are required: a schedule that declares none matches nothing.
+        Every datastore write asks this, and it used to read every active
+        datastore schedule on the pod and table, hydrate each one, and then ask
+        whether its operations included the event's -- so a table watched by one
+        schedule per operation did three times the work on every insert, twice
+        of it to reach `continue`.
+
+        The operation is a predicate the database can apply, so it does. The
+        typed check below still has the last word: it validates the config the
+        SQL only pattern-matched, and a schedule whose operations array holds
+        something that is not an operation is skipped there, as before. That
+        ordering is what makes the narrowing safe -- accepting in Python
+        *requires* the operation to be in the array, so anything this removes
+        could never have been accepted.
+
+        Operations are required: a schedule that declares none matches nothing,
+        which an `EXISTS` over the array says by construction.
         """
 
         operation_value = parse_datastore_operation(operation)
@@ -486,11 +503,25 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             func.jsonb_extract_path_text(Schedule.config, "table_name") == table_name,
         )
 
+        # `upper(btrim(...))` is `parse_datastore_operation` in SQL: the stored
+        # array is whatever the caller wrote, and normalization happens when the
+        # entity is built rather than when the row is saved.
+        operations = datastore_operations_array(Schedule.config)
+        operation_element = func.jsonb_array_elements_text(operations).column_valued(
+            "operation"
+        )
+        operation_match = (
+            select(1)
+            .where(func.upper(func.btrim(operation_element)) == operation_value.value)
+            .exists()
+        )
+
         stmt = select(Schedule).where(
             Schedule.schedule_type == ScheduleType.DATASTORE,
             Schedule.is_active.is_(True),
             Schedule.pod_id == pod_id,
             table_match,
+            operation_match,
         )
 
         result = await self.session.execute(stmt)

@@ -187,6 +187,37 @@ pub(crate) async fn sharing_action(
         .map_err(|error| error.to_string())?
 }
 
+pub(crate) fn prepare_sandbox_image_impl(app: AppHandle, id: String) -> Result<(), String> {
+    if current_mode(&app) != "local" {
+        return Err("the sandbox image belongs to a local workspace".into());
+    }
+    ensure_locald(&app)?;
+    send_to_locald(&app, json!({ "cmd": "sandbox.prepare", "id": id }))
+}
+
+#[tauri::command]
+/// Fetch the image pods run their work in, because someone asked for it.
+///
+/// Starting used to do this on its own, which spent several hundred megabytes
+/// on a capability a person may never use: the coding agents run natively on
+/// this computer, and someone using only those has no pod workload to sandbox.
+/// They paid for the download anyway, and got a toast about it.
+///
+/// Runs off the UI thread for the reason every other daemon command here does.
+/// It returns as soon as the fetch has started; progress arrives on the
+/// `sandbox-images` broadcast, which is what Settings and the workspace both
+/// already listen to.
+pub(crate) async fn prepare_sandbox_image(
+    window: Webview,
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    require_control_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || prepare_sandbox_image_impl(app, id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub(crate) fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
     require_control_window(&window)?;

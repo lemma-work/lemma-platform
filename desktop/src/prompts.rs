@@ -63,7 +63,9 @@ pub(crate) fn create_confirmation_overlay(
         .get_window("main")
         .ok_or("The app window is unavailable.")?;
     restore_dock_presence(app);
-    main.show().map_err(|error| error.to_string())?;
+    // Forward, not merely visible. A Dock or menu Quit arrives while another
+    // app is frontmost, and `show()` alone left this prompt behind it.
+    bring_window_to_front(&main)?;
     let payload = json!({"id": id, "title": title, "message": message, "confirmLabel": confirm_label, "cancelable": cancelable, "allowDiscard": allow_discard});
     let builder = WebviewBuilder::new("confirmation", WebviewUrl::App("confirmation.html".into()))
         .auto_resize()

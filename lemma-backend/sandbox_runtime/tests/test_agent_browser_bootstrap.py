@@ -20,10 +20,12 @@ right is the decision -- when to bootstrap, and just as importantly when not to.
 
 from __future__ import annotations
 
+from contextlib import suppress
 import os
 from pathlib import Path
 import socket
 import subprocess
+import time
 
 import pytest
 
@@ -31,10 +33,19 @@ import pytest
 # does not find the first one's address already taken.
 _SOCKETS: list[socket.socket] = []
 
+# Stand-ins for a running X server. Stopped after each test, or a stray one
+# would make the next test think a display it never started is up.
+_SERVERS: list[subprocess.Popen] = []
+
 
 @pytest.fixture(autouse=True)
 def _release_display_sockets():
     yield
+    while _SERVERS:
+        server = _SERVERS.pop()
+        server.terminate()
+        with suppress(subprocess.TimeoutExpired):
+            server.wait(timeout=5)
     while _SOCKETS:
         listener = _SOCKETS.pop()
         address = listener.getsockname()
@@ -42,10 +53,20 @@ def _release_display_sockets():
         Path(address).unlink(missing_ok=True)
 
 
+def _serving(display_number: int) -> bool:
+    """Whether `pgrep` can see a stand-in for this display, as the wrapper does."""
+    found = subprocess.run(
+        ["pgrep", "-f", f"Xvfb :{display_number} "], capture_output=True
+    )
+    return found.returncode == 0
+
+
 SCRIPT = Path(__file__).resolve().parents[2] / "sandbox-images/scripts/lemma-node-tool"
 
 
-def _workspace(tmp_path: Path, *, config: bool, display: bool) -> dict[str, str]:
+def _workspace(
+    tmp_path: Path, *, config: bool, display: bool, stale_socket: bool = False
+) -> dict[str, str]:
     """A sandbox in a given state, with `start-browser` stubbed to leave a mark."""
     binaries = tmp_path / "bin"
     binaries.mkdir()
@@ -74,15 +95,41 @@ def _workspace(tmp_path: Path, *, config: bool, display: bool) -> dict[str, str]
     if config:
         config_path.write_text("{}")
 
-    # A display is "up" exactly when a socket exists at the path X clients look
-    # for, which is what the wrapper tests. An unusual display number keeps this
-    # away from any real X server on the machine running the tests.
-    display_number = 77 if display else 78
-    if display:
+    # A display is up when an X server is *running* on it. It used to be
+    # modelled here as "a socket exists at the path X clients look for", which
+    # is what the wrapper used to test -- and the two come apart exactly when it
+    # matters: the socket is a file in the container's writable layer and
+    # survives a restart, while the process does not. `stale_socket` is that
+    # state, and it is the one that broke every browser in a resumed sandbox.
+    #
+    # An unusual display number keeps this away from any real X server on the
+    # machine running the tests.
+    display_number = 77 if (display or stale_socket) else 78
+    if display or stale_socket:
         os.makedirs("/tmp/.X11-unix", exist_ok=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         listener.bind(f"/tmp/.X11-unix/X{display_number}")
         _SOCKETS.append(listener)
+    if display:
+        # A stand-in whose command line is what `pgrep -f` looks for. It must
+        # not `exec`, or the argv the wrapper matches on is replaced by the
+        # sleep's own.
+        fake_server = binaries / "Xvfb"
+        fake_server.write_text("#!/bin/sh\nsleep 30\n")
+        fake_server.chmod(0o755)
+        _SERVERS.append(
+            subprocess.Popen(
+                [str(fake_server), f":{display_number}", "-screen", "0", "1x1x24"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        )
+        # Waited for: `Popen` returns before the shell is on the process table,
+        # and a test that raced it would assert "already up" against nothing.
+        deadline = time.monotonic() + 5
+        while not _serving(display_number) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert _serving(display_number), "the stand-in X server never appeared"
 
     return {
         "PATH": f"{binaries}:/usr/bin:/bin",
@@ -148,6 +195,32 @@ def test_a_browser_already_up_is_not_restarted(tmp_path: Path) -> None:
     )
 
 
+def test_a_socket_left_by_a_dead_x_server_does_not_count_as_a_display(
+    tmp_path: Path,
+) -> None:
+    """The state a resumed sandbox is in, and the one this guard used to miss.
+
+    `/tmp/.X11-unix/X99` is an ordinary file in the container's writable layer.
+    It survives whatever killed Xvfb -- an ungraceful stop, a Docker daemon
+    restart, a host reboot, a quiesce that could not reach the runtime, or E2B,
+    which pauses without quiescing and keeps `/tmp`. The process does not.
+
+    Reading that file as "a display is up" meant this returned early and
+    `start-browser` -- the one thing that would have started Xvfb -- was never
+    called, so every browser command in the sandbox failed with "Missing X
+    server or $DISPLAY" for the life of the container, with nothing inside able
+    to clear it. The test above passed throughout, because it built its "already
+    up" display out of the same stale file.
+    """
+    environment = _workspace(tmp_path, config=True, display=False, stale_socket=True)
+
+    _run(environment, "snapshot", "-i")
+
+    assert _bootstrapped(environment), (
+        "a socket with no X server behind it was taken for a running display"
+    )
+
+
 def test_version_never_starts_an_x_server(tmp_path: Path) -> None:
     """Asking which version is installed must not cost a browser."""
     environment = _workspace(tmp_path, config=False, display=False)
@@ -173,3 +246,34 @@ def test_the_guard_is_set_for_the_nested_calls(tmp_path: Path) -> None:
     _run(environment, "open")
 
     assert Path(environment["_MARKER"]).read_text().strip() == "1"
+
+
+DOCKERFILE = Path(__file__).resolve().parents[2] / "sandbox-images/Dockerfile.workspace"
+
+
+def test_the_wrapper_is_found_before_the_raw_package_binary() -> None:
+    """Every test above drives the wrapper directly. The image has to reach it.
+
+    `/usr/local/bin` is where the `lemma-node-tool` wrappers are symlinked, and
+    `/opt/lemma-node/node_modules/.bin` is where npm puts the package's own
+    shim. With the npm directory first, a bare `agent-browser` -- what an agent
+    types, and what the skill's own examples show -- resolved to the shim, which
+    cannot bootstrap. The wrapper existed, was correct, was tested, and was
+    never reached: the two errors it was written to prevent both turned up in a
+    real transcript.
+
+    Asserted against the image rather than against a stub, because the ordering
+    is the part no wrapper test can see.
+    """
+    path_line = next(
+        line
+        for line in DOCKERFILE.read_text().splitlines()
+        if line.strip().startswith("PATH=")
+    )
+    entries = path_line.strip().removeprefix("PATH=").rstrip("\\").strip().split(":")
+
+    assert "/usr/local/bin" in entries, path_line
+    assert "/opt/lemma-node/node_modules/.bin" in entries, path_line
+    assert entries.index("/usr/local/bin") < entries.index(
+        "/opt/lemma-node/node_modules/.bin"
+    ), "the npm shim would win over the wrapper"

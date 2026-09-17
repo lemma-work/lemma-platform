@@ -20,6 +20,7 @@ import { trackAppOpened } from '@/lib/analytics/onboarding';
 import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
 import { AppVersionsPanel } from '@/components/app/app-versions-panel';
+import { copyText } from '@/lib/clipboard';
 
 interface AppFrameProps {
     podId: string;
@@ -128,7 +129,7 @@ export function AppFrame({
 
     const copyLink = async () => {
         try {
-            await navigator.clipboard.writeText(frameUrl);
+            await copyText(frameUrl);
             toast.success('App link copied');
         } catch {
             toast.error('Could not copy the app link');

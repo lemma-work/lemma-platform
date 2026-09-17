@@ -28,6 +28,7 @@ from app.modules.agent_surfaces.services.surface_ingress_credentials import (
     SurfaceIngressCredentialMixin,
 )
 from app.modules.agent_surfaces.services.surface_inbound import SurfaceInboundMixin
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceIngressRequest,
@@ -93,7 +94,7 @@ class AgentSurfaceIngressService(
     def __init__(
         self,
         *,
-        uow=None,
+        uow: SqlAlchemyUnitOfWork | None = None,
         uow_factory: UnitOfWorkFactory | None = None,
         surface_repository: SurfaceInstallationRepositoryPort | None = None,
         conversation_link_repository: SurfaceConversationLinkRepository | None = None,

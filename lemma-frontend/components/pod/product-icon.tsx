@@ -15,6 +15,7 @@ import {
     Plug,
     Shield,
     SlidersHorizontal,
+    Sparkles,
     Table,
     Tray,
 } from '@/components/ui/icons';
@@ -32,6 +33,7 @@ export type ProductIconKind =
     | 'files'
     | 'folders'
     | 'functions'
+    | 'skills'
     | 'surfaces'
     | 'settings'
     | 'auth-rbac'
@@ -55,6 +57,10 @@ const iconByKind: Record<ProductIconKind, typeof FolderOpen> = {
     files: File,
     folders: FolderSimple,
     functions: Code,
+    // A skill is what an agent picks up, so it wears the agents' spark and the
+    // agents' tone. The docs switcher already draws the section this way; the
+    // shelf and the things on it should not be two different ideas.
+    skills: Sparkles,
     // Surfaces are where work arrives — Slack, Gmail, WhatsApp — so the glyph is
     // an inbox, not a speech bubble. Two bubbles for `surfaces` and
     // `conversation` were indistinguishable at 14px, and they are different

@@ -36,12 +36,35 @@ class MeteringScope:
         context: UsageExecutionContext,
         factory: UnitOfWorkFactory,
         settings: UsageSettings,
+        *,
+        parent: "MeteringScope | None" = None,
     ) -> None:
         self.context = context
         self.factory = factory
         self.settings = settings
+        self.parent = parent
         self.execution_id = uuid4()
         self.meters: dict[str, tuple[RequestMeter, RateCard]] = {}
+
+    @property
+    def inside_admitted_run(self) -> bool:
+        """Whether an enclosing execution has already put a request to a provider.
+
+        A vision delegate, a sub-agent or a title pass runs inside the scope of
+        the run that asked for it, but keeps a scope of its own so its spend is
+        metered under its own source. That scope's meters start empty, so
+        without this its first request is judged as the first request of a
+        fresh run -- and the delegate's first request always carries an image,
+        which is the one shape a run may not *start* with under a monetary
+        limit. Vision therefore failed as "usage limit exceeded" on an account
+        nowhere near its limit.
+        """
+        scope = self.parent
+        while scope is not None:
+            if any(meter.admitted for meter, _ in scope.meters.values()):
+                return True
+            scope = scope.parent
+        return False
 
     def meter(
         self, profile: Mapping[str, object], source: str | None
@@ -80,7 +103,7 @@ class MeteringScope:
                 self.factory, identity, card, self.settings
             )
             self.meters[key] = (
-                RequestMeter(gateway),
+                RequestMeter(gateway, inside_admitted_run=self.inside_admitted_run),
                 card,
             )
         return self.meters[key]
@@ -122,6 +145,7 @@ async def metering_execution(
         context,
         factory or SessionUnitOfWorkFactory(async_session_maker),
         settings or usage_settings,
+        parent=_scope.get(),
     )
     token = _scope.set(scope)
     try:

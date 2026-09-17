@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 from uuid import UUID
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.config import settings
 from app.core.object_storage import storage_supports_native_signed_urls
 from app.core.crypto import get_secret_signer
@@ -146,18 +147,34 @@ async def build_object_url(
     content_sha256: str | None = None,
 ) -> tuple[str, datetime]:
     """Build a short-lived URL for an arbitrary datastore object key."""
-    expires_seconds = (
-        expires_seconds or datastore_settings.datastore_file_url_expiry_seconds
+    # Clamped, not just defaulted. The only bound on this used to be the
+    # Pydantic `le=` on the agent tool's argument, which every direct caller of
+    # `POST .../files/url` bypassed — so an API client could mint a URL with an
+    # arbitrarily distant expiry. The ceiling is shared with the short link.
+    expires_seconds = min(
+        max(1, expires_seconds or datastore_settings.datastore_file_url_expiry_seconds),
+        datastore_settings.datastore_signed_url_max_expiry_seconds,
     )
     cache = _get_url_cache()
-    cache_key = f"{object_key}:{content_sha256 or ''}"
+    # The lifetime is part of the identity of the thing being cached. Without it
+    # a caller asking for 30 seconds could be handed a cached one-hour URL that
+    # someone else had minted for the same object, and vice versa.
+    cache_key = f"{object_key}:{content_sha256 or ''}:{expires_seconds}"
 
     if cache is not None:
         with suppress(Exception):
             cached = await cache.get_raw(cache_key)
             if cached:
                 payload = json.loads(cached)
-                return payload["url"], datetime.fromisoformat(payload["expires_at"])
+                cached_expires_at = datetime.fromisoformat(payload["expires_at"])
+                # Checked, not assumed. The cache entry's TTL comes from the
+                # *default* lifetime, so a URL minted with a shorter one stays
+                # cached long after it stops working — and every later caller
+                # asking for that same short lifetime would be handed the dead
+                # one. Minting a fresh URL is cheap; serving an expired one is a
+                # failure the caller cannot diagnose.
+                if cached_expires_at > datetime.now(timezone.utc):
+                    return payload["url"], cached_expires_at
 
     now = int(time.time())
     expires_at_epoch = now + expires_seconds
@@ -190,15 +207,28 @@ async def build_file_url(
     entity: DatastoreFileEntity,
     *,
     expires_seconds: int | None = None,
+    session: object | None = None,
 ) -> tuple[str, datetime]:
-    """Short-lived URL for a file entity's original bytes."""
+    """Short-lived URL for a file entity's original bytes.
+
+    Pass ``session`` and the pooled connection goes back for the duration. By
+    the time a URL is minted the entity is already resolved and authorized and
+    nothing below here touches the database -- it is a Redis lookup and, on GCS,
+    a signing round trip. Callers reach this from the request-scoped unit of
+    work and from the agent's file tools, both of which otherwise keep a
+    connection checked out for the whole of it.
+
+    Optional because the local-storage path and the tests call it with no
+    session, and ``connection_released(None)`` is a no-op.
+    """
     key = datastore_storage_key(entity)
-    return await build_object_url(
-        storage,
-        key,
-        expires_seconds=expires_seconds,
-        content_sha256=entity.content_sha256,
-    )
+    async with connection_released(session):
+        return await build_object_url(
+            storage,
+            key,
+            expires_seconds=expires_seconds,
+            content_sha256=entity.content_sha256,
+        )
 
 
 def build_file_app_url(pod_id: UUID, path: str) -> str:

@@ -66,10 +66,15 @@ def select_prunable[V: RetainableVersion](
     the same rows would re-delete objects that are already gone on every tick.
 
     Ties in ``created_at`` break on ``id``, which is load-bearing rather than
-    arbitrary: both tables key on uuid7, so id order IS creation order. Two
-    builds recorded in the same timestamp tick therefore still rank in the order
-    they happened, and never in an order that could keep an older build while
-    deleting a newer one.
+    arbitrary: both tables key on uuid7, whose timestamp is millisecond-granular,
+    so id order is creation order to the millisecond. ``created_at`` is
+    microsecond-granular and sorts first, so the tiebreak is only reached by two
+    builds recorded in the same microsecond -- which then rank by id, in the
+    order they happened unless they also landed in the same millisecond. Even
+    there the ranking is a total order over immutable values, so the one thing
+    this must never do -- keep an older build while deleting a newer one -- would
+    need both to be inside one millisecond of each other, which one build per
+    deploy does not produce.
     """
     cutoff = now - timedelta(days=policy.keep_days)
     ranked = sorted(

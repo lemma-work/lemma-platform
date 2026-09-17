@@ -97,11 +97,23 @@ export function ConversationPresentationStage({
     resourceHref,
     onClose,
     children,
+    stageTitle,
+    stageBodyOverride,
 }: {
     podId: string;
     resourceHref: string;
     onClose: () => void;
     children: ReactNode;
+    /** Title for a stage whose body is supplied rather than resolved. */
+    stageTitle?: string;
+    /**
+     * Render this instead of resolving `resourceHref`.
+     *
+     * The agent's computer is not a presented *resource* — nothing presented it,
+     * it is ambient state — but it wants the same region, and two competing
+     * right-hand panels is a worse problem than the one that would solve.
+     */
+    stageBodyOverride?: ReactNode;
 }) {
     const router = useRouter();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -128,11 +140,11 @@ export function ConversationPresentationStage({
 
     // The app's own record names it the way the tab strip does ("Ledger"), so the
     // pane stops printing the raw slug back at the reader.
-    const title = appPage
+    const title = stageTitle ?? (appPage
         ? formatWorkspaceAppTitle(appPage.title || appPage.slug)
-        : presentationTitle(resourceHref);
+        : presentationTitle(resourceHref));
 
-    const stageBody = appSlug ? (
+    const stageBody = stageBodyOverride ?? (appSlug ? (
         <StageAppBody podId={podId} page={appPage} title={title} isLoading={appResolving} />
     ) : embedHref ? (
         <iframe
@@ -144,9 +156,11 @@ export function ConversationPresentationStage({
             allow="clipboard-read; clipboard-write; fullscreen"
             referrerPolicy="strict-origin-when-cross-origin"
         />
-    ) : null;
+    ) : null);
 
-    if (!stageBody || !standaloneHref) return children;
+    // A supplied body has no standalone route to open — it only means anything
+    // beside the conversation it belongs to.
+    if (!stageBody || (!standaloneHref && !stageBodyOverride)) return children;
 
     return (
         <div className="conversation-presentation-layout grid h-full min-h-0 min-w-0 overflow-hidden">
@@ -170,16 +184,21 @@ export function ConversationPresentationStage({
                     <div className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
                         {title}
                     </div>
-                    <Button
-                        asChild
-                        variant="quiet"
-                        size="icon"
-                        className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
-                    >
-                        <Link href={standaloneHref} aria-label="Open in new tab" title="Open in new tab">
-                            <ArrowUpRight className="h-4 w-4" strokeWidth={1.8} />
-                        </Link>
-                    </Button>
+                    {/* Only a resolved resource has a page of its own to open.
+                        A supplied body means nothing without the conversation
+                        beside it, so it gets no orphaning link. */}
+                    {standaloneHref ? (
+                        <Button
+                            asChild
+                            variant="quiet"
+                            size="icon"
+                            className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
+                        >
+                            <Link href={standaloneHref} aria-label="Open in new tab" title="Open in new tab">
+                                <ArrowUpRight className="h-4 w-4" strokeWidth={1.8} />
+                            </Link>
+                        </Button>
+                    ) : null}
                 </header>
                 <div className="relative min-h-0 flex-1 overflow-hidden">
                     {stageBody}

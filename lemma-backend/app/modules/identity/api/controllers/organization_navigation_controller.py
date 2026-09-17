@@ -12,6 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request, status
 
+from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.api.dependencies import UoWDep
 from app.modules.identity.api.schemas.organization_schemas import (
     HomeAgentResponse,
@@ -157,9 +158,14 @@ async def get_organization_home(
             for pod in home.pods
         ],
     )
-    await set_cached_organization_home(
-        organization_id=organization_id,
-        user_id=user.id,
-        payload=response.model_dump(mode="json"),
-    )
+    # Every read that built the response is finished, so the connection goes
+    # back before the cache write rather than staying checked out across it.
+    # This handler is read-only, which is why a release works here where the
+    # user-cache writes next door needed `after_commit` instead.
+    async with connection_released(getattr(uow, "session", None)):
+        await set_cached_organization_home(
+            organization_id=organization_id,
+            user_id=user.id,
+            payload=response.model_dump(mode="json"),
+        )
     return response

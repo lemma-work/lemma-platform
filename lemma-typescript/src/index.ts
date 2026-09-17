@@ -78,6 +78,7 @@ export {
   isToolInvocationActive,
   isUserApprovalToolName,
   isAskUserToolName,
+  isSignInToolName,
   isUserInteractionToolName,
   isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
@@ -253,3 +254,13 @@ export type { ScheduleListOptions, SchedulesNamespace } from "./namespaces/sched
 export type { TablesNamespace } from "./namespaces/tables.js";
 export type { UsersNamespace } from "./namespaces/users.js";
 export type { WorkflowsNamespace } from "./namespaces/workflows.js";
+export type {
+  WorkspaceFileEntry,
+  WorkspaceFileListResponse,
+  PendingSignIn,
+  SignInOutcome,
+  WebLogin,
+  WebLoginAuditEntry,
+  WebLoginsNamespace,
+  WorkspaceNamespace,
+} from "./namespaces/workspace.js";

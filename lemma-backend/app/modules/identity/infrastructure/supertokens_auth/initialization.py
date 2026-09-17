@@ -36,6 +36,9 @@ from app.modules.identity.infrastructure.supertokens_auth.override_email_verific
 from app.modules.identity.infrastructure.supertokens_auth.jwks_guard import (
     install_jwks_guard,
 )
+from app.modules.identity.infrastructure.supertokens_auth.querier_client import (
+    install_shared_querier_client,
+)
 from app.core.log.log import get_logger
 from app.modules.identity.config import identity_settings
 from app.modules.identity.infrastructure.supertokens_auth.passwordless_challenges import (
@@ -130,6 +133,8 @@ def build_thirdparty_providers() -> list[ProviderInput]:
 def initialize_supertokens():
     # Before init, so no verification can run against the unguarded function.
     install_jwks_guard()
+    # Likewise before init: the querier is what every verification goes through.
+    install_shared_querier_client()
     init(
         app_info=build_supertokens_app_info(),
         supertokens_config=SupertokensConfig(

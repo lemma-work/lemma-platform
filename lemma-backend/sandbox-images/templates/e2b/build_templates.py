@@ -78,6 +78,10 @@ def workspace_template():
         .from_template("code-interpreter-v1")
         .apt_install(
             [
+                # `agent-browser record` shells out to ffmpeg. See the note in
+                # Dockerfile.workspace; the two images have to agree on this or
+                # recording works on one fabric and not the other.
+                "ffmpeg",
                 "fonts-dejavu-core",
                 "fonts-liberation",
                 "libasound2t64",
@@ -115,6 +119,13 @@ def workspace_template():
                 "procps",
                 "ripgrep",
                 "socat",
+                # The human-facing view of the same Xvfb display. See the note
+                # in Dockerfile.workspace; the two images have to agree on
+                # this or the VNC pane connects on one fabric and not the
+                # other -- the same failure mode the `ffmpeg` note above
+                # describes, for the same reason.
+                "websockify",
+                "x11vnc",
                 "xz-utils",
                 "xvfb",
             ],
@@ -192,6 +203,39 @@ def workspace_template():
             "lemma-backend/sandbox-images/scripts/start-browser.sh",
             "/usr/local/bin/start-browser",
             mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-browser-relay.sh",
+            "/usr/local/bin/start-browser-relay",
+            mode=0o755,
+        )
+        # The browser relay, and the package files it needs to be importable.
+        #
+        # This template deliberately ships no workspace runtime -- an E2B
+        # sandbox serves no HTTP of its own, and exec and files go through the
+        # provider SDK. The relay is the exception, and it is why it was built
+        # as a separate process: a browser channel that lived in the runtime
+        # existed on Docker and nowhere else, which is the whole reason this
+        # exists.
+        #
+        # `tasks.py` is here because `browser_relay.app` and
+        # `browser_relay.stream_proxy` both import it, and it was not: the
+        # comment said "the two package files it needs" while the relay needed
+        # three, so every workspace sandbox shipped a relay that raised
+        # `ModuleNotFoundError` on its first line and left no log. Counting
+        # them by hand is what `test_e2b_templates_ship_what_they_import` now
+        # does instead.
+        .copy(
+            "lemma-backend/sandbox_runtime/__init__.py",
+            "/app/sandbox_runtime/__init__.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/tasks.py",
+            "/app/sandbox_runtime/tasks.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/browser_relay",
+            "/app/sandbox_runtime/browser_relay",
         )
         .copy(
             "lemma-backend/sandbox-images/scripts/save-webpage.sh",
@@ -283,6 +327,13 @@ def workspace_template():
                 # long idle, which is what keeps a finished research session
                 # from holding the sandbox's whole memory budget.
                 "AGENT_BROWSER_IDLE_TIMEOUT_MS": "120000",
+                # See Dockerfile.workspace: what the live view costs on the
+                # wire. Capped where the frames are encoded, so a small pane is
+                # never sent pixels it cannot draw.
+                "AGENT_BROWSER_STREAM_QUALITY": "60",
+                "AGENT_BROWSER_STREAM_MAX_WIDTH": "1280",
+                "AGENT_BROWSER_STREAM_MAX_HEIGHT": "800",
+                "LEMMA_BROWSER_RELAY_PORT": "4850",
                 "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
                 # Where the credential bridge writes gh's config.
                 "GH_CONFIG_DIR": "/tmp/lemma-gh",
@@ -293,7 +344,9 @@ def workspace_template():
                 "PIP_PREFIX": "/workspace/.python",
                 "PYTHONPATH": (
                     "/workspace/.python/lib/python3.14/site-packages:"
-                    "/opt/lemma-python/lib/python3.14/site-packages"
+                    "/opt/lemma-python/lib/python3.14/site-packages:"
+                    # Where the browser relay package lives.
+                    "/app"
                 ),
                 "PATH": (
                     "/workspace/.python/bin:/opt/lemma-python/bin:"

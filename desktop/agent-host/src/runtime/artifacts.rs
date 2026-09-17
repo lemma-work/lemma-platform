@@ -12,9 +12,12 @@ pub(crate) fn host_directory_instructions(cwd: &str) -> String {
         "\n\n# Native Working Directory\nYour native tools run on this computer in \
          {encoded} (JSON-encoded path). This directory belongs to this conversation \
          and is reused across turns. Use relative paths here for native file and \
-         shell tools. Lemma MCP execution tools use their separate sandbox cwd; \
-         never pass its /workspace paths to native tools or this host path to \
-         sandbox tools. A reported path is not an access grant. Respect tool \
+         shell tools. Lemma MCP execution tools have their own working directory \
+         inside the sandbox, which is not mounted on this computer: never pass a \
+         sandbox path to a native tool, or this host path to a sandbox tool. \
+         Each tool is given the directory it is supposed to use; use the one you \
+         were given rather than a path you assumed. A reported path is not an \
+         access grant. Respect tool \
          approvals; access outside this directory requires separate permission."
     )
 }
@@ -74,6 +77,20 @@ pub(crate) fn prepare_run_directory(
     target: Uuid,
     spec: &RunSpec,
 ) -> anyhow::Result<PathBuf> {
+    // A folder the person picked on this computer wins, and is used as it is:
+    // it already exists, it is theirs, and creating anything inside it here
+    // would be this process deciding the shape of someone's project.
+    //
+    // Checked before the legacy scratch directory, so binding a folder takes
+    // effect on a conversation that has already run somewhere else. The
+    // provider session's cwd changes with it, which is the point.
+    let bound = crate::conversation_folders::bound_folder(
+        &crate::conversation_folders::read_bindings(&paths.folders),
+        spec.conversation_id,
+    );
+    if let Some(folder) = bound {
+        return Ok(folder);
+    }
     let legacy = scratch_directory(paths, target, spec.conversation_id);
     // Provider session indexes may include the lexical cwd. Never move an
     // existing session's files behind its back during an app upgrade.

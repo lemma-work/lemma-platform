@@ -23,12 +23,15 @@ import { useQuery } from "@tanstack/react-query";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  isAskUserToolName,
+  isAskUserToolName, isSignInToolName,
   isToolInvocationActive,
   normalizeAssistantMarkdown,
   type AssistantRenderableMessage,
 } from "lemma-sdk";
+import { toast } from "sonner";
+
 import { cn } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
 import { Check, ChevronDown, Copy } from "@/components/ui/icons";
 import { InlineLoader } from "@/components/brand/loader";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
@@ -70,7 +73,7 @@ import { useNowMs } from "./use-assistant-experience";
 import { useTurnSettleFlip } from "./use-turn-settle-flip";
 import { stripMarkdownNode } from "./assistant-experience-helpers";
 import { ToolDetailsPanel } from "./assistant-tool-details";
-import { AskUserCard, UserApprovalCard } from "./assistant-approval-cards";
+import { AskUserCard, SignInCard, UserApprovalCard } from "./assistant-approval-cards";
 import { AssistantSubagentChipRow } from "./assistant-subagent-chips";
 import { DisplayResourceCards } from "./assistant-resource-cards";
 import { TRANSCRIPT_ROW_ATTRIBUTE } from "./use-transcript-scroll";
@@ -218,11 +221,17 @@ function HoverCopyButton({ text, side }: { text: string; side: "left" | "right" 
         side === "left" ? "lchat-copybtn-left" : "lchat-copybtn-right",
       )}
       onClick={async () => {
+        // Reported rather than swallowed. The empty catch here turned every
+        // failure into a button that does nothing: `navigator.clipboard` is
+        // absent outside a secure context, so on the desktop workspace this
+        // threw before it ever reached the clipboard.
         try {
-          await navigator.clipboard.writeText(text);
+          await copyText(text);
           setCopied(true);
           setTimeout(() => setCopied(false), 1600);
-        } catch { /* clipboard denied */ }
+        } catch {
+          toast.error("Could not copy to clipboard");
+        }
       }}
     >
       {copied ? <Check className="size-3 text-[var(--state-success)]" /> : <Copy className="size-3" />}
@@ -645,13 +654,19 @@ export const AssistantTurnView = memo(function AssistantTurnView({
 
         if (item.kind === "interaction") {
           const isAsk = isAskUserToolName(item.invocation.toolName);
+          const isSignIn = isSignInToolName(item.invocation.toolName);
           return (
             <div
               key={item.id}
               className="lchat-interaction"
               id={interactionAnchorId(item.invocation.toolCallId)}
             >
-              {isAsk ? (
+              {isSignIn ? (
+                <SignInCard
+                  invocation={item.invocation}
+                  conversationId={activeConversationId}
+                />
+              ) : isAsk ? (
                 <AskUserCard
                   invocation={item.invocation}
                   onResolveUserApproval={onResolveUserApproval}

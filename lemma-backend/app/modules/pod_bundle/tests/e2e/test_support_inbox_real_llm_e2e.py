@@ -34,11 +34,20 @@ from app.modules.pod_bundle.tests.e2e.bundle_e2e_helpers import (
     provision_workspace,
 )
 
+# `provider`, which is what the module docstring above already says in prose:
+# this needs real ``system:lemma`` credentials. Saying it in a marker is what
+# stops a lane claiming it. Until now the only lane selecting this test was
+# `backend-protected-e2e.yml`, via `workspace` -- and that lane pins
+# `E2E_LLM_MODE=mock`, which the root conftest reads before any of this, so the
+# test skipped on every run it was ever selected for. A skip and a pass are the
+# same colour in a lane's summary; `plan_e2e_shards.py --verify` now counts this
+# among the `provider` tests no lane can supply, which is the true statement.
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.worker,
     pytest.mark.workspace,
     pytest.mark.real_llm,
+    pytest.mark.provider,
     pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON),
 ]
 

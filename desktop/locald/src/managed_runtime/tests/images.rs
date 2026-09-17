@@ -35,6 +35,52 @@ fn a_finished_warmup_does_not_block_the_next_one() {
     assert!(controller.claim_sandbox_image_warmup().is_some());
 }
 
+/// Starting says "nobody asked for this" rather than fetching it.
+///
+/// Fetching on every start spent several hundred megabytes on a capability a
+/// person may never use: the coding agents run natively, so someone using only
+/// those has no pod workload to sandbox. They got the download and a toast for
+/// it anyway.
+#[test]
+fn a_start_that_asks_for_nothing_records_that_nothing_was_asked_for() {
+    let (_root, controller) = test_controller();
+
+    let status = controller.note_sandbox_images_not_prepared();
+
+    assert_eq!(status.state, SANDBOX_IMAGES_NOT_PREPARED);
+    assert_eq!(
+        controller.sandbox_image_status().state,
+        SANDBOX_IMAGES_NOT_PREPARED,
+        "Settings reads the stored status, so it has to match what was said"
+    );
+}
+
+/// Recovery re-announces after a restart, and a download may still be running.
+///
+/// Overwriting it with "nobody asked" would tell the workspace to stop watching
+/// a fetch that was still going, and would offer a second download of the image
+/// already being fetched.
+#[test]
+fn announcing_never_overwrites_a_fetch_that_is_already_underway() {
+    let (_root, controller) = test_controller();
+
+    controller.claim_sandbox_image_warmup();
+    assert_eq!(
+        controller.note_sandbox_images_not_prepared().state,
+        SANDBOX_IMAGES_DOWNLOADING
+    );
+
+    controller.publish_sandbox_images(
+        SandboxImageStatus::new(SANDBOX_IMAGES_READY, "ready"),
+        &|_: &SandboxImageStatus| {},
+    );
+    assert_eq!(
+        controller.note_sandbox_images_not_prepared().state,
+        SANDBOX_IMAGES_READY,
+        "an image already here is a better answer than nobody asking for one"
+    );
+}
+
 #[test]
 fn shutdown_prevents_late_image_warmup_from_starting() {
     let (_root, controller) = test_controller();

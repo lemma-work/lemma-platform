@@ -783,3 +783,93 @@ export function ComposerAskUserPanel({
     </div>
   );
 }
+
+/** What a paused `browser_sign_in` looks like in the transcript.
+ *
+ * A link, not buttons. The other two interaction cards ask for a word or a
+ * decision and can take it inline; this one asks the person to go and do
+ * something — sign in to a site, in the agent's own browser — and the only
+ * honest control for that is a way to get there.
+ *
+ * Where it goes is the same page the Slack and Telegram links already point at
+ * (`surface_sign_in.py` builds `{frontend_url}/sign-in-to-site/...`), so the two
+ * paths are one destination rather than two implementations. That page embeds
+ * the browser with control already handed over, which is why there is nothing
+ * else to arrange here: the person arrives on the site, typing.
+ */
+export function SignInCard({
+  invocation,
+  conversationId,
+}: {
+  invocation: AssistantToolInvocation;
+  conversationId: string | null;
+}) {
+  const args = (invocation.args || {}) as ToolCardArgs;
+  const origin = asString(args.origin) || "";
+  const reason = asString(args.reason) || "";
+  const isResolved = invocation.state === "result";
+  const resultData = (invocation.result || {}) as ToolCardResult;
+  // `outcome` is a string on the return -- "signed_in" or "declined" -- and
+  // there is no `signed_in` key and no `decision` key, which is why resolved is
+  // read off `state` rather than off a decision the way an approval is.
+  // See `_browser_sign_in_return`.
+  const body = asRecord(resultData.output ?? resultData);
+  const signedIn = asString(body.outcome) === "signed_in";
+  const kept = body.saved === true;
+
+  // `new URL` throws on anything that is not absolute, and the origin comes
+  // from the agent.
+  let host: string;
+  try {
+    host = new URL(origin).host || origin;
+  } catch {
+    host = origin;
+  }
+
+  // Both are needed to name the pause, and a card that cannot name it cannot
+  // resolve it -- so it says so rather than offering a link that 404s.
+  const href =
+    conversationId && invocation.toolCallId
+      ? `/sign-in-to-site/${encodeURIComponent(conversationId)}/${encodeURIComponent(invocation.toolCallId)}`
+      : null;
+
+  return (
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 shadow-[var(--shadow-xs)]">
+      <div className="flex flex-wrap items-center gap-2">
+        <ShieldAlert className="size-4 text-[var(--text-secondary)]" />
+        <span className="text-sm text-[var(--text-primary)]">
+          {isResolved
+            ? signedIn
+              ? `Signed in to ${host}`
+              : `Not signed in to ${host}`
+            : `Sign in to ${host}`}
+        </span>
+        {isResolved ? (
+          <Badge variant={signedIn ? "success" : "warning"}>
+            {signedIn ? (kept ? "kept for next time" : "signed in") : "skipped"}
+          </Badge>
+        ) : null}
+      </div>
+
+      {reason ? (
+        <p className="mt-2 max-w-prose text-sm text-[var(--text-tertiary)]">{reason}</p>
+      ) : null}
+
+      {isResolved ? null : href ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button asChild size="sm">
+            <a href={href}>Sign in to {host}</a>
+          </Button>
+          <span className="text-xs text-[var(--text-tertiary)]">
+            Opens {host} in the agent&rsquo;s browser. Your password is never sent
+            to Lemma.
+          </span>
+        </div>
+      ) : (
+        <p className="mt-3 text-xs text-[var(--text-tertiary)]">
+          This sign-in cannot be opened from here.
+        </p>
+      )}
+    </div>
+  );
+}

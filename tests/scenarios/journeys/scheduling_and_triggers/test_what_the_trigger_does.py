@@ -202,3 +202,18 @@ async def test_a_firing_starts_a_conversation_with_the_assistant(world, run):
     # Dispatched to an agent target, down the ordinary agent path: the assistant
     # is an agent, with a row, and needs no arm of its own.
     assert fired[0]["target_kind"] == "AGENT"
+
+    # ...and the conversation it started says which schedule started it. Every
+    # scheduled run used to open as "Workflow run: <agent>", naming a workflow
+    # that does not exist and telling four schedules on one agent apart by
+    # nothing at all.
+    started = await eventually(
+        lambda: alice.conversations_in(pod),
+        lambda conversations: any(
+            conversation.get("title") == f"Schedule: {schedule['name']}"
+            for conversation in conversations
+        ),
+        describe="the fired run's conversation to be named after its schedule",
+        timeout=UNTIL_BACKGROUND_WORK_LANDS,
+    )
+    assert started

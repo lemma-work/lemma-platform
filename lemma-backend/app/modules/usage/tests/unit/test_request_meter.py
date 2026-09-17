@@ -3,10 +3,14 @@
 from collections.abc import Iterator
 from datetime import datetime
 from types import ModuleType
+from typing import TYPE_CHECKING, cast
 from decimal import Decimal
 from uuid import UUID, uuid4
 
 import pytest
+
+if TYPE_CHECKING:
+    from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 
 from app.modules.usage.domain.accounting import RequestReceipt, TokenCounts
 from app.modules.usage.domain.errors import UsageLimitExceededError
@@ -15,6 +19,10 @@ from app.modules.usage.services.request_accounting_gateway import (
     PostgresRequestAccountingGateway,
 )
 from app.modules.usage.services.request_meter import RequestMeter
+
+
+#: `inside_admitted_run` reads `meters`, never the database behind them.
+_unused_factory = cast("UnitOfWorkFactory", object())
 
 
 class Accounting:
@@ -321,3 +329,55 @@ class TestUnpriceableIsAlwaysReported:
                 gateway._report_unpriceable(priceable=True, refused=False)
 
         assert len(self._reports(caplog)) == 1
+
+
+async def test_a_delegate_inside_a_live_run_is_not_judged_as_starting_one() -> None:
+    """A vision delegate meters its own spend but is not a new run.
+
+    Its scope's counter starts at zero, so without the enclosing run's state
+    its first request -- which always carries an image -- would be judged as a
+    run *starting* with an unpriceable shape, the one case `begin` refuses.
+    """
+    gateway = Accounting()
+    delegate = RequestMeter(gateway, inside_admitted_run=True)
+    await delegate.before(priceable=False)
+    assert gateway.in_flight_flags == [True]
+    await delegate.close()
+
+    starting = Accounting()
+    fresh = RequestMeter(starting)
+    await fresh.before(priceable=False)
+    assert starting.in_flight_flags == [False]
+    await fresh.close()
+
+
+def test_an_enclosing_run_is_looked_for_through_every_scope_between() -> None:
+    """A sub-agent's delegate is two scopes below the run that is paying.
+
+    The scope in between can legitimately have dispatched nothing yet -- it is
+    opened before its first request, and a delegate can be reached from setup
+    that runs first -- so this is a walk, not a look at the immediate parent.
+    """
+    from app.modules.usage.config import UsageSettings
+    from app.modules.usage.services.metering_scope import MeteringScope
+    from app.modules.usage.services.usage_context import UsageExecutionContext
+
+    def scope(parent: MeteringScope | None) -> MeteringScope:
+        return MeteringScope(
+            UsageExecutionContext(user_id=uuid4(), organization_id=None, pod_id=None),
+            _unused_factory,
+            UsageSettings(),
+            parent=parent,
+        )
+
+    run = scope(None)
+    sub_agent = scope(run)
+    delegate = scope(sub_agent)
+    assert not delegate.inside_admitted_run
+
+    meter = RequestMeter(Accounting())
+    meter.admitted = 1
+    run.meters["opening-request"] = (meter, RateCard(model="whatever"))
+    assert delegate.inside_admitted_run
+    assert sub_agent.inside_admitted_run
+    assert not run.inside_admitted_run

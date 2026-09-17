@@ -51,7 +51,7 @@ from app.sandbox_health import record_sandbox_probe
 from app.core.infrastructure.channels.channel_service import channel_service
 
 from app.modules.apps.api.host_routing import AppHostRoutingMiddleware
-from app.core.registry.assembly import enter_api_lifespans, include_module_routers
+from app.core.registry import assembly
 from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
@@ -151,6 +151,7 @@ async def lifespan(app: FastAPI):
         )
         from app.core.observability.loop_watchdog import loop_lag_watchdog
         from app.core.observability.memory_sampler import memory_sampler
+        from app.warm_imports import warm_lazy_imports
 
         configure_thread_pool()
         start_connection_scope_monitor_from_settings(service_name="lemma-api")
@@ -199,6 +200,18 @@ async def lifespan(app: FastAPI):
         # The composed list, not OSS: lemma-cloud installs more modules, and a
         # cloud-only task missing here would be enqueued to the wrong lane.
         ensure_task_lanes_registered(getattr(app.state, "lemma_modules", OSS_MODULES))
+        # Same trade as the line above, for the libraries a request reaches
+        # rather than the handlers a job reaches. Backgrounded rather than
+        # awaited: none of it is needed to serve, and a tokenizer that has to
+        # fetch its vocabulary should not hold the port closed. Skipped in local
+        # mode, where a cold start is a person waiting and the first request is
+        # usually theirs anyway, and under an embedded worker, which shares this
+        # process and would warm the same modules twice.
+        warm_task = (
+            None
+            if embedded_worker or settings.is_local_mode()
+            else create_background_task(warm_lazy_imports(), name="api-warm-imports")
+        )
         await channel_service.connect()
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()
@@ -212,7 +225,7 @@ async def lifespan(app: FastAPI):
                 # The composed module list (OSS by default; lemma-cloud passes
                 # CLOUD_MODULES) is stashed on app.state by create_app.
                 modules = getattr(app.state, "lemma_modules", OSS_MODULES)
-                await enter_api_lifespans(module_stack, modules, app)
+                await assembly.enter_api_lifespans(module_stack, modules, app)
                 # Emit only after every core and module lifespan has entered.
                 # service.version and release.sha come from LEMMA_RELEASE_SHA.
                 logger.info("service.started")
@@ -222,7 +235,7 @@ async def lifespan(app: FastAPI):
             # Core closers — explicit and last so they tear down after modules.
             if started:
                 logger.info("service.stopped")
-            for lifecycle_task in (watchdog_task, memory_task):
+            for lifecycle_task in (watchdog_task, memory_task, warm_task):
                 if lifecycle_task is not None and not lifecycle_task.done():
                     lifecycle_task.cancel()
                     try:
@@ -256,6 +269,9 @@ async def lifespan(app: FastAPI):
             # does not leak sockets into the next process.
             from app.core.net.http_client import close_shared_http_client
             from app.core.net.impersonating_client import close_impersonating_client
+            from app.modules.identity.infrastructure.supertokens_auth.querier_client import (
+                close_shared_querier_client,
+            )
             from app.modules.agent.services.runtime_model_factory import (
                 close_agent_provider_clients,
             )
@@ -264,6 +280,8 @@ async def lifespan(app: FastAPI):
             )
 
             await close_shared_http_client()
+            # The client every SuperTokens verification goes through.
+            await close_shared_querier_client()
             # The separate libcurl session `web_fetch` reads pages through.
             await close_impersonating_client()
             # Per-endpoint LLM provider pools, kept alive across runs for
@@ -430,7 +448,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # while being included, which is exactly when a readiness probe is worth
     # having.
     app.include_router(health_router)
-    include_module_routers(app, modules)
+    assembly.include_module_routers(app, modules)
 
     # Registered only alongside the document it renders. Left on with
     # `openapi_url=None` it would serve a reference UI pointed at nothing.

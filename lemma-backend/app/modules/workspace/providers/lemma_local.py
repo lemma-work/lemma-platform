@@ -181,6 +181,12 @@ class LemmaLocalSandboxProvider(LemmaLocalOpsMixin):
             [
                 _app("runtime", profile.runtime_port, "eager", "private"),
                 _app("browser", 4848, "lazy", "workspace_user"),
+                # The browser relay. `private`, because unlike the dashboard
+                # nobody reaches this from a browser tab -- only the backend
+                # does, holding the token it delivered. Declared here because
+                # the guest publishes only the ports named at create, so an
+                # undeclared one is not slow to reach, it is unreachable.
+                _app("relay", 4850, "lazy", "private"),
             ]
             if workspace
             else [_app("function", profile.runtime_port, "eager", "private")]

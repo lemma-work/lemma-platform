@@ -43,7 +43,20 @@ ensure_browser_started() {
   display="${DISPLAY:-:99}"
   display_number="${display#:}"
   display_number="${display_number%%.*}"
-  if [ -f "$config" ] && [ -S "/tmp/.X11-unix/X${display_number}" ]; then
+  # A running X server, not the socket it left behind. `/tmp/.X11-unix/X99` is
+  # an ordinary file in the container's writable layer, so it outlives the
+  # process that made it whenever Xvfb is killed rather than asked to stop --
+  # an ungraceful container stop, a Docker daemon restart, a host reboot, a
+  # quiesce that could not reach the runtime, or E2B, which pauses without
+  # quiescing and keeps `/tmp`.
+  #
+  # Testing the socket meant this returned early in exactly those cases, so
+  # `start-browser` -- the one thing that would have started Xvfb -- was never
+  # called, and every browser command in the sandbox failed with "Missing X
+  # server or $DISPLAY" for the life of the container. Fixing the same test
+  # inside `start-browser` was not enough on its own, because this guard is
+  # what decides whether it runs at all.
+  if [ -f "$config" ] && pgrep -f "Xvfb ${display} " >/dev/null 2>&1; then
     return 0
   fi
   command -v start-browser >/dev/null 2>&1 || return 0

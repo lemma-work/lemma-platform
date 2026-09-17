@@ -34,7 +34,10 @@ def _run(source: str) -> list:
     checker = _load_checker()
     tree = ast.parse(source)
     index = checker.DependencyIndex()
-    index.ingest(tree)
+    # The same path the visitor is given: the index keys definitions by
+    # `path:lineno` so a call can be judged with the definition it sits inside
+    # taken out of the running, and the two halves have to agree on the name.
+    index.ingest(tree, "sample.py")
     index.resolve()
     index.resolve_slow()
     visitor = checker.SessionScopeChecker("sample.py", index)
@@ -350,9 +353,13 @@ class Repo:
     async def execute(self, sql):
         return await self.session.execute(sql)
 
-async def handler(uow_factory, repo):
+class Engine:
+    async def execute(self, sql):
+        return await self.session.execute(sql)
+
+async def handler(uow_factory, thing):
     async with uow_factory() as uow:
-        await repo.execute("select 1")
+        await thing.execute("select 1")
 """
     assert _run(source) == []
 
@@ -496,6 +503,47 @@ def test_one_fast_definition_no_longer_silences_the_slow_ones() -> None:
     assert index.why_slow("helper.fetch_remote") == "outbound HTTP"
 
 
+def test_a_facade_is_not_judged_against_its_own_definition() -> None:
+    """Delegating to the same method name must not report the delegator.
+
+    `FunctionRevisionUseCases.get_revision` opens a short scope, resolves the
+    revision, closes it, and only then reads the code from storage -- the shape
+    this gate exists to encourage. Because it reads storage it is itself a slow
+    definition of `get_revision`, and with only two definitions of that name in
+    the tree it pushed its own call to `FunctionRevisionService.get_revision`
+    over the ratio. The method reported itself.
+
+    `resolve_slow` already refuses self-reference by name; this is the reporting
+    half of the same rule, and the second half below is what keeps it from
+    becoming a blanket exemption for the name.
+    """
+    source = """
+class UseCases:
+    async def get_revision(self, pod_id):
+        async with self._uow_factory() as uow:
+            revision = await service.get_revision(pod_id)
+        revision.code = await service.read_revision_code(revision)
+        return revision
+
+
+class Service:
+    async def get_revision(self, pod_id):
+        return await self.repository.get_revision_by_hash(pod_id)
+
+    async def read_revision_code(self, revision):
+        return await self.storage.read_file(revision.code_path)
+"""
+    assert _run(source) == []
+
+    # The teeth. Same shape, but the delegate really does read storage: the
+    # exemption covers the enclosing definition, never the name.
+    slow = source.replace(
+        "        return await self.repository.get_revision_by_hash(pod_id)",
+        "        return await self.storage.read_file(pod_id)",
+    )
+    assert [v.rule for v in _run(slow)] == ["non-db-await"]
+
+
 def test_a_name_that_is_usually_fast_is_still_not_slow() -> None:
     """The other direction, which is why `any` is not the answer.
 
@@ -610,3 +658,209 @@ async def stream_events(ctx: PodContextDep, client):
 """
 
     assert "non-db-await/request-scoped" in _rules(source)
+
+
+# --- work deferred to after the commit ----------------------------------------
+
+
+def test_work_registered_with_after_commit_is_not_a_hold():
+    """The shape `_invalidate_snapshots_after_commit` uses, and 29 callers inherit.
+
+    Read literally the helper awaits a Redis round trip, so every role mutation
+    in the tree inherited it. Neither branch can hold a connection: the deferred
+    one runs after the commit, and the inline one runs only when there is no
+    unit of work -- which is exactly when there is no pooled connection to keep.
+    """
+    source = """
+async def invalidate(session, uow):
+    async def _run():
+        await run_blocking(purge_snapshots)
+
+    if uow is None:
+        await _run()
+        return
+    uow.after_commit(_run)
+
+
+async def mutate(uow_factory):
+    async with uow_factory() as uow:
+        await uow.session.execute("update roles set x = 1")
+        await invalidate(uow.session, uow)
+"""
+    assert _rules(source) == set()
+
+
+def test_a_nested_function_not_registered_is_still_a_hold():
+    """The narrowness is the point: only a name handed to `after_commit` is safe."""
+    source = """
+async def invalidate(session, uow):
+    async def _run():
+        await run_blocking(purge_snapshots)
+
+    await _run()
+
+
+async def mutate(uow_factory):
+    async with uow_factory() as uow:
+        await uow.session.execute("update roles set x = 1")
+        await invalidate(uow.session, uow)
+"""
+    assert "non-db-await" in _rules(source)
+
+
+def test_a_session_opened_from_a_private_factory_attribute_is_seen():
+    """`self._uow_factory()` was invisible: 39 sites across 12 files unchecked."""
+    source = """
+class Service:
+    async def run(self):
+        async with self._uow_factory() as uow:
+            await uow.session.execute("select 1")
+            await run_blocking(extract, document)
+"""
+    assert "non-db-await" in _rules(source)
+
+
+# --- committing on purpose before a slow call ---------------------------------
+
+
+def test_a_commit_before_the_slow_call_is_not_a_hold():
+    """`create_auth_config` and `update_install` do exactly this, deliberately.
+
+    Both commit with a comment saying the network work must not be waited on
+    holding a pooled connection. Read without statement order they look like
+    holds, and so does every controller that calls them.
+    """
+    source = """
+async def install(uow_factory):
+    async with uow_factory() as uow:
+        await uow.session.execute("select 1")
+        await uow.commit()
+        await run_blocking(negotiate_with_server)
+"""
+    assert _rules(source) == set()
+
+
+def test_a_query_after_the_commit_re_acquires():
+    """The span closes when something queries again, or the gate goes blind.
+
+    Commit, insert, then call out is a real hold: the insert took a connection
+    back out and the call is waiting on it.
+    """
+    source = """
+async def install(uow_factory):
+    async with uow_factory() as uow:
+        await uow.commit()
+        await uow.session.execute("insert into installs values (1)")
+        await run_blocking(negotiate_with_server)
+"""
+    assert "non-db-await" in _rules(source)
+
+
+def test_slow_work_between_a_commit_and_a_write_is_still_released():
+    """The shape one boundary could not describe: commit, call out, then write.
+
+    `create_auth_config` negotiates with a tenant-named MCP server after its
+    commit and inserts afterwards. The negotiation is genuinely released; the
+    insert genuinely re-acquires.
+    """
+    source = """
+async def install(uow_factory):
+    async with uow_factory() as uow:
+        await uow.commit()
+        await run_blocking(negotiate_with_server)
+        await uow.auth_config_repository.create(row)
+"""
+    assert _rules(source) == set()
+
+
+def test_a_call_to_a_closure_defined_here_is_not_voted_on() -> None:
+    """A nested `def` is not an ambiguous name.
+
+    `_retry_failed_conversation` awaits a closure it defines three lines above.
+    The bare name `run` has 21 definitions in this tree and 11 are slow, so the
+    ratio answered "job enqueue" for a call that can only mean the local one.
+    """
+    source = """
+async def handler(uow_factory, context):
+    async def run(scoped_uow):
+        return await agent_conversations.retry_failed_run(scoped_uow, context)
+
+    async with uow_factory() as scoped_uow:
+        return await run(scoped_uow)
+
+
+class Harness:
+    async def run(self, ctx):
+        return await self.queue.enqueue_run(ctx)
+"""
+    assert _run(source) == []
+
+    # The teeth: the closure itself doing slow work is still a hold. The rule
+    # changes which definition is consulted, not whether one is.
+    slow = source.replace(
+        "        return await agent_conversations.retry_failed_run(scoped_uow, context)",
+        "        return await self.storage.download_file(context)",
+    )
+    assert [v.rule for v in _run(slow)] == ["non-db-await"]
+
+
+def test_a_commit_at_the_top_of_a_loop_body_releases_for_that_iteration() -> None:
+    """Per-iteration release, which is the only kind that works in a loop.
+
+    `DatastoreEventHandler` fires one schedule at a time and each one may run an
+    LLM inference. A single commit before the loop is undone by the first fire
+    row written inside it, so the release has to happen per iteration -- and a
+    commit at the top of a loop body runs on every one of them. If the loop does
+    not run, neither does the slow call it was protecting.
+    """
+    source = """
+async def fire_all(uow_factory, schedules, repo):
+    async with uow_factory() as uow:
+        for schedule in schedules:
+            await uow.commit()
+            await processor.run_stream(schedule)
+            await repo.record_fire(schedule.id)
+"""
+    assert _run(source) == []
+
+    # The teeth: `if`/`try` are still not descended into, so a commit that may
+    # not run still does not release.
+    branched = source.replace(
+        "            await uow.commit()",
+        "            if schedule.wants_release:\n                await uow.commit()",
+    )
+    assert [v.rule for v in _run(branched)] == ["non-db-await"]
+
+
+def test_commit_now_counts_as_the_commit() -> None:
+    """A service reaching its unit of work through the session still releases.
+
+    `commit_now` exists because a service is built from a session, so the commit
+    is unavoidably written as "if there is one" -- and the only case it skips is
+    the one where there is no pooled connection to hand back. Naming the helper
+    asserts that once instead of at every call site.
+    """
+    source = """
+async def promote(uow_factory, repository):
+    async with uow_factory() as uow:
+        app = await repository.create(entity)
+        await commit_now(repository)
+        archive = await run_blocking(zip_it, app)
+        return archive
+"""
+    assert _run(source) == []
+
+    without = source.replace("        await commit_now(repository)\n", "")
+    assert [v.rule for v in _run(without)] == ["non-db-await"]
+
+
+def test_a_commit_inside_a_branch_does_not_release():
+    """It may not run, and a block that sometimes keeps its connection keeps it."""
+    source = """
+async def install(uow_factory, should_commit):
+    async with uow_factory() as uow:
+        if should_commit:
+            await uow.commit()
+        await run_blocking(negotiate_with_server)
+"""
+    assert "non-db-await" in _rules(source)

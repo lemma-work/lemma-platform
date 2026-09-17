@@ -178,12 +178,25 @@ EXCLUDED_PATHS = (
     "/public/sdk",  # browser SDK bundle for no-build apps
     "/widgets/serve",  # widget HTML; handler self-validates session-or-signed-token
     "/public/datastore",  # signed-token file serving validates its own token
-    "/s/",  # short signed-URL file serving validates its own Redis-backed code
+    # Short signed-URL file serving; validates its own Redis-backed code.
+    # Deliberately the trailing-slash form, so this stays a prefix for one
+    # route rather than making every future `/s*` path public. Bare `/s` is a
+    # real 404 route, reachable via EXCLUDED_EXACT_PATHS below.
+    "/s/",
     "/scalar",
     "/st",  # SuperTokens auth endpoints
     "/auth/cli/info",
     "/auth/cli/refresh",
     "/workspace/browser/user",
+    # The signed grant in the path IS the credential, and the handler verifies
+    # it. This URL is handed to a browser that has no Lemma session and never
+    # will -- requiring one 401s the only caller the route has.
+    "/workspace-ports/",
+    # The browser view websocket authenticates its own handshake (cookie,
+    # bearer, or the access_token query parameter a browser must use because it
+    # cannot set headers on an upgrade), because the global dependency cannot
+    # see an upgrade at all.
+    "/workspace/browser/view",
     "/billing/payment",  # payment result pages (success/cancel) — no session needed post-redirect
     "/billing/webhooks",  # payment-provider webhooks (Dodo) — handler verifies the HMAC signature itself; delivered server-to-server with no session
     "/connectors/connect-requests/oauth/callback",  # OAuth callback - secured by state parameter
@@ -200,6 +213,17 @@ EXCLUDED_PATHS = (
     # and stay session-protected.
     "/agent-host/",
 )
+
+# Paths excluded by an EXACT match rather than a prefix, for the cases where the
+# prefix form would be far too greedy.
+#
+# `/s` is the short-link root. Its real prefix is `/s/`, and `/s` cannot join
+# the tuple above because `startswith("/s")` would also match `/schedules`,
+# `/surfaces`, `/st` and anything else beginning with an s. But
+# `TrailingSlashMiddleware` rewrites `/s/` to `/s` before routing, so without an
+# exact entry the bare root 401s when the honest answer is 404 — an
+# authentication error for a link that is merely missing its code.
+EXCLUDED_EXACT_PATHS = frozenset({"/s"})
 
 
 def _is_surface_webhook_path(path: str) -> bool:
@@ -268,6 +292,24 @@ def _is_public_identity_auth_path(path: str, method: str) -> bool:
     )
 
 
+def _is_public_path(connection: HTTPConnection) -> bool:
+    """Whether this request is exempt from the global authentication gate.
+
+    Extracted from ``verify_auth`` rather than left inline: it is the whole of
+    that function's branching, and every new exemption made the one function
+    more complex without making it do anything more.
+    """
+    path = connection.url.path
+    method = str(connection.scope.get("method", "GET"))
+    return (
+        path.startswith(EXCLUDED_PATHS)
+        or path in EXCLUDED_EXACT_PATHS
+        or _is_surface_webhook_path(path)
+        or _is_public_desktop_auth_path(path, method)
+        or _is_public_identity_auth_path(path, method)
+    )
+
+
 async def verify_auth(connection: HTTPConnection):
     """
     Global dependency to enforce authentication on all routes except excluded ones.
@@ -275,18 +317,7 @@ async def verify_auth(connection: HTTPConnection):
     """
     set_current_context(None)
 
-    if (
-        connection.url.path.startswith(EXCLUDED_PATHS)
-        or _is_surface_webhook_path(connection.url.path)
-        or _is_public_desktop_auth_path(
-            connection.url.path,
-            str(connection.scope.get("method", "GET")),
-        )
-        or _is_public_identity_auth_path(
-            connection.url.path,
-            str(connection.scope.get("method", "GET")),
-        )
-    ):
+    if _is_public_path(connection):
         return
 
     if connection.scope["type"] != "http":
