@@ -119,6 +119,13 @@ def workspace_template():
                 "procps",
                 "ripgrep",
                 "socat",
+                # The human-facing view of the same Xvfb display. See the note
+                # in Dockerfile.workspace; the two images have to agree on
+                # this or the VNC pane connects on one fabric and not the
+                # other -- the same failure mode the `ffmpeg` note above
+                # describes, for the same reason.
+                "websockify",
+                "x11vnc",
                 "xz-utils",
                 "xvfb",
             ],
