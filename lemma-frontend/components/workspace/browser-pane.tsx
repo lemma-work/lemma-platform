@@ -144,7 +144,15 @@ export function BrowserPane({
             // Loaded on connect rather than imported at module scope: the
             // library reaches for `document`/`WebSocket` at import time, which
             // a server render has neither of.
-            const { default: RFB } = await import('@novnc/novnc');
+            let RFB: typeof NoVncClient;
+            try {
+                ({ default: RFB } = await import('@novnc/novnc'));
+            } catch {
+                if (cancelled) return;
+                setState('lost');
+                retryTimer = setTimeout(connect, reconnectDelayMs(attempt++));
+                return;
+            }
             if (cancelled) return;
             container.replaceChildren();
 

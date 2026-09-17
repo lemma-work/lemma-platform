@@ -5492,6 +5492,23 @@
         "title": "CreateTableRequest",
         "type": "object"
       },
+      "CurrentPageUrlResponse": {
+        "properties": {
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "CurrentPageUrlResponse",
+        "type": "object"
+      },
       "DataStoreWorkflowStartConfigInput": {
         "properties": {
           "operations": {
@@ -37170,6 +37187,56 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "access"
+        }
+      }
+    },
+    "/workspace/browser/current-page-url": {
+      "get": {
+        "description": "Polled by the sign-in page while its VNC pane is open.\n\nVNC is pixels, not events -- it carries no navigation signal the way the\nJSON stream this replaced did with its `url` message on every\nnavigation. This is what the anti-phishing host display on\n`sign-in-to-site/[conversationId]/[toolCallId]/page.tsx` reads instead,\nso a person mid-SSO-redirect still sees which site they are actually on.",
+        "operationId": "workspace.browser.current_page_url",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "origin",
+            "required": true,
+            "schema": {
+              "title": "Origin",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentPageUrlResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What page a sign-in's browser is actually showing",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "current_page_url"
         }
       }
     },

@@ -32,7 +32,7 @@ from typing import TypedDict
 
 from app.modules.workspace.contracts.browser import BrowserState, host_of
 from app.modules.workspace.providers.base import ProviderGone
-from sandbox_runtime.errors import SandboxCapabilityUnsupported
+from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxUnavailable
 
 logger = get_logger(__name__)
 
@@ -224,7 +224,11 @@ class BrowserViewService:
         try:
             relay = await self._relay(user_id, start=False)
             found = await relay.targets(domain=host_of(origin))
-        except BrowserRelayUnavailable:
+        except SandboxCapabilityUnsupported:
+            return None
+        except SandboxUnavailable, BrowserRelayUnavailable:
+            return None
+        except OSError, httpx.HTTPError, ProviderGone, _engine_error():
             return None
         if not found:
             return None
