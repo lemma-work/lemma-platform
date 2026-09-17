@@ -1,5 +1,6 @@
 """Company signup stays private and waits for access to the installation org."""
 
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -8,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -18,6 +20,7 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
 )
+from app.modules.agent_surfaces.services.onboarding_replay import replay_onboarding
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _ensure_connector_account,
@@ -89,8 +92,8 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
     )
     actor = "U" + uuid4().hex[:10]
 
-    async def say(text, *, channel=False):
-        payload = _load_slack_dm_fixture(text=text, ts=uuid4().hex)
+    async def say(text, *, channel=False, ts=None):
+        payload = _load_slack_dm_fixture(text=text, ts=ts or uuid4().hex)
         payload["event"].update(
             {
                 "user": actor,
@@ -168,3 +171,27 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
     messages = message_store.get_all("SLACK")
     assert messages
     assert all(item["channel"] == f"D{actor}" for item in messages)
+
+    # The handoff is what ends signup and puts the personal route in charge of
+    # the conversation. It is the worker's job, and this test has no worker.
+    async with factory() as uow:
+        pending_id = await uow.session.scalar(
+            select(PendingChatOnboarding.id).where(
+                PendingChatOnboarding.user_id == user_id
+            )
+        )
+    await replay_onboarding(
+        pending_id,
+        uow_factory=factory,
+        job_queue=AsyncMock(spec=SharedStreaqJobQueue),
+    )
+
+    # From here the personal route answers instead of `prepare_ingress`, which
+    # is where the delivery claim otherwise lives -- so this is the one
+    # conversation whose redeliveries have no message-level defence unless the
+    # route takes the claim itself. Slack retries a delivery three times.
+    redelivered = uuid4().hex
+    first = await say("What is on my plate?", ts=redelivered)
+    again = await say("What is on my plate?", ts=redelivered)
+    assert first.handled and first.context is not None
+    assert again.handled and again.context is None
