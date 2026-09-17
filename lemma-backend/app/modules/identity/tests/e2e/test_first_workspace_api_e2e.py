@@ -17,7 +17,13 @@ async def test_a_new_account_is_given_a_workspace_and_a_pod(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["organization_id"]
-    assert body["entry"] in {"saved", "existing", "domain_join", "new_org"}
+    # `authenticated_client` is a fresh account in no organization and this
+    # test seeds no domain match, so the branch is not a matter of opinion: a
+    # set of four is an assertion that cannot fail.
+    assert body["entry"] == "new_org"
+    assert body["pod_id"]
+    assert body["assistant_id"]
+    assert body["pod_created"]
 
 
 async def test_calling_it_twice_does_not_make_a_second_workspace(
@@ -54,6 +60,7 @@ async def test_a_caller_making_its_own_pod_is_not_given_a_spare(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["organization_id"]
+    assert body["entry"] == "new_org"
     assert body["pod_id"] is None
     ready = await authenticated_client.post("/users/me/first-workspace")
     assert ready.status_code == 200, ready.text

@@ -50,7 +50,9 @@ async def test_teams_channel_signup_uses_private_cards_and_installation_org(
     email = f"teams-signup-{uuid4().hex}@gmail.com"
     fake_teams._test_user_email = email
     token_cache = RedisJsonCache(
-        e2e_settings.redis_url, key_prefix="surface:teams-token", ttl_seconds=3600
+        e2e_settings.redis_url,
+        key_prefix="surface:teams-token",
+        ttl_seconds=3600,
     )
     await token_cache.set_raw(
         "botframework.com:https://api.botframework.com/.default", "teams-bot-token"
