@@ -240,31 +240,22 @@ class ConversationRepository(
                 .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
                 .limit(1)
             )
-            # `set_committed_value` rather than a plain assignment, which the
-            # ORM would read as a mutation and try to flush -- and rather than
-            # writing `__dict__` directly, which is what this used to do.
+            # `set_committed_value`, not a plain assignment (which the ORM
+            # reads as a mutation and tries to flush) and not a `__dict__`
+            # write, which is what this used to do. A bare list in `__dict__`
+            # is not an instrumented collection -- no `_sa_adapter` -- and
+            # nothing notices until a later flush in the same unit of work asks
+            # this relationship for its history, which then raises
+            # `AttributeError` from SQLAlchemy's dependency processor,
+            # attributed to whatever was being written at the time.
             #
-            # A bare list in `__dict__` is not an instrumented collection: it
-            # has no `_sa_adapter`. Nothing notices until some later flush in
-            # the same unit of work asks this relationship for its history, and
-            # then `AttributeError: 'list' object has no attribute
-            # '_sa_adapter'` comes out of SQLAlchemy's dependency processor --
-            # attributed to whatever was being written at the time, nowhere
-            # near the read that planted it.
-            #
-            # It surfaced as a second message in a Teams channel thread failing
-            # to flush inside `create_agent_run`. Reproducing it is not
-            # reliable: whether the unit of work consults this relationship at
-            # all depends on what else is in the flush, and the case that
-            # raised every time on one machine passed in CI on another. So
-            # there is no test named here that holds this -- the argument for
-            # the line below is that an uninstrumented collection is wrong
-            # whether or not today's flush plan happens to look at it.
-            #
-            # `set_committed_value` is the documented way to attach rows
-            # fetched by a separate query as part of the loaded state, and it
-            # raises no history events -- which is the whole of what writing
-            # `__dict__` was reaching for.
+            # No test here holds this: whether the flush consults the
+            # relationship depends on what else is in it, and the case that
+            # raised every time locally passed in CI. The argument is that an
+            # uninstrumented collection is wrong whether or not today's flush
+            # plan looks at it. `set_committed_value` is the documented way to
+            # attach separately-queried rows as loaded state, and raises no
+            # history events -- all the `__dict__` write was reaching for.
             set_committed_value(
                 model, "agent_runs", [latest] if latest is not None else []
             )
