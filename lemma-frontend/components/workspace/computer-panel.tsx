@@ -17,10 +17,8 @@ type Tab = 'files' | 'browser';
  * would hold a few hundred megabytes open for as long as it was on screen.
  */
 export function ComputerPanel({
-    conversationId,
     workspaceCwd,
 }: {
-    conversationId?: string;
     workspaceCwd?: string;
 }) {
     const [tab, setTab] = useState<Tab>('files');
@@ -50,13 +48,10 @@ export function ComputerPanel({
                 {tab === 'files' ? (
                     <WorkspaceFilesPane workspaceCwd={workspaceCwd} />
                 ) : (
-                    /* Named, so the pane watches *this* conversation's browser.
-                       Without it every pane attached to the sandbox's default
-                       session, which is shared by every agent this person runs
-                       -- so one conversation's pane showed another's browsing,
-                       and a login granted for one task was visible to all of
-                       them. */
-                    <BrowserPane conversationId={conversationId} />
+                    // VNC shows this person's whole sandbox display, shared by
+                    // every conversation's agent -- there is no per-conversation
+                    // session for a pane here to be scoped to any more.
+                    <BrowserPane />
                 )}
             </div>
         </div>

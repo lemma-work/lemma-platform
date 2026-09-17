@@ -164,20 +164,32 @@ class BrowserViewService:
 
         return {"state": "running" if chrome == "running" else "stopped"}
 
-    async def open_session(
-        self,
-        user_id: UUID,
-        *,
-        mode: str,
-        origin: str | None = None,
-        session: str | None = None,
-        domain: str | None = None,
+    async def open_vnc_session(
+        self, user_id: UUID, *, mode: str, origin: str | None = None
     ) -> tuple[str, dict[str, str]]:
-        """Get a browser up, on the right page, and say where to attach.
+        """Get a browser up, on the right page, and say where to attach a VNC view.
 
         Raises `BrowserRelayUnavailable` with a sentence when the browser will
         not start, and `SandboxCapabilityUnsupported` where this fabric cannot
         reach a port at all.
+
+        `origin`, when given, steers the browser to that site first -- the
+        "arrival repeats" self-heal that makes opening the sign-in page a
+        second time land on the right site even if an earlier best-effort
+        `ensure_for_sign_in` never ran or the browser had gone idle since.
+        VNC shows the whole shared display rather than one CDP-picked tab, so
+        there is no target to resolve the way the JSON stream this replaced
+        needed -- but the session the steer actually landed in is still
+        wanted, for the driving lease. See `vnc_socket_url`.
+
+        `ensure_browser` is called either way, `origin` or not: it is what
+        starts Xvfb, Chrome, and -- through `start-browser.sh` -- the VNC
+        pair, none of which a mere port-forward through `deliver_token`
+        brings up on its own. Skipping it for a plain watch/drive with no
+        site to steer to was the first version of this method, and it left
+        VNC connecting to a display nothing was running yet -- the browser
+        used to start this way implicitly, through the JSON stream's own
+        `ensure_browser` call, which VNC has no equivalent path for.
         """
         relay = await self._relay(user_id, start=True)
         # The same rule the state paths hold, on the path a person actually
@@ -186,32 +198,38 @@ class BrowserViewService:
         # a password into -- did not, so the guard was on the two doors nobody
         # was walking through.
         await _require_private(relay, doing="watch or drive this browser")
-        # No session named and a site named means a sign-in: it belongs in that
-        # site's own session, the one `save_login_state` later reads. The relay
-        # names that session from `domain` and not from `origin`, so an origin
-        # on its own used to land in the default session -- the whole of the
-        # bug this pairing removes. `ensure_for_sign_in` already did this; the
-        # viewer did not, and they are the two halves of one journey.
-        if session is None and domain is None and origin:
-            domain = host_of(origin)
+        # A site named means a sign-in: it belongs in that site's own session,
+        # the one `save_login_state` later reads. Named from `domain`,
+        # matching `ensure_for_sign_in` -- the two are the halves of one
+        # journey and must resolve the session the same way.
         found = await relay.ensure_browser(
-            origin=origin, session=session, domain=domain
+            origin=origin, session=None, domain=host_of(origin) if origin else None
         )
-        target_id = str(found.get("target_id") or "")
-        if not target_id:
-            raise BrowserRelayUnavailable("the browser has no page to show")
-        # The session the relay says it used, never one worked out again here.
-        #
-        # This used to re-derive `login-<host>` from the origin while the relay,
-        # given neither a session nor a domain, had opened the page in the
-        # default one. The socket then carried a target id from one browser to
-        # another, where it does not exist -- so the person watched a reconnect
-        # loop, and a capture afterwards read a browser nobody had signed in to.
-        # Two derivations of one fact is the bug; this is the one that knows.
-        attached = str(found.get("session") or "") or None
-        return await relay.session_socket_url(
-            target_id=target_id, mode=mode, session=attached
-        )
+        # The session the relay says it used, never one worked out again
+        # here -- see the note on `vnc_socket_url` for why this matters even
+        # though VNC does not scope the picture by it.
+        session = str(found.get("session") or "") or None
+        return await relay.vnc_socket_url(mode=mode, session=session)
+
+    async def current_page_url(self, user_id: UUID, *, origin: str) -> str | None:
+        """What page the browser signing in to `origin` is actually showing.
+
+        VNC carries no navigation signal of its own -- it is pixels, not
+        events -- so the anti-phishing host display on the sign-in page
+        (`sign-in-to-site/[conversationId]/[toolCallId]/page.tsx`) polls
+        this rather than reading it off the video the way the JSON stream's
+        `onNavigated` used to. `None` when nothing can be read, which leaves
+        that page showing the origin it was told about rather than breaking.
+        """
+        try:
+            relay = await self._relay(user_id, start=False)
+            found = await relay.targets(domain=host_of(origin))
+        except BrowserRelayUnavailable:
+            return None
+        if not found:
+            return None
+        url = found[0].get("url")
+        return str(url) if url else None
 
     async def save_login_state(
         self, user_id: UUID, *, domain: str, session: str | None = None

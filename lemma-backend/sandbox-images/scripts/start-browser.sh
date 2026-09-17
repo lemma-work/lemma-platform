@@ -40,17 +40,29 @@ rm -f \
 # The rest of the list is what makes Chromium run at all in a container without
 # a session bus or a large /dev/shm. `AGENT_BROWSER_ARGS` can extend this per
 # sandbox without editing the image.
-if [ ! -f "$CONFIG_PATH" ]; then
-  mkdir -p "$(dirname "$CONFIG_PATH")"
-  cat > "$CONFIG_PATH" <<EOF
+# Regenerated every run rather than only when missing. A resumed sandbox
+# keeps whatever `config.json` its last run wrote, and a proxy assigned since
+# then -- a new resume can land on a different sandbox instance -- must reach
+# Chrome's next launch, not wait for a profile that happens not to exist yet.
+CHROME_ARGS="--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
+if [ -n "${LEMMA_BROWSER_PROXY_URL:-}" ]; then
+  # Chrome ignores inline `user:pass` in `--proxy-server` outright, so this is
+  # for IP-allowlisted proxies only; a credentialed proxy needs CDP
+  # `Fetch.authRequired` handling this script cannot add. The WebRTC flag
+  # matters more than it looks: without it, the sandbox's real IP is visible
+  # to any page in ICE candidates gathered outside the proxy, which defeats
+  # the point of having one.
+  CHROME_ARGS="${CHROME_ARGS},--proxy-server=${LEMMA_BROWSER_PROXY_URL},--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
+fi
+mkdir -p "$(dirname "$CONFIG_PATH")"
+cat > "$CONFIG_PATH" <<EOF
 {
   "headed": true,
   "profile": "$PROFILE_DIR",
   "executablePath": "$EXECUTABLE_PATH",
-  "args": "--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
+  "args": "$CHROME_ARGS"
 }
 EOF
-fi
 if ! mkdir -p "$RUNTIME_DIR" 2>/dev/null || [ ! -w "$RUNTIME_DIR" ]; then
   RUNTIME_DIR="/tmp/agent-browser-runtime-${UID:-10001}"
   mkdir -p "$RUNTIME_DIR"
@@ -96,6 +108,28 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
     sleep 0.05
     waited=$((waited + 1))
   done
+fi
+
+# The human-facing view of this same display, over VNC rather than the
+# stream server's JPEG frames -- a real clipboard and no coordinate space to
+# get wrong, at the cost of showing the whole display rather than one tab.
+# Both processes are loopback-only; nothing outside the relay ever dials
+# either port. Idempotent by pgrep for the same reason as Xvfb and the
+# dashboard forwarder above: this script runs from every `exec_command` that
+# wants a browser, not once per sandbox.
+VNC_PORT="${LEMMA_BROWSER_VNC_PORT:-5900}"
+VNC_WS_PORT="${LEMMA_BROWSER_VNC_WS_PORT:-5901}"
+if ! pgrep -f "x11vnc .*-rfbport ${VNC_PORT}" >/dev/null 2>&1; then
+  # `-noshm`: MIT-SHM attach fails under this container's X server and takes
+  # x11vnc down with it moments after a clean-looking start -- proven by
+  # running it without the flag, not assumed. `setsid`, same reason as Xvfb.
+  setsid nohup x11vnc -display "$DISPLAY_VALUE" -noshm -forever -shared -nopw \
+    -rfbport "$VNC_PORT" -listen 127.0.0.1 -noxdamage -quiet \
+    >/tmp/lemma-x11vnc.log 2>&1 < /dev/null &
+fi
+if ! pgrep -f "websockify .*${VNC_WS_PORT}" >/dev/null 2>&1; then
+  setsid nohup websockify --heartbeat 30 127.0.0.1:"$VNC_WS_PORT" 127.0.0.1:"$VNC_PORT" \
+    >/tmp/lemma-websockify.log 2>&1 < /dev/null &
 fi
 
 # The relay is what the backend reaches; the dashboard is what a person could

@@ -1,21 +1,16 @@
 """Finding, starting, and steering the Chrome this sandbox runs.
 
-What this does *not* do any more is speak CDP over a socket. A live, drivable
-view used to mean driving `Page.startScreencast` and `Input.dispatch*`
-ourselves; `agent-browser` runs a session-scoped stream server that does the
-same job and more, and `stream_proxy.py` carries a viewer to it. `stream_port`
-below is how that port is found.
-
-An earlier version of this docstring said the browser's own dashboard "has no
-input path, so watching is all it can ever offer". That was wrong twice over:
-the dashboard offers an address bar, tabs, a console and a cookie panel, and
-the stream underneath it takes mouse, keyboard and touch. The dashboard's
-*viewport* does not forward clicks -- which is a choice in its UI, not a limit
-of the protocol.
-
-What is left here is the lifecycle: where Chrome is, whether it is up, and how
-to point it at a page. Three things make that awkward, and all three are
-handled here rather than by whoever calls it.
+A live, drivable view of it is not this module's job any more. Two earlier
+designs lived here in turn: driving CDP's `Page.startScreencast` and
+`Input.dispatch*` directly, then proxying `agent-browser`'s own session-scoped
+stream server (`stream_port`, `stream_proxy.py` -- both gone). What replaced
+both is `x11vnc` and `websockify` in front of the Xvfb display Chrome already
+runs on: a real screen rather than a translated one, so there is no frame
+protocol, no viewport measurement and no coordinate space for this module to
+answer questions about any more. `app.py`'s `/vnc` route talks to that
+directly; what is left here is Chrome's own lifecycle: where it is, whether
+it is up, and how to point it at a page. Three things make that awkward, and
+all three are handled here rather than by whoever calls it.
 
 **The port is not fixed.** Chrome writes it to ``DevToolsActivePort`` in the
 profile directory on every launch. Forcing a fixed ``--remote-debugging-port``
@@ -32,17 +27,16 @@ which surfaced as a 500 and, to the person clicking, as an unexplained failure.
 Hence: the recorded port is a candidate, and it is not believed until something
 answers on it.
 
-**Nothing here is reachable from outside.** Chrome binds loopback and so does
-the stream server, so both are only ever reached *through* this process -- which
-is also the right answer for safety, because it puts a place to stand between a
-viewer and the browser, and it means no new port is published.
+**Nothing here is reachable from outside.** Chrome binds loopback, and so do
+`x11vnc` and `websockify` -- all reached *through* this process, which is also
+the right answer for safety: it puts a place to stand between a viewer and the
+browser, and it means no new port is published.
 """
 
 from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-import json
 import hashlib
 import logging
 import os
@@ -50,7 +44,6 @@ from pathlib import Path
 import re
 
 import httpx
-import websockets
 
 #: Chrome writes the port here on launch; the second line is the browser's own
 #: WebSocket path, which is not what a page-level client wants.
@@ -321,89 +314,6 @@ async def ensure_port(*, session: str | None = None) -> int:
                 process.kill()
 
 
-async def stream_port(*, session: str | None = None) -> int:
-    """Where this session's live stream is listening.
-
-    `agent-browser` runs a **session-scoped** WebSocket stream server -- one per
-    session, on its own OS-assigned port, always enabled. It speaks frames out
-    and mouse, keyboard and touch in, and it is what the browser's own dashboard
-    renders. We proxy it rather than driving CDP ourselves: see
-    `stream_proxy.py` for why that is safe here and was not for CDP.
-
-    Asked per session rather than read from `AGENT_BROWSER_STREAM_PORT`, because
-    that variable names one port and a sandbox runs several sessions at once --
-    a conversation's browser and a sign-in's are different browsers.
-
-    The browser has to be up first; `ensure_port` is what starts it.
-    """
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *agent_browser_argv("stream", "status", "--json", session=session),
-            env=agent_browser_env(session),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-    except OSError as exc:
-        logging.getLogger(__name__).warning("could not run the browser CLI: %r", exc)
-        raise BrowserNotRunning("the browser stream could not be reached") from exc
-
-    try:
-        return await asyncio.wait_for(
-            _read_stream_port(process), timeout=_START_TIMEOUT_SECONDS
-        )
-    except asyncio.TimeoutError as exc:
-        raise BrowserNotRunning("the browser stream could not be reached") from exc
-    finally:
-        with suppress(ProcessLookupError, asyncio.TimeoutError):
-            await asyncio.wait_for(process.wait(), timeout=_REAP_TIMEOUT_SECONDS)
-        if process.returncode is None:
-            with suppress(ProcessLookupError):
-                process.kill()
-
-
-async def _read_stream_port(process: asyncio.subprocess.Process) -> int:
-    """The port out of `stream status --json`, read line by line.
-
-    Same rule as `_read_port`, for the same reason: the daemon inherits this
-    pipe, so anything that waits for EOF waits for ever.
-    """
-    assert process.stdout is not None
-    while True:
-        raw = await process.stdout.readline()
-        if not raw:
-            break
-        line = raw.decode("utf-8", "replace").strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            reply = json.loads(line)
-        except ValueError:
-            continue
-        port = (reply.get("data") or {}).get("port")
-        if isinstance(port, int) and port > 0:
-            return port
-        # A well-formed answer that carries no port means the stream is not
-        # up -- `success: false` with Chrome's own complaint, usually.
-        raise BrowserNotRunning(
-            str(reply.get("error") or "the browser stream is not running")
-        )
-    raise BrowserNotRunning("the browser stream is not running")
-
-
-def stream_socket_url(port: int, *, max_fps: int) -> str:
-    """Where to attach for one viewer.
-
-    `pacing=ack` and `maxFps` go on the URL rather than in a `config` message
-    because the CLI's own help says that is the only way to cover the opening
-    frame -- a config sent after connecting arrives too late to pace the first
-    one.
-
-    Ack pacing rather than push: one frame in flight at a time, so a viewer that
-    stalls is given fewer frames instead of draining a backlog of stale ones.
-    """
-    return f"ws://127.0.0.1:{port}/?pacing=ack&maxFps={max_fps}"
-
-
 async def _read_port(process: asyncio.subprocess.Process) -> int:
     """The port from the CLI's output, read line by line rather than to EOF.
 
@@ -503,103 +413,6 @@ async def page_targets(*, port: int) -> list[dict[str, str]]:
         for target in targets
         if target.get("type") == "page" and target.get("id")
     ]
-
-
-#: How long a viewport read may take before the pane is left to fall back.
-#: Short on purpose: this runs between accepting a socket and showing anybody a
-#: picture, and a slow answer is worse than no answer.
-_VIEWPORT_TIMEOUT_SECONDS = 3.0
-
-
-async def _layout_metrics(socket_url: str) -> tuple[int, int] | None:
-    """One page's CSS viewport, over its own debugger socket."""
-    try:
-        async with asyncio.timeout(_VIEWPORT_TIMEOUT_SECONDS):
-            async with websockets.connect(socket_url) as cdp:
-                await cdp.send(json.dumps({"id": 1, "method": "Page.getLayoutMetrics"}))
-                # Read until our own reply: CDP interleaves events on the same
-                # socket, and taking the first message would take whichever one
-                # the page happened to fire.
-                while True:
-                    raw = await cdp.recv()
-                    if isinstance(raw, bytes):
-                        raw = raw.decode("utf-8", "replace")
-                    message = json.loads(raw)
-                    if message.get("id") != 1:
-                        continue
-                    metrics = message.get("result") or {}
-                    break
-    except OSError, ValueError, TimeoutError, websockets.exceptions.WebSocketException:
-        return None
-
-    # `cssLayoutViewport` only. `layoutViewport` is device pixels, and handing
-    # those back as if they were CSS pixels is the same class of mistake this
-    # whole function exists to end: the pane would scale confidently by the
-    # wrong number instead of falling back to the picture and being wrong by a
-    # factor it at least has a comment about.
-    layout = metrics.get("cssLayoutViewport") or {}
-    width = int(layout.get("clientWidth") or 0)
-    height = int(layout.get("clientHeight") or 0)
-    return (width, height) if width and height else None
-
-
-async def viewport_size(*, port: int, target_id: str = "") -> tuple[int, int] | None:
-    """The page's own CSS pixels -- the space the stream dispatches input in.
-
-    Not the picture's. The screencast is scaled down to a cap box before it
-    leaves the sandbox, and the viewer is shown *that*, so a click has to be
-    scaled back up before it means anything. The viewer cannot work the factor
-    out for itself: the frame metadata carries a `deviceWidth`/`deviceHeight`
-    that is the cap box echoed back, not the page -- measured as 1280x720
-    against a 949x720 picture of a 1050x797 page, where no single scale relates
-    the two. Three coordinate bugs came out of trying to infer it. This asks.
-
-    `Page.getLayoutMetrics` rather than evaluating `innerWidth` in the page:
-    `Runtime.evaluate` would let anything that could reach this relay run
-    script in a page a person is signed in to, and the relay's whole security
-    case is that it cannot.
-
-    **Asks every page in the session, not only the one named.** The stream
-    follows the session's *active* tab and there is no inbound message that
-    changes which one that is, so `target_id` is a check that the caller and
-    the stream agree about which browser -- not a statement about which tab is
-    on screen. A tab that has never laid out answers with zeros, and answering
-    from it would be worse than not answering at all. Every page target in a
-    session is a tab in one window, so the one that does answer is reporting
-    the window the stream is showing.
-
-    `None` when nothing can be read, which leaves the pane on the picture's own
-    pixels -- wrong by the scale factor, which is what it did before this
-    existed, rather than broken.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=_VIEWPORT_TIMEOUT_SECONDS) as client:
-            response = await client.get(f"http://127.0.0.1:{port}/json")
-            response.raise_for_status()
-            targets = response.json()
-    except httpx.HTTPError, ValueError:
-        return None
-
-    pages = [
-        (str(target.get("id", "")), str(target.get("webSocketDebuggerUrl", "")))
-        for target in targets
-        if target.get("type") == "page" and target.get("webSocketDebuggerUrl")
-    ]
-    # The named one first, then the rest in the order Chrome listed them, which
-    # is most-recently-used first.
-    pages.sort(key=lambda page: page[0] != target_id)
-
-    for _id, socket_url in pages:
-        measured = await _layout_metrics(socket_url)
-        if measured is not None:
-            return measured
-
-    # Reported rather than swallowed: the pane still works without an answer,
-    # so this must not become a refusal -- but a pane whose clicks are off by
-    # the scale factor is exactly what this fixes, and silence here is what
-    # would make that hard to find again.
-    logging.getLogger(__name__).warning("the viewport could not be read")
-    return None
 
 
 async def open_url(url: str, *, session: str | None = None) -> None:

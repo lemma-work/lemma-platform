@@ -16,11 +16,7 @@ import pytest
 
 from sandbox_runtime.browser_relay import chrome, state
 from sandbox_runtime.browser_relay.app import TOKEN_PATH, create_app
-from sandbox_runtime.browser_relay.stream_proxy import (
-    CONTROL,
-    VIEW,
-    viewer_message_allowed,
-)
+from sandbox_runtime.browser_relay.stream_proxy import CONTROL, VIEW
 
 # No module-level `pytest.mark.asyncio`: pytest-asyncio runs in auto mode here,
 # so async tests are collected without it, and marking the synchronous ones in
@@ -142,82 +138,6 @@ async def test_the_absolute_wrapper_is_preferred_over_the_bare_name(
     argv = chrome.agent_browser_argv("get", "cdp-url", session="workspace")
     assert argv[0] == "/usr/local/bin/agent-browser"
     assert argv[1:3] == ["--session", "workspace"]
-
-
-# ---------------------------------------------------------------------------
-# What a viewer may send
-# ---------------------------------------------------------------------------
-#
-# The frame protocol itself is `agent-browser`'s, not ours -- we proxy its
-# session-scoped stream rather than driving CDP. What is still ours, and so
-# what is tested here, is the one rule the stream server does not know about:
-# a viewer who asked to watch may not type.
-
-
-def _allowed(message: dict, *, mode: str) -> bool:
-    ok, _ = viewer_message_allowed(json.dumps(message), mode=mode)
-    return ok
-
-
-def _refusal(message: dict, *, mode: str) -> dict | None:
-    _, refusal = viewer_message_allowed(json.dumps(message), mode=mode)
-    return refusal
-
-
-def test_watching_cannot_type() -> None:
-    """The stream server takes input from whoever connects.
-
-    It has no notion of a read-only viewer, so `view` mode is enforced here --
-    the only place that knows which mode was asked for. Without it, "watch"
-    and "drive" would be the same socket with a different label.
-    """
-    for kind in ("input_mouse", "input_keyboard", "input_touch"):
-        assert _allowed({"type": kind}, mode=VIEW) is False
-        assert _refusal({"type": kind}, mode=VIEW)["code"] == "read_only"
-
-
-def test_driving_can_type_and_touch() -> None:
-    """Touch included: it is what makes a sign-in work on a phone, and it is
-    something the hand-rolled screencast never had."""
-    for kind in ("input_mouse", "input_keyboard", "input_touch"):
-        assert _allowed({"type": kind}, mode=CONTROL) is True
-
-
-def test_pacing_and_acks_are_allowed_to_a_watcher() -> None:
-    """Capping your own frame rate is not driving the page."""
-    for kind in ("config", "ack", "screencast_start", "screencast_stop"):
-        assert _allowed({"type": kind}, mode=VIEW) is True
-
-
-def test_anything_outside_the_vocabulary_is_refused_in_words() -> None:
-    """Matched against a set, not a prefix.
-
-    `input_*` as a prefix test would silently admit whatever the next release
-    of the CLI adds under that name. And a message dropped in silence looks to
-    a client exactly like a browser that has stopped.
-    """
-    assert _allowed({"type": "input_something_new"}, mode=CONTROL) is False
-    assert _refusal({"type": "Runtime.evaluate"}, mode=CONTROL)["code"] == (
-        "unknown_message"
-    )
-
-
-def test_unreadable_messages_are_never_forwarded() -> None:
-    ok, refusal = viewer_message_allowed("{not json", mode=CONTROL)
-    assert ok is False
-    assert refusal["code"] == "unreadable"
-    ok, _ = viewer_message_allowed('"a string"', mode=CONTROL)
-    assert ok is False
-
-
-def test_the_stream_url_paces_from_the_opening_frame() -> None:
-    """`pacing` and `maxFps` go on the URL because the CLI's own help says that
-    is the only way to cover the first frame; a config message arrives too
-    late to pace it."""
-    url = chrome.stream_socket_url(41234, max_fps=15)
-    assert url.startswith("ws://127.0.0.1:41234/?")
-    assert "pacing=ack" in url
-    assert "maxFps=15" in url
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +265,7 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/browser:ensure",
         "/state:save",
         "/state:load",
-        "/session",
+        "/vnc",
     } <= served
     # Asserted as an equality on the state routes, not a subset: `/state:clear`
     # was here and nothing ever called it, all the way down through the client
@@ -356,6 +276,11 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/state:load",
     }
     assert not {p for p in served if p.startswith("/cdp")}
+    # `/session` proxied `agent-browser`'s own JSON/JPEG stream server. VNC
+    # replaced it outright rather than living beside it, so a route this
+    # relay no longer needs is exactly the surface the docstring above warns
+    # against leaving behind.
+    assert "/session" not in served
 
 
 # ---------------------------------------------------------------------------
@@ -510,71 +435,9 @@ def test_the_same_session_always_gets_the_same_profile() -> None:
     )
 
 
-async def test_input_for_a_dead_stream_ends_the_socket_rather_than_vanishing() -> None:
-    """A person typing into a picture has to be told.
-
-    The old CDP path wrapped its dispatch in `suppress(Exception)`: with the
-    socket to Chrome gone, clicks and keystrokes vanished with nothing on screen
-    and nothing in the log. Forwarding to a dead stream now raises out of the
-    pump, the viewer's socket closes, and the pane says the connection dropped
-    and reconnects -- which is the truth.
-    """
-    from sandbox_runtime.browser_relay.stream_proxy import pump
-
-    class _DeadStream:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            await asyncio.sleep(3600)
-
-        async def send(self, _raw):
-            raise ConnectionResetError("the stream went away")
-
-    sent: list[str] = []
-    incoming = [json.dumps({"type": "input_mouse", "eventType": "mousePressed"})]
-
-    async def receive_text():
-        return incoming.pop(0) if incoming else None
-
-    await pump(
-        _DeadStream(), mode=CONTROL, send_text=sent.append, receive_text=receive_text
-    )
-
-    # The pump returned rather than hanging: the caller closes the socket, and
-    # nothing was quietly dropped on the floor.
-    assert sent == []
-
-
-async def test_a_refusal_reaches_the_viewer_without_touching_the_stream() -> None:
-    """Refused input is answered, not dropped."""
-    from sandbox_runtime.browser_relay.stream_proxy import pump
-
-    forwarded: list[str] = []
-
-    class _Stream:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-        async def send(self, raw):
-            forwarded.append(raw)
-
-    sent: list[str] = []
-    incoming = [json.dumps({"type": "input_keyboard", "eventType": "keyDown"})]
-
-    async def receive_text():
-        return incoming.pop(0) if incoming else None
-
-    await pump(_Stream(), mode=VIEW, send_text=sent.append, receive_text=receive_text)
-
-    assert forwarded == []
-    assert json.loads(sent[0])["code"] == "read_only"
-
-
-def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) -> None:
+def test_a_refused_vnc_viewer_is_told_which_refusal_it_was(
+    monkeypatch, tmp_path
+) -> None:
     """The close code has to survive the sandbox wall, or the pane loops.
 
     A close sent before `accept()` is not a close -- ASGI turns it into a
@@ -593,7 +456,7 @@ def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) ->
 
     client = _client(monkeypatch, tmp_path)
     with client.websocket_connect(
-        "/session?session=../../etc",
+        "/vnc?session=../../etc",
         headers={"X-Lemma-Relay-Token": "token-abc"},
     ) as socket:
         with pytest.raises(WebSocketDisconnect) as refused:
@@ -601,20 +464,134 @@ def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) ->
     assert refused.value.code == CLOSE_UNAUTHENTICATED
 
 
-def test_a_viewer_without_the_token_is_refused_the_same_way(
+def test_a_vnc_viewer_without_the_token_is_refused_the_same_way(
     monkeypatch, tmp_path
 ) -> None:
-    """The socket is the one route a browser opens, so it is the one that has to
-    refuse in a code rather than in a status nobody can read."""
+    """`/vnc` is a second door into the same signed-in browser, so it gets the
+    same refusal, not a weaker one because it is newer."""
     from starlette.websockets import WebSocketDisconnect
 
     from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
 
     client = _client(monkeypatch, tmp_path)
-    with client.websocket_connect("/session") as socket:
+    with client.websocket_connect("/vnc") as socket:
         with pytest.raises(WebSocketDisconnect) as refused:
             socket.receive_text()
     assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_vnc_viewer_with_an_unknown_mode_is_refused(monkeypatch, tmp_path) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
+
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?mode=drive", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_vnc_viewer_is_refused_when_no_browser_is_running(
+    monkeypatch, tmp_path
+) -> None:
+    """No live Chrome means nothing on `:99` worth showing, and the browser is
+    told so with a code it treats as "asleep", not "dropped, retry"."""
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_NO_BROWSER
+    from sandbox_runtime.browser_relay.chrome import BrowserNotRunning
+
+    async def fake_live_port(session=None):
+        raise BrowserNotRunning("no chrome here")
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_NO_BROWSER
+
+
+async def test_a_viewer_watching_over_vnc_cannot_type() -> None:
+    """The RFB equivalent of `test_pacing_and_acks_are_allowed_to_a_watcher`:
+    `view` mode drops KeyEvent and PointerEvent frames without ever parsing
+    the rest of the protocol, by looking at the one byte that names them."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    class _FakeUpstream:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def __aiter__(self):
+            async def _empty():
+                return
+                yield  # pragma: no cover - makes this an async generator
+
+            return _empty()
+
+        async def send(self, data: bytes) -> None:
+            self.sent.append(data)
+
+    upstream = _FakeUpstream()
+    inbound = [
+        bytes([3, 0, 0, 0]),  # FramebufferUpdateRequest -- allowed
+        bytes([5, 0, 0, 0]),  # PointerEvent -- a click, dropped while viewing
+        bytes([4, 0, 0, 0]),  # KeyEvent -- a keystroke, dropped while viewing
+        bytes([6, 0, 0, 0]),  # ClientCutText -- clipboard, allowed
+    ]
+
+    async def receive_bytes() -> bytes | None:
+        if inbound:
+            return inbound.pop(0)
+        return None
+
+    async def send_bytes(_data: bytes) -> None:
+        pass
+
+    await pump_binary(
+        upstream, mode=VIEW, send_bytes=send_bytes, receive_bytes=receive_bytes
+    )
+    assert upstream.sent == [bytes([3, 0, 0, 0]), bytes([6, 0, 0, 0])]
+
+
+async def test_a_viewer_driving_over_vnc_can_type() -> None:
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    class _FakeUpstream:
+        def __init__(self) -> None:
+            self.sent: list[bytes] = []
+
+        def __aiter__(self):
+            async def _empty():
+                return
+                yield  # pragma: no cover
+
+            return _empty()
+
+        async def send(self, data: bytes) -> None:
+            self.sent.append(data)
+
+    upstream = _FakeUpstream()
+    inbound = [bytes([5, 0, 0, 0]), bytes([4, 0, 0, 0])]
+
+    async def receive_bytes() -> bytes | None:
+        if inbound:
+            return inbound.pop(0)
+        return None
+
+    async def send_bytes(_data: bytes) -> None:
+        pass
+
+    await pump_binary(
+        upstream, mode=CONTROL, send_bytes=send_bytes, receive_bytes=receive_bytes
+    )
+    assert upstream.sent == [bytes([5, 0, 0, 0]), bytes([4, 0, 0, 0])]
 
 
 def test_a_conversation_cannot_rename_the_default_session(monkeypatch) -> None:
@@ -698,173 +675,3 @@ def test_one_viewer_leaving_does_not_release_another_viewers_wheel(
 
     relay_app._release_the_wheel(second)
     assert not relay_app.wheel_path("conv-abc").exists()
-
-
-# ---------------------------------------------------------------------------
-# The size of the page, which a frame does not say
-# ---------------------------------------------------------------------------
-
-
-class _FakeCdp:
-    """A page target's debugger socket, answering one method."""
-
-    def __init__(self, reply: dict) -> None:
-        self.reply = reply
-        self.sent: list[str] = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
-
-    async def send(self, raw: str) -> None:
-        self.sent.append(raw)
-
-    async def recv(self) -> str:
-        # An event first, on the same socket, because CDP interleaves them --
-        # and taking the first message rather than matching the id is how this
-        # would read whatever the page happened to fire.
-        if len(self.sent) == 1:
-            self.sent.append("read")
-            return json.dumps({"method": "Page.frameNavigated", "params": {}})
-        return json.dumps(self.reply)
-
-
-def _fake_targets(monkeypatch, targets: list[dict]) -> None:
-    class _Response:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> list[dict]:
-            return targets
-
-    class _Client:
-        def __init__(self, **_kwargs) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def get(self, _url: str) -> "_Response":
-            return _Response()
-
-    monkeypatch.setattr(chrome.httpx, "AsyncClient", _Client)
-
-
-async def test_the_viewport_is_the_pages_css_pixels_not_the_devices(
-    monkeypatch,
-) -> None:
-    """The measurement the pane cannot make for itself.
-
-    A click arrives as a fraction of the picture and has to be scaled up into
-    the page before the stream will dispatch it anywhere. `layoutViewport` is
-    device pixels; `cssLayoutViewport` is the space input is in, and on a page
-    with a scale factor the two differ -- which is the same class of mistake
-    this function exists to end.
-    """
-    _fake_targets(
-        monkeypatch,
-        [{"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"}],
-    )
-    cdp = _FakeCdp(
-        {
-            "id": 1,
-            "result": {
-                "layoutViewport": {"clientWidth": 1280, "clientHeight": 720},
-                "cssLayoutViewport": {"clientWidth": 1050, "clientHeight": 797},
-            },
-        }
-    )
-    monkeypatch.setattr(chrome.websockets, "connect", lambda _url: cdp)
-
-    assert await chrome.viewport_size(port=9222, target_id="T1") == (1050, 797)
-    assert json.loads(cdp.sent[0])["method"] == "Page.getLayoutMetrics"
-
-
-async def test_a_browser_that_will_not_say_leaves_the_pane_to_fall_back(
-    monkeypatch,
-) -> None:
-    """`None`, not a raise and not a zero.
-
-    The pane's fallback is the picture's own pixels -- off by the scale factor,
-    which is what it did before anybody asked. Raising here would turn a pane
-    that works imperfectly into one that does not attach at all, and a zero
-    would put every click in the top-left corner.
-    """
-    _fake_targets(monkeypatch, [{"type": "page", "id": "T1"}])
-
-    assert await chrome.viewport_size(port=9222, target_id="T1") is None
-
-
-async def test_device_pixels_are_not_handed_back_as_css_pixels(monkeypatch) -> None:
-    """`layoutViewport` is device pixels, and there is no fallback to it.
-
-    Handing those back would have the pane scale confidently by the wrong
-    number -- the same class of mistake this function exists to end. `None`
-    instead, which leaves it on the picture's pixels: wrong by a factor it at
-    least has a comment about.
-    """
-    _fake_targets(
-        monkeypatch,
-        [{"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"}],
-    )
-    monkeypatch.setattr(
-        chrome.websockets,
-        "connect",
-        lambda _url: _FakeCdp(
-            {
-                "id": 1,
-                "result": {
-                    "layoutViewport": {"clientWidth": 1280, "clientHeight": 720}
-                },
-            }
-        ),
-    )
-
-    assert await chrome.viewport_size(port=9222, target_id="T1") is None
-
-
-async def test_a_tab_that_has_never_laid_out_does_not_end_the_search(
-    monkeypatch,
-) -> None:
-    """The stream shows the session's active tab, and nothing here knows which.
-
-    `target_id` is a check that the caller and the stream agree about which
-    *browser*; it says nothing about which tab is on screen. So the named tab
-    can be one that has never rendered, which answers with zeros -- and
-    stopping there would leave the pane with no measurement at all when a
-    sibling in the same window could have said. Every page target in a session
-    is a tab in one window, so the one that answers is reporting the window the
-    stream is showing.
-    """
-    _fake_targets(
-        monkeypatch,
-        [
-            {"type": "page", "id": "T1", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T1"},
-            {"type": "page", "id": "T2", "webSocketDebuggerUrl": "ws://127.0.0.1:1/T2"},
-        ],
-    )
-    replies = {
-        "ws://127.0.0.1:1/T1": {
-            "id": 1,
-            "result": {"cssLayoutViewport": {"clientWidth": 0, "clientHeight": 0}},
-        },
-        "ws://127.0.0.1:1/T2": {
-            "id": 1,
-            "result": {"cssLayoutViewport": {"clientWidth": 1050, "clientHeight": 797}},
-        },
-    }
-    asked: list[str] = []
-
-    def _connect(url: str):
-        asked.append(url)
-        return _FakeCdp(replies[url])
-
-    monkeypatch.setattr(chrome.websockets, "connect", _connect)
-
-    assert await chrome.viewport_size(port=9222, target_id="T1") == (1050, 797)
-    assert asked == ["ws://127.0.0.1:1/T1", "ws://127.0.0.1:1/T2"], asked

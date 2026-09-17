@@ -67,11 +67,11 @@ class _FakeService:
         self.opened: list[dict] = []
         self.closed = False
 
-    async def open_session(self, user_id, *, mode, origin=None, session=None):
+    async def open_vnc_session(self, user_id, *, mode, origin=None):
         self.opened.append({"user_id": user_id, "mode": mode, "origin": origin})
         if self.fail is not None:
             raise self.fail
-        return "ws://sandbox.test/session?target=t1", {"X-Lemma-Relay-Token": "t"}
+        return "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}
 
     async def status(self, user_id):
         return {"state": "stopped"}

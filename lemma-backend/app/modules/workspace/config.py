@@ -5,10 +5,10 @@ module's own -- `WORKSPACE_*`, plus `FUNCTION_*` for the function runtime and
 `E2B_*` for that provider's credentials.
 """
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import AliasChoices, Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
 
@@ -148,6 +148,43 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("WORKSPACE_HOST_ALIAS"),
         description="Hostname sandboxes use to reach the host running the backend",
     )
+
+    # --- Browser sandbox proxying -------------------------------------------
+    browser_proxy_urls: Annotated[list[SecretStr], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("WORKSPACE_BROWSER_PROXY_URLS"),
+        description=(
+            "Comma-separated pool of proxy URLs (e.g. "
+            "http://residential-proxy.example:8080). `_provision` assigns one "
+            "at random to each new workspace sandbox as `LEMMA_BROWSER_PROXY_URL`, "
+            "which `start-browser.sh` turns into Chrome's `--proxy-server`. "
+            "IP-allowlisted proxies only for now -- Chrome does not honour "
+            "inline `user:pass` in `--proxy-server` at all, and credentialed "
+            "proxies need CDP `Fetch.authRequired` handling nothing here does "
+            "yet. `SecretStr`, not `str`: a proxy URL names infrastructure an "
+            "operator may not want in a log line, same as any other credential "
+            "in this file."
+        ),
+    )
+
+    @field_validator("browser_proxy_urls", mode="before")
+    @classmethod
+    def _split_browser_proxy_urls(cls, value: object) -> object:
+        """A comma-separated env string, or already a list -- either works.
+
+        `BaseSettings` reads a `list[...]` field from an env var as JSON by
+        default (`WORKSPACE_BROWSER_PROXY_URLS=["http://a:8080"]`), which is
+        not how an operator writes any other list-shaped setting in this
+        codebase (`LEMMA_OPENAI_MODEL_NAMES` and friends are comma-separated)
+        -- and fails outright on a plain comma-separated value before this
+        validator ever runs. `NoDecode` on the field turns that JSON decode
+        off so the raw string reaches here instead; splitting by hand then
+        keeps `WORKSPACE_BROWSER_PROXY_URLS=http://a:8080,http://b:8080`
+        consistent with the rest of the codebase's convention.
+        """
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     # --- E2B ---------------------------------------------------------------
     e2b_api_key: Optional[SecretStr] = Field(

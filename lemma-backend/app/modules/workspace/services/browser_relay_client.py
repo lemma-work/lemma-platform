@@ -17,6 +17,7 @@ from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+from urllib.parse import quote
 
 import httpx
 
@@ -275,19 +276,43 @@ class BrowserRelayClient:
         if response.status_code not in (200, 204):
             raise BrowserRelayUnavailable(_detail(response))
 
-    async def session_socket_url(
-        self, *, target_id: str, mode: str, session: str | None = None
+    async def vnc_socket_url(
+        self, *, mode: str, session: str | None = None
     ) -> tuple[str, dict[str, str]]:
-        """Where to attach for one viewer, and the headers to attach with."""
+        """Where to attach for a VNC view of the sandbox's whole display.
+
+        No target in the query: VNC shows the shared Xvfb display rather than
+        one CDP-selected tab, so there is nothing to name. `session` is not a
+        selector either -- it cannot be, for the same reason -- it is only
+        which name the driving lease is recorded under, so the agent's own
+        script (which checks a lease for *its* session before acting) is not
+        told a login session's wheel is free while a person is visibly
+        driving it on this same shared screen. Callers pass the session
+        `ensure_browser` actually resolved, not one they derive themselves.
+        """
         endpoint = await self._endpoint(deadline_seconds=_QUICK_TIMEOUT_SECONDS)
         base = endpoint.url.rstrip("/")
         scheme = "wss" if base.startswith("https") else "ws"
         host = base.split("://", 1)[-1]
-        query = f"target={target_id}&mode={mode}"
+        query = f"mode={quote(mode, safe='')}"
         if session:
-            query += f"&session={session}"
+            query += f"&session={quote(session, safe='')}"
         headers = {**endpoint.headers, RELAY_TOKEN_HEADER: self._token}
-        return f"{scheme}://{host}/session?{query}", headers
+        return f"{scheme}://{host}/vnc?{query}", headers
+
+    async def targets(self, *, domain: str | None = None) -> list[dict[str, object]]:
+        """Open pages in one session, named the same way `ensure_browser` is.
+
+        Used to read back the page a VNC-attached browser is actually on --
+        VNC carries no signal of its own for that, unlike the JSON stream
+        this replaced, which sent a `url` message on every navigation.
+        """
+        path = f"/targets?domain={quote(domain, safe='')}" if domain else "/targets"
+        response = await self._request("GET", path)
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        found = response.json().get("targets")
+        return found if isinstance(found, list) else []
 
     async def endpoint_is_public(self) -> bool:
         """Whether this sandbox's ports are on the internet behind only a token."""

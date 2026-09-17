@@ -122,6 +122,12 @@ ENV PYTHONUNBUFFERED=1 \
     AGENT_BROWSER_STREAM_QUALITY=60 \
     AGENT_BROWSER_STREAM_MAX_WIDTH=1280 \
     AGENT_BROWSER_STREAM_MAX_HEIGHT=800 \
+    # Loopback-only ports for the VNC view of `:99`. `LEMMA_BROWSER_VNC_PORT`
+    # is x11vnc's own raw VNC socket; `LEMMA_BROWSER_VNC_WS_PORT` is
+    # websockify's WebSocket front door onto it. The relay is the only thing
+    # that ever dials either -- see the comment on the apt-get line above.
+    LEMMA_BROWSER_VNC_PORT=5900 \
+    LEMMA_BROWSER_VNC_WS_PORT=5901 \
     LEMMA_RUNTIME_TOKEN_FILE=/run/lemma-bootstrap/token \
     LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated \
     GH_CONFIG_DIR=/tmp/lemma-gh \
@@ -186,6 +192,14 @@ RUN apt-get update \
         ripgrep \
         socat \
         tini \
+        # The human-facing view of the same Xvfb display. `x11vnc` shares
+        # `:99` with Chromium rather than opening a second one; `websockify`
+        # is what turns its raw VNC socket into something a browser can open
+        # a WebSocket to. Neither is ever published -- both stay loopback,
+        # reached only through the relay, the same treatment raw CDP gets and
+        # for the same reason (see `browser_relay/app.py`).
+        websockify \
+        x11vnc \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
 

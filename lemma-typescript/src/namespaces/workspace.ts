@@ -193,6 +193,20 @@ export class WorkspaceNamespace {
   }
 
   /**
+   * What page the browser signing in to `origin` is actually showing.
+   *
+   * Polled by the sign-in page's anti-phishing host display while its VNC
+   * pane is open: VNC is pixels, not events, so there is nothing on the wire
+   * to react to the way the JSON stream this replaced had with its `url`
+   * message on every navigation. `null` when nothing can be read.
+   */
+  browserCurrentPageUrl(origin: string): Promise<{ url: string | null }> {
+    return this.http.request("GET", "/workspace/browser/current-page-url", {
+      params: { origin },
+    });
+  }
+
+  /**
    * Raw bytes of one file, from `offset`, at most `length` bytes.
    *
    * The query is built into the path because `requestBytes` takes no options —
