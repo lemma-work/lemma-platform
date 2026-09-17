@@ -129,13 +129,23 @@ describe('opening the view', () => {
         expect(rfb.url).toContain('origin=https%3A%2F%2Fexample.com');
     });
 
-    it('names no conversation or session', async () => {
-        // VNC shows the sandbox's whole shared display, not a session-scoped
-        // tab -- there is nothing left for either of those to select.
-        render(<BrowserPane origin="https://example.com" />);
+    it('names no conversation or session when an origin steers a sign-in', async () => {
+        // A sign-in names its own session; the conversation the pane happens
+        // to be open in, if any, is not it.
+        render(<BrowserPane origin="https://example.com" conversationId="conv-abc" />);
         const rfb = await connect();
         expect(rfb.url).not.toContain('conversation=');
         expect(rfb.url).not.toContain('session=');
+    });
+
+    it('carries the conversation for a plain watch/drive, with no origin', async () => {
+        // `run_browser_script` runs every agent browser command in a session
+        // named for the conversation, not the shared default -- without this,
+        // the pane checked the wrong session and refused forever with "no
+        // browser running" while the agent's browser was live the whole time.
+        render(<BrowserPane conversationId="conv-abc" />);
+        const rfb = await connect();
+        expect(rfb.url).toContain('conversation=conv-abc');
     });
 });
 

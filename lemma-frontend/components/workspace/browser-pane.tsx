@@ -100,6 +100,7 @@ const NAVIGATION_POLL_MS = 1500;
  */
 export function BrowserPane({
     origin,
+    conversationId,
     accessToken,
     autoControl = false,
     onNavigated,
@@ -110,6 +111,11 @@ export function BrowserPane({
      *  shared display, not a session-scoped tab, so there is nothing else to
      *  ask for. */
     origin?: string;
+    /** Which conversation's agent browser to check for "is it up" -- ignored
+     *  alongside `origin`, which names its own session. Without either this
+     *  checks the bare shared session, which is never what `run_browser_script`
+     *  actually used -- see `vncSocketUrl`. */
+    conversationId?: string;
     accessToken?: string;
     autoControl?: boolean;
     /** Called with the page the browser is actually showing, polled rather
@@ -162,7 +168,12 @@ export function BrowserPane({
             // `.onclose` directly on whatever channel it is given, which
             // would silently replace a same-named assignment made here.
             const socket = new WebSocket(
-                vncSocketUrl({ mode: controlling ? 'control' : 'view', origin, accessToken }),
+                vncSocketUrl({
+                    mode: controlling ? 'control' : 'view',
+                    origin,
+                    conversationId,
+                    accessToken,
+                }),
             );
             let closeCode = 1000;
             socket.addEventListener('close', (event) => {
@@ -220,7 +231,7 @@ export function BrowserPane({
             rfbRef.current?.disconnect();
             rfbRef.current = null;
         };
-    }, [controlling, origin, accessToken]);
+    }, [controlling, origin, conversationId, accessToken]);
 
     // Polled rather than pushed: VNC is pixels, not events, so there is no
     // message on the wire to react to the way the JSON stream's `url`

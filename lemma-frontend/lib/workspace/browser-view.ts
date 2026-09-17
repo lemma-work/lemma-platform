@@ -26,18 +26,28 @@ export const reconnectDelayMs = (attempt: number): number =>
  * Where to open a VNC view of this person's sandbox display.
  *
  * `origin`, when given, means a sign-in: it is passed through so the backend
- * can steer the browser there before attaching. No `conversation` -- VNC
- * shows the sandbox's whole shared display rather than one session's tab, so
- * there is no session for one to select.
+ * can steer the browser there before attaching. `conversation`, when given
+ * and `origin` is not, names the conversation whose agent browser this
+ * should show -- `run_browser_script` runs every agent browser command in
+ * its own session, named for the conversation, so without this a plain
+ * watch/drive resolved to the shared default session and found nothing the
+ * agent had touched (its `DevToolsActivePort` never written, the pane
+ * refusing forever with "no browser running" while the agent's browser was
+ * live the whole time, just in a different session). The picture itself is
+ * still the sandbox's one shared display -- see `browser_relay/app.py`'s
+ * `/vnc` route -- but which session's Chrome is checked for "is it up at
+ * all" is per-conversation, and that is what this selects.
  */
 export const vncSocketUrl = (options: {
     mode: string;
     origin?: string;
+    conversationId?: string;
     accessToken?: string;
 }): string => {
     const base = getLemmaApiBaseUrl().replace(/^http/, 'ws').replace(/\/$/, '');
     const query = new URLSearchParams({ mode: options.mode });
     if (options.origin) query.set('origin', options.origin);
+    else if (options.conversationId) query.set('conversation', options.conversationId);
     // In the URL because a browser cannot set headers on a WebSocket handshake
     // — the same reason the datastore changes socket does it.
     if (options.accessToken) query.set('access_token', options.accessToken);

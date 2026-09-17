@@ -33,11 +33,31 @@ describe('vncSocketUrl', () => {
         expect(parsed.searchParams.get('access_token')).toBe('tok-abc');
     });
 
-    it('names no session or conversation', () => {
-        // VNC shows the sandbox's whole shared display, not one session's tab
-        // -- so unlike the JSON stream this replaced, there is nothing here to
-        // scope a connection to beyond the mode and, for a sign-in, the site.
-        const url = vncSocketUrl({ mode: 'view', origin: 'https://example.com' });
+    it('carries the conversation, for a plain watch/drive', () => {
+        // `run_browser_script` runs every agent browser command in a session
+        // named for the conversation, not the shared default -- without this,
+        // the pane checked whether the *wrong* session's Chrome was up and
+        // refused forever with "no browser running".
+        const url = vncSocketUrl({ mode: 'view', conversationId: 'conv-abc' });
+        const parsed = new URL(url.replace(/^ws/, 'http'));
+        expect(parsed.searchParams.get('conversation')).toBe('conv-abc');
+    });
+
+    it('prefers origin over conversation, for a sign-in', () => {
+        // A sign-in names its own session; the conversation the pane happens
+        // to be open in is not it.
+        const url = vncSocketUrl({
+            mode: 'view',
+            origin: 'https://example.com',
+            conversationId: 'conv-abc',
+        });
+        const parsed = new URL(url.replace(/^ws/, 'http'));
+        expect(parsed.searchParams.get('origin')).toBe('https://example.com');
+        expect(parsed.searchParams.has('conversation')).toBe(false);
+    });
+
+    it('names no session or conversation when neither is given', () => {
+        const url = vncSocketUrl({ mode: 'view' });
         const parsed = new URL(url.replace(/^ws/, 'http'));
         expect(parsed.searchParams.has('conversation')).toBe(false);
         expect(parsed.searchParams.has('session')).toBe(false);

@@ -18,8 +18,10 @@ type Tab = 'files' | 'browser';
  */
 export function ComputerPanel({
     workspaceCwd,
+    conversationId,
 }: {
     workspaceCwd?: string;
+    conversationId?: string;
 }) {
     const [tab, setTab] = useState<Tab>('files');
 
@@ -49,9 +51,14 @@ export function ComputerPanel({
                     <WorkspaceFilesPane workspaceCwd={workspaceCwd} />
                 ) : (
                     // VNC shows this person's whole sandbox display, shared by
-                    // every conversation's agent -- there is no per-conversation
-                    // session for a pane here to be scoped to any more.
-                    <BrowserPane />
+                    // every conversation's agent -- but *whether a browser is
+                    // even running* is checked per session, and this
+                    // conversation's own agent commands run in a session named
+                    // for it (`run_browser_script`), not the shared default.
+                    // Without this the pane checked the wrong session and
+                    // refused forever with "no browser running" while the
+                    // agent's browser was live the whole time.
+                    <BrowserPane conversationId={conversationId} />
                 )}
             </div>
         </div>
