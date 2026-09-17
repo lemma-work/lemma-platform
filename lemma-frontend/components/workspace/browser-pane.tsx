@@ -84,6 +84,12 @@ function sendCtrlV(rfb: NoVncClient): void {
 //: sign-in page: an ordinary watch/drive pane has nothing that reads it.
 const NAVIGATION_POLL_MS = 1500;
 
+//: How long the pane has to stop changing size before its display is asked to
+//: match. Dragging a divider emits a resize per frame, and each one costs an X
+//: mode change behind a sandbox round trip; the person only cares about where
+//: they let go.
+const RESIZE_SETTLE_MS = 250;
+
 /**
  * The agent's browser, live, over VNC.
  *
@@ -256,6 +262,53 @@ export function BrowserPane({
             clearInterval(interval);
         };
     }, [onNavigated, origin]);
+
+    // Ask the display to be the shape of this pane, rather than scaling a
+    // fixed screen into it.
+    //
+    // Not noVNC's `resizeSession`: `_requestRemoteResize` returns early while
+    // `viewOnly` is set, and watching is the default here, so the built-in
+    // path never fires for the case that needs it most. This asks over HTTP
+    // instead, which also keeps the RFB input filter untouched — a resize is
+    // not an input event and should not have to travel as one.
+    //
+    // Debounced because a person dragging the panel divider generates a
+    // resize per frame, and each one is an X server mode change behind a
+    // sandbox round trip.
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+        let cancelled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let asked = '';
+
+        const fit = (width: number, height: number) => {
+            const target = `${Math.round(width)}x${Math.round(height)}`;
+            if (target === asked || width < 1 || height < 1) return;
+            asked = target;
+            void getLemmaClient()
+                .workspace.browserResizeDisplay(Math.round(width), Math.round(height))
+                .catch(() => {
+                    // A display that would not resize is a worse fit, not a
+                    // failure: the picture is still live and still scaled to
+                    // fit. Let the next resize try again.
+                    if (!cancelled) asked = '';
+                });
+        };
+
+        const observer = new ResizeObserver((entries) => {
+            const box = entries[0]?.contentRect;
+            if (!box) return;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => fit(box.width, box.height), RESIZE_SETTLE_MS);
+        });
+        observer.observe(container);
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+            observer.disconnect();
+        };
+    }, []);
 
     const onPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
         const rfb = rfbRef.current;

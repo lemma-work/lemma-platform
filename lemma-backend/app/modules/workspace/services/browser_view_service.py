@@ -259,6 +259,22 @@ class BrowserViewService:
         url = found[0].get("url")
         return str(url) if url else None
 
+    async def resize_display(self, user_id: UUID, *, width: int, height: int) -> str:
+        """Fit the display to the pane somebody is watching it in.
+
+        `start=False`: this follows a pane that is already open, so it must
+        not be what wakes a sandbox. A resize with nothing to resize is not
+        an error worth raising at a viewer -- the caller turns the refusal
+        into "keep what you have", which is a worse fit rather than a broken
+        picture.
+
+        One display serves every session in the sandbox, so this is not
+        session-scoped and the last request wins. `/vnc`'s docstring records
+        per-session displays as the real answer.
+        """
+        relay = await self._relay(user_id, start=False)
+        return await relay.resize_display(width=width, height=height)
+
     async def save_login_state(
         self, user_id: UUID, *, domain: str, session: str | None = None
     ) -> "BrowserState":

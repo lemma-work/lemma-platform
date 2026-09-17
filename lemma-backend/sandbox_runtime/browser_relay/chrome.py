@@ -454,6 +454,56 @@ async def open_url(url: str, *, session: str | None = None) -> None:
             process.stdout.feed_eof()
 
 
+#: The script that owns the RandR dance -- creating a mode before it can be
+#: chosen, and clamping to the framebuffer Xvfb allocated at startup. Spelled
+#: absolutely for the same reason `_AGENT_BROWSER` is: this process's PATH is
+#: not an agent shell's.
+_SET_DISPLAY_SIZE = "/usr/local/bin/set-display-size"
+
+
+async def set_display_size(width: int, height: int) -> str | None:
+    """Resize the shared display, returning the size it settled on.
+
+    `None` when it could not be done -- an image without the script, or an X
+    server that refused. The caller turns that into a refusal; the viewer
+    keeps the display it already had, which is a worse fit rather than a
+    broken one.
+
+    One display serves every session in the sandbox, so this is deliberately
+    not session-scoped: whoever asks last wins. That is the honest trade for
+    now, and `app.py`'s `/vnc` docstring records per-session displays as the
+    real fix.
+    """
+    if not Path(_SET_DISPLAY_SIZE).exists():
+        return None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            _SET_DISPLAY_SIZE,
+            str(width),
+            str(height),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except OSError as exc:
+        logging.getLogger(__name__).warning("could not resize the display: %r", exc)
+        return None
+    try:
+        stdout, _ = await asyncio.wait_for(
+            process.communicate(), timeout=_REAP_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        with suppress(ProcessLookupError):
+            process.kill()
+        return None
+    if process.returncode != 0:
+        logging.getLogger(__name__).warning(
+            "the display refused to resize: %s",
+            stdout.decode("utf-8", "replace").strip()[:200],
+        )
+        return None
+    return stdout.decode("utf-8", "replace").strip() or None
+
+
 async def keepalive(*, session: str | None = None) -> None:
     """Touch the browser so its idle timer does not retire it.
 

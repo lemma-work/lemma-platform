@@ -5966,6 +5966,46 @@
         "title": "DirectoryTreeResponse",
         "type": "object"
       },
+      "DisplaySizeRequest": {
+        "description": "The size the pane wants its picture to be, in CSS pixels.\n\nBounded here because these numbers come from a browser window and decide\nhow much memory a framebuffer takes. The sandbox clamps again against the\nframebuffer it actually allocated, which is the limit that cannot be\nargued with.",
+        "properties": {
+          "height": {
+            "maximum": 4096.0,
+            "minimum": 240.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "maximum": 4096.0,
+            "minimum": 320.0,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "DisplaySizeRequest",
+        "type": "object"
+      },
+      "DisplaySizeResponse": {
+        "properties": {
+          "size": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          }
+        },
+        "title": "DisplaySizeResponse",
+        "type": "object"
+      },
       "EndNode": {
         "description": "End node. Completes the run.",
         "properties": {
@@ -37237,6 +37277,58 @@
           "resource": "workspace.browser",
           "result": "entity",
           "verb": "current_page_url"
+        }
+      }
+    },
+    "/workspace/browser/display-size": {
+      "post": {
+        "description": "Resize the sandbox display so the picture matches the pane.\n\nThe alternative, and what this replaces, is one fixed display scaled to\nfit: a 3:2 screen letterboxed into whatever box it lands in, small and\nringed with dead space. Resizing the display itself means the pixels sent\nare the pixels shown -- and a narrow pane gets a narrow *viewport*, so a\nsite serves its mobile layout to somebody signing in on a phone.\n\nA failure here is not an error for the person: they keep the display they\nhad. So an unreachable or sleeping sandbox answers with no size rather\nthan a status code the pane would have to special-case.",
+        "operationId": "workspace.browser.resize_display",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplaySizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplaySizeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fit the workspace display to the pane showing it",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "workspace.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "resize_display"
         }
       }
     },

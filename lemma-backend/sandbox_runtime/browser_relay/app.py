@@ -47,6 +47,7 @@ from .chrome import (
     live_port,
     open_url,
     page_targets,
+    set_display_size,
 )
 from .stream_proxy import CONTROL, VIEW, pump_binary
 from .state import (
@@ -155,6 +156,25 @@ class EnsureResponse(BaseModel):
     #: carrying a target id from `workspace`. Saying which session was used is
     #: what makes the two sides unable to disagree.
     session: str
+
+
+class DisplayResizeRequest(BaseModel):
+    """The size a viewer wants the sandbox display to be.
+
+    Bounded here rather than trusted: these numbers come from a browser
+    window, and a display is a framebuffer somebody else's memory pays for.
+    The script clamps again against the framebuffer Xvfb actually allocated,
+    which is the limit that cannot be argued with.
+    """
+
+    width: int = Field(ge=320, le=4096)
+    height: int = Field(ge=240, le=4096)
+
+
+class DisplayResizeResponse(BaseModel):
+    #: What the display ended up as, which is not always what was asked for --
+    #: see the clamping in `set-display-size`.
+    size: str
 
 
 class StateSaveRequest(BaseModel):
@@ -311,6 +331,32 @@ def create_app() -> FastAPI:
             started=started,
             session=session,
         )
+
+    @app.post(
+        "/display:resize",
+        response_model=DisplayResizeResponse,
+        dependencies=[Depends(require_token)],
+    )
+    async def display_resize(request: DisplayResizeRequest) -> DisplayResizeResponse:
+        """Make the display the shape of the pane it is being watched in.
+
+        The alternative, and what this replaces, was one fixed display scaled
+        to fit whatever box it landed in: a 3:2 picture letterboxed into a
+        narrow sidebar, small and surrounded by dead space. Resizing the
+        display itself means the pixels sent are the pixels shown, and a
+        narrow pane gets a narrow *viewport* -- so a site serves its mobile
+        layout to somebody signing in on a phone rather than a shrunken
+        desktop one.
+
+        noVNC's own `resizeSession` cannot do this for us: it refuses while
+        the client is view-only, and watching is the default here.
+        """
+        size = await set_display_size(request.width, request.height)
+        if size is None:
+            raise HTTPException(
+                status_code=409, detail="the display could not be resized"
+            )
+        return DisplayResizeResponse(size=size)
 
     @app.post("/state:save", dependencies=[Depends(require_token)])
     async def state_save(request: StateSaveRequest) -> dict:

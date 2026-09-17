@@ -816,6 +816,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.browser_view.origin_refused.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.public_sandbox_refused.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.relay_absent.degraded': EventSpec('warning', frozenset({'error_type'})),
+    'workspace.browser_view.resize_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
     'workspace.browser_view.session_unreadable.degraded': EventSpec('warning', frozenset()),
     'workspace.browser_view.status_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
     'workspace.browser_view.unsupported.denied': EventSpec('warning', frozenset()),

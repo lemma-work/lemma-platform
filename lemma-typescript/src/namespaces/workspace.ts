@@ -207,6 +207,29 @@ export class WorkspaceNamespace {
   }
 
   /**
+   * Fit the workspace display to the pane showing it.
+   *
+   * The pane is a box of an arbitrary shape and the display is a real screen
+   * with a fixed size, so one of them has to move. Scaling the picture is
+   * what made the browser a small letterboxed rectangle; resizing the display
+   * means the pixels sent are the pixels shown, and a narrow pane gets a
+   * narrow *viewport* — so sites serve their mobile layout on a phone.
+   *
+   * `size` is what the display actually became, which may be smaller than
+   * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
+   * could be resized (a sleeping computer, an older image), which is not an
+   * error — the pane keeps the picture it had.
+   */
+  browserResizeDisplay(
+    width: number,
+    height: number,
+  ): Promise<{ size: string | null }> {
+    return this.http.request("POST", "/workspace/browser/display-size", {
+      body: { width, height },
+    });
+  }
+
+  /**
    * Raw bytes of one file, from `offset`, at most `length` bytes.
    *
    * The query is built into the path because `requestBytes` takes no options —

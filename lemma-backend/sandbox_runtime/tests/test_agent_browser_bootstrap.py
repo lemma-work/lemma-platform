@@ -284,7 +284,9 @@ def test_the_wrapper_is_found_before_the_raw_package_binary() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _holding_the_wheel(tmp_path: Path, environment: dict[str, str], session: str) -> None:
+def _holding_the_wheel(
+    tmp_path: Path, environment: dict[str, str], session: str
+) -> None:
     """Write the lease the relay writes while a person is driving."""
     import hashlib
 

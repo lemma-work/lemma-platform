@@ -28,6 +28,20 @@ class FakeSocket {
 vi.stubGlobal('WebSocket', FakeSocket);
 
 /**
+ * jsdom has no `ResizeObserver`, and the pane uses one to ask the sandbox
+ * display to match its own size. Never fired here: what a resize *does* is a
+ * round trip to the backend, which belongs to the tests for that endpoint
+ * rather than to a component test standing in front of a fake socket. This
+ * exists so constructing one does not throw.
+ */
+class FakeResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+
+/**
  * A stand-in for `@novnc/novnc`'s `RFB` class.
  *
  * `BrowserPane` owns none of the input-capture or rendering logic RFB does
