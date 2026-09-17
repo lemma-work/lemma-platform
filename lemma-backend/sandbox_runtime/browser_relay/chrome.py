@@ -3,7 +3,9 @@
 A live, drivable view of it is not this module's job any more. Two earlier
 designs lived here in turn: driving CDP's `Page.startScreencast` and
 `Input.dispatch*` directly, then proxying `agent-browser`'s own session-scoped
-stream server (`stream_port`, `stream_proxy.py` -- both gone). What replaced
+stream server (`stream_port`, and the JPEG frame protocol -- both gone;
+`stream_proxy.py` survives under its old name, now carrying RFB bytes for
+`app.py`'s `/vnc` route rather than frames). What replaced
 both is `x11vnc` and `websockify` in front of the Xvfb display Chrome already
 runs on: a real screen rather than a translated one, so there is no frame
 protocol, no viewport measurement and no coordinate space for this module to

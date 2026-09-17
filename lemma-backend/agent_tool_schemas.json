@@ -4928,7 +4928,7 @@
   {
     "tool_name": "web_fetch",
     "toolset": "WEB_SEARCH",
-    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them,\n`view_image` for a screenshot, `pod_view_document_pages` for a captured\nPDF. This is the right way to read anything longer than a search snippet.",
+    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. This is the right way to read\nanything longer than a search snippet.",
     "input_schema": {
       "properties": {
         "urls": {
