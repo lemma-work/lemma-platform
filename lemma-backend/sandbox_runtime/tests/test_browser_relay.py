@@ -578,6 +578,12 @@ _POINTER_EVENT_MSG = bytes([5]) + b"\x00" * 5
 _KEY_EVENT_MSG = bytes([4]) + b"\x00" * 7
 _CLIENT_CUT_TEXT_MSG = bytes([6, 0, 0, 0, 0, 0, 0, 0])  # empty text, length 0
 
+#: The three client-side steps of an RFB handshake, correctly sized -- every
+#: test below that exercises `pump_binary` past its first three messages needs
+#: these first, or its real messages are themselves mistaken for handshake
+#: steps by length and refused before ever reaching the view-safe check.
+_FAKE_HANDSHAKE = [b"RFB 003.008\n", bytes([1]), bytes([1])]
+
 
 class _RecordingUpstream:
     def __init__(self) -> None:
@@ -613,6 +619,7 @@ async def test_a_viewer_watching_over_vnc_cannot_type() -> None:
 
     upstream = _RecordingUpstream()
     inbound = [
+        *_FAKE_HANDSHAKE,
         _FRAMEBUFFER_UPDATE_REQUEST_MSG,
         _POINTER_EVENT_MSG,
         _KEY_EVENT_MSG,
@@ -626,7 +633,11 @@ async def test_a_viewer_watching_over_vnc_cannot_type() -> None:
         send_bytes=_noop_send,
         receive_bytes=_receiver_over(inbound),
     )
-    assert upstream.sent == [_FRAMEBUFFER_UPDATE_REQUEST_MSG, _SET_PIXEL_FORMAT_MSG]
+    assert upstream.sent == [
+        *_FAKE_HANDSHAKE,
+        _FRAMEBUFFER_UPDATE_REQUEST_MSG,
+        _SET_PIXEL_FORMAT_MSG,
+    ]
 
 
 async def test_a_view_mode_frame_cannot_smuggle_a_second_message() -> None:
@@ -650,9 +661,9 @@ async def test_a_view_mode_frame_cannot_smuggle_a_second_message() -> None:
         upstream,
         mode=VIEW,
         send_bytes=_noop_send,
-        receive_bytes=_receiver_over([smuggled]),
+        receive_bytes=_receiver_over([*_FAKE_HANDSHAKE, smuggled]),
     )
-    assert upstream.sent == []
+    assert upstream.sent == _FAKE_HANDSHAKE
 
 
 async def _noop_send(_data: bytes) -> None:
@@ -667,7 +678,7 @@ async def test_a_viewer_driving_over_vnc_can_type() -> None:
     from sandbox_runtime.browser_relay.stream_proxy import pump_binary
 
     upstream = _RecordingUpstream()
-    inbound = [_POINTER_EVENT_MSG, _KEY_EVENT_MSG]
+    inbound = [*_FAKE_HANDSHAKE, _POINTER_EVENT_MSG, _KEY_EVENT_MSG]
 
     await pump_binary(
         upstream,
@@ -675,7 +686,52 @@ async def test_a_viewer_driving_over_vnc_can_type() -> None:
         send_bytes=_noop_send,
         receive_bytes=_receiver_over(inbound),
     )
-    assert upstream.sent == [_POINTER_EVENT_MSG, _KEY_EVENT_MSG]
+    assert upstream.sent == [*_FAKE_HANDSHAKE, _POINTER_EVENT_MSG, _KEY_EVENT_MSG]
+
+
+async def test_the_handshake_passes_through_before_any_view_safe_check() -> None:
+    """The regression this pins: a viewer's RFB handshake reply -- the
+    ProtocolVersion string, the chosen security type, ClientInit -- carries no
+    message-type byte the way every later client-to-server message does, so
+    `_view_mode_messages` cannot recognise any of it and, before this was
+    handled specially, silently dropped every one of the three steps. The
+    viewer's reply never reached the server, which never answered, and the
+    connection hung waiting for bytes that were never coming -- discovered by
+    running the real relay end to end, not by any of the tests above, none of
+    which sent a handshake at all."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(
+            [*_FAKE_HANDSHAKE, _FRAMEBUFFER_UPDATE_REQUEST_MSG]
+        ),
+    )
+    assert upstream.sent == [*_FAKE_HANDSHAKE, _FRAMEBUFFER_UPDATE_REQUEST_MSG]
+
+
+async def test_a_handshake_step_of_the_wrong_length_is_refused() -> None:
+    """Passing the handshake through by length, rather than leaving it
+    unfiltered by mode, closes the smuggling window that would otherwise
+    reopen here: a step padded with trailing bytes is refused outright, the
+    same as an unrecognised message type is once the handshake is behind it,
+    rather than having its extra bytes ride along to the server."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    padded_client_init = _FAKE_HANDSHAKE[2] + _POINTER_EVENT_MSG
+
+    await pump_binary(
+        upstream,
+        mode=CONTROL,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over([*_FAKE_HANDSHAKE[:2], padded_client_init]),
+    )
+    assert upstream.sent == _FAKE_HANDSHAKE[:2]
 
 
 def test_a_conversation_cannot_rename_the_default_session(monkeypatch) -> None:

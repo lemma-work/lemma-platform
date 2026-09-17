@@ -51,6 +51,25 @@ _log = logging.getLogger(__name__)
 VIEW = "view"
 CONTROL = "control"
 
+#: The client's three RFB handshake steps, in order, by their fixed length:
+#: the ProtocolVersion reply (`"RFB 003.008\n"`, 12 bytes), the chosen
+#: security type (1 byte -- this relay's upstream only ever offers None), and
+#: ClientInit's shared-flag (1 byte). None of these carry a message-type byte
+#: the way every later client-to-server message does -- the RFB message
+#: vocabulary this module otherwise validates against does not exist yet at
+#: this point in the connection -- so `_view_mode_messages` cannot recognise
+#: them and, before this was handled specially, silently dropped every one of
+#: them: a view-mode viewer's handshake reply vanished into the filter and
+#: the connection hung forever waiting for a server response to a client
+#: message the server never received.
+#:
+#: Checked by length rather than left unfiltered by mode, so a would-be
+#: smuggler cannot pad a handshake step with a trailing `KeyEvent` or
+#: `PointerEvent` and have it pass for free: a frame with the wrong length
+#: at this stage is refused outright, same as an unrecognised message type
+#: is once the handshake is behind it.
+_HANDSHAKE_STEP_LENGTHS = (12, 1, 1)
+
 #: RFB client-to-server message types, by their first byte.
 _SET_PIXEL_FORMAT = 0
 _SET_ENCODINGS = 2
@@ -122,6 +141,10 @@ async def pump_binary(upstream, *, mode: str, send_bytes, receive_bytes) -> None
     Two tasks rather than one loop: the display pushes updates continuously
     while a viewer sends nothing for long stretches, so interleaving the reads
     would stall the picture behind an input that never comes.
+
+    The client's first three messages -- its RFB handshake -- are passed by
+    length rather than through `_view_mode_messages`, in both modes: see
+    `_HANDSHAKE_STEP_LENGTHS`.
     """
 
     async def to_viewer() -> None:
@@ -129,10 +152,17 @@ async def pump_binary(upstream, *, mode: str, send_bytes, receive_bytes) -> None
             await send_bytes(raw if isinstance(raw, bytes) else raw.encode())
 
     async def to_upstream() -> None:
+        handshake_step = 0
         while True:
             raw = await receive_bytes()
             if raw is None:
                 return
+            if handshake_step < len(_HANDSHAKE_STEP_LENGTHS):
+                if len(raw) != _HANDSHAKE_STEP_LENGTHS[handshake_step]:
+                    return
+                handshake_step += 1
+                await upstream.send(raw)
+                continue
             if mode != CONTROL and _view_mode_messages(raw) is None:
                 continue
             await upstream.send(raw)
