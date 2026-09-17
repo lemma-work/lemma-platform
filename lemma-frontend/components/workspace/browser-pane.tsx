@@ -11,7 +11,45 @@ import { cn } from '@/lib/utils';
 
 import type NoVncClient from '@novnc/novnc';
 
-type PaneState = 'connecting' | 'live' | 'lost';
+type PaneState = 'connecting' | 'live' | 'lost' | 'refused' | 'no-browser' | 'unsupported' | 'stale-image';
+
+//: Why a socket closed, in numbers a client can branch on -- matches
+//: `browser_view_controller.py`'s `CLOSE_*` constants exactly. Read off the
+//: WebSocket's own `close` event, not RFB's `disconnect` event: RFB reports
+//: only `{clean: boolean}`, which cannot tell "the browser is not running"
+//: (retrying is right -- the agent may start one) from "you are not signed
+//: in" (retrying with the same expired token can never succeed). Losing this
+//: distinction was a real regression from the JPEG pane, which had it: every
+//: disconnect retried forever, including an expired session, which looked
+//: exactly like "the connection dropped" repeating with no way out.
+const CLOSE_UNAUTHENTICATED = 4401;
+const CLOSE_ORIGIN_REFUSED = 4403;
+const CLOSE_NO_BROWSER = 4409;
+const CLOSE_UNSUPPORTED = 4422;
+const CLOSE_STALE_IMAGE = 4426;
+
+const closeCodeToState = (code: number): PaneState => {
+    switch (code) {
+        case CLOSE_UNAUTHENTICATED:
+        case CLOSE_ORIGIN_REFUSED:
+            return 'refused';
+        case CLOSE_NO_BROWSER:
+            return 'no-browser';
+        case CLOSE_UNSUPPORTED:
+            return 'unsupported';
+        case CLOSE_STALE_IMAGE:
+            return 'stale-image';
+        default:
+            return 'lost';
+    }
+};
+
+//: States a fresh connection attempt cannot fix: wrong or expired
+//: credentials, a fabric that cannot do this at all, or an image missing the
+//: relay. Retrying will not change any of these until something outside this
+//: component does -- signing in again, replacing the image -- so retrying
+//: forever just repeats the same failure while telling the person otherwise.
+const TERMINAL_STATES: ReadonlySet<PaneState> = new Set(['refused', 'unsupported', 'stale-image']);
 
 //: X11 keysyms for the two keys a synthetic paste needs. Lowercase ASCII
 //: letters are their own keysym in this space, so `v` needs no table lookup.
@@ -109,10 +147,21 @@ export function BrowserPane({
             const { default: RFB } = await import('@novnc/novnc');
             if (cancelled) return;
             container.replaceChildren();
-            const rfb = new RFB(
-                container,
+
+            // Owned here rather than handed to RFB as a URL string, purely so
+            // this can read the real close code -- see `closeCodeToState`.
+            // `addEventListener`, not `.onclose =`: RFB's own `attach()` sets
+            // `.onclose` directly on whatever channel it is given, which
+            // would silently replace a same-named assignment made here.
+            const socket = new WebSocket(
                 vncSocketUrl({ mode: controlling ? 'control' : 'view', origin, accessToken }),
             );
+            let closeCode = 1000;
+            socket.addEventListener('close', (event) => {
+                closeCode = event.code;
+            });
+
+            const rfb = new RFB(container, socket);
             rfb.viewOnly = !controlling;
             rfb.scaleViewport = true;
             rfb.background = 'var(--bg-canvas)';
@@ -123,10 +172,10 @@ export function BrowserPane({
             rfb.addEventListener('disconnect', () => {
                 // Guarded on identity: toggling `controlling` tears this
                 // instance down and starts a new one in the same tick, and
-                // `disconnect()` closes the socket without waiting for it --
-                // the resulting event arrives after the new instance is
-                // already the one in `rfbRef`. Without this check, that late
-                // event nulled a *live* ref out from under it, so every
+                // the socket closing does not happen synchronously with
+                // that -- the resulting event arrives after the new instance
+                // is already the one in `rfbRef`. Without this check, that
+                // late event nulled a *live* ref out from under it, so every
                 // paste and keystroke after the first "Take control" landed
                 // on `rfbRef.current === null` while the picture kept
                 // rendering the new connection's frames regardless -- there
@@ -134,8 +183,10 @@ export function BrowserPane({
                 if (rfbRef.current !== rfb) return;
                 rfbRef.current = null;
                 if (cancelled) return;
-                setState('lost');
+                const next = closeCodeToState(closeCode);
+                setState(next);
                 setKeyboardIsHere(false);
+                if (TERMINAL_STATES.has(next)) return;
                 retryTimer = setTimeout(connect, reconnectDelayMs(attempt++));
             });
             rfbRef.current = rfb;
@@ -246,12 +297,8 @@ export function BrowserPane({
                         <EmptyState
                             variant="region"
                             icon={<Monitor />}
-                            title={state === 'connecting' ? 'Connecting…' : 'The connection dropped'}
-                            description={
-                                state === 'connecting'
-                                    ? 'Waking the computer and starting its browser. The first time takes a moment.'
-                                    : 'Reconnecting.'
-                            }
+                            title={TITLES[state]}
+                            description={DESCRIPTIONS[state]}
                         />
                     </div>
                 ) : null}
@@ -259,3 +306,24 @@ export function BrowserPane({
         </div>
     );
 }
+
+const TITLES: Record<PaneState, string> = {
+    connecting: 'Connecting…',
+    live: '',
+    'no-browser': 'The browser is not running',
+    unsupported: 'Not available on this computer',
+    'stale-image': 'This computer needs restarting',
+    refused: 'You are not signed in',
+    lost: 'The connection dropped',
+};
+
+const DESCRIPTIONS: Record<PaneState, string> = {
+    connecting: 'Waking the computer and starting its browser. The first time takes a moment.',
+    live: '',
+    'no-browser': 'It starts when the agent opens a page, or when you take control.',
+    unsupported: 'This kind of sandbox cannot show a live browser.',
+    'stale-image':
+        'It is running an older image with no VNC channel. Restart it to pick up the current one.',
+    refused: 'Sign in again and reopen this panel.',
+    lost: 'Reconnecting.',
+};
