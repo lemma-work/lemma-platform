@@ -6,6 +6,10 @@ export PNPM_HOME=/home/user/.local/share/pnpm
 export DISPLAY=:99
 export XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime
 export WORKSPACE_XVFB_SCREEN=1440x960x24
+# The ceiling on a viewer-requested resize. Exported here as well as set on
+# the template, because a login shell on E2B does not see the template's own
+# environment -- and `start-browser` runs from one.
+export WORKSPACE_XVFB_MAX_SCREEN=1920x1200x24
 export AGENT_BROWSER_CONFIG=/tmp/lemma-browser/config.json
 export AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome
 export AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile

@@ -138,6 +138,24 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   done
 fi
 
+# The socket existing is not the server answering, and everything below this
+# line is an X client.
+#
+# Xvfb binds its socket before it will accept a connection, and how much
+# before depends on the fabric: on Docker the gap is invisible, on E2B it is
+# long enough that the window manager came up with "can't open display" and
+# the initial resize silently did nothing -- so the browser filled neither the
+# screen nor the pane, on the one fabric that serves real users. Waited for
+# once, here, rather than left for each client to discover.
+if command -v xrandr >/dev/null 2>&1; then
+  waited=0
+  while [ "$waited" -lt 200 ] \
+    && ! DISPLAY="$DISPLAY_VALUE" xrandr --current >/dev/null 2>&1; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+fi
+
 # Somebody has to manage the windows, or nobody does. Chrome is told its size
 # above, but a *second* window -- the OAuth popup almost every real sign-in
 # opens -- is placed by the X server's default, which is wherever it likes and
