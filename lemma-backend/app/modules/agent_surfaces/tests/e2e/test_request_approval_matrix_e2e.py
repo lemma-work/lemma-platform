@@ -236,36 +236,7 @@ async def test_a_tapped_deny_skips_the_wrapped_tool(
     assert result["executed"] is False
 
 
-#: Teams is `xfail` here, and the reason is not about approvals.
-#:
-#: This is the first test in the suite to send a *second* message into an
-#: existing Teams channel conversation, and any second message fails — "just
-#: checking in" fails identically to "deny". The flush raises
-#: ``AttributeError: 'list' object has no attribute '_sa_adapter'`` out of
-#: ``create_agent_run``, which is SQLAlchemy saying a relationship collection
-#: is holding a plain list. Slack does the same two turns through the same
-#: session and passes, so it is not "two turns in one session" in general.
-#:
-#: Left failing rather than skipped, and `strict` so it speaks up when it is
-#: fixed. Whether the fault is the product or this harness is the open
-#: question; it is recorded here because a Teams thread that answers once and
-#: then stops is worth knowing about either way.
-_TYPED_PLATFORMS = [
-    pytest.param(
-        platform,
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="a second message in a Teams channel thread fails to flush",
-        )
-        if platform is SurfacePlatform.TEAMS
-        else (),
-        id=platform.value,
-    )
-    for platform in CHAT_PLATFORMS
-]
-
-
-@pytest.mark.parametrize("platform", _TYPED_PLATFORMS)
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
 async def test_a_typed_deny_is_accepted_like_the_button(
     platform: SurfacePlatform,
     authenticated_client: AsyncClient,
