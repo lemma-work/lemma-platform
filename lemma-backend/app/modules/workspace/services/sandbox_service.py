@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-import random
 from uuid import UUID
 
 from opentelemetry import trace
@@ -45,7 +44,6 @@ from app.modules.workspace.domain.sandbox import (
     SandboxKind,
     SandboxOwnerKind,
 )
-from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -58,6 +56,7 @@ from app.modules.workspace.providers.base import (
     resumes_stopped_instances,
 )
 from app.modules.workspace.providers.profiles import profile_for, profile_is_stale
+from app.modules.workspace.services.browser_proxy_env import provisioning_env
 from app.modules.workspace.services.sandbox_addressing import (
     SandboxAddressingMixin,
 )
@@ -432,7 +431,7 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             deadline_at=deadline_at,
             volume_name=volume_name,
             mounts=sandbox.mounts,
-            env=_provisioning_env(sandbox.kind),
+            env=provisioning_env(sandbox.kind),
         )
         try:
             created = await self._provider.create(spec)
@@ -593,22 +592,3 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
 
     async def close(self) -> None:
         await self._provider.close()
-
-
-def _provisioning_env(kind: SandboxKind) -> dict[str, str]:
-    """Env baked into a sandbox at creation, before anything runs inside it.
-
-    Only a workspace sandbox has a browser to proxy -- a function sandbox
-    never opens one, so giving it a proxy assignment would spend nothing on
-    anyone and cost a slot in the pool nobody reads. One choice per sandbox,
-    made once here rather than by the browser at launch time: every restart
-    of a resumed sandbox must open through the same proxy it was created
-    with, or a session started through one residential IP would carry on
-    through a different one after the sandbox's first pause.
-    """
-    if kind != SandboxKind.WORKSPACE:
-        return {}
-    pool = workspace_settings.browser_proxy_urls
-    if not pool:
-        return {}
-    return {"LEMMA_BROWSER_PROXY_URL": random.choice(pool).get_secret_value()}

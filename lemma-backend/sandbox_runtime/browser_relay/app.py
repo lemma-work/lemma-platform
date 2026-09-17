@@ -354,7 +354,14 @@ def create_app() -> FastAPI:
             )
             return
         try:
-            await live_port()
+            # `session_name`, not the bare default: a sign-in's Chrome runs in
+            # its own named session (its own profile, its own port), and
+            # `live_port()` with no argument checks only the default one's.
+            # Checking the wrong session here reported "no browser running"
+            # about a browser that was on screen at the time -- the picture
+            # is shared, but whether *a* Chrome process is up is still asked
+            # per session, and the login session's was never the one asked.
+            await live_port(session_name)
         except BrowserNotRunning as exc:
             await _refuse(websocket, CLOSE_NO_BROWSER, f"no browser running: {exc}")
             return

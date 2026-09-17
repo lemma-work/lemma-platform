@@ -818,7 +818,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.browser_view.relay_absent.degraded': EventSpec('warning', frozenset({'error_type'})),
     'workspace.browser_view.session_unreadable.degraded': EventSpec('warning', frozenset()),
     'workspace.browser_view.status_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'workspace.browser_view.unreadable_conversation.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.unsupported.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.upstream.degraded': EventSpec('warning', frozenset({'error_type'})),
     'workspace.e2b.path_not_resolved.degraded': EventSpec('warning', frozenset({'error_type', 'path'})),

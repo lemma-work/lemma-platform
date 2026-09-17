@@ -154,7 +154,7 @@ class CurrentPageUrlResponse(BaseModel):
 @router.get(
     "/current-page-url",
     response_model=CurrentPageUrlResponse,
-    operation_id="workspace.browser.currentPageUrl",
+    operation_id="workspace.browser.current_page_url",
     summary="What page a sign-in's browser is actually showing",
 )
 async def current_page_url(

@@ -332,6 +332,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| GET | `/workspace/browser/current-page-url` | `workspace.browser.current_page_url` | What page a sign-in's browser is actually showing |
 | GET | `/workspace/browser/status` | `workspace.browser.status` | Whether the workspace browser can be watched |
 | GET | `/workspace/files` | `workspace.files.list` | List workspace files |
 | GET | `/workspace/files:content` | `workspace.files.content` | Read workspace file content |

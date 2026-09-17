@@ -518,80 +518,164 @@ def test_a_vnc_viewer_is_refused_when_no_browser_is_running(
     assert refused.value.code == CLOSE_NO_BROWSER
 
 
-async def test_a_viewer_watching_over_vnc_cannot_type() -> None:
-    """The RFB equivalent of `test_pacing_and_acks_are_allowed_to_a_watcher`:
-    `view` mode drops KeyEvent and PointerEvent frames without ever parsing
-    the rest of the protocol, by looking at the one byte that names them."""
-    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+def test_a_vnc_viewer_is_checked_against_its_own_session_not_the_default(
+    monkeypatch, tmp_path
+) -> None:
+    """The bug this pins: a sign-in's Chrome runs in its own named session,
+    not the default one -- `ensure_browser` starts it there, with its own
+    profile and its own port. Checking `live_port()` with no session, as the
+    route first shipped, asks whether the *default* session's Chrome is
+    running and finds nothing, so a person landed on a sign-in page mid-flow
+    was told "no browser running" about a browser that was on screen at the
+    time. This is only reachable if the check passes for the *named* session
+    and still fails for the default one.
+    """
+    from starlette.websockets import WebSocketDisconnect
 
-    class _FakeUpstream:
-        def __init__(self) -> None:
-            self.sent: list[bytes] = []
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+    from sandbox_runtime.browser_relay.chrome import BrowserNotRunning
 
-        def __aiter__(self):
-            async def _empty():
-                return
-                yield  # pragma: no cover - makes this an async generator
+    async def fake_live_port(session=None):
+        if session != "login-example.com":
+            raise BrowserNotRunning("no chrome in this session")
+        return 12345
 
-            return _empty()
+    class _RefusingConnect:
+        # `websockets.connect(...)` is used as an async context manager, not
+        # merely awaited -- this stands in for its shape rather than a bare
+        # coroutine. Nothing about reaching websockify is under test here,
+        # only that the liveness check passed for the right session: failing
+        # fast at the next step, with its own distinct close code, is what
+        # proves the refusal above did not fire.
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
 
-        async def send(self, data: bytes) -> None:
-            self.sent.append(data)
+        async def __aenter__(self):
+            raise OSError("no websockify in this test")
 
-    upstream = _FakeUpstream()
-    inbound = [
-        bytes([3, 0, 0, 0]),  # FramebufferUpdateRequest -- allowed
-        bytes([5, 0, 0, 0]),  # PointerEvent -- a click, dropped while viewing
-        bytes([4, 0, 0, 0]),  # KeyEvent -- a keystroke, dropped while viewing
-        bytes([6, 0, 0, 0]),  # ClientCutText -- clipboard, allowed
-    ]
+        async def __aexit__(self, *_exc):
+            return False
 
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app.websockets, "connect", _RefusingConnect)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?session=login-example.com",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+    assert closed.value.code == CLOSE_UPSTREAM_GONE
+
+
+#: Correctly-sized fake RFB client messages, by the protocol's own fixed and
+#: header-driven lengths -- a real message, not a plausible-looking prefix of
+#: one, is what the smuggling test below needs a legitimate message to be.
+_SET_PIXEL_FORMAT_MSG = bytes([0]) + b"\x00" * 19  # type + pad(3) + format(16)
+_FRAMEBUFFER_UPDATE_REQUEST_MSG = bytes([3]) + b"\x00" * 9
+_POINTER_EVENT_MSG = bytes([5]) + b"\x00" * 5
+_KEY_EVENT_MSG = bytes([4]) + b"\x00" * 7
+_CLIENT_CUT_TEXT_MSG = bytes([6, 0, 0, 0, 0, 0, 0, 0])  # empty text, length 0
+
+
+class _RecordingUpstream:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+
+    def __aiter__(self):
+        async def _empty():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        return _empty()
+
+    async def send(self, data: bytes) -> None:
+        self.sent.append(data)
+
+
+def _receiver_over(frames: list[bytes]):
     async def receive_bytes() -> bytes | None:
-        if inbound:
-            return inbound.pop(0)
+        if frames:
+            return frames.pop(0)
         return None
 
-    async def send_bytes(_data: bytes) -> None:
-        pass
+    return receive_bytes
+
+
+async def test_a_viewer_watching_over_vnc_cannot_type() -> None:
+    """`view` mode forwards only the messages that ask for a picture, and
+    drops a `KeyEvent`, a `PointerEvent`, and a `ClientCutText` outright --
+    nothing in this product pastes from view mode, so admitting the message
+    class on the promise a caller happens not to use it would be exactly the
+    allowlist erosion the module warns against."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    inbound = [
+        _FRAMEBUFFER_UPDATE_REQUEST_MSG,
+        _POINTER_EVENT_MSG,
+        _KEY_EVENT_MSG,
+        _CLIENT_CUT_TEXT_MSG,
+        _SET_PIXEL_FORMAT_MSG,
+    ]
 
     await pump_binary(
-        upstream, mode=VIEW, send_bytes=send_bytes, receive_bytes=receive_bytes
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(inbound),
     )
-    assert upstream.sent == [bytes([3, 0, 0, 0]), bytes([6, 0, 0, 0])]
+    assert upstream.sent == [_FRAMEBUFFER_UPDATE_REQUEST_MSG, _SET_PIXEL_FORMAT_MSG]
+
+
+async def test_a_view_mode_frame_cannot_smuggle_a_second_message() -> None:
+    """The vulnerability this closes: a first version of this filter looked
+    only at a frame's first byte, on the assumption that one WebSocket frame
+    carries exactly one RFB message. That assumption holds for noVNC; it does
+    not hold for whatever a viewer's socket actually is, and nothing stops a
+    frame from carrying a legitimate message's bytes followed by a
+    `PointerEvent` the byte-0 check never sees. RFB is a byte stream to the
+    server on the other end, which has no notion of WebSocket frame
+    boundaries -- so a smuggled message reached it exactly as if it had been
+    sent openly. The fix drops the *whole* frame rather than forwarding a
+    prefix of it, because forwarding the legitimate-looking part is what let
+    the rest ride along in the first place."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    smuggled = _FRAMEBUFFER_UPDATE_REQUEST_MSG + _POINTER_EVENT_MSG
+    upstream = _RecordingUpstream()
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over([smuggled]),
+    )
+    assert upstream.sent == []
+
+
+async def _noop_send(_data: bytes) -> None:
+    pass
 
 
 async def test_a_viewer_driving_over_vnc_can_type() -> None:
+    """Driving mode does not run messages through the view-safe check at
+    all -- the wheel lease is what gates who may be in this mode, not a
+    per-message filter, so a real message's exact byte layout does not
+    matter here the way it does for the view-mode tests above."""
     from sandbox_runtime.browser_relay.stream_proxy import pump_binary
 
-    class _FakeUpstream:
-        def __init__(self) -> None:
-            self.sent: list[bytes] = []
-
-        def __aiter__(self):
-            async def _empty():
-                return
-                yield  # pragma: no cover
-
-            return _empty()
-
-        async def send(self, data: bytes) -> None:
-            self.sent.append(data)
-
-    upstream = _FakeUpstream()
-    inbound = [bytes([5, 0, 0, 0]), bytes([4, 0, 0, 0])]
-
-    async def receive_bytes() -> bytes | None:
-        if inbound:
-            return inbound.pop(0)
-        return None
-
-    async def send_bytes(_data: bytes) -> None:
-        pass
+    upstream = _RecordingUpstream()
+    inbound = [_POINTER_EVENT_MSG, _KEY_EVENT_MSG]
 
     await pump_binary(
-        upstream, mode=CONTROL, send_bytes=send_bytes, receive_bytes=receive_bytes
+        upstream,
+        mode=CONTROL,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(inbound),
     )
-    assert upstream.sent == [bytes([5, 0, 0, 0]), bytes([4, 0, 0, 0])]
+    assert upstream.sent == [_POINTER_EVENT_MSG, _KEY_EVENT_MSG]
 
 
 def test_a_conversation_cannot_rename_the_default_session(monkeypatch) -> None:
