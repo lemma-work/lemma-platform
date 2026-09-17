@@ -322,7 +322,7 @@ class BrowserRelayClient:
         cannot raise, so a large request is clamped rather than refused.
         """
         response = await self._request(
-            "POST", "/display:resize", json={"width": width, "height": height}
+            "POST", "/display:resize", json_body={"width": width, "height": height}
         )
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))

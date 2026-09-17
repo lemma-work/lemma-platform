@@ -151,6 +151,23 @@ if command -v matchbox-window-manager >/dev/null 2>&1; then
   fi
 fi
 
+# Down from the framebuffer's maximum to the size we actually start at --
+# before x11vnc, deliberately.
+#
+# x11vnc does survive a resize once it is running (measured: settle it, resize
+# the screen under it, it follows and stays up). What it does not survive is
+# the screen changing size *while it is still grabbing its first frame*: the
+# X_GetImage it is midway through fails, and it dies leaving websockify
+# pointing at nothing and the pane reconnecting for ever. Resizing first means
+# it opens on the geometry it will keep.
+#
+# Best effort: a display left at the maximum is a picture that is too big,
+# which is a far smaller problem than refusing to start a browser over it.
+if command -v set-display-size >/dev/null 2>&1; then
+  DISPLAY="$DISPLAY_VALUE" set-display-size "$SCREEN_WIDTH" "$SCREEN_HEIGHT" \
+    >/dev/null 2>&1 || true
+fi
+
 # The human-facing view of this same display, over VNC rather than the
 # stream server's JPEG frames -- a real clipboard and no coordinate space to
 # get wrong, at the cost of showing the whole display rather than one tab.
@@ -177,20 +194,6 @@ if ! pgrep -f "websockify .*${VNC_WS_PORT}" >/dev/null 2>&1; then
     >/tmp/lemma-websockify.log 2>&1 < /dev/null &
 fi
 
-# Down from the framebuffer's maximum to the size we actually start at, now
-# that the display stack is up.
-#
-# The order matters and is not obvious: `xrandr --newmode` against a bare Xvfb
-# returns success and silently creates nothing, so this ran as a no-op when it
-# sat next to the Xvfb start and the display stayed at its full 1920x1200.
-# With x11vnc attached the same call works -- proven by running it either side
-# of starting x11vnc on one display, not reasoned about. Best effort either
-# way: a display left at the maximum is a picture that is too big, which is a
-# far smaller problem than refusing to start a browser over it.
-if command -v set-display-size >/dev/null 2>&1; then
-  DISPLAY="$DISPLAY_VALUE" set-display-size "$SCREEN_WIDTH" "$SCREEN_HEIGHT" \
-    >/dev/null 2>&1 || true
-fi
 
 # The relay is what the backend reaches, and now the only way in.
 #
