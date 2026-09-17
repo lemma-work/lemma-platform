@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from uuid import UUID
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from pydantic import JsonValue
-from sqlalchemy import select
 
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
@@ -26,14 +21,6 @@ from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store 
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    PersonalDMRoute,
-    VerifiedSurfaceIdentity,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
-    ExternalSurfaceUserRepository,
-)
-from app.modules.agent_surfaces.services.identity_resolution_service import (
-    SurfaceIdentityResolutionService,
 )
 from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     private_onboarding_destination,
@@ -43,15 +30,10 @@ from app.modules.agent_surfaces.services.onboarding_transport import (
     OnboardingTransport,
     resolve_onboarding_transport,
 )
-from app.modules.agent_surfaces.services.personal_dm_routes import (
-    prepare_personal_dm_context,
-)
 from app.modules.identity.contracts.onboarding import (
     ChallengeRejected,
     RateLimitExceeded,
     EmailChallengeService,
-    PENDING_TTL_SECONDS,
-    active_chat_user,
     complete_chat_account,
     email_challenge_service,
     hold_chat_onboarding,
@@ -67,23 +49,11 @@ from app.modules.agent_surfaces.domain.onboarding_state import (
     OnboardingStep,
     PendingState,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class PersonalRoute:
-    id: UUID
-    installation_surface_id: UUID
-
-
-def _original_request(event: ParsedInboundSurfaceEvent) -> dict[str, JsonValue]:
-    # Surrounding channel history and arbitrary platform payloads never enter
-    # the personal assistant's conversation. Attachments retain provider IDs.
-    return event.model_copy(
-        update={
-            "metadata": {"attachments": event.metadata.get("attachments", [])},
-            "raw_payload": {},
-        }
-    ).model_dump(mode="json")
+from app.modules.agent_surfaces.services.onboarding_sender import (
+    read_state,
+    recognize_sender,
+    require_state,
+)
 
 
 class ChatOnboardingCoordinator:
@@ -103,19 +73,10 @@ class ChatOnboardingCoordinator:
         return self._challenges or email_challenge_service(platform)
 
     async def _state(self, binding_key: str) -> PendingState | None:
-        async with self._uows() as uow:
-            row = await uow.session.scalar(
-                select(PendingChatOnboarding).where(
-                    PendingChatOnboarding.binding_key == binding_key
-                )
-            )
-            return PendingState.model_validate(row) if row is not None else None
+        return await read_state(self._uows, binding_key)
 
     async def _require_state(self, binding_key: str) -> PendingState:
-        state = await self._state(binding_key)
-        if state is None:
-            raise ValueError("Pending onboarding disappeared")
-        return state
+        return await require_state(self._uows, binding_key)
 
     async def handle(self, request: SurfaceIngressRequest) -> OnboardingIngressResult:
         transport = await resolve_onboarding_transport(
@@ -132,7 +93,12 @@ class ChatOnboardingCoordinator:
         event = transport.event
         state = await self._state(transport.binding_key)
         if state is None or state.handed_off_at is not None:
-            started = await self._new_sender(transport)
+            started = await recognize_sender(
+                self._uows,
+                transport,
+                adapters=self._adapters,
+                event_dedup_store=self._event_dedup_store,
+            )
             if isinstance(started, OnboardingIngressResult):
                 return started
             state = started
@@ -244,140 +210,6 @@ class ChatOnboardingCoordinator:
                 destination,
                 "Your account is ready. Ask your team admin to add you to this Lemma organization.",
             )
-
-    async def _verified_sender(
-        self, binding_key: str
-    ) -> tuple[UUID | None, bool, PersonalRoute | None]:
-        async with self._uows() as uow:
-            identity = await uow.session.scalar(
-                select(VerifiedSurfaceIdentity).where(
-                    VerifiedSurfaceIdentity.binding_key == binding_key
-                )
-            )
-            verified_user_id = (
-                identity.user_id
-                if identity is not None and identity.revoked_at is None
-                else None
-            )
-            previously_revoked = (
-                identity is not None and identity.revoked_at is not None
-            )
-            if verified_user_id is not None:
-                assert identity is not None
-                verified_user = await active_chat_user(uow, verified_user_id)
-                if verified_user is None or (
-                    identity.verified_phone is not None
-                    and (
-                        identity.verified_phone != verified_user.mobile_number
-                        or verified_user.mobile_verified_at is None
-                    )
-                ):
-                    verified_user_id = None
-                    previously_revoked = True
-            found = (
-                await uow.session.execute(
-                    select(
-                        PersonalDMRoute.id, PersonalDMRoute.installation_surface_id
-                    ).where(PersonalDMRoute.binding_key == binding_key)
-                )
-            ).first()
-        route = PersonalRoute(*found) if found is not None else None
-        return verified_user_id, previously_revoked, route
-
-    async def _create_pending(
-        self, transport: OnboardingTransport, event: ParsedInboundSurfaceEvent
-    ) -> PendingState:
-        async with self._uows() as uow:
-            row = await uow.session.scalar(
-                select(PendingChatOnboarding).where(
-                    PendingChatOnboarding.binding_key == transport.binding_key
-                )
-            )
-            if row is not None:
-                await uow.session.delete(row)
-                await uow.session.flush()
-            row = PendingChatOnboarding(
-                binding_key=transport.binding_key,
-                platform=event.platform.value,
-                step=OnboardingStep.HANDOFF,
-                destination={},
-                original_event=_original_request(event),
-                installation_surface_id=transport.surface.id
-                if transport.surface
-                else None,
-                expires_at=datetime.now(timezone.utc)
-                + timedelta(
-                    seconds=min(
-                        PENDING_TTL_SECONDS,
-                        surface_settings.surface_onboarding_ttl_seconds,
-                    )
-                ),
-                verified_phone=normalize_mobile_e164(
-                    "+"
-                    + str(event.sender_phone or event.sender_external_user_id).lstrip(
-                        "+"
-                    )
-                )
-                if event.platform == SurfacePlatform.WHATSAPP
-                else None,
-            )
-            uow.session.add(row)
-        state = await self._require_state(transport.binding_key)
-        assert state is not None
-        return state
-
-    async def _new_sender(
-        self, transport: OnboardingTransport
-    ) -> PendingState | OnboardingIngressResult:
-        event = transport.event
-        verified_user_id, previously_revoked, route = await self._verified_sender(
-            transport.binding_key
-        )
-        if verified_user_id is not None and route is not None and event.is_dm:
-            # This path answers instead of `prepare_ingress`, which is where the
-            # delivery claim otherwise lives. Without it a personal DM is the one
-            # conversation on the platform with no message-level defence against
-            # a redelivery -- and it is the one a person uses every day. Keyed on
-            # the route's own installation, which is what the context carries and
-            # therefore what `release_ingress_claim` hands back.
-            if not await self._event_dedup_store.claim_message(
-                surface_installation_id=route.installation_surface_id,
-                platform=event.platform.value,
-                external_channel_id=event.external_channel_id,
-                external_thread_id=event.external_thread_id,
-                external_message_id=event.external_message_id,
-            ):
-                return OnboardingIngressResult(True)
-            async with self._uows() as uow:
-                context = await prepare_personal_dm_context(
-                    uow, route_id=route.id, event=event
-                )
-            return OnboardingIngressResult(True, context)
-        if verified_user_id is not None:
-            return OnboardingIngressResult(False)
-        if not previously_revoked:
-            adapter = self._adapters.get(event.platform)
-            assert adapter is not None
-            profile = await adapter.fetch_sender_profile(
-                credentials=transport.credentials, event=event
-            )
-            async with self._uows() as uow:
-                resolved = await SurfaceIdentityResolutionService(
-                    uow, ExternalSurfaceUserRepository(uow)
-                ).resolve(
-                    event=event, sender_profile=profile, require_proven_identity=True
-                )
-            if resolved.internal_user_id is not None:
-                return OnboardingIngressResult(False)
-            if profile is not None:
-                event = event.model_copy(
-                    update={
-                        "sender_email": profile.email,
-                        "sender_display_name": profile.display_name
-                        or event.sender_display_name,
-                    }
-                )
-        return await self._create_pending(transport, event)
 
     async def _handoff(
         self, transport: OnboardingTransport, state: PendingState
