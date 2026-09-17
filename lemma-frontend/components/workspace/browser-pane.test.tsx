@@ -147,6 +147,27 @@ describe('opening the view', () => {
         const rfb = await connect();
         expect(rfb.url).toContain('conversation=conv-abc');
     });
+
+    it('reconnects to the new conversation when the mounted pane is handed a different one', async () => {
+        // `ComputerPanel` is one long-lived instance reused across whichever
+        // conversation is open -- the id is a prop, not a mount key -- so
+        // switching conversations re-runs this effect on the same component
+        // rather than making a fresh one. Without `conversationId` in the
+        // effect's dependency array, the first conversation's socket would
+        // stay open and a person switching conversations would keep watching
+        // the old one's browser.
+        const { rerender } = render(<BrowserPane conversationId="conv-first" />);
+        const first = await connect();
+        expect(first.url).toContain('conversation=conv-first');
+        expect(first.disconnected).toBe(false);
+
+        rerender(<BrowserPane conversationId="conv-second" />);
+        await waitFor(() => expect(first.disconnected).toBe(true));
+        await waitFor(() => expect(rfbInstances).toHaveLength(2));
+        const second = rfbInstances[1];
+        expect(second.url).toContain('conversation=conv-second');
+        expect(second.url).not.toContain('conv-first');
+    });
 });
 
 describe('taking control', () => {
