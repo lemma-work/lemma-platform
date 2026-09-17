@@ -369,7 +369,15 @@ def create_app() -> FastAPI:
         await websocket.accept()
         # Watching is not a command, so without this the agent's idle timeout
         # retires the browser out from under somebody reading the page.
-        keepalive_task = create_background_task(_keepalive_loop(DEFAULT_SESSION))
+        #
+        # `session_name`, not the default -- the same distinction the liveness
+        # check above already makes. A sign-in runs in `login-<host>` and a
+        # watch names its conversation's session, so keeping the *default*
+        # session warm left the browser actually on screen idle: retired after
+        # two minutes, mid-page, and for a sign-in that also takes the profile
+        # with it. It kept a browser nobody was watching alive at the same
+        # time, in a sandbox where the memory guard kills on ~220 MB free.
+        keepalive_task = create_background_task(_keepalive_loop(session_name))
         driving = _take_the_wheel(session_name) if mode == CONTROL else None
         try:
             async with websockets.connect(

@@ -569,6 +569,70 @@ def test_a_vnc_viewer_is_checked_against_its_own_session_not_the_default(
     assert closed.value.code == CLOSE_UPSTREAM_GONE
 
 
+def test_the_vnc_keepalive_touches_the_session_being_watched(
+    monkeypatch, tmp_path
+) -> None:
+    """The bug this pins: the route kept the *default* session warm whatever
+    the viewer was actually looking at.
+
+    Watching is not a command, and `agent-browser` retires a browser after two
+    idle minutes -- which is the entire reason this loop exists. Pointed at the
+    default session, it let the browser actually on screen idle out from under
+    the person reading it: a sign-in's `login-<host>`, or a conversation's own
+    session. For a sign-in that is worse than a blank panel, because releasing
+    runs quiesce and takes the profile -- and the half-finished sign-in -- with
+    it. It also kept a browser nobody was watching alive, in a sandbox whose
+    memory guard kills on ~220 MB free.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+
+    async def fake_live_port(session=None):
+        return 12345
+
+    kept_warm: list[str] = []
+
+    async def _never_finishes() -> None:
+        await asyncio.Event().wait()
+
+    def fake_keepalive_loop(session: str):
+        # Recorded where the loop is *created*, not where it first runs: the
+        # real one sleeps for a minute before its first touch and this socket
+        # is over long before that. Which session it is handed is the whole of
+        # what regressed.
+        kept_warm.append(session)
+        return _never_finishes()
+
+    class _RefusingConnect:
+        # Same stand-in as the liveness test above: failing at websockify with
+        # its own close code proves the route got past the checks and reached
+        # the point where the keepalive has already been started.
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            raise OSError("no websockify in this test")
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app, "_keepalive_loop", fake_keepalive_loop)
+    monkeypatch.setattr(relay_app.websockets, "connect", _RefusingConnect)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?session=login-example.com",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+
+    assert closed.value.code == CLOSE_UPSTREAM_GONE
+    assert kept_warm == ["login-example.com"]
+
+
 #: Correctly-sized fake RFB client messages, by the protocol's own fixed and
 #: header-driven lengths -- a real message, not a plausible-looking prefix of
 #: one, is what the smuggling test below needs a legitimate message to be.
