@@ -74,7 +74,10 @@ async def replay_onboarding(
                 if route_id is None:
                     raise ValueError("The personal DM route is missing")
                 context = await prepare_personal_dm_context(
-                    uow, route_id=route_id, event=event
+                    uow,
+                    route_id=route_id,
+                    event=event,
+                    linker=get_surface_event_handler(uow),
                 )
             else:
                 context = await _shared_replay_context(uow, state, event, user)

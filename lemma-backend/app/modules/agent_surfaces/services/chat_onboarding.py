@@ -421,6 +421,10 @@ class ChatOnboardingCoordinator:
                     purpose="chat_onboarding",
                 )
             except ChallengeRejected:
+                # Expiry is the caller here, and the challenge being already
+                # revoked, already used or itself expired is the ordinary way
+                # to arrive: the point of the call is that no live code is left
+                # behind, and all three refusals mean there is none.
                 pass
         async with self._uows() as uow:
             row = await uow.session.get(PendingChatOnboarding, state.id)

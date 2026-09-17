@@ -20,6 +20,7 @@ from sqlalchemy import select
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
@@ -195,7 +196,10 @@ async def recognize_sender(
             return OnboardingIngressResult(True)
         async with uows() as uow:
             context = await prepare_personal_dm_context(
-                uow, route_id=route.id, event=event
+                uow,
+                route_id=route.id,
+                event=event,
+                linker=get_surface_event_handler(uow),
             )
         return OnboardingIngressResult(True, context)
     if verified_user_id is not None:

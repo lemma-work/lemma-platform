@@ -197,8 +197,9 @@ class EmailChallengeService:
                         row.id, row.email, row.completed_user_id
                     )
                     code_id = row.code_id
-                    verified = True
-                    pre_auth_session_id = device_id = code = ""
+                    # Already verified: this is a replay of a durable result, so
+                    # there is no code to put to the provider a second time.
+                    pending_check = None
                 else:
                     code = parse_code_reply(submitted_code)
                     if code is None:
@@ -210,17 +211,14 @@ class EmailChallengeService:
                             "Code expired or attempts exhausted; request another code"
                         )
                     row.attempts += 1
-                    pre_auth_session_id, device_id = (
-                        row.pre_auth_session_id,
-                        row.device_id,
-                    )
+                    pending_check = (row.pre_auth_session_id, row.device_id, code)
                     code_id = row.code_id
                     operation = VerifiedEmailOperation(
                         row.id, row.email, row.completed_user_id
                     )
-                    verified = False
                 await session.commit()
-            if not verified:
+            if pending_check is not None:
+                pre_auth_session_id, device_id, code = pending_check
                 accepted = await check_email_challenge(
                     pre_auth_session_id=pre_auth_session_id,
                     device_id=device_id,

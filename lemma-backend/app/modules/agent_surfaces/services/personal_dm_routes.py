@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,6 +11,7 @@ from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts.provisioning import pod_default_agent_exists
 from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
@@ -90,11 +92,32 @@ async def validate_personal_dm_route(
     return route
 
 
-async def prepare_personal_dm_context(
-    uow: SqlAlchemyUnitOfWork, *, route_id: UUID, event: ParsedInboundSurfaceEvent
-) -> SurfaceChatContext:
-    from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
+class ConversationLinker(Protocol):
+    """The one thing context-building needs from the ingress service.
 
+    Named here rather than imported so this module keeps to the services layer.
+    Reaching for `api.dependencies` to get the handler put the module's own
+    FastAPI wiring on a service's import path, which is the wrong direction and
+    the only real import cycle this change introduced.
+    """
+
+    async def _get_or_create_conversation_link(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        resolved_user: ResolvedSurfaceUser,
+        route: ResolvedSurfaceRoute,
+    ) -> tuple[AgentSurfaceConversationLink, str | None]: ...
+
+
+async def prepare_personal_dm_context(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    route_id: UUID,
+    event: ParsedInboundSurfaceEvent,
+    linker: ConversationLinker,
+) -> SurfaceChatContext:
     route = await validate_personal_dm_route(uow, route_id=route_id, event=event)
     installation = await SurfaceRepository(uow).get(route.installation_surface_id)
     user = await active_chat_user(uow, route.user_id)
@@ -118,7 +141,7 @@ async def prepare_personal_dm_context(
         conversation_kind="DM",
         route_key=f"personal:{route.id}",
     )
-    link, title = await get_surface_event_handler(uow)._get_or_create_conversation_link(
+    link, title = await linker._get_or_create_conversation_link(
         surface=destination, parsed=event, resolved_user=resolved, route=assistant
     )
     return SurfaceChatContext(
