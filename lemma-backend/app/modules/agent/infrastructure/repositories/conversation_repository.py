@@ -250,10 +250,16 @@ class ConversationRepository(
             # then `AttributeError: 'list' object has no attribute
             # '_sa_adapter'` comes out of SQLAlchemy's dependency processor --
             # attributed to whatever was being written at the time, nowhere
-            # near the read that planted it. It surfaced as a second message in
-            # a Teams channel thread failing to flush, in `create_agent_run`,
-            # and `test_a_typed_deny_is_accepted_like_the_button[TEAMS]` is
-            # what holds it: that case fails on this line's previous form.
+            # near the read that planted it.
+            #
+            # It surfaced as a second message in a Teams channel thread failing
+            # to flush inside `create_agent_run`. Reproducing it is not
+            # reliable: whether the unit of work consults this relationship at
+            # all depends on what else is in the flush, and the case that
+            # raised every time on one machine passed in CI on another. So
+            # there is no test named here that holds this -- the argument for
+            # the line below is that an uninstrumented collection is wrong
+            # whether or not today's flush plan happens to look at it.
             #
             # `set_committed_value` is the documented way to attach rows
             # fetched by a separate query as part of the loaded state, and it
