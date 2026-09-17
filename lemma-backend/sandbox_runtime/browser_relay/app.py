@@ -225,6 +225,19 @@ def _session_name(session: str | None, domain: str | None) -> str:
 
 
 def create_app() -> FastAPI:
+    # Everything this process runs the CLI for, it runs on behalf of the person
+    # at the other end of a socket -- keeping their browser alive, steering it
+    # to the site they were asked to sign in to, capturing what they signed in
+    # to when they say they are done. The `lemma-node-tool` wrapper refuses
+    # `agent-browser` while a control lease is held, which is what stops an
+    # *agent* typing over somebody; applied to the relay it would retire the
+    # browser under them mid-sign-in and throw away the capture, so the relay
+    # says once, here, that it is the other party.
+    #
+    # Process-wide rather than per-call because not every call site passes an
+    # environment: `state.py` runs the CLI with the relay's own, inherited.
+    os.environ["LEMMA_WHEEL_BYPASS"] = "1"
+
     app = FastAPI(title="Lemma browser relay", docs_url=None, redoc_url=None)
 
     @app.get("/health")

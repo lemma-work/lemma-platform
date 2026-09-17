@@ -277,3 +277,80 @@ def test_the_wrapper_is_found_before_the_raw_package_binary() -> None:
     assert entries.index("/usr/local/bin") < entries.index(
         "/opt/lemma-node/node_modules/.bin"
     ), "the npm shim would win over the wrapper"
+
+
+# ---------------------------------------------------------------------------
+# Not typing over somebody who has the wheel
+# ---------------------------------------------------------------------------
+
+
+def _holding_the_wheel(tmp_path: Path, environment: dict[str, str], session: str) -> None:
+    """Write the lease the relay writes while a person is driving."""
+    import hashlib
+
+    wheel_dir = tmp_path / "wheel"
+    wheel_dir.mkdir(exist_ok=True)
+    digest = hashlib.sha256(session.encode()).hexdigest()[:32]
+    (wheel_dir / digest).write_text("a-viewers-token")
+    environment["LEMMA_WHEEL_DIR"] = str(wheel_dir)
+
+
+def test_a_raw_cli_command_yields_while_a_person_is_driving(tmp_path: Path) -> None:
+    """The hole this closes: the lease was read only by the *typed* browser
+    tools, and the skill teaches the raw CLI as "the core loop" -- so an agent
+    following its own documentation drove the page somebody was typing a
+    password into. The guard belongs where every command enters."""
+    environment = _workspace(tmp_path, config=True, display=True)
+    environment["AGENT_BROWSER_SESSION"] = "login-example.com"
+    _holding_the_wheel(tmp_path, environment, "login-example.com")
+
+    result = _run(environment, "click", "@e3")
+
+    assert result.returncode == 91, result
+    assert "__LEMMA_PERSON_IS_DRIVING__" in result.stderr
+    # Refused before the bootstrap: starting Xvfb and a browser for a command
+    # that is about to be turned away is work nobody asked for.
+    assert not _bootstrapped(environment)
+    assert "click" not in result.stdout
+
+
+def test_another_session_is_not_blocked_by_someone_elses_wheel(tmp_path: Path) -> None:
+    """The lease is per session, so a person signing in to one site does not
+    stop an agent working in another."""
+    environment = _workspace(tmp_path, config=True, display=True)
+    environment["AGENT_BROWSER_SESSION"] = "agent-conversation-1"
+    _holding_the_wheel(tmp_path, environment, "login-example.com")
+
+    result = _run(environment, "open", "https://other.example")
+
+    assert result.returncode == 0, result
+    assert "open https://other.example" in result.stdout
+
+
+def test_the_relay_is_not_refused_by_the_lease_it_wrote(tmp_path: Path) -> None:
+    """The relay's own commands run *for* whoever is driving -- the keepalive
+    that stops the browser being retired under them, the steer to the sign-in
+    site, the capture when they say they are done. Refusing those would lose
+    the sign-in this guard exists to protect, so the relay says it is the other
+    party."""
+    environment = _workspace(tmp_path, config=True, display=True)
+    environment["AGENT_BROWSER_SESSION"] = "login-example.com"
+    _holding_the_wheel(tmp_path, environment, "login-example.com")
+    environment["LEMMA_WHEEL_BYPASS"] = "1"
+
+    result = _run(environment, "get", "url")
+
+    assert result.returncode == 0, result
+    assert "get url" in result.stdout
+
+
+def test_version_is_never_refused(tmp_path: Path) -> None:
+    """Asking which version is installed touches no page, and an agent that
+    cannot even do that while somebody reads a page has been over-guarded."""
+    environment = _workspace(tmp_path, config=True, display=True)
+    environment["AGENT_BROWSER_SESSION"] = "login-example.com"
+    _holding_the_wheel(tmp_path, environment, "login-example.com")
+
+    result = _run(environment, "--version")
+
+    assert result.returncode == 0, result

@@ -65,9 +65,66 @@ ensure_browser_started() {
   LEMMA_BROWSER_BOOTSTRAP=1 start-browser >/tmp/agent-browser-bootstrap.log 2>&1 || true
 }
 
+# Refuse to type over a person who has taken the wheel.
+#
+# Two parties drive one page: the agent, and a person through the relay's
+# control socket. The lease that coordinates them -- a file the relay writes
+# for as long as that socket is open -- was read in exactly one place, the
+# script the *typed* browser tools run. The browser skill teaches the raw CLI
+# as "the core loop", so an agent following its own documentation walked
+# straight past the guard and typed into the page somebody was entering a
+# password into. Enforced here instead: this wrapper is where every
+# `agent-browser` command enters, typed or not.
+#
+# `LEMMA_WHEEL_BYPASS` is the relay's way past it, and it is not a loophole:
+# the relay's own commands -- the keepalive, the steer to the sign-in site,
+# the state capture when the person says they are done -- run *for* whoever
+# is holding the wheel. Refusing those would retire the browser under them
+# and lose the sign-in, which is the failure this whole guard exists to stop.
+DRIVING_MARKER=__LEMMA_PERSON_IS_DRIVING__
+DRIVING_EXIT_CODE=91
+refuse_if_somebody_is_driving() {
+  if [ -n "${LEMMA_WHEEL_BYPASS:-}" ]; then
+    return 0
+  fi
+  # Info-only flags never touch the page, and the same list is left alone by
+  # the bootstrap above for the same reason.
+  case "${1:-}" in
+    ""|--version|-v|--help|-h|help)
+      return 0
+      ;;
+  esac
+  wheel_dir="${LEMMA_WHEEL_DIR:-/tmp/lemma-relay/wheel}"
+  # The session's own lease, named the way the relay names it (a sha256 of the
+  # session, first 32 characters) -- so a person signing in to one site does
+  # not stop an agent working in another.
+  #
+  # `sha256sum` is coreutils and is always in the image; `shasum` is the BSD
+  # spelling, which is what a developer running these tests on a Mac has. If
+  # neither is here the lease cannot be read at all, and the honest answer is
+  # to let the command through rather than to refuse every browser call in the
+  # sandbox on the strength of a missing checksum tool -- the same way
+  # `_require_private` treats a probe it cannot complete.
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(printf %s "${AGENT_BROWSER_SESSION:-workspace}" | sha256sum | cut -c1-32)"
+  elif command -v shasum >/dev/null 2>&1; then
+    digest="$(printf %s "${AGENT_BROWSER_SESSION:-workspace}" | shasum -a 256 | cut -c1-32)"
+  else
+    return 0
+  fi
+  if [ -e "$wheel_dir/$digest" ]; then
+    printf '%s\n' "$DRIVING_MARKER" >&2
+    printf '%s\n' "The person has taken control of this browser and is using it right now. Do not send browser commands while they are driving -- you would be typing into the same page they are. Wait, or say what you were about to do and let them finish." >&2
+    exit "$DRIVING_EXIT_CODE"
+  fi
+}
+
 case "$tool" in
   agent-browser)
     pattern='*/node_modules/agent-browser/bin/agent-browser.js'
+    # Before the bootstrap, not after: starting Xvfb and a browser for a
+    # command that is about to be refused is work nobody asked for.
+    refuse_if_somebody_is_driving "${1:-}"
     ensure_browser_started "${1:-}"
     ;;
   lit|liteparse)
