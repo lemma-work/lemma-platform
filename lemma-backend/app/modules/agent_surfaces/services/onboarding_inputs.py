@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.onboarding_state import OnboardingStep
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     OnboardingInputToken,
     PendingChatOnboarding,
@@ -116,7 +117,10 @@ async def native_prompt_metadata(
                 PendingChatOnboarding.binding_key == binding_key
             )
         )
-        if pending is None or pending.step not in ("awaiting_email", "awaiting_code"):
+        if pending is None or pending.step not in (
+            OnboardingStep.AWAITING_EMAIL,
+            OnboardingStep.AWAITING_CODE,
+        ):
             return {}
         token = secrets.token_urlsafe(32)
         uow.session.add(
@@ -128,16 +132,15 @@ async def native_prompt_metadata(
                 challenge_id=pending.challenge_id,
             )
         )
-        label = (
-            "Email address" if pending.step == "awaiting_email" else "Verification code"
-        )
+        email_step = pending.step == OnboardingStep.AWAITING_EMAIL
+        label = "Email address" if email_step else "Verification code"
         prefill = (
             ParsedInboundSurfaceEvent.model_validate(pending.destination).sender_email
             or ""
         )
         flow_id = (
             surface_settings.whatsapp_onboarding_email_flow_id
-            if pending.step == "awaiting_email"
+            if email_step
             else surface_settings.whatsapp_onboarding_code_flow_id
         )
     if platform == SurfacePlatform.WHATSAPP:
@@ -192,7 +195,7 @@ async def native_prompt_metadata(
                     "label": label,
                     "isRequired": True,
                     "maxLength": 254,
-                    "value": prefill if label == "Email address" else "",
+                    "value": prefill if email_step else "",
                 }
             ],
             "actions": [
@@ -207,7 +210,9 @@ async def native_prompt_metadata(
 
 
 def slack_modal(token: str, step: str, *, prefill: str = "") -> dict[str, JsonValue]:
-    label = "Email address" if step == "awaiting_email" else "Six-digit code"
+    label = (
+        "Email address" if step == OnboardingStep.AWAITING_EMAIL else "Six-digit code"
+    )
     return {
         "type": "modal",
         "callback_id": CALLBACK,
@@ -223,8 +228,10 @@ def slack_modal(token: str, step: str, *, prefill: str = "") -> dict[str, JsonVa
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "answer",
-                    "max_length": 254 if step == "awaiting_email" else 6,
-                    "initial_value": prefill if step == "awaiting_email" else "",
+                    "max_length": 254 if step == OnboardingStep.AWAITING_EMAIL else 6,
+                    "initial_value": prefill
+                    if step == OnboardingStep.AWAITING_EMAIL
+                    else "",
                 },
             }
         ],

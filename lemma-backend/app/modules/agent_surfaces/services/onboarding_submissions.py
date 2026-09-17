@@ -14,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.onboarding_state import OnboardingStep
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
@@ -86,7 +87,7 @@ async def parse_native_submission(
             "Submit setup in its original personal conversation"
         )
     answer = answer.strip()
-    if bound.step == "awaiting_email":
+    if bound.step == OnboardingStep.AWAITING_EMAIL:
         try:
             answer = validate_email(answer, check_deliverability=False).normalized
         except EmailNotValidError as error:

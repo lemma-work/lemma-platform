@@ -39,7 +39,10 @@ from app.modules.identity.contracts.surfaces import (
 )
 
 
-from app.modules.agent_surfaces.domain.onboarding_state import PendingState
+from app.modules.agent_surfaces.domain.onboarding_state import (
+    OnboardingStep,
+    PendingState,
+)
 
 
 async def complete_onboarding_workspace(
@@ -78,7 +81,7 @@ async def complete_onboarding_workspace(
         pending = await uow.session.get(PendingChatOnboarding, state.id)
         assert pending is not None
         if workspace.status == "organization_access_required":
-            pending.step = "organization_access_required"
+            pending.step = OnboardingStep.ORGANIZATION_ACCESS_REQUIRED
         else:
             assert workspace.pod_id is not None and workspace.assistant_id is not None
             if transport.surface is not None:
@@ -109,7 +112,7 @@ async def complete_onboarding_workspace(
                     user_id=user.id,
                     platform=transport.event.platform,
                 )
-            pending.step = "ready"
+            pending.step = OnboardingStep.READY
             if pending.ready_at is None:
                 pending.ready_at = datetime.now(timezone.utc)
                 uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])

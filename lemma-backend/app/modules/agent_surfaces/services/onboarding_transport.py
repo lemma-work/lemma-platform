@@ -36,6 +36,18 @@ from app.modules.agent_surfaces.services.onboarding_private_delivery import (
 from app.modules.connectors.contracts.surfaces import account_with_secrets
 from app.modules.pod.contracts.agent_access import pod_organization_id
 
+#: Where a platform-wide webhook arrives on Lemma's own shared bot, so a surface
+#: bound to a customer's own account cannot be what it is for. Mirrors
+#: `surface_inbound._has_shared_system_bot`, which owns the rule; duplicated
+#: rather than imported because that module imports this one.
+_SHARED_SYSTEM_BOT_PLATFORMS = frozenset(
+    {SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP}
+)
+
+
+def _has_shared_system_bot(platform: SurfacePlatform) -> bool:
+    return platform in _SHARED_SYSTEM_BOT_PLATFORMS
+
 
 @dataclass(frozen=True, slots=True)
 class OnboardingTransport:
@@ -125,15 +137,21 @@ async def _transport_candidates(
             platform = SurfacePlatform.from_source(request.source)
             if platform is None or platform.is_email:
                 return None
-            surfaces = await repository.list_active_by_type(platform.value)
-            if request.receiver_surface_ids is not None:
-                surfaces = [
-                    surface
-                    for surface in surfaces
-                    if surface.id in request.receiver_surface_ids
-                ]
-                if not surfaces and request.receiver_surface_ids:
-                    return None
+            # The same two narrowings the ordinary ingress path applies, asked
+            # of the database rather than of the result. `list_active_by_type`
+            # is the deployment's entire surface list for a platform and has no
+            # production caller by design; reaching for it here would put that
+            # read back on the path every inbound message takes.
+            receiver_surface_ids = request.receiver_surface_ids
+            surfaces = await repository.list_active_for_routing(
+                platform.value,
+                surface_ids=receiver_surface_ids,
+                system_credentials_only=(
+                    receiver_surface_ids is None and _has_shared_system_bot(platform)
+                ),
+            )
+            if receiver_surface_ids is not None and not surfaces:
+                return None
     return platform, surfaces
 
 

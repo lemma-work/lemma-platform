@@ -1,6 +1,49 @@
+from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, JsonValue
+
+from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingIngressResult:
+    """Whether onboarding answered a delivery, and what it left to run.
+
+    Lives here rather than beside the coordinator because the worker's webhook
+    subscriber names it in its own signature, and FastStream resolves those
+    annotations at runtime -- a forward reference to a module the worker
+    deliberately does not import is not a reference it can resolve.
+    """
+
+    handled: bool
+    context: AgentSurfaceContext | None = None
+
+
+class OnboardingStep(StrEnum):
+    """Where a pending signup has got to.
+
+    Spelled once because five modules read and write it and the column is a
+    plain string: a typo in any of them is not an error, it is a state the
+    dispatcher silently has no branch for. Stored as the member's value, so an
+    older process reading a newer row still sees the string it always did.
+    """
+
+    #: A private destination has not been opened yet. Set again when opening
+    #: one fails, so the next message retries it rather than accepting input.
+    HANDOFF = "handoff"
+    AWAITING_PHONE = "awaiting_phone"
+    AWAITING_EMAIL = "awaiting_email"
+    AWAITING_CODE = "awaiting_code"
+    #: The mailbox (or the shared contact) is proven and an account is resolved.
+    VERIFIED = "verified"
+    #: Verified, but the installation's organization has not admitted them.
+    ORGANIZATION_ACCESS_REQUIRED = "organization_access_required"
+    #: A workspace exists and the original request is ready to be replayed.
+    READY = "ready"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
 
 
 class PendingState(BaseModel):

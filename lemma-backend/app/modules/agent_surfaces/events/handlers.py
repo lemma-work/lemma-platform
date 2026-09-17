@@ -1,9 +1,8 @@
 from __future__ import annotations
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
 
 from datetime import datetime, timezone
-from sqlalchemy import or_, update
+from sqlalchemy import false, update
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
@@ -48,11 +47,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
-
-if TYPE_CHECKING:
-    from app.modules.agent_surfaces.services.chat_onboarding import (
-        OnboardingIngressResult,
-    )
+from app.modules.agent_surfaces.domain.onboarding_state import OnboardingIngressResult
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
@@ -130,7 +125,7 @@ def build_surface_event_handler(uow):
 
 def provide_onboarding_handler(
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-) -> Callable[[SurfaceIngressRequest], Awaitable["OnboardingIngressResult"]]:
+) -> Callable[[SurfaceIngressRequest], Awaitable[OnboardingIngressResult]]:
     from app.modules.agent_surfaces.services.chat_onboarding import (
         ChatOnboardingCoordinator,
     )
@@ -151,7 +146,7 @@ async def handle_surface_webhook(
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
     onboarding_handler: Callable[
-        [SurfaceIngressRequest], Awaitable["OnboardingIngressResult"]
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
     ] = Depends(provide_onboarding_handler),
 ) -> None:
     # ``surface_events`` also carries ``surface.connected`` and
@@ -222,7 +217,7 @@ async def _process_surface_webhook(
     uow_factory: UnitOfWorkFactory,
     job_queue: SharedStreaqJobQueue,
     onboarding_handler: Callable[
-        [SurfaceIngressRequest], Awaitable["OnboardingIngressResult"]
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
     ]
     | None = None,
 ) -> None:
@@ -359,12 +354,21 @@ async def on_identity_event(
         phone = await current_verified_phone(uow_factory, parsed.user_id)
         async with uow_factory() as uow:
             await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
+            # Every phone-bound identity goes when the account no longer has a
+            # verified number; otherwise only the ones bound to the old one. The
+            # `phone is None` arm has to be written as a SQL literal -- a plain
+            # Python bool inside `or_` reads as SQL and is not.
+            still_bound = (
+                VerifiedSurfaceIdentity.verified_phone == phone
+                if phone is not None
+                else false()
+            )
             await uow.session.execute(
                 update(VerifiedSurfaceIdentity)
                 .where(
                     VerifiedSurfaceIdentity.user_id == parsed.user_id,
                     VerifiedSurfaceIdentity.verified_phone.isnot(None),
-                    or_(VerifiedSurfaceIdentity.verified_phone != phone, phone is None),
+                    ~still_bound,
                 )
                 .values(revoked_at=datetime.now(timezone.utc))
             )

@@ -16,10 +16,13 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
 from app.modules.agent_surfaces.domain.ingress_request import SurfaceIngressRequest
+from app.modules.agent_surfaces.domain.ports import SurfaceEventDedupStorePort
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
+)
+from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
+    get_surface_event_dedup_store,
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
@@ -59,13 +62,17 @@ from app.modules.identity.contracts.surfaces import (
 )
 
 
-from app.modules.agent_surfaces.domain.onboarding_state import PendingState
+from app.modules.agent_surfaces.domain.onboarding_state import (
+    OnboardingIngressResult,
+    OnboardingStep,
+    PendingState,
+)
 
 
 @dataclass(frozen=True, slots=True)
-class OnboardingIngressResult:
-    handled: bool
-    context: AgentSurfaceContext | None = None
+class PersonalRoute:
+    id: UUID
+    installation_surface_id: UUID
 
 
 def _original_request(event: ParsedInboundSurfaceEvent) -> dict[str, JsonValue]:
@@ -85,10 +92,12 @@ class ChatOnboardingCoordinator:
         uow_factory: UnitOfWorkFactory,
         *,
         challenges: EmailChallengeService | None = None,
+        event_dedup_store: SurfaceEventDedupStorePort | None = None,
     ) -> None:
         self._uows = uow_factory
         self._adapters = SurfacePlatformAdapterRegistry()
         self._challenges = challenges
+        self._event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
 
     def _challenge_service(self, platform: str) -> EmailChallengeService:
         return self._challenges or email_challenge_service(platform)
@@ -127,7 +136,7 @@ class ChatOnboardingCoordinator:
             if isinstance(started, OnboardingIngressResult):
                 return started
             state = started
-        if state.step == "handoff":
+        if state.step == OnboardingStep.HANDOFF:
             return await self._handoff(transport, state)
         destination = ParsedInboundSurfaceEvent.model_validate(state.destination)
         if not event.is_dm:
@@ -138,12 +147,12 @@ class ChatOnboardingCoordinator:
         text = event.message_text.strip()
         if text.lower() == "cancel":
             return await self._cancel(transport, state, destination)
-        if state.step == "awaiting_phone":
+        if state.step == OnboardingStep.AWAITING_PHONE:
             return await self._contact(transport, state, destination)
         try:
-            if state.step == "awaiting_email":
+            if state.step == OnboardingStep.AWAITING_EMAIL:
                 return await self._email(transport, state, destination)
-            if state.step == "awaiting_code":
+            if state.step == OnboardingStep.AWAITING_CODE:
                 return await self._code(transport, state, destination)
             if state.user_id is not None:
                 await self._complete(transport, state, destination)
@@ -172,7 +181,7 @@ class ChatOnboardingCoordinator:
             row = await uow.session.get(PendingChatOnboarding, state.id)
             assert row is not None
             row.original_event = None
-            row.step = "cancelled"
+            row.step = OnboardingStep.CANCELLED
             row.handed_off_at = datetime.now(timezone.utc)
         await self._reply(transport, destination, "Setup cancelled.")
         return OnboardingIngressResult(True)
@@ -238,7 +247,7 @@ class ChatOnboardingCoordinator:
 
     async def _verified_sender(
         self, binding_key: str
-    ) -> tuple[UUID | None, bool, UUID | None]:
+    ) -> tuple[UUID | None, bool, PersonalRoute | None]:
         async with self._uows() as uow:
             identity = await uow.session.scalar(
                 select(VerifiedSurfaceIdentity).where(
@@ -265,12 +274,15 @@ class ChatOnboardingCoordinator:
                 ):
                     verified_user_id = None
                     previously_revoked = True
-            route_id = await uow.session.scalar(
-                select(PersonalDMRoute.id).where(
-                    PersonalDMRoute.binding_key == binding_key
+            found = (
+                await uow.session.execute(
+                    select(
+                        PersonalDMRoute.id, PersonalDMRoute.installation_surface_id
+                    ).where(PersonalDMRoute.binding_key == binding_key)
                 )
-            )
-        return verified_user_id, previously_revoked, route_id
+            ).first()
+        route = PersonalRoute(*found) if found is not None else None
+        return verified_user_id, previously_revoked, route
 
     async def _create_pending(
         self, transport: OnboardingTransport, event: ParsedInboundSurfaceEvent
@@ -287,7 +299,7 @@ class ChatOnboardingCoordinator:
             row = PendingChatOnboarding(
                 binding_key=transport.binding_key,
                 platform=event.platform.value,
-                step="handoff",
+                step=OnboardingStep.HANDOFF,
                 destination={},
                 original_event=_original_request(event),
                 installation_surface_id=transport.surface.id
@@ -318,13 +330,27 @@ class ChatOnboardingCoordinator:
         self, transport: OnboardingTransport
     ) -> PendingState | OnboardingIngressResult:
         event = transport.event
-        verified_user_id, previously_revoked, route_id = await self._verified_sender(
+        verified_user_id, previously_revoked, route = await self._verified_sender(
             transport.binding_key
         )
-        if verified_user_id is not None and route_id is not None and event.is_dm:
+        if verified_user_id is not None and route is not None and event.is_dm:
+            # This path answers instead of `prepare_ingress`, which is where the
+            # delivery claim otherwise lives. Without it a personal DM is the one
+            # conversation on the platform with no message-level defence against
+            # a redelivery -- and it is the one a person uses every day. Keyed on
+            # the route's own installation, which is what the context carries and
+            # therefore what `release_ingress_claim` hands back.
+            if not await self._event_dedup_store.claim_message(
+                surface_installation_id=route.installation_surface_id,
+                platform=event.platform.value,
+                external_channel_id=event.external_channel_id,
+                external_thread_id=event.external_thread_id,
+                external_message_id=event.external_message_id,
+            ):
+                return OnboardingIngressResult(True)
             async with self._uows() as uow:
                 context = await prepare_personal_dm_context(
-                    uow, route_id=route_id, event=event
+                    uow, route_id=route.id, event=event
                 )
             return OnboardingIngressResult(True, context)
         if verified_user_id is not None:
@@ -368,9 +394,9 @@ class ChatOnboardingCoordinator:
                 update={"sender_email": original.sender_email}
             )
         step = (
-            "awaiting_phone"
+            OnboardingStep.AWAITING_PHONE
             if event.platform == SurfacePlatform.TELEGRAM
-            else "awaiting_email"
+            else OnboardingStep.AWAITING_EMAIL
         )
         async with self._uows() as uow:
             row = await uow.session.get(PendingChatOnboarding, state.id)
@@ -387,7 +413,7 @@ class ChatOnboardingCoordinator:
                 async with self._uows() as uow:
                     row = await uow.session.get(PendingChatOnboarding, state.id)
                     assert row is not None
-                    row.step = "handoff"
+                    row.step = OnboardingStep.HANDOFF
         return OnboardingIngressResult(True)
 
     async def _send_initial_prompt(
@@ -400,9 +426,9 @@ class ChatOnboardingCoordinator:
             transport,
             destination,
             "Share your own contact using the button below."
-            if step == "awaiting_phone"
+            if step == OnboardingStep.AWAITING_PHONE
             else "What's your email address? I'll send a code to verify it.",
-            contact=step == "awaiting_phone",
+            contact=step == OnboardingStep.AWAITING_PHONE,
         )
 
     async def _contact(
@@ -431,10 +457,10 @@ class ChatOnboardingCoordinator:
             row = await uow.session.get(PendingChatOnboarding, state.id)
             assert row is not None
             row.verified_phone = phone
-            row.step = "awaiting_email"
+            row.step = OnboardingStep.AWAITING_EMAIL
             if len(matches) == 1:
                 row.user_id = matches[0]
-                row.step = "verified"
+                row.step = OnboardingStep.VERIFIED
         if len(matches) == 1:
             state = await self._require_state(transport.binding_key)
             assert state is not None
@@ -473,7 +499,7 @@ class ChatOnboardingCoordinator:
             row = await uow.session.get(PendingChatOnboarding, state.id)
             assert row is not None
             row.challenge_id = receipt.id
-            row.step = "awaiting_code"
+            row.step = OnboardingStep.AWAITING_CODE
         await self._reply(
             transport,
             destination,
@@ -518,7 +544,7 @@ class ChatOnboardingCoordinator:
             async with self._uows() as uow:
                 row = await uow.session.get(PendingChatOnboarding, state.id)
                 assert row is not None
-                row.step = "awaiting_email"
+                row.step = OnboardingStep.AWAITING_EMAIL
                 row.challenge_id = None
             await self._reply(
                 transport,
@@ -542,7 +568,7 @@ class ChatOnboardingCoordinator:
             row = await uow.session.get(PendingChatOnboarding, state.id)
             assert row is not None
             row.user_id = user_id
-            row.step = "verified"
+            row.step = OnboardingStep.VERIFIED
         state = await self._require_state(transport.binding_key)
         assert state is not None
         await self._complete(transport, state, destination)
@@ -568,7 +594,7 @@ class ChatOnboardingCoordinator:
             row = await uow.session.get(PendingChatOnboarding, state.id)
             assert row is not None
             row.original_event = None
-            row.step = "expired"
+            row.step = OnboardingStep.EXPIRED
             row.handed_off_at = datetime.now(timezone.utc)
         await self._reply(
             transport,
