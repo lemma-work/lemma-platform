@@ -30,7 +30,7 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 )
 from typing import TypedDict
 
-from app.modules.workspace.contracts.browser import BrowserState, host_of
+from app.modules.workspace.contracts.browser import BrowserState, agent_session, host_of
 from app.modules.workspace.providers.base import ProviderGone
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxUnavailable
 
@@ -165,7 +165,12 @@ class BrowserViewService:
         return {"state": "running" if chrome == "running" else "stopped"}
 
     async def open_vnc_session(
-        self, user_id: UUID, *, mode: str, origin: str | None = None
+        self,
+        user_id: UUID,
+        *,
+        mode: str,
+        origin: str | None = None,
+        conversation_id: UUID | None = None,
     ) -> tuple[str, dict[str, str]]:
         """Get a browser up, on the right page, and say where to attach a VNC view.
 
@@ -181,6 +186,18 @@ class BrowserViewService:
         there is no target to resolve the way the JSON stream this replaced
         needed -- but the session the steer actually landed in is still
         wanted, for the driving lease. See `vnc_socket_url`.
+
+        `conversation_id`, when given and `origin` is not, names which
+        conversation's own browser this is watching or driving --
+        `run_browser_script` puts every agent browser command in
+        `agent_session(conversation_id)`, its own session and profile
+        (isolating one conversation's cookies from another's), so a plain
+        watch/drive with no session named here would resolve to the
+        *default* session instead and find nothing the agent has touched. A
+        sign-in's `origin` still wins when both are given: that session is
+        named for the site being signed in to, the same name
+        `save_login_state` reads back later, and has to agree with it
+        regardless of which conversation asked for the sign-in.
 
         `ensure_browser` is called either way, `origin` or not: it is what
         starts Xvfb, Chrome, and -- through `start-browser.sh` -- the VNC
@@ -201,9 +218,16 @@ class BrowserViewService:
         # A site named means a sign-in: it belongs in that site's own session,
         # the one `save_login_state` later reads. Named from `domain`,
         # matching `ensure_for_sign_in` -- the two are the halves of one
-        # journey and must resolve the session the same way.
+        # journey and must resolve the session the same way. Otherwise, a
+        # conversation named means its own agent session; neither named means
+        # the shared default session, same as before this parameter existed.
+        wanted_session = (
+            agent_session(conversation_id) if conversation_id and not origin else None
+        )
         found = await relay.ensure_browser(
-            origin=origin, session=None, domain=host_of(origin) if origin else None
+            origin=origin,
+            session=wanted_session,
+            domain=host_of(origin) if origin else None,
         )
         # The session the relay says it used, never one worked out again
         # here -- see the note on `vnc_socket_url` for why this matters even

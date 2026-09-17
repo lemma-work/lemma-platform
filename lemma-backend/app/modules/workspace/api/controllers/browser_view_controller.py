@@ -335,6 +335,7 @@ async def browser_view(
     origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
+    conversation: UUID | None = Query(default=None),
 ) -> None:
     """One person, watching or driving their own browser, over VNC.
 
@@ -343,10 +344,15 @@ async def browser_view(
     a browser is ever told which refusal happened -- see `_refuse`.
 
     `origin`, when given, means a sign-in: it steers the browser to that site
-    before attaching, in a session named for it. Without one this shows
-    whatever this person's sandbox already has open -- VNC is the whole
-    shared display, not a session-scoped tab, so there is nothing else here
-    to name.
+    before attaching, in a session named for it. `conversation`, when given
+    and `origin` is not, names the conversation whose own agent browser this
+    watches or drives -- `run_browser_script` puts every agent browser
+    command in its own session and profile, named for the conversation, so
+    without this a plain watch/drive resolved to the *shared* default session
+    instead and found nothing the agent had touched. Neither given shows
+    whatever this person's shared sandbox already has open -- VNC is the
+    whole shared display, not a session-scoped tab, so there is nothing else
+    here to name.
     """
     if not origin_is_allowed(websocket.headers.get("origin"), allowed=origins):
         # Browsers do not apply same-origin to WebSockets but do send cookies,
@@ -376,7 +382,7 @@ async def browser_view(
 
     try:
         upstream_url, headers = await service.open_vnc_session(
-            UUID(user_id), mode=mode, origin=origin
+            UUID(user_id), mode=mode, origin=origin, conversation_id=conversation
         )
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")
