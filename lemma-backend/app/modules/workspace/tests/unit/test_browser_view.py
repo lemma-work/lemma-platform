@@ -7,6 +7,8 @@ open sockets.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 
@@ -227,6 +229,92 @@ async def test_a_relay_that_cannot_say_is_not_treated_as_public() -> None:
             raise OSError("no route to the sandbox")
 
     await module._require_private(_Unreachable(public=True), doing="sign in to a site")
+
+
+# ---------------------------------------------------------------------------
+# Which session a plain watch/drive lands in
+# ---------------------------------------------------------------------------
+
+
+class _VncRelay(_Relay):
+    """A relay that remembers what `ensure_browser` and `vnc_socket_url` were
+    asked for, without touching a real sandbox."""
+
+    def __init__(self) -> None:
+        super().__init__(public=False)
+        self.ensured: dict | None = None
+
+    async def ensure_browser(self, *, origin, session, domain):
+        self.ensured = {"origin": origin, "session": session, "domain": domain}
+        return {"session": session or "workspace"}
+
+    async def vnc_socket_url(self, *, mode, session):
+        return f"ws://sandbox.test/vnc?mode={mode}&session={session}", {}
+
+
+def _service_with_relay(relay: _VncRelay):
+    """`BrowserViewService`, its own sandbox resolution replaced with `relay`.
+
+    `_relay` is the one method here that touches a real sandbox -- everything
+    `open_vnc_session` decides afterwards is what this test is about, so that
+    is the seam, not a double planted inside `open_vnc_session` itself.
+    """
+    from app.modules.workspace.services import browser_view_service as module
+
+    class _Service(module.BrowserViewService):
+        async def _relay(self, user_id, *, start):
+            return relay
+
+    return _Service()
+
+
+async def test_a_plain_watch_with_a_conversation_lands_in_that_conversations_session() -> (
+    None
+):
+    """`run_browser_script` puts every agent browser command in
+    `agent_session(conversation_id)` -- its own session and profile, so one
+    conversation's agent never inherits another's cookies. A plain watch/drive
+    naming that same conversation has to resolve the same session, or it
+    finds nothing the agent touched."""
+    from app.modules.workspace.contracts.browser import agent_session
+
+    relay = _VncRelay()
+    conversation_id = uuid4()
+    await _service_with_relay(relay).open_vnc_session(
+        uuid4(), mode="view", conversation_id=conversation_id
+    )
+    assert relay.ensured == {
+        "origin": None,
+        "session": agent_session(conversation_id),
+        "domain": None,
+    }
+
+
+async def test_a_plain_watch_with_no_conversation_lands_in_the_shared_default_session() -> (
+    None
+):
+    relay = _VncRelay()
+    await _service_with_relay(relay).open_vnc_session(uuid4(), mode="view")
+    assert relay.ensured == {"origin": None, "session": None, "domain": None}
+
+
+async def test_a_sign_ins_own_site_session_wins_over_a_conversation() -> None:
+    """`save_login_state` reads a sign-in's capture back by the site's own
+    domain-derived session name -- a conversation id present alongside
+    `origin` must not steer it into the conversation's session instead."""
+
+    relay = _VncRelay()
+    await _service_with_relay(relay).open_vnc_session(
+        uuid4(),
+        mode="view",
+        origin="https://example.com",
+        conversation_id=uuid4(),
+    )
+    assert relay.ensured == {
+        "origin": "https://example.com",
+        "session": None,
+        "domain": "example.com",
+    }
 
 
 # ---------------------------------------------------------------------------
