@@ -70,14 +70,14 @@ def hold_chat_onboarding(
 def email_challenge_service(surface_label: str) -> EmailChallengeService:
     adapter = SmtpIdentityEmailAdapter()
 
-    async def send(*, email: str, code: str) -> bool:
+    async def send_challenge_code(*, email: str, code: str) -> bool:
         return await adapter.send_chat_signup_code_email(
             to_email=email, code=code, surface_label=surface_label
         )
 
     return EmailChallengeService(
         async_session_maker,
-        send_email=send,
+        send_email=send_challenge_code,
         enforce_send_limits=enforce_challenge_send_limits,
     )
 

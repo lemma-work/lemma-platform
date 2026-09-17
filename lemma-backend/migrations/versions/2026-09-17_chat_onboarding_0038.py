@@ -4,8 +4,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = "0033_chat_onboarding"
-down_revision = "0032_workspace_selections"
+revision = "0038_chat_onboarding"
+down_revision = "0037_workspace_selections"
 branch_labels = None
 depends_on = None
 

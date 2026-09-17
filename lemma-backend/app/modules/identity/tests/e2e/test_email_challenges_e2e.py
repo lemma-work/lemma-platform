@@ -49,10 +49,10 @@ async def test_independent_platform_challenges_converge_on_one_account(
     operations = []
     for purpose in ("browser_login", "chat_onboarding"):
         binding = uuid4().hex
-        receipt = await service.start(
+        receipt = await service.start_challenge(
             email=email, binding=binding, purpose=purpose, sender_key=binding
         )
-        await service.verify(
+        await service.verify_challenge(
             challenge_id=receipt.id,
             binding=binding,
             purpose=purpose,
@@ -82,7 +82,7 @@ async def test_resend_cooldown_revokes_previous_code_and_expiry_is_enforced(
         sessions, send_email=mailbox.send, enforce_send_limits=allow_test_delivery
     )
     binding = uuid4().hex
-    receipt = await service.start(
+    receipt = await service.start_challenge(
         email=f"resend-{uuid4().hex}@gmail.com",
         binding=binding,
         purpose="browser_login",
@@ -90,7 +90,7 @@ async def test_resend_cooldown_revokes_previous_code_and_expiry_is_enforced(
     )
     old_code = mailbox.code
     with pytest.raises(ChallengeRejected, match="sixty"):
-        await service.resend(
+        await service.resend_challenge(
             challenge_id=receipt.id,
             binding=binding,
             purpose="browser_login",
@@ -100,14 +100,14 @@ async def test_resend_cooldown_revokes_previous_code_and_expiry_is_enforced(
         row = await session.get(EmailChallenge, receipt.id)
         row.created_at = datetime.now(timezone.utc) - timedelta(seconds=61)
         await session.commit()
-    replacement = await service.resend(
+    replacement = await service.resend_challenge(
         challenge_id=receipt.id,
         binding=binding,
         purpose="browser_login",
         sender_key=binding,
     )
     with pytest.raises(ChallengeRejected, match="no longer available"):
-        await service.verify(
+        await service.verify_challenge(
             challenge_id=receipt.id,
             binding=binding,
             purpose="browser_login",
@@ -118,7 +118,7 @@ async def test_resend_cooldown_revokes_previous_code_and_expiry_is_enforced(
         row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         await session.commit()
     with pytest.raises(ChallengeRejected, match="expired"):
-        await service.verify(
+        await service.verify_challenge(
             challenge_id=replacement.id,
             binding=binding,
             purpose="browser_login",
@@ -136,7 +136,7 @@ async def test_verified_completion_is_bound_and_reuses_the_auth_identity(
         sessions, send_email=mailbox.send, enforce_send_limits=allow_test_delivery
     )
     binding = uuid4().hex
-    receipt = await service.start(
+    receipt = await service.start_challenge(
         email=f"proof-{uuid4().hex}@gmail.com",
         binding=binding,
         purpose="chat_onboarding",
@@ -144,27 +144,27 @@ async def test_verified_completion_is_bound_and_reuses_the_auth_identity(
     )
     assert len(mailbox.code) == 6 and mailbox.code.isascii() and mailbox.code.isdigit()
     with pytest.raises(ChallengeRejected):
-        await service.verify(
+        await service.verify_challenge(
             challenge_id=receipt.id,
             binding="another actor",
             purpose="chat_onboarding",
             submitted_code=mailbox.code,
         )
     with pytest.raises(ChallengeRejected):
-        await service.verify(
+        await service.verify_challenge(
             challenge_id=receipt.id,
             binding=binding,
             purpose="browser_login",
             submitted_code=mailbox.code,
         )
     with pytest.raises(ChallengeRejected, match="six-digit"):
-        await service.verify(
+        await service.verify_challenge(
             challenge_id=receipt.id,
             binding=binding,
             purpose="chat_onboarding",
             submitted_code="thanks",
         )
-    await service.verify(
+    await service.verify_challenge(
         challenge_id=receipt.id,
         binding=binding,
         purpose="chat_onboarding",
@@ -200,7 +200,7 @@ async def test_incorrect_codes_have_a_shared_attempt_budget(
         sessions, send_email=mailbox.send, enforce_send_limits=allow_test_delivery
     )
     binding = uuid4().hex
-    receipt = await service.start(
+    receipt = await service.start_challenge(
         email=f"attempt-{uuid4().hex}@gmail.com",
         binding=binding,
         purpose="browser_login",
@@ -209,14 +209,14 @@ async def test_incorrect_codes_have_a_shared_attempt_budget(
     wrong = "000000" if mailbox.code != "000000" else "111111"
     for _ in range(3):
         with pytest.raises(ChallengeRejected, match="did not match"):
-            await service.verify(
+            await service.verify_challenge(
                 challenge_id=receipt.id,
                 binding=binding,
                 purpose="browser_login",
                 submitted_code=wrong,
             )
     with pytest.raises(ChallengeRejected, match="exhausted"):
-        await service.verify(
+        await service.verify_challenge(
             challenge_id=receipt.id,
             binding=binding,
             purpose="browser_login",
@@ -253,10 +253,10 @@ async def test_otp_preserves_existing_oss_identity_and_login_method(
         sessions, send_email=mailbox.send, enforce_send_limits=allow_test_delivery
     )
     binding = uuid4().hex
-    proof = await service.start(
+    proof = await service.start_challenge(
         email=email, binding=binding, purpose="chat_onboarding", sender_key=binding
     )
-    await service.verify(
+    await service.verify_challenge(
         challenge_id=proof.id,
         binding=binding,
         purpose="chat_onboarding",
@@ -291,13 +291,13 @@ async def test_deleted_account_is_not_recreated_after_mailbox_proof(
         sessions, send_email=mailbox.send, enforce_send_limits=allow_test_delivery
     )
     binding = uuid4().hex
-    receipt = await service.start(
+    receipt = await service.start_challenge(
         email=f"deleted-{uuid4().hex}@gmail.com",
         binding=binding,
         purpose="browser_login",
         sender_key=binding,
     )
-    await service.verify(
+    await service.verify_challenge(
         challenge_id=receipt.id,
         binding=binding,
         purpose="browser_login",

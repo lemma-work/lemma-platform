@@ -3,12 +3,12 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.contracts.provisioning import ensure_pod_default_agent
 from app.modules.pod.api.dependencies import get_pod_service
-from app.modules.pod.domain.pod_entities import PodConfig, PodEntity, PodJoinPolicy
+from app.modules.pod.domain.pod_entities import PodEntity, PodJoinPolicy
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
 
 
@@ -34,40 +34,42 @@ async def ensure_personal_workspace(
         .correlate(Pod)
         .scalar_subquery()
     )
-    candidates = list(
-        (
-            await uow.session.scalars(
-                select(Pod)
-                .where(
-                    Pod.organization_id == organization_id,
-                    Pod.user_id == owner_user_id,
-                    Pod.is_deleted.is_(False),
-                    member_count == 1,
-                    select(PodMember.id)
-                    .where(
-                        PodMember.pod_id == Pod.id,
-                        PodMember.organization_member_id == owner_membership_id,
-                    )
-                    .exists(),
-                )
-                .order_by(Pod.created_at, Pod.id)
-            )
-        ).all()
-    )
-    eligible = [
-        pod
-        for pod in candidates
-        if PodConfig.from_raw(pod.config).join_policy == PodJoinPolicy.INVITE_ONLY
-    ]
-    chosen = next(
-        (pod for pod in eligible if pod.id == saved_pod_id),
-        eligible[0] if eligible else None,
-    )
-    if chosen is not None:
-        assistant_id = await ensure_pod_default_agent(
-            uow, pod_id=chosen.id, user_id=owner_user_id
+    # `join_policy` is filtered in SQL rather than in Python so that the saved
+    # pod is one row and the fallback is `LIMIT 1`. A person's own pods are few,
+    # but "few" is a property of their data, not of this query. An absent key is
+    # `PodConfig`'s own default, which is why NULL counts as invite-only.
+    eligible = (
+        Pod.organization_id == organization_id,
+        Pod.user_id == owner_user_id,
+        Pod.is_deleted.is_(False),
+        or_(
+            Pod.config["join_policy"].astext.is_(None),
+            Pod.config["join_policy"].astext == PodJoinPolicy.INVITE_ONLY.value,
+        ),
+        member_count == 1,
+        select(PodMember.id)
+        .where(
+            PodMember.pod_id == Pod.id,
+            PodMember.organization_member_id == owner_membership_id,
         )
-        return PersonalWorkspace(chosen.id, assistant_id, False)
+        .exists(),
+    )
+    chosen_id = (
+        await uow.session.scalar(
+            select(Pod.id).where(*eligible, Pod.id == saved_pod_id)
+        )
+        if saved_pod_id is not None
+        else None
+    )
+    if chosen_id is None:
+        chosen_id = await uow.session.scalar(
+            select(Pod.id).where(*eligible).order_by(Pod.created_at, Pod.id).limit(1)
+        )
+    if chosen_id is not None:
+        assistant_id = await ensure_pod_default_agent(
+            uow, pod_id=chosen_id, user_id=owner_user_id
+        )
+        return PersonalWorkspace(chosen_id, assistant_id, False)
     # Names are unique inside an organization, including colleagues with the
     # same first name. The caller holds the organization provisioning lock.
     existing_name = await uow.session.scalar(

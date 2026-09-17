@@ -116,7 +116,7 @@ async def start_email_login(
 ) -> EmailLoginReceipt:
     binding = _binding(request, data.nonce)
     try:
-        receipt = await challenges.start(
+        receipt = await challenges.start_challenge(
             email=str(data.email),
             binding=binding,
             purpose="browser_login",
@@ -135,7 +135,7 @@ async def resend_email_login(
 ) -> EmailLoginReceipt:
     binding = _binding(request, data.nonce)
     try:
-        receipt = await challenges.resend(
+        receipt = await challenges.resend_challenge(
             challenge_id=data.challenge_id,
             binding=binding,
             purpose="browser_login",
@@ -155,7 +155,7 @@ async def verify_email_login(
 ) -> dict[str, str]:
     binding = _binding(request, data.nonce)
     try:
-        await challenges.verify(
+        await challenges.verify_challenge(
             challenge_id=data.challenge_id,
             binding=binding,
             purpose="browser_login",

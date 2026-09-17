@@ -163,7 +163,7 @@ class ChatOnboardingCoordinator:
     ) -> OnboardingIngressResult:
         event = transport.event
         if state.challenge_id is not None:
-            await self._challenge_service(event.platform.value).cancel(
+            await self._challenge_service(event.platform.value).cancel_challenge(
                 challenge_id=state.challenge_id,
                 binding=state.binding_key,
                 purpose="chat_onboarding",
@@ -463,7 +463,7 @@ class ChatOnboardingCoordinator:
                 "Send one email address so I can send your verification code.",
             )
             return OnboardingIngressResult(True)
-        receipt = await self._challenge_service(event.platform.value).start(
+        receipt = await self._challenge_service(event.platform.value).start_challenge(
             email=email,
             binding=state.binding_key,
             purpose="chat_onboarding",
@@ -488,10 +488,11 @@ class ChatOnboardingCoordinator:
         destination: ParsedInboundSurfaceEvent,
     ) -> OnboardingIngressResult:
         event = transport.event
+        challenges = self._challenge_service(event.platform.value)
         text = event.message_text.strip()
         if text.lower() == "resend":
             assert state.challenge_id is not None
-            receipt = await self._challenge_service(event.platform.value).resend(
+            receipt = await challenges.resend_challenge(
                 challenge_id=state.challenge_id,
                 binding=state.binding_key,
                 purpose="chat_onboarding",
@@ -509,7 +510,7 @@ class ChatOnboardingCoordinator:
             return OnboardingIngressResult(True)
         if text.lower() == "change email":
             assert state.challenge_id is not None
-            await self._challenge_service(event.platform.value).cancel(
+            await challenges.cancel_challenge(
                 challenge_id=state.challenge_id,
                 binding=state.binding_key,
                 purpose="chat_onboarding",
@@ -526,7 +527,7 @@ class ChatOnboardingCoordinator:
             )
             return OnboardingIngressResult(True)
         assert state.challenge_id is not None
-        await self._challenge_service(event.platform.value).verify(
+        await challenges.verify_challenge(
             challenge_id=state.challenge_id,
             binding=state.binding_key,
             purpose="chat_onboarding",
@@ -556,7 +557,7 @@ class ChatOnboardingCoordinator:
         event = transport.event
         if state.challenge_id is not None:
             try:
-                await self._challenge_service(event.platform.value).cancel(
+                await self._challenge_service(event.platform.value).cancel_challenge(
                     challenge_id=state.challenge_id,
                     binding=state.binding_key,
                     purpose="chat_onboarding",

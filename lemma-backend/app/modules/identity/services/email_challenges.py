@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.core.infrastructure.db.uow_factory import AsyncSessionMaker
 from app.modules.identity.domain.email import normalize_identity_email
@@ -77,7 +77,7 @@ class EmailChallengeService:
         self._send_email = send_email
         self._enforce_send_limits = enforce_send_limits
 
-    async def start(
+    async def start_challenge(
         self,
         *,
         email: str,
@@ -90,27 +90,35 @@ class EmailChallengeService:
         async with identity_lease(f"challenge:{digest}") as lease:
             now = datetime.now(timezone.utc)
             async with self._sessions() as session:
-                previous = list(
-                    (
-                        await session.scalars(
-                            select(EmailChallenge).where(
-                                EmailChallenge.binding_hash == digest,
-                                EmailChallenge.purpose == purpose,
-                                EmailChallenge.revoked_at.is_(None),
-                            )
-                        )
-                    ).all()
+                live = (
+                    EmailChallenge.binding_hash == digest,
+                    EmailChallenge.purpose == purpose,
+                    EmailChallenge.revoked_at.is_(None),
                 )
-                if any(
-                    row.created_at + timedelta(seconds=RESEND_COOLDOWN_SECONDS) > now
-                    for row in previous
+                newest = await session.scalar(
+                    select(func.max(EmailChallenge.created_at)).where(*live)
+                )
+                if (
+                    newest is not None
+                    and newest + timedelta(seconds=RESEND_COOLDOWN_SECONDS) > now
                 ):
                     raise ChallengeRejected(
                         "Wait sixty seconds before requesting another code"
                     )
-                old_code_ids = [row.code_id for row in previous]
-                for row in previous:
-                    row.revoked_at = now
+                # One statement retires the live challenges and names them: the
+                # provider-side codes to revoke come back from the UPDATE that
+                # revoked the rows, so nothing is read that is not acted on.
+                old_code_ids = list(
+                    (
+                        await session.scalars(
+                            update(EmailChallenge)
+                            .where(*live)
+                            .values(revoked_at=now)
+                            .returning(EmailChallenge.code_id)
+                            .execution_options(synchronize_session=False)
+                        )
+                    ).all()
+                )
                 await session.commit()
             for code_id in old_code_ids:
                 await revoke_email_challenge(code_id)
@@ -136,14 +144,14 @@ class EmailChallengeService:
                 receipt = ChallengeReceipt(row.id, expires_at)
                 await session.commit()
             if not await self._send_email(email=email, code=provider.code):
-                await self.cancel(
+                await self.cancel_challenge(
                     challenge_id=receipt.id, binding=binding, purpose=purpose
                 )
                 raise ChallengeRejected("The code could not be delivered; retry")
             await lease.require_ownership()
             return receipt
 
-    async def resend(
+    async def resend_challenge(
         self,
         *,
         challenge_id: UUID,
@@ -159,11 +167,11 @@ class EmailChallengeService:
             if row.verified_at is not None:
                 raise ChallengeRejected("Verification is already complete")
             email = row.email
-        return await self.start(
+        return await self.start_challenge(
             email=email, binding=binding, purpose=purpose, sender_key=sender_key
         )
 
-    async def verify(
+    async def verify_challenge(
         self,
         *,
         challenge_id: UUID,
@@ -237,7 +245,7 @@ class EmailChallengeService:
             await lease.require_ownership()
             return operation
 
-    async def cancel(
+    async def cancel_challenge(
         self, *, challenge_id: UUID, binding: str, purpose: ChallengePurpose
     ) -> None:
         digest = _binding_hash(binding, purpose)

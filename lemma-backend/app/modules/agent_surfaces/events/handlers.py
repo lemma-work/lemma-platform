@@ -1,15 +1,12 @@
 from __future__ import annotations
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from datetime import datetime, timezone
 from sqlalchemy import or_, update
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
-from app.modules.agent_surfaces.services.chat_onboarding import (
-    ChatOnboardingCoordinator,
-    OnboardingIngressResult,
-)
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
@@ -42,17 +39,20 @@ from app.modules.agent_surfaces.domain.events import (
     SurfaceOnboardingReadyEvent,
     SurfaceEvents,
 )
-from app.modules.agent_surfaces.services.onboarding_replay import replay_onboarding
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     VerifiedSurfaceIdentity,
 )
-from app.modules.identity.contracts.onboarding import current_verified_phone
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceIngressRequest,
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
+
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.services.chat_onboarding import (
+        OnboardingIngressResult,
+    )
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
@@ -107,6 +107,10 @@ async def handle_onboarding_ready(
         return
 
     async def process() -> None:
+        from app.modules.agent_surfaces.services.onboarding_replay import (
+            replay_onboarding,
+        )
+
         ready = SurfaceOnboardingReadyEvent.model_validate(event)
         await replay_onboarding(
             ready.pending_id, uow_factory=uow_factory, job_queue=job_queue
@@ -126,7 +130,11 @@ def build_surface_event_handler(uow):
 
 def provide_onboarding_handler(
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
-) -> Callable[[SurfaceIngressRequest], Awaitable[OnboardingIngressResult]]:
+) -> Callable[[SurfaceIngressRequest], Awaitable["OnboardingIngressResult"]]:
+    from app.modules.agent_surfaces.services.chat_onboarding import (
+        ChatOnboardingCoordinator,
+    )
+
     return ChatOnboardingCoordinator(uow_factory).handle
 
 
@@ -143,7 +151,7 @@ async def handle_surface_webhook(
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
     onboarding_handler: Callable[
-        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+        [SurfaceIngressRequest], Awaitable["OnboardingIngressResult"]
     ] = Depends(provide_onboarding_handler),
 ) -> None:
     # ``surface_events`` also carries ``surface.connected`` and
@@ -214,7 +222,7 @@ async def _process_surface_webhook(
     uow_factory: UnitOfWorkFactory,
     job_queue: SharedStreaqJobQueue,
     onboarding_handler: Callable[
-        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+        [SurfaceIngressRequest], Awaitable["OnboardingIngressResult"]
     ]
     | None = None,
 ) -> None:
@@ -257,12 +265,15 @@ async def _process_surface_webhook(
 
         deliveries = handler.split_webhook_deliveries(ingress_request)
 
-    handle_onboarding = (
-        onboarding_handler or ChatOnboardingCoordinator(uow_factory).handle
-    )
+    if onboarding_handler is None:
+        from app.modules.agent_surfaces.services.chat_onboarding import (
+            ChatOnboardingCoordinator,
+        )
+
+        onboarding_handler = ChatOnboardingCoordinator(uow_factory).handle
     contexts: list[tuple[int, AgentSurfaceContext | None]] = []
     for index, part in enumerate(deliveries):
-        onboarding = await handle_onboarding(part)
+        onboarding = await onboarding_handler(part)
         if onboarding.handled:
             context = onboarding.context
         else:
@@ -342,6 +353,8 @@ async def on_identity_event(
         return
 
     async def process() -> None:
+        from app.modules.identity.contracts.onboarding import current_verified_phone
+
         parsed = UserMobileChangedEvent.model_validate(event)
         phone = await current_verified_phone(uow_factory, parsed.user_id)
         async with uow_factory() as uow:

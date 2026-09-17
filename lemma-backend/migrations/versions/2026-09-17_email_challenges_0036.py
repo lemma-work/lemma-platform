@@ -1,14 +1,14 @@
 """Durable, bound email verification challenges.
 
-Revision ID: 0031_email_challenges
-Revises: 0030_usage_requests
+Revision ID: 0036_email_challenges
+Revises: 0035_saved_site_logins
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0031_email_challenges"
-down_revision = "0030_usage_requests"
+revision = "0036_email_challenges"
+down_revision = "0035_saved_site_logins"
 branch_labels = None
 depends_on = None
 
