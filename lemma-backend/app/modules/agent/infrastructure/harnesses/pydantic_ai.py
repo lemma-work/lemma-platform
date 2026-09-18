@@ -50,6 +50,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from pydantic_ai.capabilities import ProcessHistory
 
+from app.modules.agent.capabilities.run_notices import RunNoticeCapability
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
@@ -288,6 +289,12 @@ class PydanticAIHarness:
         capabilities.extend(
             ProcessHistory(processor) for processor in history_processors
         )
+        # The budget posts before the request is built, so its notice goes out
+        # on the request that step is about to make. The compactor posts from a
+        # history processor, and those run after this hook, so its notice lands
+        # on the following request -- soon enough, since the warning fires with
+        # a fifth of the history budget still to fill.
+        capabilities.append(RunNoticeCapability(options.notices))
         pydantic_agent: PydanticAIAgent[DepsT, object] = PydanticAIAgent(
             model,
             instructions=_instructions(agent=agent, conversation=conversation, ctx=ctx),

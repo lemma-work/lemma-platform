@@ -164,15 +164,16 @@ class NodeLoop[DepsT]:
         elapsed_seconds = time.monotonic() - self._started_at
         exhausted = spend.exhausted(elapsed_seconds=elapsed_seconds)
         if exhausted is None:
-            # Not there yet, but possibly close enough to say so. The notice is
-            # queued on the spend and picked up by the history processor that
-            # builds the very request this step is about to make, so the run
-            # hears it while it still has room to act on it.
+            # Not there yet, but possibly close enough to say so. Posted to
+            # the run's mailbox and delivered into the very request this step
+            # is about to make, so the run hears it while it still has room to
+            # act on it.
             warning = spend.approaching(
                 elapsed_seconds=elapsed_seconds,
                 at=agent_settings.agent_run_warn_at,
             )
             if warning is not None:
+                self.options.notices.post(warning.notice)
                 logger.info(
                     "agent.run_budget.approaching.observed",
                     agent_run_id=str(self.agent_run_id),

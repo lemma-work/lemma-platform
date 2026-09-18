@@ -30,12 +30,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelMessage
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
+from app.modules.agent.domain.run_notices import RunNotices
 from app.modules.agent.infrastructure.harnesses.history import (
-    append_notices,
     find_safe_cutoff,
     is_pinned_message,
 )
@@ -202,6 +201,8 @@ class HistoryCompactor:
     model: object
     trigger_tokens: int
     keep_messages: int
+    #: Where the approaching-compaction notice is posted. None says nothing.
+    notices: RunNotices | None = None
     #: Fraction of `trigger_tokens` at which the run is told compaction is
     #: coming. Outside (0, 1) switches the warning off.
     warn_at: float = 0.0
@@ -219,7 +220,8 @@ class HistoryCompactor:
             return working
         size = await run_blocking(count_model_message_tokens, working)
         if size <= self.trigger_tokens:
-            return self._warn_if_near(working, size=size)
+            self._warn_if_near(size=size)
+            return working
 
         cutoff = find_safe_cutoff(working, max(0, len(working) - self.keep_messages))
         if cutoff <= 0:
@@ -266,23 +268,24 @@ class HistoryCompactor:
         )
         return compacted
 
-    def _warn_if_near(
-        self, messages: list[ModelMessage], *, size: int
-    ) -> list[ModelMessage]:
+    def _warn_if_near(self, *, size: int) -> None:
         """Tell the run that the oldest of this conversation is about to go.
 
         Compaction is lossy on purpose, and it arrives without warning: the run
         finds out by no longer remembering. A run told beforehand can put what
-        it still needs somewhere that survives -- a file, a record, its own
-        next message -- which is the difference between a summary it chose and
-        one it was handed.
+        it still needs somewhere that survives, which is the difference between
+        a summary it chose and one it was handed.
+
+        Posted rather than spliced in here: this runs on every request while the
+        history is near the threshold, and a processor editing the tail rewrites
+        a message the provider has already read.
         """
-        if self.warned or not 0 < self.warn_at < 1:
-            return messages
+        if self.notices is None or self.warned or not 0 < self.warn_at < 1:
+            return
         if size < self.trigger_tokens * self.warn_at:
-            return messages
+            return
         self.warned = True
-        return append_notices(messages, [_COMPACTION_NEAR_NOTICE])
+        self.notices.post(_COMPACTION_NEAR_NOTICE)
 
     async def _summarize(
         self, ctx: RunContext, transcript: str, *, folded: int = 0
