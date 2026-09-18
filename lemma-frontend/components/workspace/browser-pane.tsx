@@ -200,7 +200,18 @@ export function BrowserPane({
                 return;
             }
             if (cancelled) return;
-            container.replaceChildren();
+            // The new connection gets its own element; the old one stays on
+            // screen until this one has a frame to replace it with.
+            //
+            // `container.replaceChildren()` used to run here, which wiped the
+            // canvas at the *start* of every attempt. `hasPainted` was
+            // supposed to mean "a reconnect keeps the picture", and it did
+            // not -- it only suppressed the explanatory text, over a black
+            // rectangle. A browser that had to restart left the pane black
+            // for as long as that took, which reads as a crash.
+            const surface = document.createElement('div');
+            surface.className = 'h-full w-full';
+            container.append(surface);
 
             // Owned here rather than handed to RFB as a URL string, purely so
             // this can read the real close code -- see `closeCodeToState`.
@@ -220,7 +231,7 @@ export function BrowserPane({
                 closeCode = event.code;
             });
 
-            const rfb = new RFB(container, socket);
+            const rfb = new RFB(surface, socket);
             rfb.viewOnly = false;
             rfb.scaleViewport = true;
             rfb.background = 'var(--bg-canvas)';
@@ -228,6 +239,23 @@ export function BrowserPane({
                 attempt = 0;
                 setState('live');
                 setHasPainted(true);
+                // Now, and not before: whatever the previous attempt left on
+                // screen was the only picture there was.
+                for (const stale of Array.from(container.children)) {
+                    if (stale !== surface) stale.remove();
+                }
+            });
+            // The other half of the clipboard. `clipboardPasteFrom` sends
+            // text *to* the remote; this is the remote telling us what it
+            // just copied, and nothing was listening -- so copying inside the
+            // agent's browser put the text precisely nowhere a person could
+            // reach it. `writeText` needs the document focused and can be
+            // refused outright, which is a permissions fact about the page,
+            // not a broken pane.
+            rfb.addEventListener('clipboard', (event?: { detail?: { text?: string } }) => {
+                const text = event?.detail?.text;
+                if (!text) return;
+                void navigator.clipboard?.writeText(text).catch(() => undefined);
             });
             rfb.addEventListener('disconnect', () => {
                 // Guarded on identity: a reconnect tears this instance down
@@ -242,6 +270,9 @@ export function BrowserPane({
                 // was nothing wrong to see, only a ref pointing at nothing.
                 if (rfbRef.current !== rfb) return;
                 rfbRef.current = null;
+                // Its canvas never painted, or has been superseded; either
+                // way it must not pile up behind the next attempt.
+                if (container.children.length > 1) surface.remove();
                 if (cancelled) return;
                 const next = closeCodeToState(closeCode);
                 setState(next);
@@ -353,6 +384,28 @@ export function BrowserPane({
         };
     }, []);
 
+    // ⌘C on a Mac reaches a Linux browser as Super+c, which copies nothing.
+    // The keystroke that works over there is Ctrl+c, so the native gesture is
+    // translated rather than passed through -- otherwise the person's muscle
+    // memory silently does nothing, and macOS also tends to swallow the keyup
+    // of a ⌘-combination, leaving the modifier stuck down on the far side.
+    //
+    // ⌘V is deliberately not here: the paste event below already carries the
+    // text and writes it to the remote clipboard first, which is what makes
+    // pasting race-free. Handling the keystroke too would paste twice.
+    const onKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+        const rfb = rfbRef.current;
+        if (!rfb || !event.metaKey || event.ctrlKey || event.altKey) return;
+        const key = event.key.toLowerCase();
+        if (!'cxa'.includes(key) || key.length !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        rfb.sendKey(XK_CONTROL_L, 'ControlLeft', true);
+        rfb.sendKey(key.charCodeAt(0), `Key${key.toUpperCase()}`, true);
+        rfb.sendKey(key.charCodeAt(0), `Key${key.toUpperCase()}`, false);
+        rfb.sendKey(XK_CONTROL_L, 'ControlLeft', false);
+    }, []);
+
     const onPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
         const rfb = rfbRef.current;
         if (!rfb || rfb.viewOnly) return;
@@ -377,6 +430,7 @@ export function BrowserPane({
                     ref={containerRef}
                     className="h-full w-full"
                     onPaste={onPaste}
+                    onKeyDownCapture={onKeyDown}
                     role="application"
                     aria-label="The agent’s browser. Click and type to drive it."
                 />
@@ -420,6 +474,16 @@ export function BrowserPane({
                                 Try again
                             </Button>
                         </div>
+                    </div>
+                ) : null}
+                {/* A kept picture is not a live one, and a reconnect that
+                    lasts -- a browser that has to restart takes tens of
+                    seconds -- must not look like a page sitting idle. Small
+                    and out of the way, because the frame underneath is still
+                    the most useful thing on screen. */}
+                {state !== 'live' && hasPainted && !TERMINAL_STATES.has(state) ? (
+                    <div className="absolute left-1/2 top-3 -translate-x-1/2 rounded-full bg-[var(--surface-1)]/95 px-3 py-1 text-xs text-[var(--text-secondary)] shadow-[var(--shadow-xs)]">
+                        {state === 'no-browser' ? 'Restarting the browser…' : 'Reconnecting…'}
                     </div>
                 ) : null}
                 {/* Terminal states are the exception: "you are not signed in"

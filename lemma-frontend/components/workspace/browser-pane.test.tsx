@@ -71,7 +71,7 @@ class FakeRfb {
     background = '';
     sentKeys: Array<[number, string, boolean]> = [];
     clipboardWrites: string[] = [];
-    private listeners: Record<string, Array<() => void>> = {};
+    private listeners: Record<string, Array<(event?: unknown) => void>> = {};
 
     constructor(target: Element, urlOrSocket: string | FakeSocket) {
         this.target = target;
@@ -88,12 +88,15 @@ class FakeRfb {
         rfbInstances.push(this);
     }
 
-    addEventListener(type: string, listener: () => void) {
+    addEventListener(type: string, listener: (event?: unknown) => void) {
         (this.listeners[type] ??= []).push(listener);
     }
 
-    emit(type: string) {
-        for (const listener of this.listeners[type] ?? []) listener();
+    // `event` is optional so the many `emit('connect')` callers stay as they
+    // are; the real RFB hands its listeners a CustomEvent, and `clipboard`
+    // is the one whose payload the pane actually reads.
+    emit(type: string, event?: unknown) {
+        for (const listener of this.listeners[type] ?? []) listener(event);
     }
 
     sendKey(keysym: number, code: string, down = true) {
@@ -402,5 +405,53 @@ describe('a sign-in answered late', () => {
         screen.getByRole('button', { name: 'Try again' }).click();
 
         await waitFor(() => expect(rfbInstances.length).toBe(2));
+    });
+});
+
+describe('the clipboard, both ways', () => {
+    const CTRL_L = 0xffe3;
+
+    it('sends Ctrl+C when a Mac presses Cmd+C', async () => {
+        // Passed through, Cmd arrives at a Linux browser as Super+c and
+        // copies nothing -- the gesture silently does nothing at all.
+        const { container } = render(<BrowserPane origin="https://asur.work" />);
+        const rfb = await connect();
+        const target = container.querySelector('[role="application"]')!;
+
+        fireEvent.keyDown(target, { key: 'c', metaKey: true });
+
+        expect(rfb.sentKeys).toEqual([
+            [CTRL_L, 'ControlLeft', true],
+            ['c'.charCodeAt(0), 'KeyC', true],
+            ['c'.charCodeAt(0), 'KeyC', false],
+            [CTRL_L, 'ControlLeft', false],
+        ]);
+    });
+
+    it('leaves Cmd+V to the paste event, so nothing is pasted twice', async () => {
+        // The paste event writes the remote clipboard first and then types,
+        // which is what makes it race-free. Handling the keystroke as well
+        // would fire a second, empty paste.
+        const { container } = render(<BrowserPane origin="https://asur.work" />);
+        const rfb = await connect();
+        const target = container.querySelector('[role="application"]')!;
+
+        fireEvent.keyDown(target, { key: 'v', metaKey: true });
+
+        expect(rfb.sentKeys).toEqual([]);
+    });
+
+    it('puts what the remote copied onto this machine', async () => {
+        const written: string[] = [];
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: async (text: string) => void written.push(text) },
+        });
+        render(<BrowserPane origin="https://asur.work" />);
+        const rfb = await connect();
+
+        act(() => rfb.emit('clipboard', { detail: { text: 'copied over there' } }));
+
+        expect(written).toEqual(['copied over there']);
     });
 });
