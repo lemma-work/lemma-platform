@@ -99,6 +99,7 @@ export function ConversationPresentationStage({
     children,
     stageTitle,
     stageBodyOverride,
+    stageStandaloneHref,
 }: {
     podId: string;
     resourceHref: string;
@@ -114,6 +115,16 @@ export function ConversationPresentationStage({
      * right-hand panels is a worse problem than the one that would solve.
      */
     stageBodyOverride?: ReactNode;
+    /**
+     * Where a supplied body has a page of its own.
+     *
+     * The computer panel has one now, and before it did the comment below
+     * was right that a supplied body "means nothing without the conversation
+     * beside it". Looking through a machine's files is exactly the thing
+     * somebody wants more room for, so it gets the same link a resolved
+     * resource gets.
+     */
+    stageStandaloneHref?: string;
 }) {
     const router = useRouter();
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -123,7 +134,8 @@ export function ConversationPresentationStage({
     const appSlug = conversationStageAppSlug(resourceHref, podId);
     const { page: appPage, isResolving: appResolving } = useAppPage(appSlug);
     const embedHref = appSlug ? null : buildConversationStageEmbedHref(resourceHref);
-    const standaloneHref = buildConversationStandaloneResourceHref(resourceHref);
+    const standaloneHref =
+        stageStandaloneHref ?? buildConversationStandaloneResourceHref(resourceHref);
 
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
@@ -184,9 +196,8 @@ export function ConversationPresentationStage({
                     <div className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
                         {title}
                     </div>
-                    {/* Only a resolved resource has a page of its own to open.
-                        A supplied body means nothing without the conversation
-                        beside it, so it gets no orphaning link. */}
+                    {/* A resolved resource always has a page of its own; a
+                        supplied body has one only if it said so. */}
                     {standaloneHref ? (
                         <Button
                             asChild

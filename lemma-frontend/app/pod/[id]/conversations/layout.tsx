@@ -452,6 +452,14 @@ function PodConversationSurface({
                 podId={podId}
                 resourceHref=""
                 stageTitle="Your computer"
+                // The full-size view of the same machine. Carries the
+                // conversation's own directory, so opening it lands where
+                // the pane was rather than at the root.
+                stageStandaloneHref={`/pod/${podId}/computer${
+                    activeConversation?.workspace_cwd
+                        ? `?path=${encodeURIComponent(activeConversation.workspace_cwd)}`
+                        : ''
+                }`}
                 stageBodyOverride={
                     <ComputerPanel
                         workspaceCwd={activeConversation?.workspace_cwd}
