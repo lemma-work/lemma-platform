@@ -776,7 +776,20 @@ IMAGES_DIR := sandbox-images
 
 .PHONY: sandbox-images sandbox-image-workspace sandbox-image-function \
         push-sandbox-images push-sandbox-workspace push-sandbox-function \
-        print-sandbox-images
+        print-sandbox-images runtime-bundle
+
+RUNTIME_BUNDLE_DIR ?= dist/runtime-bundle
+
+# The first-party Python the backend installs into a workspace sandbox. Built
+# into the backend image for real deployments; built here, explicitly, for
+# development. Deliberately not discovered automatically -- a loader that built
+# from the checkout whenever it could made a unit test shell out to `uv build`,
+# so the system behaved differently on a developer's machine than anywhere else.
+runtime-bundle:
+	uv run python scripts/build_runtime_bundle.py --out-dir $(RUNTIME_BUNDLE_DIR)
+	@echo
+	@echo "Point the backend at it with:"
+	@echo "  export WORKSPACE_RUNTIME_BUNDLE_DIR=$(CURDIR)/$(RUNTIME_BUNDLE_DIR)"
 
 print-sandbox-images:
 	@echo "workspace: $(WORKSPACE_IMAGE):$(SANDBOX_TAG)"
