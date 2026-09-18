@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileTypeIcon } from '@/components/documents/file-type-icon';
 import { getDocumentPreviewType } from '@/components/documents/preview-renderers';
 import { Button } from '@/components/ui/button';
-import { ChevronRight, Folder, RefreshCw } from '@/components/ui/icons';
+import { ChevronRight, Download, Folder, RefreshCw } from '@/components/ui/icons';
 import {
     WORKSPACE_ROOT,
     useWorkspaceFile,
@@ -49,18 +49,63 @@ const segmentsOf = (path: string, from: string): { name: string; path: string }[
  * pane refuses to render: an archive, a binary, anything past the text ceiling.
  * Without it those files could be listed and never opened.
  */
+/**
+ * Folders first, then files, each A-Z.
+ *
+ * The server returns one flat alphabetical run, so a directory sat wherever
+ * its name fell -- `assets` between `PROJECT.md` and `audio` -- and the eye
+ * had no way to separate the things you can open from the things you can go
+ * into. Every file manager groups them, and this is why.
+ *
+ * `localeCompare` with `numeric` so `shot-2` precedes `shot-10`, and with
+ * case folded so a capitalised name does not sort into its own block above
+ * the lowercase ones.
+ */
+function orderedEntries<T extends { name: string; kind: string }>(entries: readonly T[]): T[] {
+    return [...entries].sort((a, b) => {
+        const aDir = a.kind === 'directory';
+        if (aDir !== (b.kind === 'directory')) return aDir ? -1 : 1;
+        return a.name.localeCompare(b.name, undefined, {
+            numeric: true,
+            sensitivity: 'base',
+        });
+    });
+}
+
 function DownloadLink({ blob, path }: { blob: Blob; path: string }) {
-    const href = useMemo(() => URL.createObjectURL(blob), [blob]);
-    useEffect(() => () => URL.revokeObjectURL(href), [href]);
+    // The object URL is minted when the button is pressed, not when the
+    // component renders.
+    //
+    // Rendering it was the bug, and it failed silently. The URL was made in a
+    // `useMemo` and revoked in an effect cleanup; React's StrictMode runs a
+    // mount as setup -> cleanup -> setup, so the cleanup revoked it while the
+    // memo -- whose dependency had not changed -- never made another. The
+    // anchor was left pointing at a revoked `blob:` URL, and a revoked one
+    // does nothing when clicked: no download, no error, nothing in the
+    // console. An `<img src>` built the same way survives, because it
+    // resolves during commit rather than on a click minutes later, which is
+    // why the same shape works elsewhere in the app.
+    //
+    // Minting on click sidesteps the lifecycle entirely, and is what the
+    // document viewer already does.
+    const save = useCallback(() => {
+        const href = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = href;
+        link.download = path.slice(path.lastIndexOf('/') + 1);
+        document.body.append(link);
+        link.click();
+        link.remove();
+        // Revoked on a later turn of the loop: Safari and Firefox abandon the
+        // download if the URL dies in the same tick as the click.
+        setTimeout(() => URL.revokeObjectURL(href), 0);
+    }, [blob, path]);
 
     return (
-        <a
-            href={href}
-            download={path.slice(path.lastIndexOf('/') + 1)}
-            className="text-xs underline text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-        >
+        <Button variant="quiet" size="xs" onClick={save}>
+            <Download className="size-3.5" />
             Download
-        </a>
+        </Button>
     );
 }
 
@@ -279,7 +324,7 @@ export function WorkspaceFilesPane({
                                     </Button>
                                 </li>
                             ) : null}
-                            {(data?.entries ?? []).map((entry) => {
+                            {orderedEntries(data?.entries ?? []).map((entry) => {
                                 const isDirectory = entry.kind === 'directory';
                                 return (
                                     <li
@@ -296,12 +341,14 @@ export function WorkspaceFilesPane({
                                             onClick={() => open(entry.path, isDirectory)}
                                             className="w-full justify-start gap-2 rounded-none px-3 font-normal"
                                         >
-                                            {isDirectory ? (
-                                                <Folder className="size-3.5 text-[var(--text-tertiary)]" />
-                                            ) : (
-                                                <FileTypeIcon filename={entry.name} size="sm" />
-                                            )}
-                                            <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
+                                            <span className="flex size-4 shrink-0 items-center justify-center">
+                                                {isDirectory ? (
+                                                    <Folder className="size-4 text-[var(--text-secondary)]" />
+                                                ) : (
+                                                    <FileTypeIcon filename={entry.name} size="sm" />
+                                                )}
+                                            </span>
+                                            <span className="min-w-0 flex-1 truncate text-left text-[var(--text-secondary)]">
                                                 {entry.name}
                                             </span>
                                             {!isDirectory ? (

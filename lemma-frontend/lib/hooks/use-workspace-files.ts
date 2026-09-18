@@ -70,4 +70,15 @@ export const useWorkspaceFile = (path: string | null, isImage: boolean) =>
         },
         enabled: Boolean(path),
         staleTime: 5_000,
+        // Not the app-wide `keepPreviousData`.
+        //
+        // That default is right for a list, where showing the last page while
+        // the next one loads reads as smooth. It is wrong for *this*, because
+        // the two halves of the answer come from different places: the blob
+        // comes from the query and the filename comes from the selected path.
+        // Keeping the previous data means that, for as long as the new file is
+        // loading, the pane offers the old file's bytes under the new file's
+        // name -- and a download taken in that window saves the wrong file,
+        // convincingly. Better to show the pending state for a moment.
+        placeholderData: undefined,
     });

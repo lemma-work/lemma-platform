@@ -4,6 +4,12 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { WorkspaceFilesPane } from './workspace-files-pane';
 
 const asked = vi.hoisted(() => ({ paths: [] as string[] }));
+// What `useWorkspaceFile` answers, so a test can put a real file in the
+// detail pane instead of the empty default.
+const listing = vi.hoisted(() => ({ entries: [] as Array<Record<string, unknown>> }));
+const file = vi.hoisted(() => ({
+    data: undefined as { blob: Blob; text: string | null; tooLarge: boolean; sizeBytes: number } | undefined,
+}));
 
 vi.mock('@/lib/hooks/use-workspace-files', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/lib/hooks/use-workspace-files')>();
@@ -12,19 +18,27 @@ vi.mock('@/lib/hooks/use-workspace-files', async (importOriginal) => {
         useWorkspaceFiles: (path: string) => {
             asked.paths.push(path);
             return {
-                data: { path, sleeping: false, truncated: false, exists: true, entries: [] },
+                data: {
+                    path,
+                    sleeping: false,
+                    truncated: false,
+                    exists: true,
+                    entries: listing.entries,
+                },
                 isPending: false,
                 error: null,
                 refetch: vi.fn(),
                 isFetching: false,
             };
         },
-        useWorkspaceFile: () => ({ data: undefined, isPending: false, error: null }),
+        useWorkspaceFile: () => ({ data: file.data, isPending: false, error: null }),
     };
 });
 
 afterEach(() => {
     asked.paths = [];
+    file.data = undefined;
+    listing.entries = [];
     cleanup();
 });
 
@@ -64,5 +78,66 @@ describe('which directory the pane opens', () => {
 
         expect(asked.paths.at(-1)).toBe('/workspace/c/2026-09-16/quiet-harbour');
         expect(screen.getByRole('button', { name: 'This conversation' })).toBeTruthy();
+    });
+});
+
+describe('saving a file to your own machine', () => {
+    it('mints the object URL when pressed, not when rendered', async () => {
+        // The bug, and why it was invisible. The URL used to be made in a
+        // `useMemo` and revoked in an effect cleanup, and StrictMode runs a
+        // mount as setup -> cleanup -> setup: the cleanup revoked it, the memo
+        // never made another, and the anchor pointed at a revoked `blob:` URL.
+        // Clicking a revoked one does nothing at all -- no download, no error,
+        // nothing in the console.
+        //
+        // So this asserts the ordering that makes that impossible: no URL
+        // exists until the button is pressed.
+        const created: string[] = [];
+        const revoked: string[] = [];
+        const realCreate = URL.createObjectURL;
+        const realRevoke = URL.revokeObjectURL;
+        URL.createObjectURL = vi.fn(() => {
+            const url = `blob:fake/${created.length}`;
+            created.push(url);
+            return url;
+        }) as unknown as typeof URL.createObjectURL;
+        URL.revokeObjectURL = vi.fn((url: string) => void revoked.push(url));
+
+        try {
+            file.data = {
+                blob: new Blob(['hello']),
+                text: 'hello',
+                tooLarge: false,
+                sizeBytes: 5,
+            };
+            listing.entries = [
+                { path: '/workspace/notes.txt', name: 'notes.txt', kind: 'file', size_bytes: 5 },
+            ];
+            render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+            screen.getByRole('button', { name: /notes\.txt/ }).click();
+
+            // Rendering the detail pane must not have minted anything.
+            expect(created).toEqual([]);
+
+            const button = await screen.findByRole('button', { name: /download/i });
+            let clicked = false;
+            const realClick = HTMLAnchorElement.prototype.click;
+            HTMLAnchorElement.prototype.click = function () {
+                clicked = true;
+                // The href must still be live at the moment of the click.
+                expect(revoked).not.toContain(this.getAttribute('href'));
+            };
+            try {
+                button.click();
+            } finally {
+                HTMLAnchorElement.prototype.click = realClick;
+            }
+
+            expect(created).toHaveLength(1);
+            expect(clicked).toBe(true);
+        } finally {
+            URL.createObjectURL = realCreate;
+            URL.revokeObjectURL = realRevoke;
+        }
     });
 });
