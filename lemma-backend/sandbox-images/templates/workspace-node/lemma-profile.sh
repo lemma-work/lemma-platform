@@ -20,6 +20,13 @@ export AGENT_BROWSER_HEADED=true
 # started by the runtime is.
 export AGENT_BROWSER_IDLE_TIMEOUT_MS=120000
 export MPLBACKEND=Agg
+# pnpm installs global binaries into PNPM_HOME, which was on no PATH at all
+# on this fabric -- so `pnpm add -g` succeeded and produced something the
+# agent could not then run.
+case ":${PATH}:" in
+  *:${PNPM_HOME}:*) ;;
+  *) export PATH="${PNPM_HOME}:${PATH}" ;;
+esac
 case ":${PATH}:" in
   *:/opt/node24/bin:*) ;;
   *) export PATH="/opt/node24/bin:${PATH}" ;;

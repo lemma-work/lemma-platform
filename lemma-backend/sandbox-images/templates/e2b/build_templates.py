@@ -17,9 +17,7 @@ NODE_LINUX_X64_SHA256 = (
 )
 PNPM_VERSION = "11.15.1"
 GH_VERSION = "2.97.0"
-GH_LINUX_X64_SHA256 = (
-    "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
-)
+GH_LINUX_X64_SHA256 = "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
 DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
 
@@ -295,7 +293,7 @@ def workspace_template():
             "/tmp/lemma-browser/profile && "
             "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
-            "ln -sf \"$(command -v google-chrome-stable)\" "
+            'ln -sf "$(command -v google-chrome-stable)" '
             "/usr/local/bin/workspace-chrome && "
             "test -x /usr/local/bin/workspace-chrome && "
             "rm -rf /root/.cache/pnpm /root/.local/share/pnpm/store "
@@ -406,7 +404,7 @@ def workspace_template():
                 "GH_NO_UPDATE_NOTIFIER": "1",
                 "GH_PAGER": "cat",
                 "NODE_PATH": "/opt/lemma-node/node_modules",
-                "PNPM_HOME": "/home/user/.pnpm",
+                "PNPM_HOME": "/home/user/.local/share/pnpm",
                 "PIP_PREFIX": "/home/user/.python",
                 "PYTHONPATH": (
                     "/home/user/.python/lib/python3.14/site-packages:"
@@ -415,7 +413,8 @@ def workspace_template():
                     "/app"
                 ),
                 "PATH": (
-                    "/home/user/.python/bin:/home/user/.pnpm:/home/user/.local/bin:"
+                    "/home/user/.python/bin:/home/user/.local/share/pnpm:"
+                    "/home/user/.local/bin:"
                     "/opt/lemma-python/bin:"
                     "/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"

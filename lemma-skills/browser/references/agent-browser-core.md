@@ -180,7 +180,7 @@ The generic `agent-browser` recipes for this — filling a password into a form,
 `auth save --password-stdin`, `state save ./auth.json`, `--state`,
 `AGENT_BROWSER_SESSION_NAME` — **do not apply in a Lemma workspace and must not
 be used.** A password is never yours to hold, and a state file written by hand
-outlives the run that made it: `/workspace` is durable and readable by whatever
+outlives the run that made it: the working directory is durable and readable by whatever
 runs next, and `/tmp/lemma-browser` is deleted when the workspace suspends. What
 `browser_sign_in` keeps instead is the site's session, encrypted, scoped to that
 one site, loaded into *this conversation's* browser, and visible to the person
