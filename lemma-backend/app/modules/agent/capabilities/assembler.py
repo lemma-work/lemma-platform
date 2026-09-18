@@ -161,7 +161,7 @@ def _instructions_for(toolset: object) -> tuple[str, Callable[[], str]] | None:
     One lookup for both wrappers, because deferral is supposed to hide a
     toolset's *schemas*, never its *contract*. Messaging is the case that proves
     it: ``message_user`` does not pause the turn, so an agent that was never
-    taught the send → snooze → check_messages loop sends a message and then sits
+    taught the send → wait_for → check_messages loop sends a message and then sits
     waiting for a reply that arrives as a tool result never. Advertising the
     tool in the deferred hint while withholding that is the worst of both.
     """

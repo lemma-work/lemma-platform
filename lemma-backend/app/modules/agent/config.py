@@ -32,6 +32,51 @@ class AgentSettings(BaseSettings):
         extra="ignore",
     )
 
+    # --- Run budget -------------------------------------------------------
+    # Ceilings for one run, after which it pauses and asks a person whether to
+    # carry on. Contract numbers, so they live here rather than in a comment:
+    # a deployment that wants longer runs raises them, and setting one to 0
+    # switches that dimension off.
+    #
+    # The starting values come from a trace study of real runs: the median run
+    # made far fewer than 40 model calls and finished inside a minute, while the
+    # runs that never converged ran for tens of minutes and past 150 calls. They
+    # are set to sit above ordinary work and below a runaway, and are expected to
+    # move once spans carry outcomes and a healthy run can be described.
+    agent_run_budget_model_requests: int = Field(
+        default=40,
+        description=(
+            "Model requests one run may make before pausing to ask whether to "
+            "continue. 0 disables the check. Compaction is excluded: harness "
+            "bookkeeping must not spend the agent's allowance."
+        ),
+    )
+    agent_run_budget_wall_clock_seconds: float = Field(
+        default=900.0,
+        description=(
+            "Seconds one run may take before pausing to ask whether to continue. "
+            "Catches the run that waits rather than loops, where every call is "
+            "cheap and a request count never trips. 0 disables the check."
+        ),
+    )
+    agent_run_budget_tool_failures: int = Field(
+        default=5,
+        description=(
+            "Consecutive failing tool calls before pausing to ask. Counted "
+            "consecutively, so a success anywhere clears it: a long run doing "
+            "real work fails a tool now and then. 0 disables the check."
+        ),
+    )
+    agent_run_budget_unattended_wall_clock_seconds: float = Field(
+        default=1800.0,
+        description=(
+            "The wall-clock ceiling for a run nobody is watching — a schedule, a "
+            "surface, an automation. Longer than the interactive one because "
+            "nobody is waiting, and still bounded because nobody is watching "
+            "the spend either. 0 disables the check."
+        ),
+    )
+
     agent_run_stop_poll_interval_seconds: float = Field(
         default=1.0,
         description="Minimum interval between database polls of an agent run's stop flag.",

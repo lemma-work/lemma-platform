@@ -287,9 +287,10 @@ no run is parked.
 
 A **conversation** in `WAITING` is a different thing, and the difference matters
 before you go chasing it: it is either blocked on you (an `ask_user` question or an
-approval card — answer it and the agent continues) or **snoozed**, meaning the agent
-suspended itself and wakes on its own within 24 hours (the ceiling; requests above
-it are clamped). A snoozed conversation is healthy and needs nothing from you.
+approval card — answer it and the agent continues) or **waiting**, meaning the agent
+suspended itself on a timer, a sandbox process or a sub-agent run, and resumes on its
+own within 24 hours (the ceiling; requests above it are clamped). A waiting
+conversation is healthy and needs nothing from you.
 The CLI does not distinguish the two — `conversations get` reports `status` and
 `last_run_status` but no wait reason — so tell them apart from the transcript:
 `conversations approvals <id>` lists an outstanding `ask_user`/approval, and an
@@ -379,7 +380,7 @@ Two ways in, and which one you have depends on how the agent was granted:
   `search_tools` first, then `search_connector_operations` and
   `run_connector_operation`. Prefer this when you have it — no shell involved.
   (`CONNECTORS` is not alone behind `search_tools`: `POD`, `SUBAGENTS`,
-  `MESSAGING` and `SNOOZE` are deferred the same way. Not seeing a tool in your
+  `MESSAGING` and `WAIT` are deferred the same way. Not seeing a tool in your
   prefix is not the same as not having it — go looking before concluding you
   cannot do something.)
 - **The CLI** (`lemma connectors …`, needs the `WORKSPACE_CLI` toolset) — same

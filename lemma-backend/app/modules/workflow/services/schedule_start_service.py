@@ -426,10 +426,10 @@ class ScheduleStartService:
 
         Both wakes have the same shape — the timer carries the ``wait_ref`` that
         resolves to exactly one ACTIVE wait — and differ only in what they resume:
-        a snoozed conversation, or a suspended workflow run.
+        a waiting conversation, or a suspended workflow run.
         """
         if payload.get("conversation_id"):
-            await self._wake_snoozed_conversation(external_ref=payload.get("wait_ref"))
+            await self._resolve_conversation_wait(external_ref=payload.get("wait_ref"))
             return True
         if payload.get("workflow_run_id"):
             await self._handle_timer_fire(
@@ -441,28 +441,32 @@ class ScheduleStartService:
             return True
         return False
 
-    async def _wake_snoozed_conversation(self, *, external_ref: str | None) -> None:
-        """Resume the agent whose snooze timer just fired."""
+    async def _resolve_conversation_wait(self, *, external_ref: str | None) -> None:
+        """Hand a fired conversation wait to the agent module to interpret.
+
+        `resolve`, not `wake`: only a TIME wait means "your time is up" when its
+        timer fires. For the others the timer is a *check* — has the process
+        exited, has the child finished — and may well end in the wait re-arming
+        itself rather than the agent waking at all. This file deliberately does
+        not know which; the branch belongs in the module that owns the wait.
+        """
         if not external_ref:
-            logger.debug("workflow.schedule_start_service.snooze_wake_no_ref.observed")
+            logger.debug("workflow.schedule_start_service.wait_fire_no_ref.observed")
             return
-        from app.modules.agent.domain.wait import AgentWaitWakeReason
         from app.modules.agent.infrastructure.wait_repository import (
             AgentConversationWaitRepository,
         )
-        from app.modules.agent.services.snooze_wake_service import SnoozeWakeService
+        from app.modules.agent.services.wait_wake_service import AgentWaitService
 
         wait = await AgentConversationWaitRepository(
             self._uow
         ).find_active_by_external_ref(external_ref)
         if wait is None:
-            # Already woken by the reconciliation sweep, cancelled, or long gone.
-            # Duplicate and stale timer fires are no-ops by construction.
-            logger.debug("workflow.schedule_start_service.snooze_wake_stale.observed")
+            # Already resolved by the reconciliation sweep, cancelled, or long
+            # gone. Duplicate and stale timer fires are no-ops by construction.
+            logger.debug("workflow.schedule_start_service.wait_fire_stale.observed")
             return
-        await SnoozeWakeService(self._uow).wake(
-            wait=wait, reason=AgentWaitWakeReason.TIMER
-        )
+        await AgentWaitService(self._uow).resolve(wait=wait)
 
     async def _handle_timer_fire(
         self,

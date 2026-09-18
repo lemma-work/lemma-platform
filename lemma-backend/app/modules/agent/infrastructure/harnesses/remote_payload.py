@@ -23,9 +23,9 @@ from app.modules.agent.services.runtime_model_factory import provider_model_sett
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ConversationType,
-    HarnessOptions,
     JsonObject,
     MessageKind,
     MessageRole,
@@ -263,7 +263,7 @@ def _turn_messages(
     would only duplicate the conversation in its context.
 
     A run that resumes a pause is the same rule with a different answer. Waking
-    from a ``snooze`` adds no user message, so "the latest user message" is the
+    from a ``wait_for`` adds no user message, so "the latest user message" is the
     request that started the task — and re-sending that to an agent whose
     session already contains it does not read as "carry on", it reads as the
     person asking again, so the agent does the work twice. What the session has

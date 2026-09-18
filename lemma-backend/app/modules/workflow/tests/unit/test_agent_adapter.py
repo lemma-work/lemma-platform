@@ -77,11 +77,11 @@ async def test_reserved_id_returns_existing_conversation_without_side_effects(
 
 
 @pytest.mark.anyio
-async def test_waiting_conversation_reports_snooze_when_a_wait_is_active(monkeypatch):
+async def test_waiting_conversation_reports_wait_when_a_wait_is_active(monkeypatch):
     """The reporting half of the wait-expiry exemption.
 
-    ``_expire_overdue_wait`` already exempts ``wait_reason == "SNOOZE"``, but
-    nothing ever produced that value until agent snooze landed. Without this the
+    ``_expire_overdue_wait`` already exempts ``wait_reason == "WAIT"``, but
+    nothing ever produced that value until agent waits landed. Without this the
     exemption is dead code and an agent sleeping past
     ``workflow_wait_max_age_seconds`` has its workflow failed while it is
     perfectly healthy — a silent wrong outcome, not a visible error.
@@ -103,12 +103,12 @@ async def test_waiting_conversation_reports_snooze_when_a_wait_is_active(monkeyp
     status = await adapter.get_conversation_status(conversation_id)
 
     assert status["status"] == "WAITING"
-    assert status["wait_reason"] == "SNOOZE"
+    assert status["wait_reason"] == "WAIT"
     assert status["wakes_at"] == wakes_at.isoformat()
 
 
 @pytest.mark.anyio
-async def test_waiting_conversation_still_reports_human_without_a_snooze():
+async def test_waiting_conversation_still_reports_human_without_a_wait():
     """An agent blocked on a person is the hang the ceiling exists to catch."""
     adapter = AgentControlAdapter(Mock(session=Mock()))
     adapter.conversation_repo = Mock(

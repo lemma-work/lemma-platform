@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+from pydantic import BaseModel
 from pydantic_ai import BinaryContent, ToolReturn
 
 from app.modules.agent.services.mcp_content import (
@@ -136,3 +138,43 @@ def test_both_bridges_keep_image_bytes_out_of_the_text_channel() -> None:
         "path": "/me/shot.png",
         "bytes": len(picture),
     }
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_is_error"),
+    [
+        ({"success": False, "error": "the write never landed"}, True),
+        ({"success": True, "stdout": "ok"}, False),
+        # Not a failure: the agent must ask a person first, which is a step in a
+        # working flow and one the model is built to act on.
+        ({"success": False, "needs_approval": True, "error": "no grant"}, False),
+        # No verdict to read -- a tool that does not use the uniform contract.
+        ({"pages": 3}, False),
+    ],
+)
+def test_a_returned_failure_is_marked_is_error(payload, expected_is_error):
+    """A tool that *returns* `success: false` must not look like a success.
+
+    Almost nothing raises: `GracefulToolset` converts a raise into this exact
+    shape so one bad call cannot end a run. Before this, the raised path set
+    `is_error` and the returned path -- which is nearly every real failure --
+    did not, so a remote harness saw them as successful calls, and the
+    platform's measured tool-error rate read less than half the real one.
+    """
+    result = tool_call_result(payload)
+
+    assert result.is_error is expected_is_error
+    # Marking it must never cost the model the payload it has to act on.
+    assert result.structured_content == payload
+
+
+def test_a_pydantic_response_is_read_the_same_way():
+    """Most tools return a model, not a dict — reading only dicts missed them."""
+
+    class _Response(BaseModel):
+        success: bool = False
+        error: str | None = None
+
+    result = tool_call_result(_Response(error="the write never landed"))
+
+    assert result.is_error is True

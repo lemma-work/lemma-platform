@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from app.modules.agent.config import agent_settings
+
 from app.modules.agent.infrastructure.context_brief_repository import UserProfile
 
 #: Columns past this are named as a count rather than listed.
@@ -56,12 +58,59 @@ def more_note(shown: int, total: object, noun: str) -> list[str]:
 #: the automatic ones instead means an unrecognised source is never called
 #: unattended, and wrongly claiming nobody is watching is the failure that
 #: actually costs somebody an answer.
-AUTOMATIC_RUN_SOURCES = frozenset({"snooze_resume", "agent_snooze"})
+AUTOMATIC_RUN_SOURCES = frozenset({"wait_resume", "agent_wait"})
 
 #: A person answered a pause: an approval decision, or a reply to ``ask_user``.
 #: Worth saying out loud, because the run resumes mid-task and the answer it was
 #: waiting for is now sitting in its history.
 RESUMED_BY_PERSON = "approval_resume"
+
+
+def _with_budget(framing: str, *, unattended: bool) -> str:
+    """Append what this run may spend before it has to stop and ask.
+
+    The trace study's first finding was that nothing in the brief says stop:
+    there was no iteration, time or spend limit stated anywhere, while both base
+    prompts said "complete the requested work". A run that knows it has twenty
+    minutes can choose the short route; one that discovers the wall by hitting
+    it cannot. The numbers are the same ones enforced in the loop, read from the
+    same settings, so the brief cannot drift from the behaviour.
+    """
+    steps = agent_settings.agent_run_budget_model_requests
+    seconds = (
+        agent_settings.agent_run_budget_unattended_wall_clock_seconds
+        if unattended
+        else agent_settings.agent_run_budget_wall_clock_seconds
+    )
+    if steps <= 0 and seconds <= 0:
+        return framing
+
+    limits = []
+    if steps > 0:
+        limits.append(f"about {steps} steps")
+    if seconds > 0:
+        limits.append(f"{int(seconds // 60)} minutes")
+    return (
+        f"{framing}\n"
+        f"- You have {' or '.join(limits)}, whichever comes first. Past that "
+        "this run pauses and asks a person whether to carry on, so aim for the "
+        "shortest route to a usable result and say what is left rather than "
+        "starting something you cannot finish."
+    )
+
+
+def run_is_unattended(run_source: str | None) -> bool:
+    """Whether nobody is expected to be watching this turn.
+
+    The claim has to be positively established, never inferred from absence:
+    anything unrecognised is treated as attended, because wrongly deciding
+    nobody is watching is the failure that costs somebody an answer.
+
+    Read by two callers who must agree. The brief tells the model not to expect
+    a quick reply; the run budget uses a longer ceiling, because nobody is
+    waiting — and still a ceiling, because nobody is watching the spend either.
+    """
+    return run_source is None or run_source in AUTOMATIC_RUN_SOURCES
 
 
 def run_source_of(agent_run) -> str | None:
@@ -102,22 +151,23 @@ def with_run_framing(brief: str, *, conversation, run_source: str | None = None)
     metadata = getattr(conversation, "metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
     started_by_schedule = str(metadata.get("started_by") or "").upper() == "SCHEDULE"
-    unattended = run_source is None or run_source in AUTOMATIC_RUN_SOURCES
+    unattended = run_is_unattended(run_source)
     platform = metadata.get("surface_platform")
     where = f" from {str(platform).lower()}" if platform else ""
 
     if run_source == RESUMED_BY_PERSON:
-        return (
+        return _with_budget(
             f"{brief}\n\n## This run\n"
             "- A person answered what you were waiting on — an approval, or a "
             "reply to `ask_user`. Their answer is in your history above. Carry "
-            "on from where you paused, and tell them what happened."
+            "on from where you paused, and tell them what happened.",
+            unattended=False,
         )
 
     if started_by_schedule and unattended:
         name = metadata.get("schedule_name")
         named = f" (`{name}`)" if name else ""
-        return (
+        return _with_budget(
             f"{brief}\n\n## This run\n"
             f"- A schedule{named} started this, and nothing since has come from "
             "a person. **Assume nobody is watching right now** — `ask_user` "
@@ -126,23 +176,26 @@ def with_run_framing(brief: str, *, conversation, run_source: str | None = None)
             "- Your reply is still saved to this conversation and a person can "
             "read it later. Put anything that needs a decision where its owner "
             "will find it — a row, a file, or a message to them — rather than "
-            "only in the reply."
+            "only in the reply.",
+            unattended=True,
         )
 
     if started_by_schedule:
-        return (
+        return _with_budget(
             f"{brief}\n\n## This run\n"
             "- This conversation was started by a schedule, and a person is now "
-            f"asking in it{where}. Answer them here."
+            f"asking in it{where}. Answer them here.",
+            unattended=False,
         )
 
     if platform:
-        return (
+        return _with_budget(
             f"{brief}\n\n## This run\n"
             f"- This arrived{where}, and the person is waiting there. Your reply "
-            "goes back to the same conversation."
+            "goes back to the same conversation.",
+            unattended=False,
         )
-    return brief
+    return _with_budget(f"{brief}\n\n## This run", unattended=False)
 
 
 def user_lines(profile: UserProfile, user_id: UUID) -> list[str]:

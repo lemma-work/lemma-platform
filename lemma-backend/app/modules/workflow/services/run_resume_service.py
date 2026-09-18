@@ -28,7 +28,7 @@ RECONCILE_BATCH = 100
 # reason added later is subject to the ceiling until someone decides otherwise,
 # because the failure mode of guessing wrong in the other direction is a ceiling
 # that silently stops applying.
-SELF_RESOLVING_WAIT_REASONS = frozenset({"SNOOZE"})
+SELF_RESOLVING_WAIT_REASONS = frozenset({"WAIT"})
 
 # Waits blocked on a person get their own, far larger ceiling. The machine
 # ceiling exists to catch a hang; a human ceiling can only ever catch a person
@@ -234,7 +234,7 @@ class RunResumeService:
         someone decides it wakes itself; defaulting the other way would let a
         reason nobody thought about silently disable the ceiling.
 
-        `SNOOZE` is on it: a sleeping agent wakes itself and is healthy, so
+        `WAIT` is on it: a waiting agent wakes itself and is healthy, so
         failing its run would be a silent wrong outcome rather than a visible
         error. A wait blocked on a *person* is not exempt at this ceiling, but it
         gets a much longer one.

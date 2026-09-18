@@ -1,13 +1,12 @@
-"""Self-heal snoozed conversations whose scheduler wake never arrived.
+"""Self-heal waiting conversations whose scheduler wake never arrived.
 
-Mirrors ``RunResumeService.reconcile_stale_waits`` for TIME waits: there is no
-external system to poll, a timer just has to elapse, so an overdue wait is fired
-here.
+Mirrors ``RunResumeService.reconcile_stale_waits``: an overdue wait is one
+whose scheduler event never landed, so it is fired here instead.
 
 Three things keep this a backstop rather than a second wake path:
 
 * **A grace period.** ``RECONCILE_AFTER`` matches the workflow sweep's. Firing
-  the moment ``scheduled_at`` passes would race the real timer on every snooze,
+  the moment ``scheduled_at`` passes would race the real timer on every wait,
   and every healthy wait would log "lost timer" at WARNING.
 * **A session per wait.** A wake that raises rolls its session back; sharing one
   across the batch would leave every later wait riding a broken transaction.
@@ -23,14 +22,11 @@ from datetime import datetime, timedelta, timezone
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.agent.domain.wait import (
-    AgentConversationWaitEntity,
-    AgentWaitWakeReason,
-)
+from app.modules.agent.domain.wait import AgentConversationWaitEntity
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.services.snooze_wake_service import SnoozeWakeService
+from app.modules.agent.services.wait_wake_service import AgentWaitService
 
 logger = get_logger(__name__)
 
@@ -45,7 +41,7 @@ RECONCILE_AFTER = timedelta(minutes=10)
 MAX_WAKE_ATTEMPTS = 3
 
 
-class SnoozeReconcileService:
+class WaitReconcileService:
     def __init__(self) -> None:
         # No shared unit of work on purpose: every step below opens its own, so
         # one wait's rollback cannot poison the rest of the batch.
@@ -72,12 +68,14 @@ class SnoozeReconcileService:
             return False
         try:
             async with SessionUnitOfWorkFactory(async_session_maker)() as uow:
-                woke = await SnoozeWakeService(uow).wake(
-                    wait=wait, reason=AgentWaitWakeReason.TIMER
-                )
+                # `resolve`, not `wake`: a lost timer on a PROCESS or
+                # SUBAGENT wait must still ask what happened. Waking it with
+                # TIMER would tell the agent its time elapsed when the truth may
+                # be that the thing it waited for finished ten minutes ago.
+                woke = await AgentWaitService(uow).resolve(wait=wait)
         except Exception:
             logger.error(
-                "agent.snooze.reconcile_failed",
+                "agent.wait.reconcile_failed",
                 wait_id=str(wait.id),
                 attempt=attempt,
                 exc_info=True,
@@ -85,7 +83,7 @@ class SnoozeReconcileService:
             return False
         if woke:
             logger.warning(
-                "agent.snooze.reconcile_fired_lost_timer",
+                "agent.wait.reconcile_fired_lost_timer",
                 conversation_id=str(wait.conversation_id),
                 wait_id=str(wait.id),
             )
@@ -117,7 +115,7 @@ class SnoozeReconcileService:
             await repo.update(claimed)
             await uow.commit()
         logger.error(
-            "agent.snooze.reconcile_abandoned",
+            "agent.wait.reconcile_abandoned",
             conversation_id=str(wait.conversation_id),
             wait_id=str(wait.id),
             attempt=attempt,

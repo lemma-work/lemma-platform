@@ -237,14 +237,16 @@ class AgentControlAdapter(AgentPort):
         if conversation.status is ConversationStatus.WAITING:
             # The expiry policy needs to know *why* a conversation is waiting. An
             # agent blocked on a person is the hang the ceiling exists to catch;
-            # a snoozed agent will wake itself and is perfectly healthy, so
+            # a waiting agent will wake itself and is perfectly healthy, so
             # failing its run would be a silent wrong outcome rather than a
             # visible error. See `run_resume_service._expire_overdue_wait`.
-            snooze = await self.wait_repo.find_active_for_conversation(conversation_id)
+            waiting_on = await self.wait_repo.find_active_for_conversation(
+                conversation_id
+            )
             return {
                 "status": "WAITING",
-                "wait_reason": "SNOOZE" if snooze else "HUMAN",
-                "wakes_at": snooze.scheduled_at.isoformat() if snooze else None,
+                "wait_reason": "WAIT" if waiting_on else "HUMAN",
+                "wakes_at": waiting_on.scheduled_at.isoformat() if waiting_on else None,
                 "output_data": output,
             }
         if conversation.status in {
