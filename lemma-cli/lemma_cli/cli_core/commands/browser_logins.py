@@ -33,22 +33,38 @@ def browser_logins_root(ctx: typer.Context) -> None:
     list_logins(ctx)
 
 
-def _all_pages(client, fetch):  # type: ignore[no-untyped-def]
-    """Follow `next_page_token` to exhaustion.
+#: A ceiling on how many pages one listing will follow. The server caps the
+#: set well below this, so reaching it means the token is not advancing and
+#: the honest thing is to stop with what we have rather than spin.
+_MAX_PAGES = 50
+
+
+def _all_pages(fetch):  # type: ignore[no-untyped-def]
+    """Follow `next_page_token` to exhaustion, and no further.
 
     Paged to the end rather than one page at a time, for the same reason
     `files shares` is: a login you cannot see is a login you cannot revoke,
     and a caller who forgets to follow the token is left believing the first
     page is all of it.
+
+    Both guards are load-bearing. The token must be a non-empty *string*,
+    because `test_json_output_contract` drives every command against a
+    permissive stub whose every attribute answers truthily -- an unbounded
+    `while` there does not fail, it hangs, and it took a CI job down for its
+    full thirty-minute budget with no output at all. The page ceiling catches
+    the other shape of the same bug: a server that keeps handing back a token
+    that does not advance.
     """
     items = []
     page_token = None
-    while True:
+    for _ in range(_MAX_PAGES):
         page = fetch(page_token)
-        items.extend(page.items)
+        batch = list(getattr(page, "items", None) or [])
+        items.extend(batch)
         page_token = getattr(page, "next_page_token", None)
-        if not page_token:
-            return items
+        if not batch or not isinstance(page_token, str) or not page_token:
+            break
+    return items
 
 
 @app.command("list")
@@ -61,8 +77,7 @@ def list_logins(
     result = run_with_client(
         ctx,
         lambda client, _s: _all_pages(
-            client,
-            lambda token: client.web_logins.list(limit=limit, page_token=token),
+            lambda token: client.web_logins.list(limit=limit, page_token=token)
         ),
     )
     if result is not None:
@@ -107,8 +122,7 @@ def login_history(
     result = run_with_client(
         ctx,
         lambda client, _s: _all_pages(
-            client,
-            lambda token: client.web_logins.history(limit=limit, page_token=token),
+            lambda token: client.web_logins.history(limit=limit, page_token=token)
         ),
     )
     if result is not None:

@@ -22,12 +22,18 @@ async function allPages<T>(
 ): Promise<{ items: T[] }> {
     const items: T[] = [];
     let pageToken: string | undefined;
-    for (;;) {
-        const page = await fetch(pageToken);
-        items.push(...page.items);
-        if (!page.next_page_token) return { items };
-        pageToken = page.next_page_token;
+    // Bounded. The server caps these sets well below the ceiling, so reaching
+    // it means the token is not advancing -- and an unbounded follow turns
+    // that into a page that never settles rather than a short list. The CLI
+    // had the same loop and hung a CI job for its whole thirty-minute budget
+    // against a stub whose every field answered truthily.
+    for (let page = 0; page < 50; page += 1) {
+        const answer = await fetch(pageToken);
+        items.push(...answer.items);
+        if (!answer.items.length || !answer.next_page_token) break;
+        pageToken = answer.next_page_token;
     }
+    return { items };
 }
 
 export const useWebLogins = () =>
