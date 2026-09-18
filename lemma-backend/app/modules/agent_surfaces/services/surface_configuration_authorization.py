@@ -23,6 +23,12 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
 )
 
+#: How many of a pod's agents a surface's chooser offers. Slack's App Home and
+#: Telegram's menu both render a list a person picks from, and neither is a
+#: place to read several hundred names -- so the read is bounded here rather
+#: than fetching the pod's whole roster to display the top of it.
+SURFACE_AGENT_CHOICES = 100
+
 
 class SurfaceConfigurationAuthorizationMixin:
     async def _configuration_surface_candidates(self, request, *, tenant_id, platform):
@@ -178,12 +184,19 @@ class SurfaceConfigurationAuthorizationMixin:
 
         `agent.contracts.pod_summaries` rather than the agent repository the
         `ConversationService` used to carry: the Home tab prints a name and a
-        description, which is exactly what a summary is. It also arrives in name
-        order and unpaginated, where the repository listing was id-descending
-        and capped at a hundred -- neither of which a rendered list wanted.
+        description, which is exactly what a summary is. It also arrives in
+        name order, where the repository listing was id-descending -- which is
+        not what a rendered list wanted.
+
+        The summary read now authorizes as it selects, so what comes back is
+        already this viewer's. The per-agent check below stays authoritative
+        anyway: it is the one that knows which `action` is being asked about,
+        where the listing can only answer for reading.
         """
         summaries = await list_agent_summaries_by_pod(
-            session=self.uow.session, pod_ids=[surface.pod_id]
+            session=self.uow.session,
+            contexts={surface.pod_id: ctx},
+            limit=SURFACE_AGENT_CHOICES,
         )
         visible: list[PodAgentSummary] = []
         for agent in summaries.get(surface.pod_id, []):
