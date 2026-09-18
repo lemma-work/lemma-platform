@@ -2,8 +2,8 @@
 
 `test_e2b_provider_real.py` covers the provider's contract. This covers the
 *lifecycle* -- the sequence a workspace actually lives through, in order:
-created, used, paused, resumed, used again, drifted, replaced, destroyed -- and
-it does so through the real Redis-backed output buffer rather than the in-memory
+created, used, paused, resumed, used again, drifted, *kept*, destroyed -- and it
+does so through the real Redis-backed output buffer rather than the in-memory
 one.
 
 That last part is the point. Every real-E2B test before this substituted
@@ -16,8 +16,10 @@ The failures this file is built from, all observed in production:
 
 * A workspace ran for days on the template it was first created with, through
   four releases meant to fix it, because adoption compared only a hand-edited
-  profile digest. 249 sandboxes across four old templates; zero on the
-  configured one.
+  profile digest. Hundreds of sandboxes across four old templates; zero on the
+  configured one. The fence added to fix that then replaced a workspace to
+  adopt a new template -- which, on a provider where the sandbox is the disk,
+  made publishing an image and deleting the fleet's files the same act.
 * A pause preserved resident memory because the SDK default was never
   overridden, so a leaked browser was snapshotted and restored on every resume,
   and the sandbox's memory exhaustion became permanent.
@@ -483,42 +485,51 @@ async def test_a_killed_process_reaches_a_terminal_state(
 
 
 # ---------------------------------------------------------------------------
-# Replacement: the fence that has to fire for a fix to reach anyone
+# Drift: publishing a template must not cost anybody their files
 # ---------------------------------------------------------------------------
 
 
-async def test_a_sandbox_on_a_different_template_is_replaced_not_adopted(
+async def test_a_workspace_on_a_different_template_keeps_serving(
     provider: E2BSandboxProvider,
 ) -> None:
-    """Against the real service, because this is the one that failed silently.
+    """Against the real service, because the old behaviour was measured there.
 
-    Adoption ignored the template entirely, so publishing a new one changed
-    nothing for anybody who already had a workspace. The fleet sat on four old
-    templates and the configured one had zero sandboxes -- through four releases
-    that were each meant to fix the workspaces that were failing.
+    This asserted the opposite. Publishing a template replaced every workspace
+    built from an older one, which was the only way a fix could reach a sandbox
+    that is never otherwise recreated -- and, because here the sandbox is the
+    disk, also the way a routine promotion deleted the fleet's files. Measured
+    on the production account while this was still live: 34 of 37 workspaces
+    were on a superseded build, each one ensure away from being destroyed.
+
+    A workspace's first-party code is now installed into the running sandbox,
+    so repairing one no longer requires replacing it. The promotion becomes a
+    no-op for existing workspaces, which is the outcome `Sandbox fabric`
+    README section 6 always specified.
     """
     sandbox_id = uuid4()
     first = await _create(provider, sandbox_id)
+    await _run(provider, first, "echo survived > /workspace/drift-marker.txt")
 
-    # Same account, same identity, a different configured template. Nothing else
-    # changes -- which is exactly the deploy that used to be a no-op.
+    # Same account, same identity, a different configured template. Nothing
+    # else changes -- which used to be the deploy that wiped the fleet.
     moved = _build_provider(f"{_TEMPLATE}-nonexistent-successor")
     moved._lifecycle_created = provider._lifecycle_created  # type: ignore[attr-defined]
 
-    with pytest.raises(Exception):
-        # The successor template does not exist, so provisioning must fail --
-        # but the stale sandbox must already be gone, because leaving it would
-        # mean a later lookup could still land on it.
-        await moved.create(_spec(sandbox_id, epoch=2))
+    adopted = await moved.create(_spec(sandbox_id, epoch=2))
 
-    found = await provider.inspect(
-        naming.container_name(sandbox_id, SandboxKind.WORKSPACE, 1),
-        deadline_at=_deadline(),
+    assert adopted.provider_id == first.provider_id, "the workspace was replaced"
+    assert adopted.storage_adopted is True
+    # The successor template does not even exist, and that is the point: drift
+    # no longer reaches a create at all, so a typo in the configured template
+    # cannot cost anybody their disk.
+    _, output, exit_code, _ = await _run(
+        provider, adopted, "cat /workspace/drift-marker.txt"
     )
-    assert found is None or found.provider_id != first.provider_id, (
-        "the sandbox on the old template survived, so the new template will "
-        "never reach this workspace"
-    )
+    assert exit_code == 0 and b"survived" in output, output
+    # Tolerating drift is not forgetting it: now that nothing is replaced, the
+    # stamp is the only record of what a workspace is actually running, and the
+    # only thing a later non-destructive migration could select these by.
+    assert adopted.template == _TEMPLATE
 
 
 async def test_an_adopted_sandbox_keeps_reporting_the_template_it_runs(

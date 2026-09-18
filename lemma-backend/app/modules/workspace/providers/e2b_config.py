@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.modules.workspace.domain.sandbox import SandboxKind
+
 
 #: How every sandbox is created, and not a setting.
 #:
@@ -57,3 +59,35 @@ class E2BProviderConfig:
     # backend dies, not the primary idle policy.
     sandbox_timeout_seconds: int = 60 * 30
     domain: str | None = None
+
+
+def lifecycle_for(kind: SandboxKind) -> dict[str, object]:
+    """What E2B does to this sandbox when its timeout runs out.
+
+    The SDK defaults `on_timeout` to `"kill"`, and this call used to pass no
+    lifecycle at all -- so every workspace was created already scheduled for
+    deletion, thirty minutes out, and on this provider deleting the sandbox
+    deletes the user's files. Nothing in the row recorded it and nothing told
+    the user; the only reason it was not a daily event is that the idle sweep
+    usually paused the sandbox first, which stops the clock. A five-minute
+    cron was the only thing standing between a long session and data loss.
+
+    `keep_memory=False` matches what `release` already does, and for the same
+    reason: a memory-preserving snapshot restores whatever was running,
+    including a browser that had exhausted the sandbox, so the exhaustion
+    became permanent across every later resume. It also rules out
+    `auto_resume`, which E2B can only offer by restoring a memory snapshot in
+    place. That trade is worth revisiting once a leak is impossible, and not
+    before.
+
+    Functions invert this: the leak was a *workspace* browser, while
+    `lemma-function` runs function code and nothing else. Filesystem-only
+    resumes a function sandbox *without* its runtime -- nothing re-runs the
+    image CMD -- so it comes back answering 502, which is the P0.
+    `test_e2b_function_liveness_real` measures both modes.
+    """
+    keep_memory = kind is SandboxKind.FUNCTION
+    return {
+        "on_timeout": {"action": "pause", "keep_memory": keep_memory},
+        **({"auto_resume": True} if keep_memory else {}),
+    }

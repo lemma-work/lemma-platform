@@ -185,10 +185,20 @@ is harmless, but it is not a substitute for the one that matters.
 
 **Under `e2b`, the images are not what a sandbox is made from — the templates
 are.** `E2BSandboxProvider.create` passes `template=...` and never reads the
-image, so leaving `WORKSPACE_IMAGE` at its default is correct there. What
-still matters on E2B is the profile digest: it is stamped into sandbox
-metadata and is the only thing that moves an existing workspace onto a
-rebuilt template.
+image, so leaving `WORKSPACE_IMAGE` at its default is correct there.
+
+**Nothing moves an existing workspace onto a rebuilt template**, and that is
+deliberate: on E2B the sandbox *is* the disk, so replacing one to adopt a newer
+image deletes the user's files. Both the template and the profile digest are
+stamped into sandbox metadata, drift in either is recorded, and the sandbox is
+adopted as it stands. The first-party Lemma code a workspace runs — the CLI, the
+SDK, the skills, the browser relay — is installed into the running sandbox
+instead (`WORKSPACE_RUNTIME_BUNDLE_DIR`), so shipping a code change no longer
+needs a template at all. A genuinely new base image reaches an existing
+workspace only when that workspace is next created from scratch.
+
+Function sandboxes are the opposite, because they own no durable disk: drift
+replaces them, which costs a cold start and nothing else.
 
 ```dotenv
 WORKSPACE_PROVIDER=docker
@@ -292,8 +302,8 @@ These five are the whole backend-side E2B surface. In particular:
   build those runs exercise. Setting them in a deployment environment does
   nothing; do not treat a template id alone as an unpinned deployment.
 - A template name is a moving pointer: rebuilding a template under the same
-  name changes what a *new* sandbox is made from. It does not touch sandboxes
-  that already exist — bump `WORKSPACE_PROFILE_DIGEST` for that.
+  name changes what a *new* sandbox is made from. It does not touch workspace
+  sandboxes that already exist, and no setting makes it — see above.
 
 ### Reaching a sandbox
 

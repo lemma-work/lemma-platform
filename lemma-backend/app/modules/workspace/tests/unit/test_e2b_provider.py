@@ -311,17 +311,23 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
     assert world.killed == []
 
 
-async def test_a_workspace_on_a_different_template_is_replaced(
+async def test_a_workspace_on_a_different_template_keeps_its_disk(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Publishing a template has to reach the workspaces that already exist.
+    """A published template must reach existing workspaces without killing them.
 
-    It did not. Adoption compared only `profile_digest`, a hand-maintained
-    environment variable sitting at its default, so a workspace stayed on
-    whatever template it was first created on for as long as it lived. Measured
-    against the real account: 249 sandboxes spread over four older templates and
-    zero on the configured one, through four releases that were each meant to
-    fix the workspaces that were failing.
+    This test asserted the opposite, and the reasoning was sound at the time.
+    Adoption compared only `profile_digest`, a hand-maintained environment
+    variable sitting at its default, so a workspace stayed on whatever template
+    it was first created on for as long as it lived -- hundreds of sandboxes
+    across several older templates, through releases each meant to fix the
+    workspaces that were failing. Replacing them was the only way to reach them.
+
+    It was also the only way to destroy them, because here the sandbox is the
+    disk. So publishing a template and wiping the fleet were the same act. The
+    first-party code that forced nearly every publication is now installed into
+    a running sandbox instead, which means repairing a workspace no longer
+    requires replacing it -- and this stops.
     """
     from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
 
@@ -339,19 +345,21 @@ async def test_a_workspace_on_a_different_template_is_replaced(
 
     instance = await provider.create(spec)
 
-    assert world.killed == ["on-last-months-template"]
-    assert instance.provider_id != "on-last-months-template"
-    assert instance.storage_adopted is False
-    assert world.created[0]["template"] == "lemma-workspace"
+    assert world.killed == []
+    assert world.created == []
+    assert instance.provider_id == "on-last-months-template"
+    assert instance.storage_adopted is True
+    # Still answerable: tolerating drift is not the same as forgetting it, and
+    # the base image is what a later migration has to find these by.
+    assert instance.template == "lemma-workspace-but-older"
 
 
-async def test_a_workspace_with_no_recorded_template_is_replaced(
+async def test_a_workspace_with_no_recorded_template_keeps_its_disk(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Unstamped means "created before anything recorded this", which means at
-    least one template behind by construction. Reading the absence as "fine" is
-    the shape of the original bug: the fleet's staleness was invisible because
-    nothing wrote down what any of it was running."""
+    """Unstamped means "created before anything recorded this", so it is at least
+    one template behind by construction -- and it is still not a reason to delete
+    somebody's files. It reports as drifted and is adopted."""
     from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
 
     sandbox_id = uuid4()
@@ -367,15 +375,51 @@ async def test_a_workspace_with_no_recorded_template_is_replaced(
 
     instance = await provider.create(spec)
 
-    assert world.killed == ["unstamped"]
+    assert world.killed == []
+    assert instance.storage_adopted is True
+    assert instance.template is None
+
+
+async def test_a_function_on_a_different_template_is_still_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The asymmetry between the two kinds is the whole policy, so pin it.
+
+    A function sandbox owns no durable disk -- it refetches an immutable
+    artifact -- so replacing it costs a cold start and nothing else, and leaving
+    it stale has already cost a P0: a runtime the backend could no longer talk
+    to answered 502 for 100 minutes. A workspace is the disk, so the same drift
+    gets the opposite answer. Nothing may flatten these two rules together.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id, kind=SandboxKind.FUNCTION)
+    world.sandboxes["old-function"] = FakeSandboxInfo(
+        sandbox_id="old-function",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-function-but-older",
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["old-function"]
     assert instance.storage_adopted is False
 
 
 async def test_a_created_sandbox_records_the_template_it_was_built_from(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Without the stamp there is nothing to compare on the next ensure, so the
-    fence would silently never fire again."""
+    """More load-bearing now, not less.
+
+    It used to feed a fence that killed. It now feeds the only record of what a
+    workspace is actually running, which is what a non-destructive migration
+    would have to select on.
+    """
     await provider.create(_spec(uuid4()))
 
     assert world.created[0]["metadata"][META_TEMPLATE] == "lemma-workspace"
@@ -405,8 +449,9 @@ async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
         metadata={
             META_SANDBOX_ID: str(sandbox_id),
             META_PROFILE_DIGEST: "sha256:" + "b" * 64,
-            # On the configured template, so this isolates the digest rule from
-            # the template fence, which does replace.
+            # On the configured template, so this isolates the digest rule
+            # from template drift. Both are tolerated for a workspace now, and
+            # this test is what pins the digest half of that.
             META_TEMPLATE: "lemma-workspace",
         },
     )
