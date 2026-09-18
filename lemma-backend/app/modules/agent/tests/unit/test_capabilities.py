@@ -780,12 +780,11 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "ask_user",
     "write_todos",
     # The pod's own data and files. Visible on purpose, and it is the one entry
-    # here that costs real prefix budget — ~9.5k characters of schema in every
-    # pod-default prompt. Deferred, these were almost never called: a sampled
-    # 892 tool calls used `pod_get_records` twice and the other seven not at
-    # all, while the shell rebuilt the same operations in ~201 `lemma` CLI
-    # calls with 29 usage errors. A tool that has to be found first, competing
-    # with a command the prompt already showed, loses.
+    # here that costs real prefix budget: ten schemas in every pod-default
+    # prompt. Deferred, they went almost unused — most conversations that
+    # touched pod files did it through the `lemma` CLI in a shell, and paid for
+    # it in CLI usage errors. A tool that has to be found first, competing with
+    # a command the prompt already showed, loses.
     "pod_tables",
     "pod_get_records",
     "pod_write_record",

@@ -3,9 +3,9 @@
 Each of these was a silent discard: the schema offered a knob, the model turned
 it, and nothing used the value or said so. That is worse than not offering the
 knob, because the model has no way to learn — it sees a result consistent with
-its request and draws the wrong conclusion. The measured case was a poll asking
-to wait 60-240s, silently given ~35s, and coming back empty; nine consecutive
-empty polls of one build read as "still quiet" rather than "you cannot wait
+its request and draws the wrong conclusion. The case that bit was a poll asking
+to wait minutes, silently given its own much shorter deadline, and coming back
+empty: a run of such polls reads as "still quiet" rather than "you cannot wait
 that long here".
 """
 

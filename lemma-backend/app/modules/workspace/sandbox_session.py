@@ -77,9 +77,9 @@ def _clamped_yield_ms(requested_ms: int) -> tuple[int, str | None]:
 
     One poll's whole budget is `_POLL_DEADLINE_SECONDS`, so a caller asking to
     wait longer was silently returned early — and early with no output looks
-    exactly like a process that is quiet. An agent reading that concluded
-    nothing was happening and asked again, which is how nine consecutive polls
-    of one build came back empty.
+    exactly like a process that is quiet. An agent reading that concludes
+    nothing is happening and asks again, and a slow build can absorb a long run
+    of such polls without any of them saying why they came back empty.
 
     A clamp the caller cannot see is a lie; a clamp reported is a contract.
     """

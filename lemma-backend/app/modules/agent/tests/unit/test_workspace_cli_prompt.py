@@ -8,9 +8,9 @@ LiteParse — the regression observed where an agent ran ``lemma files download`
 The cheap path is now the typed tools rather than the CLI. That change is the
 point: the pod tools were deferred behind ``search_tools`` while this prompt
 taught the ``lemma files`` equivalent in the visible prefix, so the bypass was
-cheaper than the search and the measured traffic split ~201 CLI calls to 3 tool
-calls. What must stay true is that "read a few pages" maps to something that
-reads the existing conversion, whatever that something is called.
+cheaper than the search and most pod file work went through the shell. What must
+stay true is that "read a few pages" maps to something that reads the existing
+conversion, whatever that something is called.
 """
 
 from __future__ import annotations
