@@ -75,10 +75,11 @@ class BaseAgentContext(AgentContext):
 
     @property
     def file_manager(self) -> WorkspaceFileManager:
-        return WorkspaceFileManager(
-            self.user_id,
-            cwd=self.get_workspace_cwd().removeprefix(f"{WORKSPACE_ROOT}/"),
-        )
+        # Passed as stored, absolute. The manager splits it and keeps the root
+        # it was written under -- a `removeprefix` of the *current* root did
+        # nothing for a cwd under the previous one, leaving an absolute string
+        # where a relative one was required.
+        return WorkspaceFileManager(self.user_id, cwd=self.get_workspace_cwd())
 
     async def get_subscription_models(self) -> SubscriptionModels:
         return await resolve_subscription_models(self.user_id)

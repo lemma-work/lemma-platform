@@ -21,6 +21,7 @@ is the status quo, not a regression this introduced.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -68,6 +69,11 @@ _INSTALL_BUDGET_SECONDS = 180.0
 
 #: One round trip. A probe that has to retry is a sandbox with worse problems.
 _PROBE_BUDGET_SECONDS = 20.0
+
+#: How many sandboxes' installed versions one process remembers. Generous
+#: next to any real fleet, and an eviction costs a probe rather than a
+#: reinstall -- the sandbox's own stamp is still the answer.
+_REMEMBERED_SANDBOXES = 2048
 
 #: Everything the provider layer raises for "this sandbox could not do that".
 #: Named rather than caught broadly so a mistake in *our* code still propagates.
@@ -117,7 +123,13 @@ class WorkspaceRuntimeBundleMixin:
     #: (loop, user, allocation, generation) -> the version known to be installed.
     #: Class-level, like the directory caches beside it: the answer is about a
     #: sandbox rather than about whoever happens to hold a service instance.
-    _installed_bundles: dict[tuple[int, UUID, str, int], str] = {}
+    #:
+    #: Bounded, because the key names an allocation and allocations keep being
+    #: made. Nothing releases an entry when its sandbox goes, so under sustained
+    #: churn this would hold one key per sandbox the process had ever seen, for
+    #: the life of the process. Evicting the oldest costs a probe -- one command
+    #: -- which is the cheapest thing in this file.
+    _installed_bundles: OrderedDict[tuple[int, UUID, str, int], str] = OrderedDict()
     _inflight_bundles: dict[tuple[int, UUID, str, int], asyncio.Task[bool]] = {}
 
     def _runtime_bundle(self) -> RuntimeBundle | None:
@@ -168,6 +180,12 @@ class WorkspaceRuntimeBundleMixin:
             return
         key = self._bundle_cache_key(user_id, sandbox_info)
         if key is not None and self._installed_bundles.get(key) == bundle.version:
+            # A hit refreshes the entry, so the bound below evicts by last use
+            # and not by when the install happened. Without this, the sandbox
+            # someone has been working in all day is evicted ahead of one that
+            # was installed into once and abandoned -- exactly backwards, since
+            # the busy one is the whole reason this path avoids I/O.
+            self._installed_bundles.move_to_end(key)
             return
 
         task = self._inflight_bundles.get(key) if key is not None else None
@@ -191,6 +209,9 @@ class WorkspaceRuntimeBundleMixin:
         # the life of this process, with the warm path skipping every retry.
         if installed and key is not None:
             self._installed_bundles[key] = bundle.version
+            self._installed_bundles.move_to_end(key)
+            while len(self._installed_bundles) > _REMEMBERED_SANDBOXES:
+                self._installed_bundles.popitem(last=False)
 
     async def _install_bundle(self, user_id: UUID, bundle: RuntimeBundle) -> bool:
         """Install it, reporting whether the sandbox now has this version."""

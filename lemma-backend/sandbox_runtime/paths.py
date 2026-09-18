@@ -38,6 +38,26 @@ RUNTIME_FILESYSTEM_ROOTS = tuple(
 )
 
 
+#: The roots that hold a user's files, newest first. ``/tmp`` is deliberately
+#: absent: the runtime allows it, the HTTP files route does not, and a caller
+#: asking "which workspace root is this under" never means ``/tmp``.
+WORKSPACE_ROOTS = tuple(dict.fromkeys((WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT)))
+
+
+def root_of(path: str) -> str | None:
+    """Which workspace root this absolute path is under, or None.
+
+    Answering with the root rather than a bool is what lets a caller keep a
+    path where it actually is. A workspace created before the move has the
+    user's files under the previous root, and re-rooting its paths onto the
+    current one does not move the files -- it just points somewhere empty.
+    """
+    for root in WORKSPACE_ROOTS:
+        if path == root or path.startswith(f"{root}/"):
+            return root
+    return None
+
+
 def is_legacy_root(path: str) -> bool:
     """Was this path created under the root workspaces used before the move?"""
     return path == LEGACY_WORKSPACE_ROOT or path.startswith(f"{LEGACY_WORKSPACE_ROOT}/")
@@ -45,6 +65,8 @@ def is_legacy_root(path: str) -> bool:
 
 __all__ = [
     "LEGACY_WORKSPACE_ROOT",
+    "WORKSPACE_ROOTS",
+    "root_of",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",
     "is_legacy_root",

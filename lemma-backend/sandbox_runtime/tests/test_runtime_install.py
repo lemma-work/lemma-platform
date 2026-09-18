@@ -13,8 +13,10 @@ installers, pruning -- is about not needing a lock.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -188,7 +190,7 @@ def test_a_bundle_entry_cannot_escape_the_directory_it_unpacks_into(
     assert not (tmp_path / "escaped.txt").exists()
 
 
-def test_an_abandoned_staging_directory_is_swept(
+def test_a_staging_directory_left_behind_long_ago_is_swept(
     tmp_path: Path, root: Path, site: Path
 ) -> None:
     """An install killed mid-unpack leaves one behind, and it is pure waste."""
@@ -197,12 +199,37 @@ def test_an_abandoned_staging_directory_is_swept(
     abandoned = root / ".incoming-99999"
     abandoned.mkdir()
     (abandoned / "junk").write_text("half a bundle", encoding="utf-8")
+    stale = time.time() - runtime_install._ABANDONED_STAGING_SECONDS - 60
+    os.utime(abandoned, (stale, stale))
 
     runtime_install.install(
         root=root, archive=archive, version=_V1, requires=[], site_packages=site
     )
 
     assert not abandoned.exists()
+
+
+def test_a_staging_directory_another_installer_is_using_is_left_alone(
+    tmp_path: Path, root: Path, site: Path
+) -> None:
+    """Racing installers cost a wasted copy, never a failed one.
+
+    Every installer stages into its own `.incoming-<pid>`. Sweeping all of them
+    meant the second to arrive deleted the first's tree out from under it,
+    mid-extract -- turning the lock-free design into a way for two installs to
+    break each other.
+    """
+    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    root.mkdir(parents=True)
+    live = root / ".incoming-12345"
+    live.mkdir()
+    (live / "partial").write_text("still being written", encoding="utf-8")
+
+    runtime_install.install(
+        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+    )
+
+    assert live.exists(), "another installer's staging directory was deleted"
 
 
 def test_the_overlay_is_placed_ahead_of_the_baked_environment(
@@ -298,3 +325,31 @@ def test_a_version_that_is_not_a_digest_is_refused(root: Path, tmp_path: Path) -
     """The version names a directory, so it must not be able to name a path."""
     with pytest.raises(SystemExit):
         runtime_install._version_directory(root, "../../etc")
+
+
+def test_a_module_that_imports_from_outside_the_overlay_is_not_accepted(
+    tmp_path: Path, root: Path, site: Path
+) -> None:
+    """Importing is not the same as importing *what was just installed*.
+
+    The image carries its own copy of everything the bundle ships, so a bundle
+    that had dropped a package would still import cleanly -- from the baked copy
+    -- and `current` would move behind it, leaving the sandbox reporting a
+    version it is not running. That is the one failure this mechanism exists to
+    make impossible.
+
+    `json` stands in for the baked copy: it imports anywhere and comes from
+    nowhere near the overlay, which is exactly the shape of the problem.
+    """
+    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+
+    with pytest.raises(SystemExit, match="not from the overlay"):
+        runtime_install.install(
+            root=root,
+            archive=archive,
+            version=_V1,
+            requires=["probe_pkg", "json"],
+            site_packages=site,
+        )
+
+    assert runtime_install.probe(root, site_packages=site)["version"] is None

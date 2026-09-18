@@ -220,13 +220,28 @@ WORKSPACE_SWEEP_CRON=*/5 * * * *
 
 ### Making a new sandbox image take effect
 
-A sandbox is reused only when the profile digest recorded on it matches
-`WORKSPACE_PROFILE_DIGEST` (or `FUNCTION_PROFILE_DIGEST` for function runtimes).
-This is the supported way to force existing workspaces onto a new image:
-publish the image, point `WORKSPACE_IMAGE` at it, and bump the digest in the
-same change. Without the bump, a workspace that already exists keeps running the
-image it was created from for as long as it lives, and a fix shipped in the
-image never reaches anyone who already has a workspace.
+What a digest bump does depends on whether the sandbox owns a disk separate from
+itself, so this is stated per provider.
+
+**Under `docker` and `lemma_local`,** a sandbox is reused only when the profile
+digest recorded on it matches `WORKSPACE_PROFILE_DIGEST` (or
+`FUNCTION_PROFILE_DIGEST` for function runtimes). This is the supported way to
+force existing workspaces onto a new image: publish the image, point
+`WORKSPACE_IMAGE` at it, and bump the digest in the same change. The container
+is destroyed and rebuilt; its volume is a separate object and is adopted
+afterwards, so the user's files survive. Without the bump, a workspace that
+already exists keeps running the image it was created from for as long as it
+lives, and a fix shipped in the image never reaches anyone who already has a
+workspace.
+
+**Under `e2b`, a bump does not move an existing workspace.** There the sandbox
+*is* the disk, so the drift is recorded and the sandbox adopted as it stands --
+see above. Bump the digest anyway when you publish a template: it is what
+workspaces created from then on are stamped with, and it is what makes function
+sandboxes, which own no disk, pick the new template up. But do not expect it to
+re-home a workspace that already exists; nothing does, by design. Ship
+first-party code changes through the runtime bundle instead, which reaches
+running workspaces without a template at all.
 
 The digest is an opaque identity — any `sha256:` value works, as long as it
 changes when the image does.

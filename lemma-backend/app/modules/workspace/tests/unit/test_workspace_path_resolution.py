@@ -13,9 +13,11 @@ It affected every method on the manager, not just the one where it was noticed.
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import LEGACY_WORKSPACE_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
@@ -76,3 +78,42 @@ def test_a_rootless_session_still_resolves_both_forms():
         manager._workspace_path(f"{WORKSPACE_ROOT}/a.txt") == f"{WORKSPACE_ROOT}/a.txt"
     )
     assert manager._workspace_path(WORKSPACE_ROOT) == WORKSPACE_ROOT
+
+
+def test_a_workspace_from_before_the_move_keeps_its_own_root():
+    """Its files are under the previous root, and re-rooting does not move them.
+
+    A conversation created before the root moved has that root written into its
+    metadata, and those rows are never rewritten. Resolving its paths against
+    the *current* root would point at a directory nothing has written to and
+    report the user's own work missing.
+    """
+    manager = WorkspaceFileManager(uuid4(), cwd=f"{LEGACY_WORKSPACE_ROOT}/c/x")
+
+    assert manager.root == LEGACY_WORKSPACE_ROOT
+    assert manager._workspace_path("f.txt") == f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt"
+    assert (
+        manager._workspace_path(f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt")
+        == f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt"
+    )
+
+
+def test_a_new_workspace_is_rooted_at_the_current_root():
+    manager = WorkspaceFileManager(uuid4(), cwd=f"{WORKSPACE_ROOT}/c/x")
+
+    assert manager.root == WORKSPACE_ROOT
+    assert manager._workspace_path("f.txt") == f"{WORKSPACE_ROOT}/c/x/f.txt"
+
+
+def test_one_workspace_root_cannot_reach_the_other():
+    """Tolerating the previous root is not the same as merging the two."""
+    manager = WorkspaceFileManager(uuid4(), cwd=f"{WORKSPACE_ROOT}/c/x")
+
+    with pytest.raises(ValueError, match="escapes its configured root"):
+        manager._workspace_path(f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt")
+
+
+def test_a_cwd_under_no_workspace_root_is_refused():
+    for cwd in ("/tmp/elsewhere", "/etc"):
+        with pytest.raises(ValueError, match="must be relative"):
+            WorkspaceFileManager(uuid4(), cwd=cwd)

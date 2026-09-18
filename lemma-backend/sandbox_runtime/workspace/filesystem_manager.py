@@ -12,7 +12,6 @@ import stat as stat_module
 from typing import BinaryIO
 from uuid import uuid4
 
-from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from sandbox_runtime.protocol import ByteRange, FileKind, FileStat
 
 

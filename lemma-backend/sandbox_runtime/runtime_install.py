@@ -41,6 +41,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -56,6 +57,12 @@ CURRENT_LINK = "current"
 #: How many installed versions to keep. Two, so a rollback to the immediately
 #: previous bundle is a symlink flip rather than a re-upload.
 KEEP_VERSIONS = 2
+
+#: How long a staging directory must be untouched before it counts as left
+#: behind. Comfortably longer than an unpack, so a live one is never taken
+#: for an abandoned one; short enough that a killed install does not leave
+#: its tree on the user's disk indefinitely.
+_ABANDONED_STAGING_SECONDS = 3600.0
 
 
 def _site_packages(override: Path | None = None) -> Path:
@@ -138,15 +145,35 @@ def _smoke_test(overlay: Path, requires: list[str]) -> None:
         return
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(overlay)
+    # Each module must resolve *inside the overlay*, not merely import. The
+    # image carries its own copy of all of this, so a bundle that had dropped a
+    # package would still import cleanly -- from the baked copy -- and the
+    # install would then move `current`, leaving the sandbox reporting a version
+    # it is not running. Checking where each module came from is the difference
+    # between "the import worked" and "the thing we just installed works".
+    program = (
+        "import importlib, sys\n"
+        f"overlay = {str(overlay)!r}\n"
+        f"missing = []\n"
+        f"for name in {list(requires)!r}:\n"
+        "    module = importlib.import_module(name)\n"
+        "    where = list(getattr(module, '__path__', ())) or [\n"
+        "        getattr(module, '__file__', '') or ''\n"
+        "    ]\n"
+        "    if not any(str(p).startswith(overlay) for p in where):\n"
+        "        missing.append(f'{name} resolved to {where}')\n"
+        "if missing:\n"
+        "    sys.exit('not from the overlay: ' + '; '.join(missing))\n"
+    )
     result = subprocess.run(
-        [sys.executable, "-c", "import " + ", ".join(requires)],
+        [sys.executable, "-c", program],
         capture_output=True,
         text=True,
         env=environment,
     )
     if result.returncode != 0:
         raise SystemExit(
-            f"the installed bundle cannot import {requires}:\n"
+            f"the installed bundle cannot import {requires} from {overlay}:\n"
             f"{result.stdout}\n{result.stderr}"
         )
 
@@ -187,8 +214,19 @@ def _prune(root: Path, keep: Path) -> None:
     for stale in versions[KEEP_VERSIONS:]:
         if stale.resolve() not in (current, keep.resolve()):
             shutil.rmtree(stale, ignore_errors=True)
+    # Only ones old enough to have been abandoned. Every installer stages into
+    # its own `.incoming-<pid>`, so sweeping all of them meant the second
+    # installer to arrive deleted the first one's tree out from under it --
+    # mid-extract, mid-stamp or mid-rename. Which is the opposite of the
+    # lock-free story this module tells: racing installers are supposed to
+    # cost a wasted copy, never a failed one.
+    cutoff = time.time() - _ABANDONED_STAGING_SECONDS
     for abandoned in root.glob(".incoming-*"):
-        shutil.rmtree(abandoned, ignore_errors=True)
+        try:
+            if abandoned.stat().st_mtime < cutoff:
+                shutil.rmtree(abandoned, ignore_errors=True)
+        except OSError:
+            continue
 
 
 def install(

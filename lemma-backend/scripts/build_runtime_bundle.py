@@ -276,6 +276,15 @@ def _prune(root: Path) -> None:
         compiled.unlink(missing_ok=True)
 
 
+def _archive_mode(path: Path) -> int:
+    """The mode this file gets in the archive: executable, or not.
+
+    Normalised rather than taken from disk, because the umask of whoever ran
+    the build is not part of what the bundle is.
+    """
+    return 0o755 if path.stat().st_mode & 0o100 else 0o644
+
+
 def _payload_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*") if path.is_file())
 
@@ -293,6 +302,12 @@ def _contents_digest(root: Path) -> str:
         relative = path.relative_to(root).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
+        # The archive preserves the executable bit, so the identity has to as
+        # well. Without it a bundle whose only change is `chmod +x` gets the
+        # version it already had, and a sandbox holding that version skips the
+        # install and keeps the old mode -- a script that is not executable and
+        # a stamp insisting it is current.
+        digest.update(_archive_mode(path).to_bytes(2, "big"))
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
 
@@ -328,7 +343,7 @@ def _write_archive(root: Path, destination: Path) -> str:
             )
             # Keep the executable bit and nothing else: a wheel's own modes vary
             # with the umask of whoever built it.
-            info.external_attr = (0o755 if path.stat().st_mode & 0o100 else 0o644) << 16
+            info.external_attr = _archive_mode(path) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, path.read_bytes())
     return hashlib.sha256(destination.read_bytes()).hexdigest()

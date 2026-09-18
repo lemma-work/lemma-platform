@@ -14,6 +14,7 @@ both are claims about I/O that no amount of reading the code can settle.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -25,6 +26,7 @@ from app.modules.workspace.infrastructure.runtime_bundle import (
     load_bundle,
 )
 from app.modules.workspace.services.workspace_runtime_bundle import (
+    _REMEMBERED_SANDBOXES,
     WorkspaceRuntimeBundleMixin,
 )
 from sandbox_runtime.errors import SandboxUnavailable
@@ -88,8 +90,9 @@ class _Service(WorkspaceRuntimeBundleMixin):
         self.client = client
         self.bundle = bundle
         # Per-instance, so one test's remembered install cannot leak into the
-        # next through the class-level cache the real service shares.
-        self._installed_bundles = {}
+        # next through the class-level cache the real service shares. Same
+        # type as the subject's: the eviction it does is ordering-dependent.
+        self._installed_bundles = OrderedDict()
         self._inflight_bundles = {}
 
     def _get_manager_client(self) -> _Client:
@@ -174,6 +177,53 @@ async def test_a_replaced_sandbox_is_asked_again() -> None:
     await service._ensure_runtime_bundle(user_id, _info(allocation="alloc-2"))
 
     assert len(client.commands) == before + 1
+
+
+async def test_the_memory_of_installs_does_not_grow_without_bound() -> None:
+    """The key names an allocation, and allocations keep being made.
+
+    Nothing releases an entry when its sandbox goes, so a long-lived process
+    under sustained churn would hold one key per sandbox it had ever seen. The
+    entry evicted is the one whose sandbox was touched longest ago, and the only
+    cost of evicting a live one is a re-probe.
+    """
+    client = _Client(installed=None)
+    service = _Service(client)
+    user_id = uuid4()
+    for n in range(_REMEMBERED_SANDBOXES + 2):
+        await service._ensure_runtime_bundle(user_id, _info(allocation=f"alloc-{n}"))
+
+    assert len(service._installed_bundles) == _REMEMBERED_SANDBOXES
+    remembered = {key[2] for key in service._installed_bundles}
+    assert "alloc-0" not in remembered
+    assert f"alloc-{_REMEMBERED_SANDBOXES + 1}" in remembered
+
+
+async def test_a_sandbox_still_in_use_stays_remembered_while_others_age_out() -> None:
+    """Eviction is by last use, not by when the install happened.
+
+    Insertion order alone would evict the sandbox someone has been working in
+    all day ahead of one that was installed into once and abandoned -- exactly
+    backwards, since the busy one is the whole reason this path avoids I/O.
+
+    `busy` is installed first and `idle` second, so under insertion order `busy`
+    goes first; the hit in between is what has to reorder them.
+    """
+    client = _Client(installed=None)
+    service = _Service(client)
+    user_id = uuid4()
+    await service._ensure_runtime_bundle(user_id, _info(allocation="busy"))
+    await service._ensure_runtime_bundle(user_id, _info(allocation="idle"))
+    await service._ensure_runtime_bundle(user_id, _info(allocation="busy"))
+
+    # One more than the bound holds, so exactly one entry is evicted -- and
+    # `busy` is never touched again until the assertion.
+    for n in range(_REMEMBERED_SANDBOXES - 1):
+        await service._ensure_runtime_bundle(user_id, _info(allocation=f"alloc-{n}"))
+
+    remembered = {key[2] for key in service._installed_bundles}
+    assert "busy" in remembered
+    assert "idle" not in remembered
 
 
 async def test_a_failed_delivery_does_not_fail_the_caller() -> None:

@@ -64,22 +64,31 @@ def load_bundle(directory: Path) -> RuntimeBundle | None:
     manifest_path = directory / "manifest.json"
     if not manifest_path.is_file():
         return None
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    archive = directory / str(manifest["archive"])
-    if not archive.is_file():
+    # Anything malformed here is "there is no usable bundle at this path", not
+    # an exception. Raising would take the *caller's* fallback with it: a
+    # half-written directory named by a setting would stop the image's own good
+    # bundle from ever being tried, and a deployment would lose the mechanism
+    # over a truncated file.
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        archive = directory / str(manifest["archive"])
+        payload = archive.read_bytes()
+        bundle = RuntimeBundle(
+            version=str(manifest["version"]),
+            archive=payload,
+            archive_sha256=str(manifest["archive_sha256"]),
+            requires=tuple(str(item) for item in manifest.get("requires", ())),
+            component_version=str(manifest.get("component_version", "unknown")),
+        )
+    except (OSError, ValueError, TypeError, KeyError) as exc:
         logger.warning(
-            "workspace.runtime_bundle.archive_missing",
+            "workspace.runtime_bundle.unusable.degraded",
             directory=str(directory),
-            archive=str(archive),
+            error_type=type(exc).__name__,
+            exc_info=True,
         )
         return None
-    return RuntimeBundle(
-        version=str(manifest["version"]),
-        archive=archive.read_bytes(),
-        archive_sha256=str(manifest["archive_sha256"]),
-        requires=tuple(str(item) for item in manifest.get("requires", ())),
-        component_version=str(manifest.get("component_version", "unknown")),
-    )
+    return bundle
 
 
 @lru_cache(maxsize=1)

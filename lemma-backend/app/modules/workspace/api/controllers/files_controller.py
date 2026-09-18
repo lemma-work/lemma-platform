@@ -37,7 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import WORKSPACE_ROOT, root_of
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
@@ -144,7 +144,10 @@ def _workspace_path(path: str | None) -> str:
         candidate if candidate.startswith("/") else posixpath.join(_ROOT, candidate)
     )
     normalized = posixpath.normpath(absolute)
-    if normalized != _ROOT and not normalized.startswith(f"{_ROOT}/"):
+    # Either workspace root, because a workspace created before the root moved
+    # still holds the user's files under the previous one -- and `/tmp` is under
+    # neither, which is the whole point of asking this question here.
+    if root_of(normalized) is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Path must stay inside /workspace",
@@ -181,7 +184,7 @@ def _inside_workspace(stat) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Path must stay inside /workspace",
         )
-    if reported and reported != _ROOT and not reported.startswith(f"{_ROOT}/"):
+    if reported and root_of(reported) is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Path must stay inside /workspace",

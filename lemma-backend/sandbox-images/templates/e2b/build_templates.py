@@ -406,8 +406,15 @@ def workspace_template():
                 "NODE_PATH": "/opt/lemma-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
                 "PIP_PREFIX": "/home/user/.python",
+                # Deliberately *not* the user's own site-packages. A path
+                # already on PYTHONPATH is already on sys.path, so
+                # `lemma-workspace-overlay.pth`'s "insert unless present" guard
+                # does nothing -- and the runtime overlay, which has no such
+                # competition, lands in front of it. That inverts the one
+                # ordering this design promises: a package the agent installed
+                # itself must outrank the one we ship. Docker dropped PYTHONPATH
+                # for the same class of reason and says so in its own comment.
                 "PYTHONPATH": (
-                    "/home/user/.python/lib/python3.14/site-packages:"
                     "/opt/lemma-python/lib/python3.14/site-packages:"
                     # Where the browser relay package lives.
                     "/app"
