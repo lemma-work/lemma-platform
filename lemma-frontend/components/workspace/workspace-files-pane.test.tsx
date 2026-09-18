@@ -141,3 +141,62 @@ describe('saving a file to your own machine', () => {
         }
     });
 });
+
+describe('what the detail pane will and will not render', () => {
+    // The report: opening a video showed the MP4 container decoded as UTF-8
+    // -- `ftypisom` and then screens of replacement characters. The pane
+    // asked one question, "is this an image?", and sent everything else down
+    // the text branch, so video, audio, PDF and .docx all printed their bytes.
+    it('offers a video as a player rather than as text', async () => {
+        file.data = {
+            blob: new Blob([new Uint8Array([0, 0, 0, 32])], { type: 'video/mp4' }),
+            text: null,
+            tooLarge: false,
+            sizeBytes: 4,
+        };
+        listing.entries = [
+            { path: '/workspace/clip.mp4', name: 'clip.mp4', kind: 'file', size_bytes: 4 },
+        ];
+        render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+        screen.getByRole('button', { name: /clip\.mp4/ }).click();
+        expect(await screen.findByRole('button', { name: /download/i })).toBeTruthy();
+
+        expect(document.querySelector('video')).toBeTruthy();
+        expect(document.querySelector('pre')).toBeNull();
+    });
+
+    it('gives a file it cannot show its name, size and a download, and no <pre>', async () => {
+        file.data = {
+            blob: new Blob([new Uint8Array([80, 75, 3, 4])]),
+            text: null,
+            tooLarge: false,
+            sizeBytes: 2048,
+        };
+        listing.entries = [
+            { path: '/workspace/report.docx', name: 'report.docx', kind: 'file', size_bytes: 2048 },
+        ];
+        render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+        screen.getByRole('button', { name: /report\.docx/ }).click();
+        expect(await screen.findByRole('button', { name: /download/i })).toBeTruthy();
+
+        expect(document.querySelector('pre')).toBeNull();
+        expect(screen.getAllByText(/no preview for this kind of file/).length).toBeGreaterThan(0);
+    });
+
+    it('still shows a text file as text', async () => {
+        file.data = {
+            blob: new Blob(['hello']),
+            text: 'hello',
+            tooLarge: false,
+            sizeBytes: 5,
+        };
+        listing.entries = [
+            { path: '/workspace/notes.txt', name: 'notes.txt', kind: 'file', size_bytes: 5 },
+        ];
+        render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+        screen.getByRole('button', { name: /notes\.txt/ }).click();
+        expect(await screen.findByRole('button', { name: /download/i })).toBeTruthy();
+
+        expect(document.querySelector('pre')?.textContent).toBe('hello');
+    });
+});
