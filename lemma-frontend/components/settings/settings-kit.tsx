@@ -69,7 +69,20 @@ export type SettingsChoiceOption<TValue extends string> = {
     value: TValue;
     label: ReactNode;
     description?: ReactNode;
-    /** Optional content revealed beneath the row while it is the selected option. */
+    /**
+     * Trailing fact about this option, right-aligned before the selector — a
+     * price, a count. Kept out of `label` so it lands in the same column on
+     * every row instead of trailing whatever the name happens to be.
+     */
+    meta?: ReactNode;
+    /**
+     * Optional content revealed beneath the row while it is the selected option.
+     *
+     * Rendered as a sibling of the row's button rather than inside it, on
+     * purpose: consumers put form fields in here (the email-domain input on the
+     * join policy), and interactive content nested inside a button is both
+     * invalid markup and unusable.
+     */
     expanded?: ReactNode;
     disabled?: boolean;
 };
@@ -113,7 +126,9 @@ export function SettingsChoiceList<TValue extends string>({
                             data-selected={selected}
                             className="settings-choice-row items-start disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            <span className="flex min-w-0 flex-col gap-0.5">
+                            {/* flex-1 so `meta` right-aligns to the row rather
+                                than sitting against the end of the label. */}
+                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                                 <span className="text-sm font-medium text-[var(--text-primary)]">{option.label}</span>
                                 {option.description ? (
                                     <span className="text-xs leading-5 text-[var(--text-tertiary)]">
@@ -121,6 +136,11 @@ export function SettingsChoiceList<TValue extends string>({
                                     </span>
                                 ) : null}
                             </span>
+                            {option.meta ? (
+                                <span className="shrink-0 text-sm tabular-nums text-[var(--text-secondary)]">
+                                    {option.meta}
+                                </span>
+                            ) : null}
                             <span
                                 aria-hidden
                                 className={cn(
