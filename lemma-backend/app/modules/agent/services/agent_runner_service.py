@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-import time
-from typing import Awaitable, Callable, Protocol
+from typing import Protocol
 from uuid import UUID
 from pydantic_ai.output import OutputSpec
 from pydantic_ai.capabilities import AgentCapability
@@ -30,13 +29,13 @@ from app.modules.agent.services.conversation_access import (
 )
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import ConversationNotFoundError
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRuntimeConfig,
     AgentRunStatus,
     ConversationType,
     HarnessKind,
-    HarnessOptions,
     JsonObject,
     MessageKind,
     MessageRole,
@@ -53,6 +52,7 @@ from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
     ResolvedAgentRuntime,
 )
+from app.modules.agent.services.run_limits import budget_for_run, make_stop_checker
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_phase_spans import (
     observe_first_output,
@@ -300,7 +300,10 @@ class AgentRunnerService:
                 model_settings=harness_model_settings,
                 usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
-                should_stop=self._make_stop_checker(agent_run_id),
+                should_stop=make_stop_checker(
+                    agent_run_id, uow_factory=self.uow_factory
+                ),
+                spend=budget_for_run(run_with_usage),
                 history_summarization_token_limit=(
                     context_budget.summarization_token_limit
                 ),
@@ -477,45 +480,6 @@ class AgentRunnerService:
     ) -> Agent:
         del resolved_runtime
         return agent
-
-    async def _should_stop_run(self, agent_run_id: UUID) -> bool:
-        async with self.uow_factory() as uow:
-            agent_run = await ConversationRepository(uow).get_agent_run(agent_run_id)
-        return agent_run is not None and agent_run.status in {
-            AgentRunStatus.STOP_REQUESTED,
-            AgentRunStatus.STOPPED,
-        }
-
-    def _make_stop_checker(self, agent_run_id: UUID) -> Callable[[], Awaitable[bool]]:
-        """Build a throttled, sticky stop checker for the harness.
-
-        The harness polls ``should_stop`` at every streaming checkpoint (per
-        token delta, part, and tool call). Querying the DB on every checkpoint
-        issues one ``SELECT`` per token across every concurrent run, churning the
-        connection pool — the dominant per-token DB load under streaming. Cache
-        the answer and re-query at most once per
-        ``agent_run_stop_poll_interval_seconds``; once a stop is observed it
-        sticks (no further queries). A stop request is still honored within the
-        poll interval. Interval ``0`` disables throttling (every call queries).
-        """
-        interval = agent_settings.agent_run_stop_poll_interval_seconds
-        stopped = False
-        last_checked: float | None = None
-
-        async def _check() -> bool:
-            nonlocal stopped, last_checked
-            if stopped:
-                return True
-            now = time.monotonic()
-            if last_checked is not None and (now - last_checked) < interval:
-                return False
-            last_checked = now
-            if await self._should_stop_run(agent_run_id):
-                stopped = True
-                return True
-            return False
-
-        return _check
 
     async def _load_run_context(
         self,

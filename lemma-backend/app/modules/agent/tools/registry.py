@@ -13,7 +13,7 @@ from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
-from app.modules.agent.tools.snooze.pydantic_adapter import snooze_toolset
+from app.modules.agent.tools.waiting.pydantic_adapter import waiting_toolset
 from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
 from app.modules.agent.tools.user_interaction.pydantic_adapter import (
     user_interaction_toolset,
@@ -38,12 +38,12 @@ POD_DEFAULT_AGENT_TOOLSETS = (
     AgentToolset.SPEECH,
     AgentToolset.TODO,
     # Reaching a colleague, and being able to wait for their answer. These two
-    # are one capability: `message_user` does not block, so without `snooze` the
+    # are one capability: `message_user` does not block, so without `wait_for` the
     # agent is told to send and then has no way to be around when the reply
     # lands. Both are deferred (see EXTRA_TOOLSETS) so neither shows up in the
     # prompt prefix of an ordinary chat.
     AgentToolset.MESSAGING,
-    AgentToolset.SNOOZE,
+    AgentToolset.WAIT,
     # Memory contributes no tools -- see `_CAPABILITY_ONLY_TOOLSETS`. It is in
     # this list so Lem is taught the memory contract and gets its AGENTS.md
     # scopes loaded into every brief; the reading and writing happen through
@@ -62,7 +62,7 @@ _TOOLSET_BY_NAME: dict[AgentToolset, AbstractToolset[ConversationContext]] = {
     AgentToolset.SUBAGENTS: subagents_toolset,
     AgentToolset.VIEW_IMAGE: view_image_toolset,
     AgentToolset.CONNECTORS: connectors_toolset,
-    AgentToolset.SNOOZE: snooze_toolset,
+    AgentToolset.WAIT: waiting_toolset,
     AgentToolset.MESSAGING: messaging_toolset,
 }
 
@@ -92,7 +92,7 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # (RunToolAssembler still drops SUBAGENTS entirely for sub-agent conversations
     # before the capability assembler runs, so sub-agents never get them.)
     AgentToolset.SUBAGENTS,
-    # Messaging and snooze are deferred for a UX reason rather than a size one:
+    # Messaging and waiting are deferred for a UX reason rather than a size one:
     # the pod assistant is the interactive chat, and an assistant carrying
     # "message a colleague" and "go to sleep" in its visible prefix reaches for
     # them. Behind ToolSearch it has to go looking first — the same bar as
@@ -100,7 +100,7 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # `_deferred_capability`, because hiding the contract while advertising the
     # tool is the worst of both.
     AgentToolset.MESSAGING,
-    AgentToolset.SNOOZE,
+    AgentToolset.WAIT,
     # Driving a page is a deliberate step past `web_fetch`, which already covers
     # ordinary research in the visible prefix. Five schemas in front of every
     # chat to cover the minority of turns that open a browser is the trade

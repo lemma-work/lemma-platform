@@ -64,15 +64,16 @@ lit screenshot input.pdf --target-pages "1-3" --dpi 200 -o shots
 ## Long-running commands
 
 `exec_command` returns `completed: false` and `process_id` when work continues.
-Poll that process; do not start it again:
+Wait for it; do not start it again and do not check it in a loop:
 
 ```
-manage_process(action="input", process_id="<id>")
+wait_for(reason="the test suite", process_id="<id>")
 ```
 
-Read `exit_code` after `completed: true`. Recover lost IDs with
-`manage_process(action="list")`. Start dev servers with `tty=true` and leave
-them running while needed.
+Your turn ends there and you get a new one when the process exits, with its
+`exit_code`. The sandbox stays alive while it runs. Recover lost IDs with
+`manage_process(action="list")`; use `action="input"` to send input or read
+output so far. Start dev servers with `tty=true` and leave them running.
 
 ## Toolchains
 

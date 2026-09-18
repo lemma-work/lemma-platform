@@ -148,7 +148,7 @@ def test_a_sub_agent_loses_the_withheld_ones_even_though_they_are_always_on():
     resolved = resolve_toolsets(_agent(), _conversation(is_sub_agent=True))
 
     assert AgentToolset.MESSAGING not in resolved.names
-    assert AgentToolset.SNOOZE not in resolved.names
+    assert AgentToolset.WAIT not in resolved.names
     assert AgentToolset.SUBAGENTS not in resolved.names
     # The rest of the always-on set survives.
     assert AgentToolset.USER_INTERACTION in resolved.names

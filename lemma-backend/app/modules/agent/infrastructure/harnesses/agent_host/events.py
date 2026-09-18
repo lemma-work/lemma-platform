@@ -444,7 +444,7 @@ class AgentHostEventNormalizer:
         if tool_name in PAUSING_TOOL_NAMES:
             # The other half of the drop above: with no call on the record under
             # this id, a return under it pairs with nothing. What the model was
-            # actually told — a park's answer, a snooze's "you are asleep" — is
+            # actually told — a park's answer, a wait's "you are waiting" — is
             # written against the id Lemma owns, by whatever resolved it.
             return [*opening, *self._drain_tokens()]
         return [

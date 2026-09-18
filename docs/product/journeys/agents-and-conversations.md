@@ -236,6 +236,34 @@ it happens.
 
 ---
 
+## Capability: Wait for something to finish
+
+### PS-AGENT-023 — A run can wait for something without occupying a turn
+**Status:** covered
+
+- Where an agent has nothing to do until a time passes, a command it started
+  finishes, or a sub-agent it started finishes, the system shall let it wait for
+  exactly one of those and shall end its turn.
+- While a run waits, the system shall hold its state durably, so that a restart
+  of the platform does not lose it.
+- When the thing a run waits on resolves, the system shall resume the run where
+  it stopped, and shall tell it which of those resolved it.
+- The system shall resume a run exactly once for a given resolution, even if the
+  resolution is reported more than once.
+- While a run waits on a command it started, the system shall keep that
+  command's workspace running.
+- The system shall give every wait a limit, and when that limit passes the system
+  shall resume the run and shall say that the wait expired rather than that the
+  thing finished.
+- If a resolution is never reported, then the system shall notice the run is
+  stuck and shall resolve it rather than leaving it waiting indefinitely.
+- When a person stops a conversation that is waiting, the system shall end the
+  wait and shall not resume the run.
+
+**Contracts:** `agent.conversation.get`, `agent.conversation.message.list`
+
+---
+
 ## Capability: Give an agent more than one thing to do
 
 ### PS-AGENT-030 — An agent can delegate to a subagent

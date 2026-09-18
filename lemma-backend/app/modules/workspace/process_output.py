@@ -32,6 +32,51 @@ _POLL_SAFETY_MARGIN_SECONDS = 1.0
 _SILENCE_IS_SUSPICIOUS_AFTER_SECONDS = 5.0
 
 
+#: What each way of not succeeding means, in words the model can act on. This
+#: used to be `state.value`, so a failed build reported its error as the single
+#: word "failed" -- no exit code, no cause, nothing to distinguish it from a
+#: command that was cancelled or one the reaper killed at its deadline.
+_FAILURE_MESSAGES = {
+    ProcessState.CANCELLED: "The command was cancelled before it finished.",
+    ProcessState.TIMED_OUT: (
+        "The command hit its maximum lifetime and the runtime stopped it. It "
+        "did not finish on its own."
+    ),
+    ProcessState.UNKNOWN: (
+        "The sandbox lost track of this command, so its outcome cannot be "
+        "read. Check for its effects rather than assuming either way."
+    ),
+}
+
+
+def has_stopped(process) -> bool:
+    """Whether this process is over, by either signal the providers give.
+
+    Both are needed, and neither alone is enough. E2B records a cancelled
+    process with `exit_code=None` (`e2b_output.record_cancelled`), so the exit
+    code alone made every process an agent killed look alive for the hour the
+    output buffer retains it. The state alone is not enough either:
+    `ProcessDescriptor.state` is typed `object`, and a provider reporting a
+    state this module does not know would read as running forever.
+    """
+    if process.exit_code is not None:
+        return True
+    return process.state in TERMINAL_PROCESS_STATES or str(
+        getattr(process.state, "value", process.state)
+    ) in {state.value for state in TERMINAL_PROCESS_STATES}
+
+
+def _failure_message(state: ProcessState, exit_code: int | None) -> str | None:
+    """The `error` field for a finished process, or None when nothing failed."""
+    if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED}:
+        return None
+    if state is ProcessState.FAILED:
+        if exit_code is None:
+            return "The command failed."
+        return f"The command exited {exit_code}."
+    return _FAILURE_MESSAGES.get(state, f"The command ended as {state.value}.")
+
+
 TERMINAL_PROCESS_STATES = {
     ProcessState.SUCCEEDED,
     ProcessState.FAILED,
@@ -199,7 +244,10 @@ async def collect_process_output(
         "exit_code": exit_code,
         "completed": completed,
         "process_id": None if completed else str(operation_id),
-        "error": None
-        if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED}
-        else state.value,
+        # The raw state as well as the message. `success` cannot answer "what
+        # happened" here -- it is true for a process that is merely still
+        # running -- and callers that need the distinction were reading the
+        # error string to get it.
+        "state": state.value,
+        "error": _failure_message(state, exit_code),
     }

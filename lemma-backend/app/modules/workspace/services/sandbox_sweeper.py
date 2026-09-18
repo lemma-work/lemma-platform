@@ -26,7 +26,7 @@ from app.modules.workspace.domain.sandbox import (
     SandboxInstanceState,
 )
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
-from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
+from app.modules.workspace.process_output import has_stopped
 from app.modules.workspace.providers.base import (
     ProviderFailed,
     ProviderGone,
@@ -218,7 +218,7 @@ class SandboxSweeper:
         # released it. Agents kill processes exactly when a tool call looks
         # stuck, which is how this compounded: the sandbox that frustrated
         # someone was then the one that could never be reclaimed.
-        return any(not _has_stopped(p) for p in processes)
+        return any(not has_stopped(p) for p in processes)
 
     async def reclaim_orphans(self, *, dry_run: bool = False) -> tuple[str, ...]:
         """Destroy provider objects this environment created and no longer wants.
@@ -428,23 +428,3 @@ class SandboxSweeper:
         except ProviderFailed, ProviderNotReady, ProviderRejected, SandboxError:
             return False
         return instance is not None and instance.provider_id == obj.provider_id
-
-
-def _has_stopped(process) -> bool:
-    """Whether this process is over, by either signal the providers give.
-
-    Both are needed, and neither alone is enough. E2B records a cancelled
-    process with `exit_code=None` (`e2b_output.record_cancelled`), so the exit
-    code alone made every process an agent killed pin its sandbox as busy for
-    the hour the output buffer retains it -- and agents kill processes exactly
-    when a tool call looks stuck, so the sandbox that had just frustrated
-    someone was then the one the idle sweep could never reclaim. The state
-    alone is not enough either: `ProcessDescriptor.state` is typed `object`,
-    and a provider that reports a state this module does not know would read as
-    running forever.
-    """
-    if process.exit_code is not None:
-        return True
-    return process.state in TERMINAL_PROCESS_STATES or str(
-        getattr(process.state, "value", process.state)
-    ) in {state.value for state in TERMINAL_PROCESS_STATES}

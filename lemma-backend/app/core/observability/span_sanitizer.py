@@ -27,6 +27,8 @@ from opentelemetry.trace import (
     TraceState,
 )
 
+from app.core.redaction import redact_text
+
 
 _SAFE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _SAFE_ROUTE_SEGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
@@ -329,6 +331,28 @@ def _safe_scope(scope: InstrumentationScope | None) -> InstrumentationScope | No
     return InstrumentationScope(name=name, version=version)
 
 
+def _safe_status_description(span: ReadableSpan) -> str | None:
+    """The error's description, for spans this codebase writes itself.
+
+    The description used to be dropped for every span, which is the difference
+    between a dashboard saying "a tool failed" and one saying which tool failed
+    how. It is free text from wherever the span was created, so it is kept only
+    under the same rule the span's own *name* is kept under -- an ``app.``
+    instrumentation scope, i.e. code in this repository -- and is then redacted
+    and bounded like any other exported string. A third-party library's status
+    text has neither of those guarantees and is still dropped.
+    """
+    if span.status.status_code is not StatusCode.ERROR:
+        return None
+    description = span.status.description
+    if not description:
+        return None
+    scope_name = (getattr(span.instrumentation_scope, "name", None) or "").lower()
+    if not scope_name.startswith("app."):
+        return None
+    return _safe_scalar(redact_text(description))
+
+
 def sanitize_span(span: ReadableSpan, *, llm: bool) -> ReadableSpan:
     resource = Resource(
         {
@@ -341,7 +365,8 @@ def sanitize_span(span: ReadableSpan, *, llm: bool) -> ReadableSpan:
     status = Status(
         StatusCode.ERROR
         if span.status.status_code is StatusCode.ERROR
-        else span.status.status_code
+        else span.status.status_code,
+        description=_safe_status_description(span),
     )
     return ReadableSpan(
         name=_safe_span_name(span, llm=llm),
