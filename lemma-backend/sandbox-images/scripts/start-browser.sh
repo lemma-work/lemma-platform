@@ -55,7 +55,17 @@ rm -f \
 # keeps whatever `config.json` its last run wrote, and a proxy assigned since
 # then -- a new resume can land on a different sandbox instance -- must reach
 # Chrome's next launch, not wait for a profile that happens not to exist yet.
-CHROME_ARGS="--no-sandbox,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
+# `--test-type` is here for one reason: it suppresses the yellow "You are
+# using an unsupported command-line flag: --no-sandbox" infobar. That bar is
+# not a warning anybody in this product can act on -- the sandbox flag is
+# required to run Chrome inside a container, and the container *is* the
+# isolation boundary -- but it sits across the top of every frame the person
+# watching sees, steals a strip of the page, and reads like the browser is
+# broken. It changes no behaviour beyond hiding infobars and a first-run
+# bubble; it does not make this a "test build" of Chrome, which is a
+# different thing -- the binary is whatever `workspace-chrome` points at,
+# Debian Chromium on the Docker image and `google-chrome-stable` on E2B.
+CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--no-default-browser-check,--disable-blink-features=AutomationControlled"
 # Chrome's own size is *not* set here, and cannot be: this list is
 # comma-separated (agent-browser splits it), and every flag that would say a
 # size takes a comma inside its value. `--window-size=1920,1200` arrives at

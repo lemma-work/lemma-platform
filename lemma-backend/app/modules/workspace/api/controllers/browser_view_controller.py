@@ -219,13 +219,29 @@ async def resize_display(
     had. So an unreachable or sleeping sandbox answers with no size rather
     than a status code the pane would have to special-case.
     """
+    # Every branch below logs. Answering the viewer with "no size" is right --
+    # they keep a working picture either way -- but answering *silently* meant
+    # a display that never resized looked exactly like one that had nothing to
+    # resize, and the pane letterboxed a 1920x1200 screen for days with no
+    # trace anywhere of why. A degraded path still has to say it degraded.
     try:
         size = await service.resize_display(
             user.id, width=request.width, height=request.height
         )
     except SandboxCapabilityUnsupported:
+        logger.warning(
+            "workspace.browser_view.resize_unsupported.degraded",
+            width=request.width,
+            height=request.height,
+        )
         return DisplaySizeResponse()
-    except BrowserRelayUnavailable:
+    except BrowserRelayUnavailable as exc:
+        logger.warning(
+            "workspace.browser_view.resize_no_relay.degraded",
+            width=request.width,
+            height=request.height,
+            error_type=type(exc).__name__,
+        )
         return DisplaySizeResponse()
     except (OSError, httpx.HTTPError, _engine_error()) as exc:
         logger.warning(
@@ -235,6 +251,14 @@ async def resize_display(
         return DisplaySizeResponse()
     finally:
         await service.close()
+    if not size:
+        # The relay answered and still changed nothing, which is its own
+        # outcome and not the same as any failure above.
+        logger.warning(
+            "workspace.browser_view.resize_had_no_effect.degraded",
+            width=request.width,
+            height=request.height,
+        )
     return DisplaySizeResponse(size=size or None)
 
 
