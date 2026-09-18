@@ -93,13 +93,16 @@ def test_installing_the_same_version_again_does_no_work(
     runtime_install.install(
         root=root, archive=archive, version=_V1, requires=[], site_packages=site
     )
-    archive.unlink()  # a no-op install must not read it
+    # A successful install consumes the archive. Left behind, a superseded copy
+    # of every bundle the sandbox was ever sent rides into every later snapshot
+    # -- and where the sandbox is the disk, that is the user's disk it rides on.
+    assert not archive.exists()
 
     outcome = runtime_install.install(
         root=root, archive=archive, version=_V1, requires=[], site_packages=site
     )
 
-    assert outcome["installed"] is False
+    assert outcome["installed"] is False, "a no-op install must not need the archive"
 
 
 def test_an_upgrade_moves_current_and_keeps_the_previous_version(

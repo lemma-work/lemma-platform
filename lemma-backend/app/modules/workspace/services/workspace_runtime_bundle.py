@@ -21,6 +21,7 @@ is the status quo, not a regression this introduced.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -51,8 +52,8 @@ RUNTIME_ROOT = "/opt/lemma-runtime"
 #: Staging paths. `/tmp` because they are consumed once and must not survive --
 #: the installer deletes them itself, and a pause would otherwise carry a
 #: superseded archive forward for the life of the sandbox.
-_INSTALLER_PATH = "/tmp/lemma-runtime-install.py"
-_ARCHIVE_PATH = "/tmp/lemma-runtime-bundle.zip"
+INSTALLER_PATH = "/tmp/lemma-runtime-install.py"
+ARCHIVE_PATH = "/tmp/lemma-runtime-bundle.zip"
 
 #: The interpreter that owns the site-packages the `.pth` must land in. Naming
 #: it explicitly rather than `python3`: the overlay is only ever ahead of *this*
@@ -82,6 +83,31 @@ _SANDBOX_FAILURES = (
 
 def _deadline(seconds: float) -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
+
+def install_command(*, version: str, requires: Sequence[str]) -> str:
+    """The shell command that installs a delivered bundle.
+
+    Module-level so the real-sandbox test runs the command this actually emits
+    rather than a copy of it that can drift.
+
+    The overlay is root-owned, and so is the site-packages the `.pth` goes in --
+    verified against a live sandbox, where the workspace user cannot even
+    `mkdir /opt/lemma-runtime`. E2B's user has passwordless sudo, so elevation
+    is available; a fabric without it falls through to an unelevated run, which
+    fails cleanly and leaves the baked copy in place. That is better than
+    branching on the provider: Docker's image already carries current
+    first-party code, because rebuilding it there costs a container rather than
+    somebody's disk, so an overlay has nothing to fix.
+    """
+    return (
+        "sudo -n true 2>/dev/null && SUDO='sudo -n' || SUDO=''; "
+        f"$SUDO {_SANDBOX_PYTHON} {INSTALLER_PATH} install "
+        f"--root {RUNTIME_ROOT} "
+        f"--archive {ARCHIVE_PATH} "
+        f"--version {version} "
+        f"--requires {','.join(requires)}"
+    )
 
 
 class WorkspaceRuntimeBundleMixin:
@@ -220,13 +246,13 @@ class WorkspaceRuntimeBundleMixin:
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
         await client.write_file(
             user_id,
-            _INSTALLER_PATH,
+            INSTALLER_PATH,
             Path(runtime_install.__file__).read_bytes(),
             deadline_at=deadline_at,
         )
         await client.write_file(
             user_id,
-            _ARCHIVE_PATH,
+            ARCHIVE_PATH,
             bundle.archive,
             deadline_at=deadline_at,
             # The provider verifies this before the bytes are accepted, so a
@@ -239,13 +265,7 @@ class WorkspaceRuntimeBundleMixin:
     ) -> None:
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
         operation_id = uuid4()
-        command = (
-            f"{_SANDBOX_PYTHON} {_INSTALLER_PATH} install "
-            f"--root {RUNTIME_ROOT} "
-            f"--archive {_ARCHIVE_PATH} "
-            f"--version {bundle.version} "
-            f"--requires {','.join(bundle.requires)}"
-        )
+        command = install_command(version=bundle.version, requires=bundle.requires)
         await client.start_process(
             WorkloadKind.WORKSPACE,
             user_id,
@@ -290,4 +310,10 @@ class WorkspaceRuntimeBundleMixin:
         return text.strip()[-500:] or "no output"
 
 
-__all__ = ["RUNTIME_ROOT", "WorkspaceRuntimeBundleMixin"]
+__all__ = [
+    "ARCHIVE_PATH",
+    "INSTALLER_PATH",
+    "RUNTIME_ROOT",
+    "WorkspaceRuntimeBundleMixin",
+    "install_command",
+]

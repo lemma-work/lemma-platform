@@ -40,6 +40,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -219,6 +220,12 @@ def install(
     _point_current_at(root, target)
     _write_pth(root / CURRENT_LINK / "site-packages", site_packages)
     _prune(root, keep=target)
+    # The archive is consumed, and only now is it safe to say so: before the
+    # smoke test a failure still wants it on disk to retry against. Left behind
+    # it is a superseded copy of every bundle this sandbox has ever been sent,
+    # carried into every later snapshot -- and on a fabric where the sandbox is
+    # the disk, that is the user's disk it is carried on.
+    archive.unlink(missing_ok=True)
     return {"version": version, "installed": True}
 
 
@@ -258,6 +265,14 @@ def main(argv: list[str] | None = None) -> int:
         requires=[item for item in args.requires.split(",") if item],
         site_packages=args.site_packages,
     )
+    # And the installer itself, which is staged the same way and just as
+    # superseded. Guarded on the staging directory so that running this file
+    # from a checkout -- which is how its own tests drive it -- cannot delete
+    # the source. Unlinking a running script is safe: the kernel holds the
+    # inode until this process exits.
+    script = Path(__file__).resolve()
+    if script.is_relative_to(Path(tempfile.gettempdir())):
+        script.unlink(missing_ok=True)
     _emit(outcome)
     return 0
 
