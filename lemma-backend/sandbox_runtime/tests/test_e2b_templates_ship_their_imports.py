@@ -1,8 +1,8 @@
-"""Every `sandbox_runtime` module a template ships must be able to import.
+"""Every `sandbox_runtime` module an image ships must be able to import.
 
-The E2B templates are assembled by `build_templates.py`, not by
-`Dockerfile.workspace` -- the two are separate definitions of the same idea and
-they drift. `test_e2b_template_sources_exist` already checks that each copied
+Three separate definitions of the same idea -- `build_templates.py` for E2B,
+`Dockerfile.workspace` and `Dockerfile.function` for the rest -- and they
+drift. `test_e2b_template_sources_exist` already checks that each copied
 path exists in the repository, which is a different question from whether the
 code that lands can actually run: the workspace template copied
 `browser_relay/` and `__init__.py` and not `tasks.py`, which
@@ -11,8 +11,17 @@ workspace sandbox therefore shipped a relay that raised `ModuleNotFoundError`
 on its first line, left no log because it died before logging was configured,
 and presented as a browser stuck on "Connecting...".
 
-Resolved statically, from the builder's own copy list, so this needs no SDK, no
-network and no template build, and runs on every commit -- unlike the two tests
+The Dockerfiles drifted the same way and cost more. Moving the workspace root
+added `sandbox_runtime/paths.py`, which `contracts` and the whole workspace
+runtime import; the E2B templates were covered by the test below and were fine,
+and `Dockerfile.workspace` copied an explicit file list that nobody updated. The
+build succeeded. The container started, exited 1 on the import, and the backend
+then waited on a runtime that was never coming -- so it surfaced as every
+sandbox-backed e2e test timing out at 300s each, in a different module, with the
+real error only in `docker logs` of a container the test had already abandoned.
+
+Resolved statically, from each builder's own copy list, so this needs no SDK, no
+network and no image build, and runs on every commit -- unlike the two tests
 that `importorskip("e2b")` and only run in the conformance workflow.
 """
 
@@ -24,6 +33,10 @@ from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[2]
 BUILDER = BACKEND / "sandbox-images" / "templates" / "e2b" / "build_templates.py"
+DOCKERFILES = (
+    BACKEND / "sandbox-images" / "Dockerfile.workspace",
+    BACKEND / "sandbox-images" / "Dockerfile.function",
+)
 PREFIX = "lemma-backend/sandbox_runtime/"
 
 
@@ -151,6 +164,42 @@ def test_e2b_templates_ship_what_they_import() -> None:
                 missing.setdefault(f"{template} -> {module}", set()).add(needed)
     assert not missing, (
         "E2B templates ship modules whose imports they do not: "
+        + "; ".join(
+            f"{where} needs {sorted(names)}" for where, names in missing.items()
+        )
+    )
+
+
+def _copies_per_dockerfile() -> dict[str, list[str]]:
+    """Each image, and the `sandbox_runtime` paths its `COPY` lines ship.
+
+    One entry per Dockerfile rather than a union, for the reason the E2B half
+    reads them per-template: the function image ships a smaller subset, and
+    reading them together would let the workspace image's copies cover for it.
+    """
+    per: dict[str, list[str]] = {}
+    for dockerfile in DOCKERFILES:
+        assert dockerfile.is_file(), f"{dockerfile.name} has moved"
+        per[dockerfile.name] = re.findall(
+            r"^COPY\s+(?:--\S+\s+)*(" + re.escape(PREFIX) + r"\S+)",
+            dockerfile.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    return per
+
+
+def test_the_sandbox_images_ship_what_they_import() -> None:
+    missing: dict[str, set[str]] = {}
+    for image, copies in _copies_per_dockerfile().items():
+        assert copies, f"{image} no longer copies any sandbox_runtime sources"
+        shipped = _shipped_modules(copies)
+        for module in sorted(shipped):
+            for needed in _imports_of(module):
+                if needed in shipped:
+                    continue
+                missing.setdefault(f"{image} -> {module}", set()).add(needed)
+    assert not missing, (
+        "sandbox images ship modules whose imports they do not: "
         + "; ".join(
             f"{where} needs {sorted(names)}" for where, names in missing.items()
         )
