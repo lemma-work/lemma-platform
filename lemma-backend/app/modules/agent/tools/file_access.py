@@ -2,9 +2,10 @@
 
 The pod datastore (``/me/...`` and other pod-visible paths) is the source of
 truth for user-facing files; the workspace sandbox (an absolute path under the
-sandbox home, or one relative to the conversation cwd) is the agent's ephemeral
-working area. Tools
-that read a file should target the store they mean: ``read_pod_file_bytes`` for
+sandbox home, or one relative to the conversation cwd) is the agent's own
+working area -- durable for the life of the workspace, and not backed up, which
+is why the pod is where anything a user should keep goes. Tools that read a file
+should target the store they mean: ``read_pod_file_bytes`` for
 the datastore (grant-checked) and ``read_workspace_file_bytes`` for the sandbox.
 
 Some tools (speech ``listen``) accept a single user-supplied path and infer the
