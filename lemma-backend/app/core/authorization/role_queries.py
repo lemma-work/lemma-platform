@@ -27,10 +27,14 @@ from app.core.authorization.models import (
     RolePermissionModel,
 )
 
-#: One row of the join: the principal it was assigned to, the role, and one of
-#: that role's permissions -- or ``None`` where the role grants none, which the
-#: outer join preserves so a role with no permissions still names itself.
-RoleRow = tuple[UUID, UUID, str, str | None]
+#: One row of the join: the principal it was assigned to, the role, one of that
+#: role's permissions -- or ``None`` where the role grants none, which the outer
+#: join preserves so a role with no permissions still names itself -- and the
+#: pod the role itself is scoped to, ``None`` for an organization-level role.
+#:
+#: The role's own pod is carried because a caller spanning pods has to re-check
+#: it: see :func:`roles_applying_to_pod`.
+RoleRow = tuple[UUID, UUID, str, str | None, UUID | None]
 
 
 class _AnyPodScope:
@@ -65,9 +69,13 @@ async def load_roles_for_principals(
 
     ``pod_scope`` is required, because every value of it is a different answer:
     a pod id takes that pod's roles, ``None`` takes the organization's own, and
-    :data:`ANY_POD` takes both. A caller spanning pods wants ``ANY_POD`` and is
-    safe with it, because a pod-member id is unique to its pod -- matching on
-    the principal is what keeps one pod's roles out of another's answer.
+    :data:`ANY_POD` takes both.
+
+    :data:`ANY_POD` does no scoping at all, so a caller using it **must** put
+    each row back in its place with :func:`roles_applying_to_pod` before
+    merging. Matching on the principal is not enough on its own: a pod-member
+    id is unique to its pod, but an organization-member id is not, and a caller
+    spanning pods merges that one principal's rows into every pod it builds.
     """
     if not principal_ids:
         return []
@@ -77,6 +85,7 @@ async def load_roles_for_principals(
             RoleModel.id,
             RoleModel.name,
             RolePermissionModel.permission_id,
+            RoleModel.pod_id,
         )
         .join(RoleAssignmentModel, RoleAssignmentModel.role_id == RoleModel.id)
         .join(
@@ -104,9 +113,32 @@ def merge_role_data(
     role_names: set[str],
     permission_ids: set[str],
 ) -> None:
-    """Collapse rows into the three sets a ``Context`` carries, in place."""
-    for _principal_id, role_id, role_name, permission_id in rows:
+    """Collapse rows into the three sets a ``Context`` carries, in place.
+
+    Scoping is the caller's, not this function's: rows fetched with
+    :data:`ANY_POD` go through :func:`roles_applying_to_pod` first.
+    """
+    for _principal_id, role_id, role_name, permission_id, _role_pod_id in rows:
         role_ids.add(role_id)
         role_names.add(role_name)
         if permission_id is not None:
             permission_ids.add(permission_id)
+
+
+def roles_applying_to_pod(rows: Iterable[RoleRow], pod_id: UUID) -> list[RoleRow]:
+    """The rows that really do govern ``pod_id``.
+
+    An organization-level role (no pod of its own) applies in every pod; a role
+    scoped to a pod applies in that one. Anything else is a role belonging to a
+    different pod, and it is dropped.
+
+    This restores, at merge time, the constraint the per-pod query used to
+    carry in its WHERE clause. It matters most for the organization member:
+    that one principal's rows are merged into *every* pod a listing builds, so
+    a pod-scoped role reaching it would be granted in all of them. Nothing in
+    the schema forbids such an assignment -- ``role_assignments`` has no
+    constraint tying a principal's scope to its role's -- and `assign_roles`
+    only avoids writing one because it resolves roles by (organization, pod)
+    first. That is a property of one caller, which is thinner than a check.
+    """
+    return [row for row in rows if row[4] is None or row[4] == pod_id]

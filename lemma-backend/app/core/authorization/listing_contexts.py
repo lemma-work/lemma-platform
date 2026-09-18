@@ -38,6 +38,7 @@ from app.core.authorization.role_queries import (
     RoleRow,
     load_roles_for_principals,
     merge_role_data,
+    roles_applying_to_pod,
 )
 
 
@@ -69,8 +70,10 @@ async def build_listing_contexts_for_pods(
     if organization_member_id is not None:
         principal_ids.append(organization_member_id)
     # ANY_POD, not a pod id: one query covers every pod on the page plus the
-    # organization's own roles, and a pod-member id is unique to its pod, so
-    # the principal match is what keeps one pod's roles out of another's.
+    # organization's own roles. It does no scoping, so every row is put back in
+    # its place by `roles_applying_to_pod` below before it is merged -- the
+    # organization member's rows reach every pod here, so the principal match
+    # alone would not keep one pod's roles out of another's context.
     rows = await load_roles_for_principals(
         session,
         principal_ids=principal_ids,
@@ -93,7 +96,9 @@ async def build_listing_contexts_for_pods(
         if organization_member_id is not None:
             principal_refs.add(PrincipalRef("ORG_MEMBER", organization_member_id))
             merge_role_data(
-                by_principal.get(organization_member_id, ()),
+                roles_applying_to_pod(
+                    by_principal.get(organization_member_id, ()), pod_id
+                ),
                 role_ids,
                 role_names,
                 permission_ids,
@@ -101,7 +106,7 @@ async def build_listing_contexts_for_pods(
         if pod_member_id is not None:
             principal_refs.add(PrincipalRef("POD_MEMBER", pod_member_id))
             merge_role_data(
-                by_principal.get(pod_member_id, ()),
+                roles_applying_to_pod(by_principal.get(pod_member_id, ()), pod_id),
                 role_ids,
                 role_names,
                 permission_ids,
