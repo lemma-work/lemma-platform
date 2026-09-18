@@ -104,13 +104,15 @@ class _Service(WorkspaceRuntimeBundleMixin):
         return self.bundle
 
 
-def _info(*, allocation: str = "alloc-1", generation: int = 1) -> SandboxInfo:
+def _info(
+    *, allocation: str = "alloc-1", generation: int = 1, epoch: int = 1
+) -> SandboxInfo:
     return SandboxInfo(
         sandbox_id=str(uuid4()),
         status="RUNNING",
         image="",
         allocation_id=allocation,
-        allocation_epoch=1,
+        allocation_epoch=epoch,
         storage_generation=generation,
     )
 
@@ -226,6 +228,26 @@ async def test_a_sandbox_still_in_use_stays_remembered_while_others_age_out() ->
     remembered = {key[2] for key in service._installed_bundles}
     assert "busy" in remembered
     assert "idle" not in remembered
+
+
+async def test_a_rebuilt_container_on_the_same_disk_is_asked_again() -> None:
+    """The overlay lives in the container, the files live on the disk beside it.
+
+    Replacing a container and adopting its volume keeps every file and keeps the
+    storage generation -- and loses `/opt` entirely, because that was never on
+    the volume. Keyed on the logical sandbox alone, this sandbox reported the
+    overlay installed and served the image's older copy, which is the one
+    outcome the whole mechanism exists to prevent.
+    """
+    client = _Client(installed=None)
+    service = _Service(client)
+    user_id = uuid4()
+    await service._ensure_runtime_bundle(user_id, _info(epoch=1))
+    before = len(client.commands)
+
+    await service._ensure_runtime_bundle(user_id, _info(epoch=2))
+
+    assert len(client.commands) == before + 1
 
 
 async def test_a_failed_delivery_does_not_fail_the_caller() -> None:

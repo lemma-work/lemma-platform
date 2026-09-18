@@ -123,7 +123,7 @@ def install_command(
 class WorkspaceRuntimeBundleMixin:
     """``_ensure_runtime_bundle``, mixed into the workspace sandbox service."""
 
-    #: (loop, user, allocation, generation) -> the version known to be installed.
+    #: (loop, user, sandbox, epoch, generation) -> the version known installed.
     #: Class-level, like the directory caches beside it: the answer is about a
     #: sandbox rather than about whoever happens to hold a service instance.
     #:
@@ -132,8 +132,10 @@ class WorkspaceRuntimeBundleMixin:
     #: churn this would hold one key per sandbox the process had ever seen, for
     #: the life of the process. Evicting the oldest costs a probe -- one command
     #: -- which is the cheapest thing in this file.
-    _installed_bundles: OrderedDict[tuple[int, UUID, str, int], str] = OrderedDict()
-    _inflight_bundles: dict[tuple[int, UUID, str, int], asyncio.Task[bool]] = {}
+    _installed_bundles: OrderedDict[tuple[int, UUID, str, int, int], str] = (
+        OrderedDict()
+    )
+    _inflight_bundles: dict[tuple[int, UUID, str, int, int], asyncio.Task[bool]] = {}
 
     def _runtime_bundle(self) -> RuntimeBundle | None:
         """The bundle this service installs.
@@ -147,19 +149,26 @@ class WorkspaceRuntimeBundleMixin:
 
     def _bundle_cache_key(
         self, user_id: UUID, sandbox_info
-    ) -> tuple[int, UUID, str, int] | None:
+    ) -> tuple[int, UUID, str, int, int] | None:
         """Identity for "the overlay is installed", which belongs to the sandbox.
 
-        Unlike a directory, the overlay does not live on a disk that outlives its
-        container: it is written into the sandbox's own filesystem. So a new
-        allocation has no overlay however healthy the disk is, and a recreated
-        disk implies a new allocation anyway. Both are in the key, which makes
-        the answer conservative in the only direction that is safe -- a
-        re-probe costs one command, a wrong "already installed" costs a sandbox
-        running code we believe we replaced.
+        Unlike a directory, the overlay does not live on a disk that outlives
+        its container: it is written into the sandbox's own filesystem, which on
+        Docker and `lemma_local` is the container layer. So the *epoch* has to be
+        here. `allocation_id` is the logical sandbox and does not move when a
+        container is replaced -- and a replacement that adopts the same volume
+        keeps its files and its storage generation while losing `/opt`
+        entirely. Keyed without the epoch, that sandbox reported the overlay
+        installed and ran the image's older copy, which is the one outcome this
+        whole mechanism exists to make impossible.
+
+        Conservative in the only direction that is safe: a re-probe costs one
+        command, a wrong "already installed" costs a sandbox running code we
+        believe we replaced.
         """
         if (
             sandbox_info.allocation_id is None
+            or sandbox_info.allocation_epoch is None
             or sandbox_info.storage_generation is None
         ):
             return None
@@ -167,6 +176,7 @@ class WorkspaceRuntimeBundleMixin:
             id(asyncio.get_running_loop()),
             user_id,
             sandbox_info.allocation_id,
+            sandbox_info.allocation_epoch,
             sandbox_info.storage_generation,
         )
 
