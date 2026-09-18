@@ -44,6 +44,7 @@ from app.modules.web_login.services.scope import (
     BrowserState,
     host_of,
     looks_signed_in,
+    page_looks_like_a_login_wall,
     scope_state,
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
@@ -52,12 +53,6 @@ if TYPE_CHECKING:
     from app.modules.workspace.contracts.browser import BrowserState
 
 logger = get_logger(__name__)
-
-
-#: Words a page shows when it still wants a login. Crude on purpose: the
-#: alternative is asking a model, and a wrong answer here either asks a person
-#: who did not need asking or reports a sign-in that did not happen.
-_WALL_HINTS = ("sign in", "signin", "log in", "login", "password")
 
 
 def _agent_browser(conversation_id: UUID | None) -> str | None:
@@ -367,47 +362,9 @@ class SignInService:
             )
             return SignInOutcome(origin=site, signed_in=False, saved=False)
 
-        saved = False
-        detail: str | None = None
-        domain = host_of(site)
-
-        try:
-            state: (
-                BrowserState | dict[str, object]
-            ) = await self._browser.save_login_state(user_id, domain=domain)
-        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
-            state = {}
-            detail = f"the browser could not be read: {exc}"
-
-        if state and not looks_signed_in(state, origin=site) and not force:
-            raise NotSignedInYet(site)
-
-        if state:
-            scoped = scope_state(state, origin=site)
-            if scoped["cookies"] or scoped["origins"]:
-                async with self._uow_factory() as uow:
-                    await WebLoginRepository(uow.session).save(
-                        user_id=user_id,
-                        origin=site,
-                        secret=WebLoginSecret(
-                            cookies=scoped["cookies"], origins=scoped["origins"]
-                        ),
-                    )
-                saved = True
-                # Handed to the browser the run will resume into, here and not
-                # on the next run. The person signed in to `login-<host>`; the
-                # agent works in the conversation's own browser, and without
-                # this it resumes into one that has never seen the site. Saving
-                # and transferring are two steps because they are two browsers,
-                # and the whole point of the second one is that it is separate.
-                await self._hand_to_the_agent(
-                    user_id,
-                    origin=site,
-                    conversation_id=conversation_id,
-                    scoped=scoped,
-                )
-            else:
-                detail = detail or "nothing for this site was in the browser"
+        saved, detail = await self.capture(
+            user_id=user_id, origin=site, conversation_id=conversation_id, force=force
+        )
 
         await self._audit(
             user_id,
@@ -428,6 +385,71 @@ class SignInService:
         return SignInOutcome(
             origin=site, signed_in=True, saved=saved, saved_detail=detail
         )
+
+    async def capture(
+        self,
+        *,
+        user_id: UUID,
+        origin: str,
+        conversation_id: UUID | None,
+        force: bool = False,
+    ) -> tuple[bool, str | None]:
+        """Read the signed-in browser, keep what is there, hand it to the run.
+
+        Returns whether anything was kept and, when it was not, why. Shared by
+        the two surfaces that can answer a sign-in, because doing it twice
+        would mean two implementations of the one step that has to be right.
+
+        `force` is about whether there is somebody to argue with. The
+        standalone page passes it false first: it can refuse, tell the person
+        "the browser holds nothing for this site", and let them press "Save
+        anyway" -- which only works while they are still in front of it. When
+        the answer arrives through the ordinary approval path there is nobody
+        waiting, so the caller takes what is there and reports the rest.
+        """
+        site = normalize_origin(origin)
+        domain = host_of(site)
+        detail: str | None = None
+
+        try:
+            state: (
+                BrowserState | dict[str, object]
+            ) = await self._browser.save_login_state(user_id, domain=domain)
+        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
+            state = {}
+            detail = f"the browser could not be read: {exc}"
+
+        if state and not looks_signed_in(state, origin=site) and not force:
+            raise NotSignedInYet(site)
+
+        if not state:
+            return False, detail
+
+        scoped = scope_state(state, origin=site)
+        if not (scoped["cookies"] or scoped["origins"]):
+            return False, detail or "nothing for this site was in the browser"
+
+        async with self._uow_factory() as uow:
+            await WebLoginRepository(uow.session).save(
+                user_id=user_id,
+                origin=site,
+                secret=WebLoginSecret(
+                    cookies=scoped["cookies"], origins=scoped["origins"]
+                ),
+            )
+        # Handed to the browser the run will resume into, here and not on the
+        # next run. The person signed in to `login-<host>`; the agent works in
+        # the conversation's own browser, and without this it resumes into one
+        # that has never seen the site. Saving and transferring are two steps
+        # because they are two browsers, and the whole point of the second one
+        # is that it is separate.
+        await self._hand_to_the_agent(
+            user_id,
+            origin=site,
+            conversation_id=conversation_id,
+            scoped=scoped,
+        )
+        return True, detail
 
     async def _hand_to_the_agent(
         self,
@@ -567,16 +589,6 @@ class SignInNotPending(Exception):
     def __init__(self, tool_call_id: str) -> None:
         super().__init__(f"no sign-in is waiting on {tool_call_id}")
         self.tool_call_id = tool_call_id
-
-
-def page_looks_like_a_login_wall(text: str) -> bool:
-    """Whether a page still appears to want a login.
-
-    Used after loading a saved session: if the site shows a login form anyway,
-    the session is dead and saying so now is what `PS-CONN-022` asks for.
-    """
-    lowered = (text or "").lower()[:4000]
-    return any(hint in lowered for hint in _WALL_HINTS)
 
 
 __all__ = ["NotSignedInYet", "SignInService", "page_looks_like_a_login_wall"]

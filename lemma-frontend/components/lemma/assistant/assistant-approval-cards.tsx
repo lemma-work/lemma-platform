@@ -801,6 +801,7 @@ export function SignInCard({
   invocation,
   conversationId,
   onNavigateResource,
+  onResolveUserApproval,
 }: {
   invocation: AssistantToolInvocation;
   conversationId: string | null;
@@ -812,6 +813,16 @@ export function SignInCard({
     resourceId: string,
     meta?: Record<string, unknown>,
   ) => void;
+  /** Answers the pause, through the same path `ask_user` answers through.
+   *  That is not a detail: what the transcript shows and whether the composer
+   *  unlocks are both read off this tool call, so a resolution made anywhere
+   *  else is one this screen never learns about — the card kept saying "sign
+   *  in to continue" over a run that had already carried on. */
+  onResolveUserApproval?: (
+    approvalId: string,
+    decision: UserApprovalDecision,
+    response?: Record<string, unknown> | null,
+  ) => Promise<void>;
 }) {
   const args = (invocation.args || {}) as ToolCardArgs;
   const origin = asString(args.origin) || "";
@@ -834,6 +845,15 @@ export function SignInCard({
   } catch {
     host = origin;
   }
+
+  const {
+    pendingDecision,
+    submittedDecision,
+    error: answerError,
+    resolve,
+  } = useApprovalSubmission(invocation, onResolveUserApproval);
+  const canAnswer =
+    !!onResolveUserApproval && !isResolved && !pendingDecision && !submittedDecision;
 
   // Both are needed to name the pause, and a card that cannot name it cannot
   // resolve it -- so it says so rather than offering a link that 404s.
@@ -865,32 +885,66 @@ export function SignInCard({
       ) : null}
 
       {isResolved ? null : href ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          {/* Opens the computer panel beside the conversation when there is
-              one to open, and only falls back to the standalone page when
-              there is not — a link that replaces the whole page is the right
-              answer from an email, and the wrong one from a chat the person
-              is in the middle of. */}
-          {onNavigateResource && conversationId ? (
-            <Button
-              size="sm"
-              onClick={() =>
-                onNavigateResource("sign_in", invocation.toolCallId, {
-                  conversationId,
-                })
-              }
-            >
-              Sign in to {host}
-            </Button>
-          ) : (
-            <Button asChild size="sm">
-              <a href={href}>Sign in to {host}</a>
-            </Button>
-          )}
-          <span className="text-xs text-[var(--text-tertiary)]">
-            Opens {host} in the agent&rsquo;s browser. Your password is never sent
-            to Lemma.
-          </span>
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Opens the computer panel beside the conversation when there is
+                one to open, and only falls back to the standalone page when
+                there is not — a link that replaces the whole page is the right
+                answer from an email, and the wrong one from a chat the person
+                is in the middle of. */}
+            {onNavigateResource && conversationId ? (
+              <Button
+                size="sm"
+                onClick={() =>
+                  onNavigateResource("sign_in", invocation.toolCallId, {
+                    conversationId,
+                  })
+                }
+              >
+                Open {host}
+              </Button>
+            ) : (
+              <Button asChild size="sm">
+                <a href={href}>Open {host}</a>
+              </Button>
+            )}
+            <span className="text-xs text-[var(--text-tertiary)]">
+              Opens {host} in the agent&rsquo;s browser. Your password is never
+              sent to Lemma.
+            </span>
+          </div>
+
+          {/* Answering lives here rather than under the picture. The panel
+              shows the browser and nothing else, and this is the one place
+              that can both unlock the composer and tell the run to carry on. */}
+          {canAnswer ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => resolve("APPROVE_ONCE")}
+                disabled={!!pendingDecision}
+              >
+                {pendingDecision === "APPROVE_ONCE" ? "Checking…" : "I’m signed in"}
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                onClick={() => resolve("DENY")}
+                disabled={!!pendingDecision}
+              >
+                Can’t right now
+              </Button>
+              {submittedDecision ? (
+                <span className="text-xs text-[var(--text-tertiary)]">
+                  {approvalSubmittedNote(submittedDecision)}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          {answerError ? (
+            <p className="text-xs text-[var(--state-error)]">{answerError}</p>
+          ) : null}
         </div>
       ) : (
         <p className="mt-3 text-xs text-[var(--text-tertiary)]">

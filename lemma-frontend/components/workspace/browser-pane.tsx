@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Monitor } from '@/components/ui/icons';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
@@ -133,7 +132,18 @@ export function BrowserPane({
     const containerRef = useRef<HTMLDivElement>(null);
     const rfbRef = useRef<NoVncClient | null>(null);
     const [state, setState] = useState<PaneState>('connecting');
-    const [controlling, setControlling] = useState(autoControl);
+    // Driving when there is a sign-in to do, watching otherwise -- and no
+    // control to toggle either way, because the pane is the browser and
+    // nothing else now.
+    //
+    // Not "always driving", tempting as that is. A control socket takes the
+    // relay's wheel lease for the session it is watching, and the agent's
+    // own commands yield to that lease. For a sign-in the lease is on
+    // `login-<host>`, a session the agent never touches, so the person drives
+    // and the run is unaffected. For a plain watch the session *is* the
+    // agent's, so holding the wheel for as long as the panel happened to be
+    // open would stop the agent browsing while somebody looked at it.
+    const controlling = !!origin || autoControl;
     // Whether keystrokes are actually going to the page. RFB moves focus to
     // the remote session on click by default, but "driving" being on is not
     // the same claim as "this element currently has the keyboard" -- a person
@@ -141,6 +151,9 @@ export function BrowserPane({
     // of the two is true rather than shown a control that quietly does
     // nothing until they discover the click on their own.
     const [keyboardIsHere, setKeyboardIsHere] = useState(false);
+    //: Whether this pane has ever shown a frame. What decides between
+    //: explaining itself and keeping the picture through a reconnect.
+    const [hasPainted, setHasPainted] = useState(false);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -193,6 +206,7 @@ export function BrowserPane({
             rfb.addEventListener('connect', () => {
                 attempt = 0;
                 setState('live');
+                setHasPainted(true);
             });
             rfb.addEventListener('disconnect', () => {
                 // Guarded on identity: toggling `controlling` tears this
@@ -237,7 +251,11 @@ export function BrowserPane({
             rfbRef.current?.disconnect();
             rfbRef.current = null;
         };
-    }, [controlling, origin, conversationId, accessToken]);
+        // `controlling` belongs here even though it is derived from `origin`:
+        // `autoControl` can flip on its own, and view-vs-control is baked into
+        // the socket URL, so a stale value would leave a read-only socket in
+        // place under a pane the person is now expected to type into.
+    }, [origin, conversationId, accessToken, controlling]);
 
     // Polled rather than pushed: VNC is pixels, not events, so there is no
     // message on the wire to react to the way the JSON stream's `url`
@@ -321,29 +339,7 @@ export function BrowserPane({
     }, []);
 
     return (
-        <div className="flex h-full min-h-0 flex-col gap-2">
-            <div className="flex items-center justify-between gap-2 px-1">
-                <span className="text-xs text-[var(--text-tertiary)]">
-                    {/* Three states, not two. "You are driving" while the
-                        keyboard is somewhere else is the sentence that made
-                        this feel broken: it says the typing will arrive, and
-                        it does not. */}
-                    {!controlling
-                        ? 'Watching the agent’s browser.'
-                        : keyboardIsHere
-                          ? 'You are driving. What you type goes to the site.'
-                          : 'Click the page to type into it.'}
-                </span>
-                <Button
-                    variant="quiet"
-                    size="xs"
-                    onClick={() => setControlling((on) => !on)}
-                    disabled={state !== 'live'}
-                >
-                    {controlling ? 'Stop driving' : 'Take control'}
-                </Button>
-            </div>
-
+        <div className="flex h-full min-h-0 flex-col">
             <div
                 className={cn(
                     'relative min-h-0 flex-1 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-canvas)] [&_canvas]:h-full [&_canvas]:w-full [&_canvas]:object-contain [&_canvas]:outline-none',
@@ -364,8 +360,28 @@ export function BrowserPane({
                     }
                 />
 
-                {state !== 'live' ? (
+                {/* Only ever drawn *over* nothing. Once a frame has arrived
+                    the picture stays, whatever the socket is doing: a
+                    reconnect that blanked the screen and said "Connecting…"
+                    read as the browser crashing, when what actually happened
+                    was a two-second hiccup on a page that was still there.
+                    A short-lived drop now shows the last frame, unchanged,
+                    and only a pane that has never had one explains itself. */}
+                {state !== 'live' && !hasPainted ? (
                     <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-canvas)] p-6">
+                        <EmptyState
+                            variant="region"
+                            icon={<Monitor />}
+                            title={TITLES[state]}
+                            description={DESCRIPTIONS[state]}
+                        />
+                    </div>
+                ) : null}
+                {/* Terminal states are the exception: "you are not signed in"
+                    or "this image has no VNC" will not fix themselves, and a
+                    stale picture over them is a lie. */}
+                {TERMINAL_STATES.has(state) && hasPainted ? (
+                    <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-canvas)]/90 p-6">
                         <EmptyState
                             variant="region"
                             icon={<Monitor />}

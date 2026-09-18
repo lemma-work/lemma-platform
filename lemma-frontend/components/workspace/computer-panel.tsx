@@ -1,11 +1,12 @@
 'use client';
 
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import { BrowserPane } from '@/components/workspace/browser-pane';
 import { Button } from '@/components/ui/button';
-import { SignInEmbed } from '@/components/workspace/sign-in-embed';
 import { WorkspaceFilesPane } from '@/components/workspace/workspace-files-pane';
+import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { cn } from '@/lib/utils';
 
 type Tab = 'files' | 'browser';
@@ -49,7 +50,19 @@ export function ComputerPanel({
               ? 'browser'
               : 'files';
 
-    const signingIn = tab === 'browser' && signInToolCallId && conversationId;
+    // A sign-in names a site, and the browser has to be pointed at it. The id
+    // travels in the URL rather than the origin (an origin there survives
+    // reload and would re-steer a shared browser at a site the person has
+    // finished with), so it is resolved from the pause here — the same call
+    // the standalone page makes.
+    const signInRequest = useQuery({
+        queryKey: ['pending-sign-in', conversationId, signInToolCallId],
+        queryFn: () =>
+            getLemmaClient().webLogins.pendingSignIn(conversationId!, signInToolCallId!),
+        enabled: tab === 'browser' && !!signInToolCallId && !!conversationId,
+        retry: false,
+    });
+    const steerTo = signInRequest.data?.origin;
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-2">
@@ -75,16 +88,6 @@ export function ComputerPanel({
             <div className="min-h-0 flex-1">
                 {tab === 'files' ? (
                     <WorkspaceFilesPane workspaceCwd={workspaceCwd} />
-                ) : signingIn ? (
-                    // The sign-in carries its own controls. Without them a
-                    // person could sign in here and have no way to tell the
-                    // agent, leaving the run paused for ever -- `answerSignIn`
-                    // is the only route back to it.
-                    <SignInEmbed
-                        conversationId={conversationId}
-                        toolCallId={signInToolCallId}
-                        variant="panel"
-                    />
                 ) : (
                     // VNC shows this person's whole sandbox display, shared by
                     // every conversation's agent -- but *whether a browser is
@@ -94,7 +97,11 @@ export function ComputerPanel({
                     // Without this the pane checked the wrong session and
                     // refused forever with "no browser running" while the
                     // agent's browser was live the whole time.
-                    <BrowserPane conversationId={conversationId} />
+                    //
+                    // `origin` steers it at the site a sign-in named; the
+                    // answering happens on the card in the conversation, so
+                    // nothing but the browser is drawn here.
+                    <BrowserPane conversationId={conversationId} origin={steerTo} />
                 )}
             </div>
         </div>

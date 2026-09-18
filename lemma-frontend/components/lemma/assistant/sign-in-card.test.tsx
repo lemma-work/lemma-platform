@@ -38,7 +38,7 @@ describe('a waiting sign-in', () => {
             />,
         );
 
-        screen.getByRole('button', { name: /Sign in to asur\.work/ }).click();
+        screen.getByRole('button', { name: /Open asur\.work/ }).click();
 
         expect(navigations).toEqual([
             ['sign_in', 'call_abc123', { conversationId: 'conv-1' }],
@@ -51,11 +51,49 @@ describe('a waiting sign-in', () => {
     it('falls back to the standalone page where there is no panel to open', () => {
         render(<SignInCard invocation={paused} conversationId="conv-1" />);
 
-        const link = screen.getByRole('link', { name: /Sign in to asur\.work/ });
+        const link = screen.getByRole('link', { name: /Open asur\.work/ });
         // The same destination the Slack and Telegram links use, so somebody
         // outside the app shell still reaches a page that can resolve it.
         expect(link.getAttribute('href')).toBe('/sign-in-to-site/conv-1/call_abc123');
         expect(screen.getByText('reading your pods')).toBeTruthy();
+    });
+
+    it('is answered from the card, the way a question is', () => {
+        // The bug this pins: answering used to happen on the panel, through
+        // an endpoint of its own. The server resolved the pause and the run
+        // carried on, but this screen never heard about it -- the card sat
+        // there and the composer stayed locked on "Sign in to continue" over
+        // a conversation that had already moved on. Answering through the
+        // approval path is what the transcript actually watches.
+        const calls: Array<[string, string]> = [];
+        render(
+            <SignInCard
+                invocation={paused}
+                conversationId="conv-1"
+                onResolveUserApproval={async (id, decision) => {
+                    calls.push([id, decision]);
+                }}
+            />,
+        );
+
+        screen.getByRole('button', { name: /I’m signed in/ }).click();
+        expect(calls).toEqual([['call_abc123', 'APPROVE_ONCE']]);
+    });
+
+    it('can say the sign-in did not happen', () => {
+        const calls: Array<[string, string]> = [];
+        render(
+            <SignInCard
+                invocation={paused}
+                conversationId="conv-1"
+                onResolveUserApproval={async (id, decision) => {
+                    calls.push([id, decision]);
+                }}
+            />,
+        );
+
+        screen.getByRole('button', { name: /Can’t right now/ }).click();
+        expect(calls).toEqual([['call_abc123', 'DENY']]);
     });
 
     it('says so rather than offering a link it cannot build', () => {

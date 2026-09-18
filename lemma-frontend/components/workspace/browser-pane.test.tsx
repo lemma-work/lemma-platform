@@ -131,15 +131,21 @@ const connect = async () => {
 };
 
 describe('opening the view', () => {
-    it('asks for view mode by default, and control mode with autoControl', async () => {
-        render(<BrowserPane origin="https://example.com" />);
-        const rfb = await connect();
-        expect(rfb.url).toContain('mode=view');
-        expect(rfb.viewOnly).toBe(true);
+    it('watches a conversation and drives a sign-in', async () => {
+        // Which one it is decides who holds the relay's wheel lease, and the
+        // agent yields to that lease. A sign-in's lease is on `login-<host>`,
+        // a session the agent never touches, so the person can type while the
+        // run carries on. A plain watch is the agent's *own* session, so
+        // holding the wheel there would stop it browsing for as long as
+        // somebody had the panel open.
+        render(<BrowserPane conversationId="conv-1" />);
+        const watching = await connect();
+        expect(watching.url).toContain('mode=view');
+        expect(watching.viewOnly).toBe(true);
 
         cleanup();
         rfbInstances.length = 0;
-        render(<BrowserPane origin="https://example.com" autoControl />);
+        render(<BrowserPane origin="https://example.com" />);
         const driving = await connect();
         expect(driving.url).toContain('mode=control');
         expect(driving.viewOnly).toBe(false);
@@ -192,47 +198,33 @@ describe('opening the view', () => {
     });
 });
 
-describe('taking control', () => {
-    it('flips viewOnly on the live connection when the toggle is used', async () => {
-        const { getByRole } = render(<BrowserPane origin="https://example.com" />);
-        await connect();
-
-        fireEvent.click(getByRole('button', { name: 'Take control' }));
-
-        // A new connection: the mode is part of the URL, not a message sent
-        // over an existing one, so driving reconnects rather than upgrading.
-        await waitFor(() => expect(rfbInstances).toHaveLength(2));
-        const driving = rfbInstances[1];
-        act(() => driving.emit('connect'));
-        expect(driving.viewOnly).toBe(false);
-        expect(driving.url).toContain('mode=control');
-    });
-
+describe('reconnecting', () => {
     it('is not undone by the old connection reporting its own close late', async () => {
-        // The bug this pins: toggling `controlling` tears down the view-mode
-        // connection and starts a control-mode one in the same tick, but
+        // The bug this pins: anything that changes the socket's URL tears the
+        // old connection down and starts a new one in the same tick, but
         // `disconnect()` does not close the socket synchronously -- the real
-        // RFB fires `disconnect` only once the server actually confirms it,
-        // which lands *after* the new connection already exists. The old
-        // handler nulled the (shared, by-ref) `rfbRef` unconditionally, so
-        // every paste and keystroke after the first "Take control" landed on
-        // a null ref while the picture went on rendering the new
-        // connection's frames -- nothing on screen said so.
-        const { getByRole, container } = render(<BrowserPane origin="https://example.com" />);
-        const watching = await connect();
+        // RFB fires `disconnect` only once the server confirms it, which
+        // lands *after* the new connection already exists. The old handler
+        // nulled the (shared, by-ref) `rfbRef` unconditionally, so every
+        // paste and keystroke after that landed on a null ref while the
+        // picture went on rendering the new connection's frames.
+        const { container, rerender } = render(
+            <BrowserPane origin="https://a.example" />,
+        );
+        const first = await connect();
 
-        fireEvent.click(getByRole('button', { name: 'Take control' }));
+        rerender(<BrowserPane origin="https://b.example" />);
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
-        const driving = rfbInstances[1];
-        act(() => driving.emit('connect'));
+        const second = rfbInstances[1];
+        act(() => second.emit('connect'));
 
         // The stale instance's close finally reports in, after the new one
         // is already live.
-        act(() => watching.emit('disconnect'));
+        act(() => first.emit('disconnect'));
 
         const target = container.querySelector('[role="application"]');
         fireEvent.paste(target!, { clipboardData: { getData: () => 'hunter2' } });
-        expect(driving.clipboardWrites).toEqual(['hunter2']);
+        expect(second.clipboardWrites).toEqual(['hunter2']);
     });
 });
 
@@ -265,11 +257,14 @@ describe('a disconnect that will not fix itself by retrying', () => {
             first.emit('disconnect');
         });
 
-        expect(screen.getByText('The browser is not running')).toBeTruthy();
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
     });
 
-    it('keeps retrying on an ordinary drop, same as before', async () => {
+    it('keeps the picture through a drop it expects to recover from', async () => {
+        // Blanking to "Connecting..." on every hiccup is what made a live
+        // pane feel broken: the page was still there a second later, but the
+        // screen said the browser had gone. Once a frame has arrived it stays
+        // until something terminal replaces it.
         render(<BrowserPane origin="https://example.com" />);
         const first = await connect();
         act(() => {
@@ -277,8 +272,20 @@ describe('a disconnect that will not fix itself by retrying', () => {
             first.emit('disconnect');
         });
 
-        expect(screen.getByText('The connection dropped')).toBeTruthy();
+        expect(screen.queryByText('The connection dropped')).toBeNull();
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
+    });
+
+    it('does explain itself when it never had a picture to keep', async () => {
+        render(<BrowserPane origin="https://example.com" />);
+        // No `connect` event: nothing has ever painted here.
+        await waitFor(() => expect(rfbInstances).toHaveLength(1));
+        act(() => {
+            rfbInstances[0].socket!.closeWith(1006);
+            rfbInstances[0].emit('disconnect');
+        });
+
+        expect(screen.getByText('The connection dropped')).toBeTruthy();
     });
 
     async function renderAndClose(code: number, title: string): Promise<void> {
@@ -321,7 +328,7 @@ describe('paste', () => {
     });
 
     it('does nothing while only watching', async () => {
-        const { container } = render(<BrowserPane origin="https://example.com" />);
+        const { container } = render(<BrowserPane conversationId="conv-1" />);
         const rfb = await connect();
         const target = container.querySelector('[role="img"]');
 

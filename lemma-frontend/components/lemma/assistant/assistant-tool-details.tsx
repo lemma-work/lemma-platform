@@ -172,6 +172,7 @@ export function ToolDetailsPanel({
             invocation={interactionInvocation}
             conversationId={activeConversationId}
             onNavigateResource={onNavigateResource}
+            onResolveUserApproval={onResolveUserApproval}
           />
         ) : isAskUserToolName(toolName) ? (
           <AskUserCard

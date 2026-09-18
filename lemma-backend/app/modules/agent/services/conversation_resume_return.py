@@ -101,6 +101,8 @@ class ResumeToolReturnBuilder:
                 tool_args=tool_args,
                 decision=decision,
                 response=response,
+                user_id=user_id,
+                conversation_id=conversation.id,
             )
 
         host_permission = agent_host_permission_request(tool_args)
@@ -197,15 +199,28 @@ class ResumeToolReturnBuilder:
         tool_args: dict[str, object],
         decision: AgentRunApprovalDecision,
         response: dict[str, object],
+        user_id: UUID,
+        conversation_id: UUID,
     ) -> dict[str, object]:
         """What the agent is told after somebody answered a sign-in request.
 
-        The capture itself already happened, at the moment the person pressed
-        "I'm signed in" -- that endpoint reads the browser while they are still
-        there to be told if it found nothing. This only reports it, which is
-        why a failure to capture does not fail the resume: the run is allowed
-        to carry on with a browser that is signed in but a login that was not
-        kept, and the agent is told exactly that.
+        The capture happens here when nobody has done it already, which is what
+        lets the card in the conversation answer a sign-in the same way it
+        answers an `ask_user`: through the ordinary approval decision, with no
+        second endpoint and no state of its own. That matters for more than
+        symmetry -- the transcript and the composer both key off the paused
+        tool call, so a resolution the client did not make itself is a
+        resolution it never learns about, and the card sat there afterwards
+        saying "sign in to continue" over a run that had already moved on.
+
+        The standalone page -- the link that reaches a phone from Slack or
+        email -- still captures at the moment the person presses the button,
+        because it is the only surface that can tell them "the browser holds
+        nothing for this site" while they are still in front of it. It passes
+        `saved` along on the decision, and this then has nothing to do.
+
+        Never fatal. A run is allowed to carry on with a browser that is signed
+        in and a login that was not kept, and the agent is told exactly that.
         """
         from app.modules.agent.tools.browser.models import BrowserSignInResponse
 
@@ -229,9 +244,19 @@ class ResumeToolReturnBuilder:
         # they drifted: the lookup filtered on a status the capture had already
         # moved past, so the agent was told the login had not been kept every
         # single time, including the times it had.
-        saved = bool(response.get("saved"))
-        detail = response.get("saved_detail")
-        detail = str(detail) if detail else None
+        #
+        # `captured` distinguishes "the capture ran and kept nothing" from "no
+        # capture has run at all". Only the second is ours to do: a payload
+        # that carries the key is the standalone page's answer, and repeating
+        # its capture would read a browser the person has already left.
+        if "saved" in response:
+            saved = bool(response.get("saved"))
+            detail = response.get("saved_detail")
+            detail = str(detail) if detail else None
+        else:
+            saved, detail = await self._capture_for_resume(
+                user_id=user_id, conversation_id=conversation_id, origin=origin
+            )
 
         kept = (
             "It has been kept, so the next run will not ask."
@@ -247,6 +272,45 @@ class ResumeToolReturnBuilder:
             saved=saved,
             message=f"The person signed in. {kept} Open the page again to carry on.",
         ).model_dump(mode="json")
+
+    async def _capture_for_resume(
+        self, *, user_id: UUID, conversation_id: UUID, origin: str
+    ) -> tuple[bool, str | None]:
+        """Read the browser and keep the login, for an answer given in the chat.
+
+        Best effort, and deliberately not fatal: the person has signed in
+        either way, and a run that carries on with an unkept login is worth
+        more than a resume that fails. What it costs is being asked again next
+        time, which the agent is told in as many words.
+        """
+        from app.core.api.dependencies import get_uow_factory
+        from app.modules.web_login.contracts import SignInService
+
+        # Its own factory, and short-lived units of work inside it: this runs
+        # while the caller's unit of work is open, and a sandbox round trip
+        # must not be the thing a pooled connection waits on. What it costs is
+        # that a slow browser makes the resume slower, which is the trade the
+        # alternative -- answering through a second endpoint the client never
+        # hears about -- was paying in a worse currency.
+        #
+        # Nothing is caught here on purpose. `capture` already answers the
+        # failures that are *expected* of a browser -- an unreachable relay, a
+        # fabric that cannot do this -- as `(False, why)`, and the agent is
+        # told. What is left is a bug or a database that is down, and
+        # swallowing either would resume the run with a login silently
+        # discarded.
+        service = SignInService(get_uow_factory())
+        try:
+            return await service.capture(
+                user_id=user_id,
+                origin=origin,
+                conversation_id=conversation_id,
+                # Nobody is waiting to be offered "save anyway": this answer
+                # came from the conversation, not from the page that can ask.
+                force=True,
+            )
+        finally:
+            await service.close()
 
     async def _execute_approved_tool_as_user(
         self,

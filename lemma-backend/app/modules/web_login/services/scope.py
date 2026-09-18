@@ -185,3 +185,23 @@ __all__ = [
     "looks_signed_in",
     "scope_state",
 ]
+
+
+#: Words a page shows when it still wants a login. Crude on purpose: the
+#: alternative is asking a model, and a wrong answer here either asks a person
+#: who did not need asking or reports a sign-in that did not happen.
+_WALL_HINTS = ("sign in", "signin", "log in", "login", "password")
+
+
+def page_looks_like_a_login_wall(text: str) -> bool:
+    """Whether a page still appears to want a login.
+
+    Used after loading a saved session: if the site shows a login form anyway,
+    the session is dead and saying so now is what `PS-CONN-022` asks for.
+
+    Here rather than beside the service that calls it, because this is the
+    same question `looks_signed_in` asks from the other side -- and because a
+    service file is not the place for a word list.
+    """
+    lowered = (text or "").lower()[:4000]
+    return any(hint in lowered for hint in _WALL_HINTS)
