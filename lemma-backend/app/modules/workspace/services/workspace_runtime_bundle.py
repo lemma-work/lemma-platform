@@ -100,14 +100,28 @@ def install_command(
     Module-level so the real-sandbox test runs the command this actually emits
     rather than a copy of it that can drift.
 
-    The overlay is root-owned, and so is the site-packages the `.pth` goes in --
-    verified against a live sandbox, where the workspace user cannot even
-    `mkdir /opt/lemma-runtime`. E2B's user has passwordless sudo, so elevation
-    is available; a fabric without it falls through to an unelevated run, which
-    fails cleanly and leaves the baked copy in place. That is better than
-    branching on the provider: Docker's image already carries current
-    first-party code, because rebuilding it there costs a container rather than
-    somebody's disk, so an overlay has nothing to fix.
+    It runs unelevated, on both fabrics. That is not luck: the images create
+    `/opt/lemma-runtime` owned by the sandbox user and bake the `.pth` with
+    exactly the bytes the installer would write, so the one path that needs root
+    -- writing into the interpreter's own site-packages -- is never taken. Both
+    were verified against live sandboxes, the second byte for byte, because a
+    `.pth` differing by so much as a trailing newline would send the installer
+    into a root-owned directory.
+
+    The `sudo -n` probe stays as insurance rather than as the plan. A sandbox
+    created from an image that predates the baking still has a root-owned
+    `/opt/lemma-runtime`, and during a rollout those exist; where sudo is absent
+    too, the install fails cleanly and the baked copy keeps serving.
+
+    `/opt` rather than somewhere under the home, deliberately. It is where
+    add-on software belongs, it keeps what the platform installed out of the
+    directory listing the user browses, and it keeps the disk-copy set that a
+    later migration works from as "the user's files" -- an overlay installed
+    `--no-deps` against one base image has no business being carried onto
+    another. The cost is that on Docker and `lemma_local`, where `/opt` is the
+    container layer, replacing a container discards it and the next ensure
+    reinstalls: about 650ms, once, on the fabric where a container is cheap. On
+    E2B, where the sandbox is the disk, it simply persists.
     """
     return (
         "sudo -n true 2>/dev/null && SUDO='sudo -n' || SUDO=''; "

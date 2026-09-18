@@ -349,13 +349,30 @@ surface than a shell and is exposed to page script.
   gone when the container is replaced. This is why the mount is the home and not
   the project root.
 
-One consequence follows from that asymmetry and is worth stating plainly: the
-runtime overlay in `/opt/lemma-runtime` is durable on E2B and is **not** durable
-on Docker, where replacing a container discards it. It is reinstalled on the next
-ensure — about 650 ms — so it is a cost, not a correctness problem. The code that
-decides whether to reinstall therefore keys on the sandbox *incarnation*, not on
-the logical sandbox, because a replaced container keeps its files and its storage
-generation while losing `/opt` entirely.
+#### Why the runtime overlay is not in the home
+
+The first-party Lemma code the backend installs lives in `/opt/lemma-runtime`,
+outside the durable root, and that is deliberate. `/opt` is where add-on software
+belongs; it keeps what the platform installed out of the directory the user
+browses; and it keeps the copy set a later disk migration works from as *the
+user's files*, since an overlay installed `--no-deps` against one base image has
+no business being carried onto another.
+
+The cost is an asymmetry worth stating plainly: the overlay is durable on E2B,
+where the sandbox is the disk, and is **not** durable on Docker or
+`lemma_local`, where `/opt` is the container layer and replacing a container
+discards it. The next use reinstalls it — about 650 ms, on the fabric where
+replacing a container is cheap — so this is a cost, not a correctness problem.
+
+Installing needs no elevation on either fabric: the images create the directory
+owned by the sandbox user and bake the `.pth` with exactly the bytes the
+installer would write, so the one step that would need root is never taken.
+
+It does place one requirement on the code. Whatever decides to reinstall must key
+on the sandbox *incarnation*, not on the logical sandbox: a replaced container
+keeps every file and keeps its storage generation while losing `/opt` entirely,
+and a check that missed that would report the overlay installed while the sandbox
+served the image's older copy.
 
 #### What is not promised
 
