@@ -325,8 +325,8 @@ class FilesystemPort(Protocol):
 ```
 
 Paths are absolute and must resolve below the profile's allowed roots. Workspace
-callers use the sandbox user's home (`/home/user`), and the earlier `/workspace`
-is still accepted so a conversation recorded before the move keeps resolving;
+callers address the sandbox user's home (`/home/user`), within which
+`/home/user/lemma` is the project root that conversations are created under;
 function runtime internals may additionally use a private ephemeral cache root. Symlink resolution is checked at the adapter boundary.
 
 Writes use a temporary sibling file, fsync when supported, and atomic rename. The
@@ -445,8 +445,6 @@ POST   .../files:move
 DELETE .../files?path=/home/user/a.txt&recursive=false
 ```
 
-`/workspace/a.txt` is still accepted on any of these, for a conversation
-recorded before the root moved. It is compatibility, not the caller path.
 
 Read/write bodies use `application/octet-stream`. Metadata is carried in response
 headers and typed JSON for `stat`/`list`. Conditional writes accept an optional

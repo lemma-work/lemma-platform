@@ -39,7 +39,7 @@ The design intentionally uses different lifecycle policies for the two workloads
 
 | Workload | Logical owner | Durable state | Idle action | Physical isolation |
 | --- | --- | --- | --- | --- |
-| Workspace | User | `/workspace` files | Quiesce and release | One sandbox per user |
+| Workspace | User | home-directory files | Quiesce and release | One sandbox per user |
 | Function | Pod | None | Destroy after five minutes | One sandbox per pod |
 
 The logical identity is a composite key. A UUID is never interpreted without its
@@ -250,7 +250,7 @@ Initial profiles:
 - Node 24 LTS and browser/application tooling locked with `pnpm`;
 - stateful Python support;
 - reconnectable commands and PTYs;
-- `/workspace` as the only durable project root;
+- `/home/user/lemma` as the only project root, inside a durable home;
 - public internet egress with private, link-local, metadata, and provider control
   destinations denied;
 - provider-specific persistent workspace storage.
@@ -335,7 +335,7 @@ stateDiagram-v2
 - Release first blocks new work, drains active operations, terminates managed
   sessions/processes, clears ephemeral credentials and browser state, then invokes
   the provider release primitive.
-- `/workspace` files survive release.
+- home-directory files survive release.
 - Session and process continuity is not portable across release.
 - Suspended retention is configurable (currently seven days by default) and is
   measured from the last accepted activity; activity before that deadline resumes
@@ -431,7 +431,7 @@ invariants, and the acceptance gates together.
 | --- | --- |
 | Logical sandbox | Stable `(workload_kind, logical_id)` requested by a caller |
 | Physical allocation | One provider-created container, Pod, or E2B sandbox |
-| Workspace storage | Durable `/workspace` content owned by one logical workspace, independent of a replaceable allocation where the provider permits |
+| Workspace storage | Durable home-directory content owned by one logical workspace, independent of a replaceable allocation where the provider permits |
 | Allocation token | sandbox-runtime-generated unique identifier for one create attempt |
 | Allocation epoch | Monotonic logical incarnation used to fence sessions/processes |
 | Profile | Immutable workload image/template, capabilities, and policies |

@@ -9,7 +9,7 @@ from fastapi import HTTPException
 
 from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
 
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.api.controllers import files_controller as controller
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeFileNotFound,
@@ -46,8 +46,8 @@ def test_the_workspace_root_itself_is_allowed() -> None:
         "/tmp",
         "/etc/passwd",
         "../../etc/passwd",
-        f"{WORKSPACE_ROOT}/../tmp/secret",
-        f"{WORKSPACE_ROOT}/../../root",
+        f"{HOME_ROOT}/../tmp/secret",
+        f"{HOME_ROOT}/../../root",
     ],
 )
 def test_nothing_outside_the_workspace_is_readable(path: str) -> None:
@@ -302,10 +302,10 @@ def test_an_ordinary_workspace_file_is_allowed() -> None:
 
 
 def test_a_path_that_merely_starts_with_the_root_name_is_refused() -> None:
-    """`/workspace-other` is not inside `/workspace`, and a prefix test that
+    """`/home/user-other` is not inside `/home/user`, and a prefix test that
     forgets the separator says it is."""
     with pytest.raises(HTTPException) as raised:
-        controller._inside_workspace(_stat(f"{WORKSPACE_ROOT}-other/secrets"))
+        controller._inside_workspace(_stat(f"{HOME_ROOT}-other/secrets"))
     assert raised.value.status_code == 422
 
 

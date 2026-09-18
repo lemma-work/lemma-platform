@@ -15,26 +15,22 @@ pub fn workspace_root() -> anyhow::Result<PathBuf> {
     Ok(root)
 }
 
-/// Sandbox roots a persisted conversation cwd may be written under.
+/// The sandbox root a persisted conversation cwd is written under.
 ///
-/// Two, because the root moved and conversation rows are never rewritten. A
-/// host that knew only the current one would reject every conversation created
-/// before the move; one that knew only the previous one — which is every copy
-/// already installed on somebody's machine — rejects every conversation created
-/// after it. Accepting both is what makes the two releases able to pass each
-/// other.
-const SANDBOX_ROOTS: [&str; 2] = ["/home/user/", "/workspace/"];
+/// One, now that the root is settled and the conversations that predate it have
+/// been repointed. It is deliberately the same trailing name as the host
+/// directory these map onto — `~/lemma` in the sandbox, `~/lemma` here — so the
+/// two sides of a dispatched run are not two vocabularies.
+///
+/// A host binary carries this constant, and there is no auto-updater, so a copy
+/// installed before this release rejects a conversation created after it. That
+/// is the cost of moving the root at all; it is paid once.
+const SANDBOX_ROOT: &str = "/home/user/lemma/";
 
 fn suffix(cwd: &str) -> anyhow::Result<&str> {
-    let suffix = SANDBOX_ROOTS
-        .iter()
-        .find_map(|root| cwd.strip_prefix(root))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "conversation cwd must be beneath one of {}",
-                SANDBOX_ROOTS.join(", ")
-            )
-        })?;
+    let suffix = cwd.strip_prefix(SANDBOX_ROOT).ok_or_else(|| {
+        anyhow::anyhow!("conversation cwd must be beneath {SANDBOX_ROOT}")
+    })?;
     anyhow::ensure!(
         suffix.len() <= 4096
             && suffix.split('/').all(|part| {
@@ -204,8 +200,8 @@ mod tests {
         let target = Uuid::new_v4();
         let suffix = "c/2026-09-18/ab3f2k7q";
 
-        let old = prepare(&root, target, &format!("/workspace/{suffix}")).unwrap();
-        let new = prepare(&root, target, &format!("/home/user/{suffix}")).unwrap();
+        let old = prepare(&root, target, &format!("/home/user/lemma/{suffix}")).unwrap();
+        let new = prepare(&root, target, &format!("/home/user/lemma/{suffix}")).unwrap();
 
         assert_eq!(old, new);
     }
@@ -215,7 +211,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("lemma");
         let target = Uuid::new_v4();
-        let cwd = "/workspace/c/2026-09-07/Δ project";
+        let cwd = "/home/user/lemma/c/2026-09-07/Δ project";
         let first = prepare(&root, target, cwd).unwrap();
         assert_eq!(first, root.join("c/2026-09-07/Δ project"));
         std::fs::write(first.join("work.txt"), "preserved").unwrap();
@@ -224,14 +220,14 @@ mod tests {
             std::fs::read_to_string(first.join("work.txt")).unwrap(),
             "preserved"
         );
-        assert!(prepare(&root, target, "/workspace/c/2026-09-07/other").is_ok());
+        assert!(prepare(&root, target, "/home/user/lemma/c/2026-09-07/other").is_ok());
         assert!(prepare(&root, Uuid::new_v4(), cwd).is_err());
-        assert!(prepare(&root, Uuid::new_v4(), "/workspace/c").is_err());
+        assert!(prepare(&root, Uuid::new_v4(), "/home/user/lemma/c").is_err());
         assert!(
             prepare(
                 &root,
                 Uuid::new_v4(),
-                "/workspace/c/2026-09-07/Δ project/child"
+                "/home/user/lemma/c/2026-09-07/Δ project/child"
             )
             .is_err()
         );
@@ -243,15 +239,15 @@ mod tests {
         let root = temp.path().join("lemma");
         for cwd in [
             "/workspace",
-            "/workspace/",
+            "/home/user/lemma/",
             "/etc",
-            "/workspace/../escape",
-            "/workspace/a/./b",
-            "/workspace//b",
-            "/workspace/a\\b",
-            "/workspace/C:drive",
-            "/workspace/a\nb",
-            "/workspace/.lemma/state",
+            "/home/user/lemma/../escape",
+            "/home/user/lemma/a/./b",
+            "/home/user/lemma//b",
+            "/home/user/lemma/a\\b",
+            "/home/user/lemma/C:drive",
+            "/home/user/lemma/a\nb",
+            "/home/user/lemma/.lemma/state",
         ] {
             assert!(prepare(&root, Uuid::new_v4(), cwd).is_err(), "{cwd}");
             assert!(!root.exists());
@@ -264,7 +260,7 @@ mod tests {
         let project = temp.path().join("project");
         std::fs::create_dir(&project).unwrap();
         std::fs::write(project.join("work.txt"), "mine").unwrap();
-        assert!(prepare(temp.path(), Uuid::new_v4(), "/workspace/project").is_err());
+        assert!(prepare(temp.path(), Uuid::new_v4(), "/home/user/lemma/project").is_err());
         assert_eq!(
             std::fs::read_to_string(project.join("work.txt")).unwrap(),
             "mine"
@@ -304,11 +300,11 @@ mod tests {
     fn a_sibling_that_only_shares_a_prefix_is_not_an_overlap() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("lemma");
-        prepare(&root, Uuid::new_v4(), "/workspace/proj").unwrap();
-        prepare(&root, Uuid::new_v4(), "/workspace/project").unwrap();
-        prepare(&root, Uuid::new_v4(), "/workspace/proj0").unwrap();
+        prepare(&root, Uuid::new_v4(), "/home/user/lemma/proj").unwrap();
+        prepare(&root, Uuid::new_v4(), "/home/user/lemma/project").unwrap();
+        prepare(&root, Uuid::new_v4(), "/home/user/lemma/proj0").unwrap();
         // And the real containment is still refused.
-        assert!(prepare(&root, Uuid::new_v4(), "/workspace/proj/inside").is_err());
+        assert!(prepare(&root, Uuid::new_v4(), "/home/user/lemma/proj/inside").is_err());
     }
 
     /// Narrowing the query must not narrow what it finds. A conflict buried
@@ -320,18 +316,18 @@ mod tests {
         let root = temp.path().join("lemma");
         let mine = Uuid::new_v4();
         for index in 0..64 {
-            prepare(&root, Uuid::new_v4(), &format!("/workspace/other-{index}")).unwrap();
+            prepare(&root, Uuid::new_v4(), &format!("/home/user/lemma/other-{index}")).unwrap();
         }
-        prepare(&root, mine, "/workspace/a/b/c").unwrap();
+        prepare(&root, mine, "/home/user/lemma/a/b/c").unwrap();
 
         // An ancestor of a directory somebody else owns.
-        assert!(prepare(&root, Uuid::new_v4(), "/workspace/a").is_err());
+        assert!(prepare(&root, Uuid::new_v4(), "/home/user/lemma/a").is_err());
         // A descendant of one.
-        assert!(prepare(&root, Uuid::new_v4(), "/workspace/a/b/c/d").is_err());
+        assert!(prepare(&root, Uuid::new_v4(), "/home/user/lemma/a/b/c/d").is_err());
         // The same directory.
-        assert!(prepare(&root, Uuid::new_v4(), "/workspace/a/b/c").is_err());
+        assert!(prepare(&root, Uuid::new_v4(), "/home/user/lemma/a/b/c").is_err());
         // And its own owner is still let back in.
-        assert!(prepare(&root, mine, "/workspace/a/b/c/d").is_ok());
+        assert!(prepare(&root, mine, "/home/user/lemma/a/b/c/d").is_ok());
     }
 
     #[cfg(unix)]
@@ -340,11 +336,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let target = Uuid::new_v4();
-        let project = prepare(temp.path(), target, "/workspace/project").unwrap();
+        let project = prepare(temp.path(), target, "/home/user/lemma/project").unwrap();
         std::fs::remove_dir(&project).unwrap();
         std::os::unix::fs::symlink(outside.path(), project).unwrap();
-        assert!(prepare(temp.path(), target, "/workspace/project/child").is_err());
+        assert!(prepare(temp.path(), target, "/home/user/lemma/project/child").is_err());
         assert!(!outside.path().join("child").exists());
-        assert!(prepare(temp.path(), target, "/workspace/project").is_err());
+        assert!(prepare(temp.path(), target, "/home/user/lemma/project").is_err());
     }
 }

@@ -13,7 +13,7 @@ import pytest
 
 from app.modules.agent.tools.file_access import is_datastore_path
 from sandbox_runtime.paths import (
-    LEGACY_WORKSPACE_ROOT,
+    HOME_ROOT,
     RUNTIME_FILESYSTEM_ROOTS,
     WORKSPACE_ROOT,
 )
@@ -26,13 +26,18 @@ def test_every_runtime_root_addresses_the_sandbox(root: str) -> None:
     assert not is_datastore_path(f"{root}/notes.md")
 
 
-def test_the_current_and_legacy_workspace_roots_are_both_the_sandbox() -> None:
-    """A conversation recorded before the move still reads its own files."""
+def test_the_project_root_and_the_rest_of_the_home_are_both_the_sandbox() -> None:
+    """Routing asks which disk, not which directory.
+
+    A conversation's own files and the tool caches beside them are both in the
+    sandbox; only the project root is this session's *directory*, and that is a
+    different question asked elsewhere.
+    """
     assert not is_datastore_path(f"{WORKSPACE_ROOT}/c/2026-01-01/slug/out.txt")
-    assert not is_datastore_path(f"{LEGACY_WORKSPACE_ROOT}/c/2026-01-01/slug/out.txt")
+    assert not is_datastore_path(f"{HOME_ROOT}/.npm/_cacache")
 
 
-def test_the_parent_of_the_workspace_root_is_not_the_sandbox() -> None:
+def test_the_parent_of_the_home_is_not_the_sandbox() -> None:
     """`/home` is not a root, and prefix matching must not make it one.
 
     The check is `startswith(f"{root}/")` rather than `startswith(root)` for
@@ -40,10 +45,10 @@ def test_the_parent_of_the_workspace_root_is_not_the_sandbox() -> None:
     and `/tmpfiles`, and a path the sandbox cannot serve would stop being
     routed at the pod that can.
     """
-    parent, _, _ = WORKSPACE_ROOT.rpartition("/")
-    assert parent and parent != WORKSPACE_ROOT
+    parent, _, _ = HOME_ROOT.rpartition("/")
+    assert parent and parent != HOME_ROOT
     assert is_datastore_path(parent)
-    assert is_datastore_path(f"{WORKSPACE_ROOT}-other/notes.md")
+    assert is_datastore_path(f"{HOME_ROOT}-other/notes.md")
 
 
 def test_a_path_is_routed_by_what_it_names_after_traversal() -> None:
@@ -55,7 +60,7 @@ def test_a_path_is_routed_by_what_it_names_after_traversal() -> None:
     names, so it is normalised first.
     """
     assert is_datastore_path("/tmp/../me/report")
-    assert is_datastore_path(f"{WORKSPACE_ROOT}/../../etc/passwd")
+    assert is_datastore_path(f"{HOME_ROOT}/../../etc/passwd")
 
 
 def test_traversal_that_stays_inside_a_root_still_addresses_the_sandbox() -> None:
@@ -76,7 +81,7 @@ def test_a_doubled_leading_slash_still_names_the_sandbox() -> None:
     """
     assert not is_datastore_path("//tmp/staged")
     assert not is_datastore_path(f"/{WORKSPACE_ROOT}/a.txt")
-    assert not is_datastore_path(f"/{LEGACY_WORKSPACE_ROOT}/a.txt")
+    assert not is_datastore_path(f"/{HOME_ROOT}/a.txt")
     assert not is_datastore_path("///tmp/x")
 
 

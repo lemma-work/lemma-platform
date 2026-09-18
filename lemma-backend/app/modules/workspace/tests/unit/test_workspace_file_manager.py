@@ -159,7 +159,7 @@ def test_workspace_file_manager_rejects_escaping_cwd_and_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 
-    with pytest.raises(ValueError, match="cwd escapes"):
+    with pytest.raises(ValueError, match="cwd must be relative"):
         WorkspaceFileManager(uuid4(), cwd="../../outside")
 
     manager = WorkspaceFileManager(uuid4(), cwd="conversations/abc")

@@ -50,12 +50,12 @@ def test_conversation_metadata_overrides_cwd_and_workspace():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": "/workspace/project", "workspace_name": "research"},
+        metadata={"cwd": f"{WORKSPACE_ROOT}/project", "workspace_name": "research"},
     )
 
     location = resolve_workspace_location(conversation)
 
-    assert location.cwd == "/workspace/project"
+    assert location.cwd == f"{WORKSPACE_ROOT}/project"
     assert location.workspace_id == "research"
 
 
@@ -64,7 +64,7 @@ def test_nested_workspace_block_takes_precedence():
         pod_id=uuid4(),
         user_id=uuid4(),
         metadata={
-            "workspace": {"id": "ws-7", "cwd": "/workspace/ws7"},
+            "workspace": {"id": "ws-7", "cwd": f"{WORKSPACE_ROOT}/ws7"},
             "cwd": "/ignored",
         },
     )
@@ -72,14 +72,14 @@ def test_nested_workspace_block_takes_precedence():
     location = resolve_workspace_location(conversation)
 
     assert location.workspace_id == "ws-7"
-    assert location.cwd == "/workspace/ws7"
+    assert location.cwd == f"{WORKSPACE_ROOT}/ws7"
 
 
 def test_pod_cwd_mirrors_persisted_workspace_cwd_under_me():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": "/workspace/c/2026-07-02/ab3f2k7q"},
+        metadata={"cwd": f"{WORKSPACE_ROOT}/c/2026-07-02/ab3f2k7q"},
     )
 
     assert resolve_pod_cwd(conversation) == "/me/c/2026-07-02/ab3f2k7q"
@@ -89,15 +89,15 @@ def test_pod_cwd_mirrors_overridden_workspace_cwd():
     conversation = Conversation(
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": "/workspace/project"},
+        metadata={"cwd": f"{WORKSPACE_ROOT}/project"},
     )
 
     assert resolve_pod_cwd(conversation) == "/me/project"
 
 
 def test_pod_cwd_from_workspace_cwd_edge_cases():
-    assert pod_cwd_from_workspace_cwd("/workspace") == "/me"
-    assert pod_cwd_from_workspace_cwd("/workspace/a/b") == "/me/a/b"
+    assert pod_cwd_from_workspace_cwd(WORKSPACE_ROOT) == "/me"
+    assert pod_cwd_from_workspace_cwd(f"{WORKSPACE_ROOT}/a/b") == "/me/a/b"
     # A cwd not under /workspace is placed under /me as-is (defensive).
     assert pod_cwd_from_workspace_cwd("/other/x") == "/me/other/x"
 
@@ -114,18 +114,18 @@ def test_python_runtime_identity_tracks_conversation_working_directory():
     first = workspace_runtime_context(
         BaseAgentContext(
             **common,
-            workspace_cwd="/workspace/conversations/first",
+            workspace_cwd=f"{WORKSPACE_ROOT}/conversations/first",
         )
     )
     second = workspace_runtime_context(
         BaseAgentContext(
             **common,
-            workspace_cwd="/workspace/conversations/second",
+            workspace_cwd=f"{WORKSPACE_ROOT}/conversations/second",
         )
     )
 
-    assert first.initial_cwd == "/workspace/conversations/first"
-    assert second.initial_cwd == "/workspace/conversations/second"
+    assert first.initial_cwd == f"{WORKSPACE_ROOT}/conversations/first"
+    assert second.initial_cwd == f"{WORKSPACE_ROOT}/conversations/second"
     assert first.default_python_session_id != second.default_python_session_id
 
 
@@ -290,13 +290,13 @@ def test_an_explicit_cwd_still_wins_over_the_repo_directory():
         user_id=uuid4(),
         metadata={
             "repo": {"owner": "acme", "repo": "web"},
-            "cwd": "/workspace/somewhere-else",
+            "cwd": f"{WORKSPACE_ROOT}/somewhere-else",
         },
     )
 
     location = resolve_workspace_location(conversation)
 
-    assert location.cwd == "/workspace/somewhere-else"
+    assert location.cwd == f"{WORKSPACE_ROOT}/somewhere-else"
     # The repo is still in effect — the checkout just lands where it was asked to.
     assert location.repo is not None
 

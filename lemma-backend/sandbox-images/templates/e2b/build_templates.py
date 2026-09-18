@@ -289,7 +289,7 @@ def workspace_template():
             user="root",
         )
         .run_cmd(
-            "mkdir -p /home/user /tmp/lemma-browser/runtime "
+            "mkdir -p /home/user /home/user/lemma /tmp/lemma-browser/runtime "
             "/tmp/lemma-browser/profile && "
             "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
@@ -430,7 +430,7 @@ def workspace_template():
                 "UV_CACHE_DIR": "/home/user/.uv-cache",
             }
         )
-        .set_workdir("/home/user")
+        .set_workdir("/home/user/lemma")
         .set_user("user")
     )
 

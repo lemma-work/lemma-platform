@@ -37,7 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from sandbox_runtime.paths import WORKSPACE_ROOT, root_of
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT, is_inside_home
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
@@ -144,13 +144,14 @@ def _workspace_path(path: str | None) -> str:
         candidate if candidate.startswith("/") else posixpath.join(_ROOT, candidate)
     )
     normalized = posixpath.normpath(absolute)
-    # Either workspace root, because a workspace created before the root moved
-    # still holds the user's files under the previous one -- and `/tmp` is under
-    # neither, which is the whole point of asking this question here.
-    if root_of(normalized) is None:
+    # The home rather than the project root: a sandbox belongs to one user and
+    # browsing their own `~/.config` is not a boundary worth enforcing, since
+    # the shell can already read it. `/tmp` is outside it, which is the whole
+    # point of asking this question here rather than deferring to the runtime.
+    if not is_inside_home(normalized):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
     return normalized
 
@@ -182,12 +183,12 @@ def _inside_workspace(stat) -> None:
     if getattr(stat, "kind", None) == FileKind.SYMLINK:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
-    if reported and root_of(reported) is None:
+    if reported and not is_inside_home(reported):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
 
 

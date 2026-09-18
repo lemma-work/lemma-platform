@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import pytest
 
-from sandbox_runtime.paths import LEGACY_WORKSPACE_ROOT, WORKSPACE_ROOT
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
@@ -61,7 +61,7 @@ def test_another_conversations_path_is_refused_not_quietly_re_homed():
     path naming somebody else's conversation was turned into one naming the
     caller's and read from there. Refusing is the point of the guard.
     """
-    other = "/workspace/conversations/00000000-0000-0000-0000-000000000000/secret.txt"
+    other = f"{WORKSPACE_ROOT}/conversations/00000000-0000-0000-0000-000000000000/secret.txt"
     with pytest.raises(ValueError, match="escapes its configured root"):
         _manager(CWD)._workspace_path(other)
 
@@ -80,37 +80,24 @@ def test_a_rootless_session_still_resolves_both_forms():
     assert manager._workspace_path(WORKSPACE_ROOT) == WORKSPACE_ROOT
 
 
-def test_a_workspace_from_before_the_move_keeps_its_own_root():
-    """Its files are under the previous root, and re-rooting does not move them.
-
-    A conversation created before the root moved has that root written into its
-    metadata, and those rows are never rewritten. Resolving its paths against
-    the *current* root would point at a directory nothing has written to and
-    report the user's own work missing.
-    """
-    manager = WorkspaceFileManager(uuid4(), cwd=f"{LEGACY_WORKSPACE_ROOT}/c/x")
-
-    assert manager.root == LEGACY_WORKSPACE_ROOT
-    assert manager._workspace_path("f.txt") == f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt"
-    assert (
-        manager._workspace_path(f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt")
-        == f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt"
-    )
-
-
-def test_a_new_workspace_is_rooted_at_the_current_root():
+def test_a_workspace_is_rooted_at_the_project_root():
     manager = WorkspaceFileManager(uuid4(), cwd=f"{WORKSPACE_ROOT}/c/x")
 
-    assert manager.root == WORKSPACE_ROOT
     assert manager._workspace_path("f.txt") == f"{WORKSPACE_ROOT}/c/x/f.txt"
 
 
-def test_one_workspace_root_cannot_reach_the_other():
-    """Tolerating the previous root is not the same as merging the two."""
+def test_a_path_in_the_home_but_outside_the_project_root_is_refused():
+    """The home is browsable and durable; it is not this session's directory.
+
+    `/home/user/.npm` is a real path the runtime serves, so it reaches the
+    already-rooted branch rather than being joined on -- and is then compared
+    against the caller's own directory, which is what refuses it. Without that
+    comparison it would be read as if it belonged to the conversation.
+    """
     manager = WorkspaceFileManager(uuid4(), cwd=f"{WORKSPACE_ROOT}/c/x")
 
     with pytest.raises(ValueError, match="escapes its configured root"):
-        manager._workspace_path(f"{LEGACY_WORKSPACE_ROOT}/c/x/f.txt")
+        manager._workspace_path(f"{HOME_ROOT}/.npm/secret")
 
 
 def test_a_cwd_under_no_workspace_root_is_refused():

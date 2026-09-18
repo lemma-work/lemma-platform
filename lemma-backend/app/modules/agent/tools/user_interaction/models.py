@@ -153,7 +153,7 @@ def _reject_fields_from_other_types(
 # Roots that belong to the machine or the sandbox rather than the pod. A path
 # under any of these resolves for the agent and for nobody else.
 #
-# ``/workspace`` is the one that actually gets sent. It is the agent's own cwd,
+# A sandbox path is the one that actually gets sent. It is the agent's own cwd,
 # so it is the path it has in hand when it decides to show a file it just made,
 # and it used to pass this check — leaving the delivery to fail three layers
 # down, where the only thing left to do was render a card whose "Open file"

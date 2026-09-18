@@ -16,6 +16,7 @@ from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxUnavailable,
 )
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -536,7 +537,7 @@ async def test_streamed_output_becomes_a_readable_cursor(
             operation_id=operation_id,
             shell_command="echo hi",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(EnvironmentVariable(name="A", value="1"),),
             tty=None,
             output_limit_bytes=1024,
@@ -586,7 +587,7 @@ async def test_a_tty_process_streams_on_the_pty_channel(
             operation_id=uuid4(),
             shell_command="bash",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=TerminalSize(rows=24, cols=80),
             output_limit_bytes=1024,
@@ -624,7 +625,7 @@ async def _start(provider: E2BSandboxProvider, *, deadline_at, tty=None) -> None
             operation_id=uuid4(),
             shell_command="npm run build",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=tty,
             output_limit_bytes=1024,
@@ -685,18 +686,18 @@ async def test_files_round_trip(provider: E2BSandboxProvider) -> None:
 
     stat = await provider.write_file(
         instance,
-        path="/workspace/a.txt",
+        path=f"{WORKSPACE_ROOT}/a.txt",
         data=payload(),
         expected_sha256=None,
         deadline_at=_deadline(),
     )
-    assert stat.path == "/workspace/a.txt"
+    assert stat.path == f"{WORKSPACE_ROOT}/a.txt"
 
     chunks = [
         chunk
         async for chunk in provider.open_file(
             instance,
-            path="/workspace/a.txt",
+            path=f"{WORKSPACE_ROOT}/a.txt",
             byte_range=ByteRange(offset=0, length=None),
             deadline_at=_deadline(),
         )
@@ -712,7 +713,7 @@ async def test_a_missing_file_is_definitively_missing(
     instance = await provider.create(_spec(uuid4()))
     with pytest.raises(SandboxPathNotFound):
         await provider.stat_file(
-            instance, path="/workspace/nope.txt", deadline_at=_deadline()
+            instance, path=f"{WORKSPACE_ROOT}/nope.txt", deadline_at=_deadline()
         )
 
 
@@ -723,7 +724,7 @@ async def test_deleting_a_missing_file_reports_that_nothing_was_removed(
     assert (
         await provider.delete_file(
             instance,
-            path="/workspace/nope.txt",
+            path=f"{WORKSPACE_ROOT}/nope.txt",
             recursive=False,
             deadline_at=_deadline(),
         )
@@ -744,12 +745,12 @@ async def test_a_mismatched_digest_is_refused_before_writing(
     with pytest.raises(SandboxRejected, match="digest"):
         await provider.write_file(
             instance,
-            path="/workspace/a.txt",
+            path=f"{WORKSPACE_ROOT}/a.txt",
             data=payload(),
             expected_sha256="sha256:" + "0" * 64,
             deadline_at=_deadline(),
         )
-    assert "/workspace/a.txt" not in world.files
+    assert f"{WORKSPACE_ROOT}/a.txt" not in world.files
 
 
 # ---------------------------------------------------------------------------
@@ -766,7 +767,7 @@ async def test_a_missing_sandbox_is_definitively_gone(
 
     with pytest.raises(ProviderGone):
         await provider.stat_file(
-            instance, path="/workspace/a.txt", deadline_at=_deadline()
+            instance, path=f"{WORKSPACE_ROOT}/a.txt", deadline_at=_deadline()
         )
 
 
@@ -1140,7 +1141,7 @@ async def test_python_and_the_shell_are_given_the_same_directory(
     monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
     monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
 
-    cwd = "/workspace/c/2026-08-21/0d8y15k6"
+    cwd = f"{WORKSPACE_ROOT}/c/2026-08-21/0d8y15k6"
     instance = await provider.create(_spec(uuid4()))
     world.command_cwds.clear()
 
@@ -1204,7 +1205,7 @@ async def test_execute_python_is_visible_to_the_idle_sweep(
     monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
     monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
 
-    cwd = "/workspace/c/2026-08-30/rkil98cd"
+    cwd = f"{WORKSPACE_ROOT}/c/2026-08-30/rkil98cd"
     instance = await provider.create(_spec(uuid4()))
     operation_id = uuid4()
 

@@ -80,6 +80,12 @@ pub(crate) fn build_run_arguments(
                     "type=bind,src={},dst=/run/lemma-bootstrap",
                     runtime_token_mount.display()
                 ),
+                // The bind target, not the project root inside it. This is a
+                // bind rather than a named volume, so nothing pre-populates it
+                // from the image and `/home/user/lemma` does not exist until a
+                // session asks for it. A working directory the engine has to
+                // create is created as root, which would lock the sandbox user
+                // out of its own cwd.
                 "--workdir".into(),
                 "/home/user".into(),
             ]);

@@ -401,7 +401,7 @@ async def test_workspace_paths_cannot_escape_runtime_roots() -> None:
 
     # A relative path may still climb out of one allowed root into another.
     # Written from the root's own depth rather than assuming one segment,
-    # which is what `../tmp` quietly assumed while the root was "/workspace".
+    # which is what `../tmp` quietly assumed while the root was WORKSPACE_ROOT.
     up = "../" * WORKSPACE_ROOT.strip("/").count("/") + "../"
     assert await session._resolve_path(f"{up}tmp/result") == "/tmp/result"
     assert await session._resolve_path("/tmp/result") == "/tmp/result"

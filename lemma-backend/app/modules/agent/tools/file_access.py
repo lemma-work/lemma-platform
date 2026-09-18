@@ -1,8 +1,9 @@
 """Dual-store file reads for agent tools.
 
 The pod datastore (``/me/...`` and other pod-visible paths) is the source of
-truth for user-facing files; the workspace sandbox (``/workspace/...`` or paths
-relative to the conversation cwd) is the agent's ephemeral working area. Tools
+truth for user-facing files; the workspace sandbox (an absolute path under the
+sandbox home, or one relative to the conversation cwd) is the agent's ephemeral
+working area. Tools
 that read a file should target the store they mean: ``read_pod_file_bytes`` for
 the datastore (grant-checked) and ``read_workspace_file_bytes`` for the sandbox.
 
@@ -52,9 +53,8 @@ def is_datastore_path(path: str) -> bool:
     """True when ``path`` addresses the pod datastore rather than the sandbox.
 
     Absolute paths (``/me/...`` and other pod-visible roots) are datastore
-    paths; anything under a runtime filesystem root -- the sandbox user's home,
-    the legacy ``/workspace``, ``/tmp`` -- and every relative path belong to the
-    sandbox.
+    paths; anything under a runtime filesystem root -- the sandbox user's home
+    and ``/tmp`` -- and every relative path belong to the sandbox.
 
     The roots are read from `RUNTIME_FILESYSTEM_ROOTS` rather than spelled here,
     because the default when a path matches nothing is to route it at the pod:

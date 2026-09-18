@@ -9,65 +9,54 @@ process manager, the filesystem manager, the python session manager and the
 runtime's own app factory, and the containment message named a root that one of
 them did not enforce.
 
-``LEGACY_WORKSPACE_ROOT`` is accepted and never generated. A sandbox that
-predates the move still has the user's files under it, and on E2B the sandbox is
-the disk -- so the old root is not something to migrate away from on a schedule,
-it is something that keeps working for as long as those sandboxes do.
+There are two roots here and they are not the same question. ``HOME_ROOT`` is
+what *survives*; ``WORKSPACE_ROOT`` is where projects *go*. On a fabric where the
+sandbox is the disk they are the same disk and the distinction costs nothing. On
+Docker and ``lemma_local`` it is load-bearing: the volume is the only durable
+object, so it is mounted at the home and everything a tool writes to ``~``
+survives with it. Mounting it at the project root instead would put ``~/.npm``,
+``~/.cargo`` and ``~/.python`` back in the container layer, which is the exact
+failure that made the home the durable root in the first place.
 """
 
 from __future__ import annotations
 
-#: The durable root. Everything new is created under it, and on a fabric where
-#: the sandbox is the disk this is simply the sandbox user's home: tools put
-#: their state in ``~`` whether or not anyone planned for it, so making the home
-#: the durable thing is what stops each one needing to be redirected by hand --
-#: which is how ``PNPM_HOME`` came to point into the volume on one fabric and
-#: into the home directory on the other.
-WORKSPACE_ROOT = "/home/user"
+#: The durable root, and the sandbox user's home. Tools put their state in ``~``
+#: whether or not anyone planned for it, so making the home the durable thing is
+#: what stops each one needing to be redirected by hand -- which is how
+#: ``PNPM_HOME`` came to point into the volume on one fabric and into the home
+#: directory on the other.
+HOME_ROOT = "/home/user"
 
-#: What workspaces created before the move use. Read, never written.
-LEGACY_WORKSPACE_ROOT = "/workspace"
+#: Where conversations and projects are created. Inside the home, so it inherits
+#: its durability, and named ``lemma`` so that it is the same path on both sides
+#: of a host-dispatched run: Agent Host already maps a sandbox directory onto
+#: ``~/lemma`` on the user's own machine.
+WORKSPACE_ROOT = f"{HOME_ROOT}/lemma"
 
-#: Everything a workspace operation may address. ``/tmp`` is here because the
-#: runtime genuinely allows it -- session-scoped credentials are staged there
-#: precisely so they die with the sandbox -- and it is deliberately *not*
-#: reachable through the HTTP files route, which is a narrower surface than a
-#: shell. See ``api/controllers/files_controller``.
-RUNTIME_FILESYSTEM_ROOTS = tuple(
-    dict.fromkeys((WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT, "/tmp"))
-)
-
-
-#: The roots that hold a user's files, newest first. ``/tmp`` is deliberately
-#: absent: the runtime allows it, the HTTP files route does not, and a caller
-#: asking "which workspace root is this under" never means ``/tmp``.
-WORKSPACE_ROOTS = tuple(dict.fromkeys((WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT)))
+#: Everything a workspace operation may address. The home rather than the
+#: project root, because a sandbox belongs to one user and browsing their own
+#: ``~/.config`` is not a boundary worth enforcing -- the shell can already read
+#: it. ``/tmp`` is here because the runtime genuinely allows it -- session-scoped
+#: credentials are staged there precisely so they die with the sandbox -- and it
+#: is deliberately *not* reachable through the HTTP files route, which is a
+#: narrower surface than a shell. See ``api/controllers/files_controller``.
+RUNTIME_FILESYSTEM_ROOTS = (HOME_ROOT, "/tmp")
 
 
-def root_of(path: str) -> str | None:
-    """Which workspace root this absolute path is under, or None.
+def is_inside_home(path: str) -> bool:
+    """Whether this absolute path is under the durable root.
 
-    Answering with the root rather than a bool is what lets a caller keep a
-    path where it actually is. A workspace created before the move has the
-    user's files under the previous root, and re-rooting its paths onto the
-    current one does not move the files -- it just points somewhere empty.
+    The containment question the HTTP files route asks. ``/tmp`` is allowed by
+    the runtime and refused here, which is the whole difference between the two
+    surfaces.
     """
-    for root in WORKSPACE_ROOTS:
-        if path == root or path.startswith(f"{root}/"):
-            return root
-    return None
-
-
-def is_legacy_root(path: str) -> bool:
-    """Was this path created under the root workspaces used before the move?"""
-    return path == LEGACY_WORKSPACE_ROOT or path.startswith(f"{LEGACY_WORKSPACE_ROOT}/")
+    return path == HOME_ROOT or path.startswith(f"{HOME_ROOT}/")
 
 
 __all__ = [
-    "LEGACY_WORKSPACE_ROOT",
-    "WORKSPACE_ROOTS",
-    "root_of",
+    "HOME_ROOT",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",
-    "is_legacy_root",
+    "is_inside_home",
 ]
