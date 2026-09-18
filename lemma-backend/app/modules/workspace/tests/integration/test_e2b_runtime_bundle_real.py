@@ -201,7 +201,11 @@ async def _install(
     return await _run(
         provider,
         instance,
-        install_command(version=bundle.version, requires=bundle.requires),
+        install_command(
+            version=bundle.version,
+            requires=bundle.requires,
+            archive_sha256=bundle.archive_sha256,
+        ),
     )
 
 
