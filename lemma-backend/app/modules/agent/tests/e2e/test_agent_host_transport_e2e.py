@@ -499,6 +499,16 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
         scenario.async_client, machine, capacity=_capacity(1), **heartbeat
     )
 
+    # The two readings below are not symmetric, and knowing why is what stops
+    # the fragile-looking one being deleted the next time it flakes.
+    #
+    # `poll_after_ms` is the server's own account of which branch it took: it is
+    # non-zero only when a control update changed something, which is the same
+    # condition that returns without entering the idle wait. So for the advance
+    # it is already proof, and the clock below is a latency guard rather than
+    # the evidence. For the repeat there is no such proxy -- that branch answers
+    # 0 when it merely has commands to hand back -- so only the duration can
+    # show it actually waited, and that assertion is load-bearing.
     assert advanced["poll_after_ms"] > 0
     assert repeated["poll_after_ms"] == 0
     assert repeated_elapsed >= 0.7, "a repeated heartbeat kept cutting the poll short"
