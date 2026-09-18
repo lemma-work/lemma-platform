@@ -31,6 +31,7 @@ _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
 _CONNECTORS_PROMPT_PATH = _PROMPT_DIR / "connectors.md"
 _REPLIES_PROMPT_PATH = _PROMPT_DIR / "replies.md"
 _WORKSPACE_CLI_PROMPT_PATH = _PROMPT_DIR / "workspace_cli.md"
+_POD_PROMPT_PATH = _PROMPT_DIR / "pod.md"
 _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
@@ -41,13 +42,20 @@ _USER_INTERACTION_PROMPT_PATH = _PROMPT_DIR / "user_interaction.md"
 _AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 
 # Per-toolset prompt fragments, in the order they should appear in the system
-# prompt. Only the visible/core toolsets that carry usage guidance are listed;
-# deferred toolsets (pod/subagents) are surfaced via the deferred-tools hint
-# instead. The pod-default assistant has all of these, so it gets them all.
+# prompt. A toolset is listed here if it carries usage guidance, whether or not
+# it ends up deferred: deferral hides a toolset's schemas, not its contract.
+# The pod-default assistant has all of these, so it gets them all.
 # NB: in-process runs get these fragments through the matching pydantic-ai
 # capabilities (build_agent_instructions is called with include_toolset_prompts=
 # False); this map is the remote-harness path, which has no capability layer.
 FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
+    # Before WORKSPACE_CLI on purpose. The CLI fragment is a worked cookbook and
+    # the pod tools are deferred behind a search, so an agent that met the CLI
+    # first reached for `lemma query run` in `exec_command` and never went
+    # looking -- traces showed whole runs doing every table and file read that
+    # way. Stating the default before the exception is the cheap half of the
+    # fix; the other half was deleting the duplicate recipes from the cookbook.
+    AgentToolset.POD: _POD_PROMPT_PATH,
     AgentToolset.WORKSPACE_CLI: _WORKSPACE_CLI_PROMPT_PATH,
     AgentToolset.SKILLS: _SKILLS_PROMPT_PATH,
     AgentToolset.WEB_SEARCH: _WEB_SEARCH_PROMPT_PATH,
@@ -117,6 +125,17 @@ def load_replies_prompt() -> str:
 
 def load_workspace_cli_prompt() -> str:
     return _read_required_prompt(_WORKSPACE_CLI_PROMPT_PATH)
+
+
+def load_pod_prompt() -> str:
+    """Which tool reaches pod tables and files, and when the CLI is still right.
+
+    Deferred toolsets still carry their contract (see ``connectors``), and this
+    one has to carry more than a contract: `exec_command` is visible while the
+    `pod_*` tools are a search away, so the fragment exists to say which of two
+    working paths is the default.
+    """
+    return _read_required_prompt(_POD_PROMPT_PATH)
 
 
 def load_skills_prompt() -> str:

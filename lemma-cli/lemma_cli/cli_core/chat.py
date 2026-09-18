@@ -11,7 +11,7 @@ from rich.rule import Rule
 from rich.text import Text
 
 from .io import emit
-from .state import CliState, console
+from .state import CliState, console, fail
 
 TERMINAL_EVENTS = {"completed", "stopped", "error"}
 
@@ -80,9 +80,55 @@ def iter_sse_events(response: Any) -> Iterable[StreamEvent]:
         yield event
 
 
-def emit_stream_events(state: CliState, response: Any) -> None:
+#: What a stream that carried no terminal event means. The run did not report
+#: completing, stopping or failing, so its outcome is genuinely unknown -- a
+#: dropped connection mid-run looks exactly like this -- and reporting success
+#: is the one answer that is certainly wrong.
+_NO_TERMINAL_EVENT = (
+    "The run ended without reporting an outcome. It may still be running; "
+    "check the conversation before assuming it failed or succeeded."
+)
+
+
+def _exit_on_failed_run(
+    *, error_text: str | None, saw_terminal: bool, owns_run: bool
+) -> None:
+    """Leave a non-zero exit code behind when a run did not succeed.
+
+    A server-side failure used to print red text and exit 0, so every script,
+    every CI step and every agent driving this CLI read a failed run as a
+    successful one -- the same defect the ordinary request path had already
+    fixed by funnelling through `fail`. A run the user *stopped* is not a
+    failure and still exits 0.
+
+    `owns_run` separates the two callers, and only the missing-outcome rule
+    depends on it. A command that sent the message is answerable for how the run
+    ended, so a stream that stops without saying is a failure it must report. A
+    command that merely *attached* to a run someone else started is an observer:
+    the stream ending tells it nothing about the run, and exiting non-zero would
+    make "I watched for a while" indistinguishable from "it broke". An explicit
+    error event is reported either way -- that one is about the run, not about
+    who is watching.
+    """
+    if error_text:
+        fail(f"Run failed: {error_text}")
+    if owns_run and not saw_terminal:
+        fail(_NO_TERMINAL_EVENT)
+
+
+def emit_stream_events(
+    state: CliState, response: Any, *, owns_run: bool = True
+) -> None:
+    error_text: str | None = None
+    saw_terminal = False
     try:
         for event in iter_sse_events(response):
+            event_type = event.type.lower()
+            if event_type == "error":
+                error_text = str(event.data)
+                saw_terminal = True
+            elif event_type in {"completed", "stopped"}:
+                saw_terminal = True
             emit(
                 state,
                 {
@@ -101,6 +147,12 @@ def emit_stream_events(state: CliState, response: Any) -> None:
             )
     finally:
         response.close()
+    # After the `finally`, so the events a consumer needs are all emitted before
+    # the process exits -- a machine reading `--output json` has the same right
+    # to the transcript as a person reading the rendered one.
+    _exit_on_failed_run(
+        error_text=error_text, saw_terminal=saw_terminal, owns_run=owns_run
+    )
 
 
 def render_chat_stream(
@@ -109,9 +161,10 @@ def render_chat_stream(
     response: Any,
     agent: str | None,
     verbose: bool = False,
+    owns_run: bool = True,
 ) -> None:
     if state.output == "json":
-        emit_stream_events(state, response)
+        emit_stream_events(state, response, owns_run=owns_run)
         return
 
     renderer = ChatRenderer(agent=agent, verbose=verbose)
@@ -121,6 +174,11 @@ def render_chat_stream(
     finally:
         response.close()
         renderer.finish()
+    _exit_on_failed_run(
+        error_text=renderer.error_text,
+        saw_terminal=renderer.seen_terminal,
+        owns_run=owns_run,
+    )
 
 
 def _json_object_at(text: str, start: int) -> tuple[dict[str, Any] | None, int]:
@@ -197,6 +255,9 @@ class ChatRenderer:
         self.printed_tokens = False
         self.answer_line_open = False
         self.seen_terminal = False
+        # Kept, not just printed: `render_chat_stream` turns it into the exit
+        # code once the stream has been fully rendered.
+        self.error_text: str | None = None
         # Some runtimes deliver the answer as a `final_result` tool call rather
         # than as tokens. Hold it so `finish` can print it when nothing else did.
         self.final_result: Any = None
@@ -220,6 +281,7 @@ class ChatRenderer:
             self._end_answer_line()
             console.print(f"[red]Error:[/red] {event.data}")
             self.seen_terminal = True
+            self.error_text = str(event.data)
             return
         if event_type in {"completed", "stopped"}:
             self.seen_terminal = True

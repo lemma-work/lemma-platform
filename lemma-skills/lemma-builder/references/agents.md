@@ -89,7 +89,7 @@ Only six of them are a decision. Set those on the agent; the rest arrive on thei
 
 - **Declared** — `WORKSPACE_CLI`, `WEB_SEARCH`, `SUBAGENTS`, `SPEECH`, `MEMORY`, `BROWSER`.
   These are the six `toolsets` accepts as a real choice. Grant only what the job needs.
-- **Always on** — `USER_INTERACTION`, `SKILLS`, `SNOOZE`, `MESSAGING`, `TODO`.
+- **Always on** — `USER_INTERACTION`, `SKILLS`, `WAIT`, `MESSAGING`, `TODO`.
   Every agent has them; listing them changes nothing.
 - **Derived** — `POD` follows any folder or table grant, `CONNECTORS` follows any
   connector grant. Grant the resource and the tools appear. Do **not** also list
@@ -107,7 +107,7 @@ A stale `POD` or `CONNECTORS` in an older agent's `toolsets` is harmless — the
 effective set is the union — but do not write new ones.
 
 Sub-agents are the one subtraction: a spawned child loses `SUBAGENTS` (the depth rule),
-`SNOOZE` (a sleeping child would block its parent's tool call) and `MESSAGING` (a
+`WAIT` (a waiting child would block its parent's tool call) and `MESSAGING` (a
 colleague hearing from an implementation detail of somebody's turn cannot place it).
 
 | Toolset | Enables |
@@ -123,7 +123,7 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | `CONNECTORS` | **Derived — any connector grant.**  call third-party APIs through the org's connector installs, without a sandbox. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `search_connector_operations` (leave `auth_config` unset to search **every** install — each hit names the one to run it against) and `run_connector_operation`; `describe_connector_operation` only if you want the full input schema up front, `list_connectors` only to see what is installed. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
 | `TODO` | **Always on.**  a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
 | `MEMORY` | **Declared.**  durable facts kept between conversations, in ordinary pod files: `/memory` for what the whole pod should know, `/me` for what is true of one person only. `AGENTS.md` in each scope is read into every run automatically, so it must stay a short index of pointers — it is capped, and the overflow is truncated with a marker. It carries **no tools of its own**, but it does not need pairing: turning it on **derives a `folder.write` grant on `/memory`** (write implies read), which in turn derives `POD` — so the agent gets the file tools that make the instruction actionable. Turning it off takes the grant back, and it is re-derived on every write, so a `permissions` replace cannot strip it |
-| `SNOOZE` | **Always on.**  suspend the current turn and resume it later after a delay (`snooze`), capped at 24h. Every wake replays the whole conversation, so it is for work with a genuine gap in the middle (a build, a batch job) — **not** for waiting on a person, and **not** for waiting on a `message_user` answer |
+| `WAIT` | **Always on.**  suspend the current turn and resume it when there is a reason to (`wait_for`): a time, a sandbox process exiting, or a sub-agent run finishing. Capped at 24h. Every wake replays the whole conversation, so one real wait beats a loop of short ones — and it is **not** for waiting on a person, nor on a `message_user` answer |
 | `MESSAGING` | **Always on.**  the way an agent reaches a person *unprompted*: `message_user` contacts a **pod member who is not in this conversation** on whichever surface they last used — or by email, cold, if they have never messaged the bot — with a copy always landing in their Lemma inbox; `list_pod_members` looks people up (and reports each member's `reachable_on`); `check_messages` reads the answers. See the pattern below — it is the one people get wrong |
 
 For pod files and data you grant the folder or table and `POD` follows — typed,
@@ -134,7 +134,7 @@ toolset: file access is part of `POD`, scoped by the folder grants that produced
 it.
 
 **Five toolsets are *deferred*, whether declared, derived or always-on.** `POD`,
-`CONNECTORS`, `SUBAGENTS`, `MESSAGING` and `SNOOZE` are not in the model's prompt
+`CONNECTORS`, `SUBAGENTS`, `MESSAGING` and `WAIT` are not in the model's prompt
 prefix — it has to find them with `search_tools` first. That keeps a chat agent from
 reaching for "message a colleague" unprompted, and it is also why **an agent that
 should chase people has to be told so in its instruction**. "You have a tool for it" is
@@ -162,7 +162,7 @@ The loop, in full:
    `channel` unset unless you have a reason — a channel you *do* name is used or refused,
    never silently swapped, and a chat app they have never messaged this agent on cannot
    be used at all.
-3. **Then finish the turn and stop.** Do **not** snooze on it, and do not poll. When the
+3. **Then finish the turn and stop.** Do **not** `wait_for` it, and do not poll. When the
    **last** outstanding answer lands, the backend starts a fresh turn in your
    conversation on its own; you read what everyone said with `check_messages` there.
    Say who you are waiting on before you stop — that sentence is the last thing the

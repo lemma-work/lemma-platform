@@ -375,7 +375,7 @@ def test_the_snapshot_the_bridge_reads_carries_those_capabilities():
     from app.modules.agent.services.runtime_profile_service import (
         ResolvedAgentRuntime,
     )
-    from app.modules.agent.domain.value_objects import HarnessOptions  # noqa: F401
+    from app.modules.agent.domain.harness_options import HarnessOptions  # noqa: F401
 
     profile = SimpleNamespace(
         id="p",

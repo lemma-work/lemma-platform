@@ -365,7 +365,7 @@ def _is_unpaired_tool_call(message: Message) -> bool:
 
     Eliding a run to its first and last message is fine until the first message
     is an assistant tool call -- which is the normal shape for a run with no
-    user message: an approval resume and a snooze wake both create a run and go
+    user message: an approval resume and a wait resolution both create a run and go
     straight into a tool (`pause_resume.start_resume_run_if_ready`).
 
     Keeping that call without its return is worse than dropping it. The history

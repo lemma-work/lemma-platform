@@ -54,9 +54,9 @@ class ExecCommandRequest(BaseModel):
             "default 30s. This is THIS CALL'S patience, not a limit on the "
             "command: if the command is still running when the wait is up you "
             "get `completed: false` and a `process_id`, and the command keeps "
-            "running in the background. Poll it with "
-            "`manage_process(action='input', process_id=...)` until "
-            "`completed: true` — never re-run the command."
+            "running in the background. Hand that id to `wait_for` rather than "
+            "raising this — waiting there costs nothing and costs no model "
+            "calls. Never re-run the command."
         ),
     )
 
@@ -220,10 +220,10 @@ class ExecCommandResult(BaseToolResponse):
     process_id: Optional[str] = Field(
         default=None,
         description=(
-            "Handle for a process that is still running. Poll it with "
-            "`manage_process(action='input', process_id=...)` to "
-            "collect more output, or send input the same way. Present whenever "
-            "`completed` is false."
+            "Handle for a process that is still running. Wait for it with "
+            "`wait_for(process_id=...)`; read its output so far or send it input "
+            "with `manage_process(action='input', process_id=...)`. Present "
+            "whenever `completed` is false."
         ),
     )
 

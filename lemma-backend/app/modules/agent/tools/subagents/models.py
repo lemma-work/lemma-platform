@@ -57,12 +57,14 @@ class InteractSubagentRequest(BaseModel):
     timeout_seconds: float = Field(
         default=30.0,
         ge=1.0,
-        le=120.0,
+        le=60.0,
         description=(
             "Max seconds to block when action='await' before returning a "
-            "still-running handle. Keep this small and poll again with "
-            "query_subagents(mode='messages') for long-running children rather "
-            "than blocking the parent run."
+            "still-running handle. This is for a child that should finish "
+            "almost immediately — blocking holds the parent's run open. For "
+            "anything longer, end this call and use "
+            "`wait_for(subagent_run_id=...)`, which costs nothing while it "
+            "waits."
         ),
     )
 

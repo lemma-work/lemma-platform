@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
-    from pydantic_ai import UsageLimits
-    from pydantic_ai.capabilities import AgentCapability
-    from pydantic_ai.toolsets import AbstractToolset
-    from pydantic_ai.output import OutputSpec
+    pass
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -79,7 +75,7 @@ class AgentToolset(str, Enum):
     SUBAGENTS = "SUBAGENTS"
     TODO = "TODO"
     CONNECTORS = "CONNECTORS"
-    SNOOZE = "SNOOZE"
+    WAIT = "WAIT"
     MESSAGING = "MESSAGING"
     # Carries no tools: memory is pod files, read and written with the file
     # tools the agent already has. See `memory_is_active`.
@@ -524,27 +520,6 @@ class AgentEvent(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
-@dataclass(slots=True)
-class HarnessOptions[DepsT = object]:
-    """Dependency-injected options for one harness execution."""
-
-    model_name: str
-    toolsets: list[AbstractToolset[DepsT]] = field(default_factory=list)
-    # Remote harnesses use MCP; only the in-process harness consumes capabilities.
-    capabilities: list[AgentCapability[DepsT]] = field(default_factory=list)
-    usage_limits: UsageLimits | None = None
-    output_type: OutputSpec[object] | None = None
-    model_settings: JsonObject | None = None
-    history_summarization_enabled: bool = True
-    history_summarization_token_limit: int = DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT
-    history_summarization_keep_messages: int = (
-        DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
-    )
-    history_hard_token_ceiling: int = DEFAULT_HISTORY_HARD_TOKEN_CEILING
-    should_stop: Callable[[], Awaitable[bool]] | None = None
-    extra: JsonObject = field(default_factory=dict)
-
-
 class AgentRunStartResult(BaseModel):
     """Result returned after adding a user message to a conversation."""
 
@@ -584,7 +559,6 @@ __all__ = [
     "DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES",
     "DEFAULT_HISTORY_SUMMARIZATION_TOKEN_LIMIT",
     "HarnessKind",
-    "HarnessOptions",
     "JsonObject",
     "JsonPrimitive",
     "JsonValue",

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter
+from opentelemetry.trace import StatusCode
+from pydantic import BaseModel
 from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -120,3 +126,127 @@ async def test_failing_tool_does_not_abort_a_real_run():
         for part in getattr(message, "parts", [])
     )
     assert "kaboom" in rendered
+
+
+class _ReturningToolset:
+    """A toolset stand-in whose call_tool returns a given payload."""
+
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    async def call_tool(self, name, tool_args, ctx, tool):
+        return self._payload
+
+
+def _span_collector():
+    """Collect exported spans without standing a double inside the subject.
+
+    `run_phase` holds a module-level tracer, but it is a *ProxyTracer*: it
+    resolves lazily to whatever global provider is installed. So attaching a
+    real SDK provider is enough, and nothing in `app/` is patched — the gate on
+    in-subject doubles is right that patching there proves less.
+
+    A real provider rather than a mock because part of what is under test is the
+    span context manager's own behaviour: that setting OK before re-raising
+    stops it stamping ERROR on the way out. A mock would assert our belief about
+    that rather than the fact.
+    """
+    exported: list[ReadableSpan] = []
+
+    class _Collect(SpanExporter):
+        def export(self, spans):
+            exported.extend(spans)
+
+        def shutdown(self):
+            return None
+
+    processor = SimpleSpanProcessor(_Collect())
+    provider = trace.get_tracer_provider()
+    if isinstance(provider, TracerProvider):
+        # Somebody already installed one; a second `set_tracer_provider` is
+        # ignored by OTel, so join theirs instead of quietly collecting nothing.
+        provider.add_span_processor(processor)
+    else:
+        provider = TracerProvider()
+        provider.add_span_processor(processor)
+        trace.set_tracer_provider(provider)
+    return exported
+
+
+@contextmanager
+def _captured_spans():
+    """The spans exported while the block runs."""
+    exported = _span_collector()
+    before = len(exported)
+    yield exported
+    del exported[:before]
+
+
+@pytest.mark.anyio
+async def test_a_returned_failure_marks_its_span():
+    """The failure that hides: the tool returns, so nothing raised.
+
+    Before this the span ended UNSET and looked exactly like a success, which
+    is why a measured tool-error rate read less than half the real one.
+    """
+    payload = {"success": False, "error": "no grant", "code": "FORBIDDEN"}
+    with _captured_spans() as spans:
+        await GracefulToolset(_ReturningToolset(payload)).call_tool(
+            "pod_write_record", {}, None, None
+        )
+
+    (span,) = spans
+    assert span.name == "lemma.agent.tool.pod_write_record"
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.status.description == "no grant"
+    assert span.attributes["lemma.outcome"] == "error"
+    assert span.attributes["error.code"] == "FORBIDDEN"
+
+
+@pytest.mark.anyio
+async def test_a_returned_failure_is_seen_through_a_pydantic_response():
+    """Most tools return a model, not a dict — reading only dicts missed them."""
+
+    class _Response(BaseModel):
+        success: bool = False
+        error: str | None = None
+
+    with _captured_spans() as spans:
+        await GracefulToolset(
+            _ReturningToolset(_Response(error="the write never landed"))
+        ).call_tool("exec_command", {}, None, None)
+
+    (span,) = spans
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["lemma.outcome"] == "error"
+
+
+@pytest.mark.anyio
+async def test_a_successful_call_is_marked_ok():
+    with _captured_spans() as spans:
+        await GracefulToolset(_ReturningToolset({"success": True})).call_tool(
+            "web_search", {}, None, None
+        )
+
+    (span,) = spans
+    assert span.status.status_code is not StatusCode.ERROR
+    assert span.attributes["lemma.outcome"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_a_pause_is_not_an_error():
+    """`ask_user` and `wait_for` end their turn by raising. That is not a fault.
+
+    The span context manager stamps ERROR on any exception that leaves it, so
+    without the explicit OK every pause would export as a failed tool call —
+    the exact opposite of making real failures legible.
+    """
+    with _captured_spans() as spans:
+        with pytest.raises(ModelRetry):
+            await GracefulToolset(_RaisingToolset(ModelRetry("try again"))).call_tool(
+                "ask_user", {}, None, None
+            )
+
+    (span,) = spans
+    assert span.status.status_code is not StatusCode.ERROR
+    assert span.attributes["lemma.outcome"] == "control_flow"

@@ -12,13 +12,13 @@ from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Mes
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentToolset,
     ConnectorAccessConfig,
     ConnectorMode,
     ConversationType,
-    HarnessOptions,
     MessageKind,
     MessageRole,
 )
@@ -2000,7 +2000,10 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     assert "lemma-user" in prompt
     assert "other conversations\nshare the workspace" in prompt
     assert "/me/<topic>/" in prompt
-    assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
+    # Reading a converted document is a pod-tool job now; the CLI fragment used
+    # to teach `lemma files cat --pages` for it and competed with `pod_read_file`.
+    assert "`pod_read_file` takes a page range" in prompt
+    assert "not the `lemma` CLI" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
     # does not exist, so guard the whole composed prompt against it coming back.
     assert "/pod/" not in prompt
@@ -2440,7 +2443,7 @@ def test_a_pending_approval_is_not_reported_to_the_model_as_a_failure():
     failure would tell the model its question failed while the user is still
     being asked it."""
     conversation_id = uuid4()
-    for tool_name in ("ask_user", "request_approval", "snooze"):
+    for tool_name in ("ask_user", "request_approval", "wait_for"):
         pending = _tool_call_message(
             conversation_id=conversation_id,
             sequence=0,

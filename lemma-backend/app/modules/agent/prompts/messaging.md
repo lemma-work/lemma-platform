@@ -7,8 +7,9 @@ someone else and returns before they reply.
    `to` value, a member/user id, or an exact email; names do not resolve.
 2. Send all messages before waiting. Set `background_instruction` to tell the
    recipient's agent what answer to collect and where to record it.
-3. If awaiting replies, `snooze` once for a realistic interval, then call
-   `check_messages` and inspect the specified records. Avoid tight polling.
+3. If awaiting replies, `wait_for(seconds=...)` once for a realistic interval,
+   then call `check_messages` and inspect the specified records. You wake early
+   if everyone answers. Never loop.
 
 Leave `channel` unset to use the recipient's last channel. An explicit channel
 must appear in `reachable_on`; it is used or refused, never substituted.

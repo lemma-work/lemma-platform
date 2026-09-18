@@ -8,6 +8,7 @@ from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ACTIVE_AGENT_RUN_STATUSES,
     AgentEvent,
@@ -21,7 +22,6 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     ConversationType,
     HarnessKind,
-    HarnessOptions,
     JsonObject,
     JsonValue,
     MessageDraft,

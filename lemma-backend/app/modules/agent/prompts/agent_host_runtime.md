@@ -13,10 +13,11 @@ Pod files are a separate durable store for inputs and deliverables.
 `ask_user` and `request_approval` pause this turn until the person answers.
 Use them for the person in this conversation.
 
-`snooze` ends the turn and resumes later in the same conversation. Use it for
-external work or replies from people contacted with `message_user`. Save needed
-state to pod files first; sandbox processes do not survive. On waking, check
-the result you were waiting for.
+`wait_for` ends the turn and resumes later in the same conversation. Name one
+of `seconds`, `process_id` or `subagent_run_id`. Waiting on a process keeps the
+sandbox alive; across a plain `seconds` wait it may be reclaimed, so save state
+to pod files first. On waking, check the result — waking proves only that the
+wait ended.
 
 # Native image generation
 

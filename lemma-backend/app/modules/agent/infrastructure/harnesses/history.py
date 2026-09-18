@@ -19,6 +19,8 @@ never hand the provider an oversized prompt.
 
 from __future__ import annotations
 
+import dataclasses
+
 from collections.abc import Sequence
 
 from pydantic_ai.messages import ModelMessage
@@ -27,7 +29,8 @@ from pydantic_ai._history_processor import HistoryProcessor
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import HarnessOptions
+from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.services.history_tokens import count_model_message_tokens
 
 logger = get_logger(__name__)
@@ -246,6 +249,60 @@ def _trim_to_ceiling(
     return before, trimmed, count_model_message_tokens(trimmed)
 
 
+def append_notices(
+    messages: list[ModelMessage], notices: Sequence[str]
+) -> list[ModelMessage]:
+    """Put run notices where the model will read them, without a stray turn.
+
+    A notice joins the last request rather than arriving as one of its own: a
+    request of its own is a second user turn in a row, which providers that
+    require alternating roles reject, and the tool returns the run is already
+    reading live in that same last request.
+
+    Copied rather than mutated -- the list handed to a history processor is the
+    run's own, and a part appended in place would still be there next turn,
+    turning a one-shot notice into a permanent fixture of the prompt.
+    """
+    if not notices:
+        return messages
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    parts = [UserPromptPart(content=notice) for notice in notices]
+    if messages and isinstance(messages[-1], ModelRequest):
+        messages[-1] = dataclasses.replace(
+            messages[-1], parts=[*messages[-1].parts, *parts]
+        )
+    else:
+        messages.append(ModelRequest(parts=parts))
+    return messages
+
+
+def _deliver_run_notices[DepsT](
+    options: HarnessOptions[DepsT],
+) -> HistoryProcessor[DepsT]:
+    """Hand the run any notice its budget has queued, as part of this request.
+
+    The counting happens in the node loop, which knows what the run has spent;
+    this only carries the result the last few inches into the prompt. Split that
+    way because the loop cannot reach the message list and the processor cannot
+    see the clock, and the alternative -- a second counter here -- would be a
+    second answer to how far along the run is.
+
+    The notice joins the last request rather than arriving as one of its own.
+    A request of its own would be a second user turn in a row, which providers
+    that require alternating roles reject, and tool returns live in that same
+    last request -- so this lands beside them, where the run is already looking.
+    """
+
+    async def _processor(messages: Sequence[ModelMessage]) -> list[ModelMessage]:
+        spend = options.spend
+        if spend is None:
+            return list(messages)
+        return append_notices(list(messages), spend.take_notices())
+
+    return _processor
+
+
 def build_history_processors[DepsT](
     options: HarnessOptions[DepsT],
     *,
@@ -284,8 +341,12 @@ def build_history_processors[DepsT](
                 model=summarization_model,
                 trigger_tokens=options.history_summarization_token_limit,
                 keep_messages=options.history_summarization_keep_messages,
+                warn_at=agent_settings.agent_run_warn_at,
             )
         )
+
+    if options.spend is not None:
+        processors.append(_deliver_run_notices(options))
 
     async def _ensure_leading_user_message(
         messages: Sequence[ModelMessage],

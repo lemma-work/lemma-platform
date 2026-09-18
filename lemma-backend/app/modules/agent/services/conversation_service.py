@@ -481,5 +481,5 @@ class ConversationService:
 
     @property
     def wait_repository(self) -> AgentConversationWaitRepository:
-        """The snooze timer store, reached through the turn coordinator."""
+        """The conversation wait store, reached through the turn coordinator."""
         return self.turns.wait_repository

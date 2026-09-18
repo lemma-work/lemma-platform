@@ -27,11 +27,11 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     HarnessKind,
-    HarnessOptions,
     JsonObject,
 )
 from app.modules.agent.infrastructure.agent_host.channels import poke_host
@@ -69,7 +69,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.run_config import (
     agent_host_run_config,
     resolve_pod_cwd,
 )
-from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
+from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
 from app.modules.agent.services.run_suspension import run_suspended_on
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     CREDENTIAL_DEADLINE_MESSAGE,
@@ -452,7 +452,7 @@ class RemoteHarness:
     ) -> list[AgentEvent]:
         """Re-read a turn that ended as one that was suspended, if it was.
 
-        ``snooze`` on a remote harness cannot end the turn from inside its own
+        ``wait_for`` on a remote harness cannot end the turn from inside its own
         tool call, so Lemma asks the host to stop it. The host has no idea why
         and reports what it saw: ``CANCELLED`` when the stop arrived first,
         ``SUCCEEDED`` when the agent finished talking before it did. Neither is
@@ -480,7 +480,7 @@ class RemoteHarness:
                 # downstream of a paused turn reads one event, not two.
                 data={
                     "tool_call_id": wait.tool_call_id,
-                    "kind": SNOOZE_TOOL_NAME,
+                    "kind": WAIT_TOOL_NAME,
                     "conversation_id": str(conversation.id),
                 },
                 agent_run_id=agent_run_id,

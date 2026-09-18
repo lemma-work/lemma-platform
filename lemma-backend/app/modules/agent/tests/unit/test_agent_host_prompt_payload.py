@@ -20,11 +20,11 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
 from app.modules.agent.domain.entities import Agent, Conversation, Message
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentToolset,
     ConversationStatus,
     ConversationType,
-    HarnessOptions,
     MessageKind,
     MessageRole,
 )

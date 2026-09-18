@@ -4,7 +4,8 @@
 machinery grew inside the approval path in ``conversation_service``. It is not
 approval-specific: any tool that raises ``AgentInputRequired`` pauses the same
 way, and resumes by having its return synthesized and replayed by a fresh run.
-``snooze`` is the second caller — it resolves on a timer instead of on a person.
+``wait_for`` is the second caller — it resolves on a timer, a process or a child
+run instead of on a person.
 
 A collaborator rather than a mixin: it needs a unit of work, a conversation
 repository and an agent repository, and nothing else ``ConversationService``
@@ -141,7 +142,7 @@ class PauseResume:
         """Start the run that replays the synthesized return, at most once.
 
         A turn can pause with several pending interactions (e.g. request_approval
-        + ask_user in one assistant turn, or an ask_user alongside a snooze).
+        + ask_user in one assistant turn, or an ask_user alongside a wait_for).
         Resume only once every pausing call in the paused run is resolved —
         otherwise the unresolved sibling is orphaned (no return), dropped from the
         resumed run's history, and the agent re-asks it. The conversation lock

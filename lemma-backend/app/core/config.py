@@ -1162,7 +1162,7 @@ class Settings(BaseSettings):
             "*machine* ceiling; a wait blocked on a person is multiplied by "
             "HUMAN_WAIT_CEILING_MULTIPLIER, because someone not replying "
             "overnight is not a hang. TIME waits and self-resolving agent waits "
-            "(a snooze) are exempt entirely."
+            "(a wait) are exempt entirely."
         ),
     )
     lemma_runtime_instance_id: str = Field(

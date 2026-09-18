@@ -27,6 +27,7 @@ from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.modules.agent.domain.pausing_tools import (
     PAUSING_TOOL_NAMES,
     USER_PAUSING_TOOL_NAMES,
+    WAIT_TOOL_NAME,
 )
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
@@ -234,10 +235,13 @@ async def test_a_returned_pause_is_not_pending_on_either_question(
         )
 
 
-async def test_a_snooze_is_never_a_user_approval(conversation_for_query) -> None:
-    """A snooze resolves on a timer with nobody involved, so it must not appear
-    on an approvals list or be handed a typed reply."""
-    tool_call_id = await _pause_then_bury_it(conversation_for_query, tool_name="snooze")
+async def test_a_wait_is_never_a_user_approval(conversation_for_query) -> None:
+    """A wait resolves on a timer, a process or a child run, with nobody
+    involved, so it must not appear on an approvals list or be handed a typed
+    reply."""
+    tool_call_id = await _pause_then_bury_it(
+        conversation_for_query, tool_name=WAIT_TOOL_NAME
+    )
 
     async with create_uow_from_session_maker(async_session_maker) as uow:
         repo = ConversationRepository(uow)
