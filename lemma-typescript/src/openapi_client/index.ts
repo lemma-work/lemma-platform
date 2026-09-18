@@ -140,6 +140,8 @@ export type { DecisionNodeResponse } from './models/DecisionNodeResponse.js';
 export type { DecisionRule } from './models/DecisionRule.js';
 export type { DirectoryTreeNode } from './models/DirectoryTreeNode.js';
 export type { DirectoryTreeResponse } from './models/DirectoryTreeResponse.js';
+export type { DisplaySizeRequest } from './models/DisplaySizeRequest.js';
+export type { DisplaySizeResponse } from './models/DisplaySizeResponse.js';
 export type { EndNode } from './models/EndNode.js';
 export type { EndNodeConfig } from './models/EndNodeConfig.js';
 export type { EndNodeResponse } from './models/EndNodeResponse.js';

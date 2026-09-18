@@ -46,9 +46,13 @@ async def test_one_persons_logins_are_not_anothers(world) -> None:
         assert items_of(await person.api.get("/web-logins")) == []
 
     # And the route takes no user parameter at all -- there is no way to ask
-    # for somebody else's, correctly or otherwise.
+    # for somebody else's, correctly or otherwise. The body carries the
+    # listing and its pagination envelope and nothing else: no owner, no id,
+    # nothing a caller could change to mean a different person. `page_token`
+    # is a position in *this* person's list, minted by the server from their
+    # own rows, so it selects a page and never a subject.
     mine = await alice.api.get("/web-logins")
-    assert set(mine) <= {"items"}, mine
+    assert set(mine) <= {"items", "limit", "next_page_token"}, mine
 
 
 @scenario("Removing a site that was never saved says so, rather than pretending")

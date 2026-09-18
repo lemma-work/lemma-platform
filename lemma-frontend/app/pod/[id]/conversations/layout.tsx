@@ -114,6 +114,12 @@ function PodConversationSurface({
     // the conversation that has been using it, so a URL you could navigate to
     // cold would be a page that cannot say whose files it is showing.
     const isComputerOpen = searchParams.get('computer') === '1';
+    // A sign-in card in the transcript opens the panel already pointed at its
+    // pause (see `navigateToResource`'s `sign_in` branch). The tool call id
+    // travels, never the origin: an origin in the URL survives reload and back,
+    // and would re-steer the shared sandbox browser at a site the person may
+    // already have finished with.
+    const signInToolCallId = searchParams.get('signInCall');
     const conversationInstructions = searchParams.get('conversationInstructions');
     const conversationMetadata = useMemo(
         () => parseConversationMetadataParam(searchParams.get('conversationMetadata')),
@@ -251,6 +257,11 @@ function PodConversationSurface({
             params.set('computer', '1');
         } else {
             params.delete('computer');
+            // A spent sign-in must not come back with the panel. Without this,
+            // reopening "Your computer" later lands on a pause that has since
+            // been answered rather than on the person's files.
+            params.delete('computerTab');
+            params.delete('signInCall');
         }
         const query = params.toString();
         router.replace(
@@ -445,6 +456,7 @@ function PodConversationSurface({
                     <ComputerPanel
                         workspaceCwd={activeConversation?.workspace_cwd}
                         conversationId={activeConversation?.id}
+                        signInToolCallId={signInToolCallId}
                     />
                 }
                 onClose={() => setComputerOpen(false)}

@@ -42,25 +42,23 @@ _TTS_BITRATE_RANGE: dict[str, tuple[int, int]] = {
     "opus": (4000, 650000),
 }
 
-# One Aura-2 voice per language Deepgram actually speaks. A reply in Spanish
-# read by an English voice is the same defect as a wrong transcript, so the
-# language of the text picks the voice. Languages absent here (Hindi among
-# them) have no Aura-2 voice at all and fall back to the default.
-_VOICE_BY_LANGUAGE: dict[str, str] = {
-    "en": "aura-2-thalia-en",
-    "es": "aura-2-celeste-es",
-    "de": "aura-2-elara-de",
-    "fr": "aura-2-agathe-fr",
-    "nl": "aura-2-beatrix-nl",
-    "it": "aura-2-melia-it",
-    "ja": "aura-2-uzume-ja",
-}
 
+async def voice_for_language(language: str | None) -> str | None:
+    """A voice that speaks this language, or None when the provider has none.
 
-def voice_for_language(language: str | None) -> str | None:
-    """The Aura-2 voice for a BCP-47 code, or None when Deepgram has none."""
-    base = str(language or "").strip().lower().replace("_", "-").split("-")[0]
-    return _VOICE_BY_LANGUAGE.get(base)
+    A reply in Spanish read by an English voice is the same defect as a wrong
+    transcript, so the language of the text picks the voice. This used to be a
+    hand-written dict of one voice per language; it is the live catalogue now,
+    which is both the whole range (roughly eighty voices, not seven) and the
+    only source that cannot go stale. `voice_catalogue` keeps the old dict as
+    its offline fallback.
+    """
+    from app.modules.agent.tools.speech.voice_catalogue import (
+        default_voice_for,
+        load_voices,
+    )
+
+    return default_voice_for(language, await load_voices())
 
 
 class DeepgramSpeechProvider(SpeechProvider):
@@ -113,7 +111,7 @@ class DeepgramSpeechProvider(SpeechProvider):
             raise SpeechProviderError("Deepgram API key is not configured.")
         model = (
             voice
-            or voice_for_language(language)
+            or await voice_for_language(language)
             or agent_settings.speech_tts_voice
             or _DEFAULT_TTS_MODEL
         )

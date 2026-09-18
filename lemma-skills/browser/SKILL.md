@@ -5,7 +5,9 @@ description: "Operate a real browser in a Lemma workspace for web pages or local
 
 # Browser
 
-Drive a real Chromium with the `agent-browser` CLI. Use it for anything a page renders: local dev apps, JS-heavy sites, logins, scraping, screenshots, console/network debugging.
+Drive a real, full desktop Chrome with the `agent-browser` CLI. Use it for anything a page renders: local dev apps, JS-heavy sites, logins, scraping, screenshots, console/network debugging.
+
+The CLI is the whole surface. There is one browser tool, `browser_sign_in`, and it exists because a login is the one thing the command line must not do (below). Everything else is `agent-browser` through `exec_command`, and `view_image` to look at what it captures.
 
 ## The Core Loop (this is law)
 
@@ -19,13 +21,22 @@ agent-browser snapshot -i        # ALWAYS re-snapshot after the page changes
 
 **Refs go stale the moment the page changes** (navigation, submit, dialog, re-render). Acting on a stale ref is the #1 failure — re-snapshot first. Always use `-i` (interactive-only) to keep output small; add `-u` to include link URLs.
 
+**Chain with `&&` and end on a snapshot.** Each `exec_command` is a round trip, and the steps between two snapshots are usually not decisions — you already know you will click, wait and re-read. One command is one round trip:
+
+```bash
+agent-browser click @e3 && agent-browser wait --url "**/dashboard" && agent-browser snapshot -i
+```
+
+Split them only where you genuinely need to see the output before choosing the next step. `&&` also stops at the first failure, so a click that missed does not go on to report a snapshot of the page it failed to leave.
+
 Environment facts:
 
 - Nothing is running at startup, and you do not have to start it. Any `agent-browser` command brings the browser up first if it is down. `start-browser [url]` still exists and is harmless, but it is no longer a step you must remember.
-- The browser is **this conversation's own**, not the sandbox's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself, or you will be talking to a different browser from the one the person can see and the one a saved login was loaded into.
+- The browser is **this conversation's own**, not the sandbox's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself unless you genuinely need a second browser (see *Parallel isolated sessions*). Naming one by hand puts you in a different browser from the one a saved login was loaded into — and from the one the panel checks when deciding whether a browser is running for this conversation at all.
 - **The profile is scratch, not storage.** Cookies and logins survive across commands *inside a live workspace*, and nothing more: the browser daemon closes Chrome after 2 minutes with no command (`AGENT_BROWSER_IDLE_TIMEOUT_MS=120000`), and suspending the workspace deletes `/tmp/lemma-browser` outright. Never leave the only copy of anything there.
 - **Do not save session state into `/workspace`.** `agent-browser state save ./auth.json` writes cookies in plain text onto the durable volume, where it outlives the run that made it and is readable by whatever runs next. Use `browser_sign_in` instead: it asks the person, keeps what they signed in to encrypted and scoped to that one site, and loads it back on the next run without asking again.
-- Dashboard on port 4848 for human observation (signed URL via the sandbox runtime Manager `/sandboxes/<id>/browser-url`).
+- **A person may be watching this browser, and may take it over.** It is streamed live into the workspace app's *Your computer → Browser* panel, where they can click and type in the page themselves. Nothing stops you acting at the same time and you do not need to wait: this is your browser and they are looking over your shoulder. If a step lands somewhere you did not expect — a page you did not navigate to, a field already filled — assume they did it, re-snapshot, and carry on from what is on screen rather than from what you last saw.
+- **The window size is not yours alone, and it can change under you.** One display serves the sandbox, and when somebody opens the *Your computer → Browser* panel it is resized to match their pane — so the viewport you measured at the start of a run may not be the one you have now. Mostly that is what you want: the page gets a real, human-shaped window. It bites when a task depends on a fixed size, and the usual casualty is a recording or a set of screenshots that turn out to be the wrong shape after the fact. If the size matters, set it and say so: `set-display-size <width> <height>` (bounded by `WORKSPACE_XVFB_MAX_SCREEN`), then take the recording. Re-read it with `xrandr --current` if you need to be sure rather than hopeful.
 - Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
 - Never install Playwright or browser binaries — everything is preinstalled.
 
@@ -69,7 +80,7 @@ Raw CSS selectors (`agent-browser click "#submit"`) are the last resort.
 agent-browser get text @e5 ; agent-browser get attr @e10 href
 agent-browser get url ; agent-browser get title
 agent-browser --max-output 500000 get html html > page.html   # big output needs --max-output
-agent-browser screenshot shot.png ; agent-browser screenshot --full full.png
+agent-browser screenshot shot.jpeg ; agent-browser screenshot --full full.jpeg
 agent-browser screenshot --annotate map.png                   # numbered labels keyed to @eN refs
 
 # Arbitrary JS — heredoc avoids quote-escaping hell
@@ -79,6 +90,10 @@ Array.from(document.querySelectorAll("table tbody tr")).map(r => ({
 }))
 EOF
 ```
+
+**A screenshot is a file until you look at it.** `screenshot` writes to the sandbox and tells you nothing about what it captured; `view_image` with `workspace_file_path` is what puts the picture in front of you. If this agent's model cannot see images, `view_image` asks one that can and hands you back the description — so set `instructions` to the question you actually have ("is the chart's y-axis labelled?"), not "describe this".
+
+Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg` — a full-page `.png` is several times the bytes for a photograph of a web page.
 
 Save pages for later reading/citation (markdown via Readability+Turndown; pdf/jpeg/png direct):
 
@@ -104,7 +119,9 @@ A password is never yours to hold, and a session you save by hand outlives the r
 
 **Tabs.** `agent-browser tab` (list), `tab new <url>`, `tab 2`, `tab close 2`. Refs are per-page — re-snapshot after switching.
 
-**Parallel isolated sessions.** `agent-browser --session user-a open ...` gives a separate browser with its own cookies, tabs and refs. Use it only when you genuinely need two at once — comparing two signed-in users, say. Your ordinary commands already run in this conversation's own session, and naming one by hand takes you out of the browser the person is watching.
+**Parallel isolated sessions.** `agent-browser --session user-a --profile /tmp/lemma-browser/profile-user-a open ...` gives a separate browser with its own cookies, tabs and refs. Use it only when you genuinely need two at once — comparing two signed-in users, say.
+
+**Pass `--profile` with `--session`, always.** A session is a whole separate Chrome and needs a profile directory of its own; every session shares one default profile path, and Chrome locks it. `--session` on its own therefore exits immediately with nothing but `Chrome exited early`. Your ordinary commands already run in this conversation's own session with both set for you, which is the other reason not to name one by hand: a person watching sees the whole screen either way, but the panel checks *this conversation's* session to decide whether a browser is running at all.
 
 **Dialogs and iframes.** `agent-browser dialog accept|dismiss`; iframes are auto-inlined in snapshots (refs work through them), or `agent-browser frame @e3` / `frame main` to switch context explicitly.
 
@@ -128,24 +145,23 @@ the API origin, so cross-origin API calls authenticate too. Then it opens the ap
 `--url <dev-url> --no-auth`. From there it's the normal core loop: `snapshot -i` →
 `click`/`fill` → re-`snapshot`, plus `screenshot` to capture the rendered UI.
 
-**See it with your own eyes.** Take a `screenshot`, then use the **view-image**
-capability on that PNG to actually *view* the rendered app (layout, charts, broken
-styles, error overlays). view-image reads from **either store** — pass exactly one
-of `workspace_file_path` (the sandbox) or `pod_file_path` (the datastore); it
-never guesses from the path shape, and giving both or neither is an error. So a
-local screenshot, an uploaded image, or a rendered page from a pod document
-(`lemma files child …/pages/page_0001.jpg`) all work, and you can confirm a chart
-or document looks right without a browser at all. It handles **images only**: a
-PDF comes back with a pointer to `pod_view_document_pages`, which renders that
-document's pages for you and is the shorter route anyway. (App design, deploy,
-and test details: `lemma-builder/references/apps.md`.)
+Then `screenshot` + `view_image` as above, to see the rendered app rather than
+infer it. `view_image` reads from **either store** — pass exactly one of
+`workspace_file_path` (the sandbox) or `pod_file_path` (the datastore); it never
+guesses from the path shape, and giving both or neither is an error. So an
+uploaded image or a rendered page from a pod document (`lemma files child
+…/pages/page_0001.jpg`) works too, and you can confirm a chart or document looks
+right without a browser at all. It handles **images only**: a PDF comes back with
+a pointer to `pod_view_document_pages`, which renders that document's pages for
+you and is the shorter route anyway. (App design, deploy, and test details:
+`lemma-builder/references/apps.md`.)
 
 ## Troubleshooting
 
 - Element missing from snapshot → scroll it into view, wait for it, or dismiss the overlay covering it; then re-snapshot.
 - Click does nothing → a modal/banner is intercepting; find and dismiss it.
 - Fill ignored by custom inputs → `agent-browser keyboard inserttext "text"` bypasses key events.
-- CDP/connection errors or weird state → `agent-browser doctor --fix`.
+- CDP/connection errors or weird state → `agent-browser doctor` to diagnose. **Do not run `doctor --fix`**: its repairs are destructive — it purges browser state, which throws away a login `browser_sign_in` just restored, and reinstalls Chrome, which replaces the browser this image pins.
 - More guides ship with the CLI: `agent-browser skills list`, `agent-browser skills get <name>`; `references/agent-browser-core.md` has the full core reference.
 
 ## See also

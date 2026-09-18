@@ -314,6 +314,21 @@ class BrowserRelayClient:
         found = response.json().get("targets")
         return found if isinstance(found, list) else []
 
+    async def resize_display(self, *, width: int, height: int) -> str:
+        """Make the sandbox display the shape of the pane watching it.
+
+        Returns the size it settled on, which is not always the size asked
+        for: the framebuffer Xvfb allocated at startup is a ceiling RandR
+        cannot raise, so a large request is clamped rather than refused.
+        """
+        response = await self._request(
+            "POST", "/display:resize", json_body={"width": width, "height": height}
+        )
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        size = response.json().get("size")
+        return str(size) if size else ""
+
     async def endpoint_is_public(self) -> bool:
         """Whether this sandbox's ports are on the internet behind only a token."""
         endpoint = await self._endpoint(deadline_seconds=_QUICK_TIMEOUT_SECONDS)

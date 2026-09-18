@@ -39,6 +39,22 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Stage 2: Runtime stage
 FROM python:3.14-slim-bookworm
 
+# Take the base image's security updates. `python:3.14-slim-bookworm` is
+# rebuilt on its own schedule, so a Debian advisory published between rebuilds
+# lands in this image and fails the vulnerability scan on a PR that did not
+# touch it -- which is how three pcre2 CVEs (CVE-2026-86145, -89157, -89161,
+# all fixed in 10.42-1+deb12u1) arrived here.
+#
+# `upgrade`, not a pinned version: pinning means editing this line for every
+# future advisory, and the pin is stale the moment it is written. The base
+# already lists `bookworm-security` in its deb822 sources, so nothing is added
+# here -- writing a legacy `.list` beside those conflicts on `Signed-By` and
+# fails the build.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # Set working directory
 WORKDIR /app
 

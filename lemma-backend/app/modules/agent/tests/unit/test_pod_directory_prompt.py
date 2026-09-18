@@ -110,12 +110,23 @@ class TestTheAgentIsToldWhereAttachmentsAre:
 class TestAnEmptySearchIsNotAnAbsentFile:
     def test_the_agent_is_told_search_lags_the_write(self) -> None:
         text = _instructions(["POD"])
-        assert "not indexed yet" in text
-        assert "never *not there*" in text
+        assert "index built after a file is stored" in text.replace("\n", " ")
+        assert "still returns nothing for it" in text.replace("\n", " ")
 
     def test_and_is_told_what_does_answer_the_question(self) -> None:
         text = _instructions(["POD"])
-        assert "listing the directory or reading the path" in text.replace("\n", " ")
+        assert "list the directory or read the path" in text.replace("\n", " ")
+
+    def test_the_lag_is_not_stated_as_a_ban_on_searching(self) -> None:
+        """It read as "never search", and two other fragments say to search.
+
+        The rule is about one question — does this specific file exist — and
+        overreached into a general prohibition, leaving the same prompt telling
+        the agent both things.
+        """
+        text = _instructions(["POD"]).replace("\n", " ")
+        assert "Do not go looking for it with search" not in text
+        assert "Search is the right tool" in text
 
 
 class TestTheDirectoryFallsBackToWhereTheAgentActuallyIs:

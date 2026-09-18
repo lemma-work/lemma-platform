@@ -31,7 +31,7 @@ import os
 from pathlib import Path
 import secrets
 
-from .chrome import agent_browser_argv
+from .chrome import agent_browser_argv, agent_browser_env
 
 #: Under /tmp, never /workspace. See the module docstring.
 _STATE_DIR = Path("/tmp/lemma-relay/state")
@@ -62,16 +62,28 @@ def session_for_domain(domain: str) -> str:
     return f"login-{safe.strip('-') or 'site'}"
 
 
-async def _run(argv: list[str]) -> tuple[int, str]:
+async def _run(argv: list[str], *, session: str) -> tuple[int, str]:
     """Run the CLI and collect its output without ever waiting for EOF.
 
     The daemon inherits the pipe, so `communicate()` never returns -- the same
     trap `chrome.py` documents at length. Waiting on the *process* is safe.
+
+    `env` is not optional, and this was the one call site in the relay that
+    left it out while `chrome.py` passed it everywhere. The flags alone are
+    not enough: `agent-browser` is the `lemma-node-tool` wrapper, which
+    bootstraps a cold sandbox by running `start-browser`, and that script
+    reads `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PROFILE` from the
+    environment and never sees a flag. Warm, the bootstrap short-circuits and
+    the flags win, so this looked fine. Cold -- a fresh display, a Chrome the
+    memory guard killed -- it started Chrome in the image's default
+    `workspace` profile and then saved or loaded *that* browser's cookies
+    instead of the login's.
     """
     process = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        env=agent_browser_env(session),
     )
     try:
         await asyncio.wait_for(process.wait(), timeout=_COMMAND_TIMEOUT_SECONDS)
@@ -98,7 +110,8 @@ async def save_session(*, session: str) -> dict:
     path = _STATE_DIR / f"{secrets.token_hex(16)}.json"
     try:
         code, output = await _run(
-            agent_browser_argv("state", "save", str(path), session=session)
+            agent_browser_argv("state", "save", str(path), session=session),
+            session=session,
         )
         if code != 0:
             raise StateOperationFailed(f"state save failed: {output.strip()[:200]}")
@@ -133,7 +146,8 @@ async def load_session(state: dict, *, session: str) -> None:
         path.write_bytes(json.dumps(state).encode())
         os.chmod(path, 0o600)
         code, output = await _run(
-            agent_browser_argv("state", "load", str(path), session=session)
+            agent_browser_argv("state", "load", str(path), session=session),
+            session=session,
         )
         if code != 0:
             raise StateOperationFailed(f"state load failed: {output.strip()[:200]}")
