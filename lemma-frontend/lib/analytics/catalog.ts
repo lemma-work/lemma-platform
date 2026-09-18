@@ -50,7 +50,7 @@ export const CLIENT_CATALOG = {
     //
     // Onboarding renders every step at "/", so pageviews cannot tell them
     // apart and the funnel was previously unmeasurable end to end. `step` is
-    // the bounded SetupStep union, never free text.
+    // a bounded id — a SetupStep, or a first-run tour frame — never free text.
     /** One onboarding step shown. */
     "onboarding.step_viewed": { properties: ["step"] },
     /** The user is inside a pod: the end of onboarding, however they got there.

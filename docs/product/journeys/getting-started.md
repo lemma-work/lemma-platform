@@ -19,6 +19,16 @@ the window, including at the desktop's minimum size and with enlarged text.
 Long setup content scrolls independently of that action. Connection failures
 are shown with a retry action rather than an indefinite loading message.
 
+A hosted account that arrives with nothing is provisioned rather than
+interviewed: its organization and first pod are created without a question.
+While that runs, the person is shown four screens about what the product is —
+the agent, the app, the people, the channels — one sentence each, with a
+picture that shows the claim and a Skip that is always visible. Provisioning
+finishing early never cuts a screen short; the workspace opens only when the
+person presses through the last screen or skips, and a person who does so
+before it is ready sees the wait rather than a blank page. If provisioning
+fails, the setup flow takes over as before.
+
 ---
 
 ## Capability: Sign up and sign in
