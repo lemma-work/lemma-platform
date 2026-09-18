@@ -187,7 +187,8 @@ case IDs become mandatory for Kubernetes before that adapter is enabled.
 - Five minutes of configured inactivity triggers quiescence/release.
 - Active foreground operation prevents release until terminal or release deadline.
 - Release terminates sessions/processes and revokes port grants.
-- Resume preserves `/workspace` but callers recreate nonportable session state.
+- Resume preserves the home directory but callers recreate nonportable session
+  state.
 - Repeated release/resume does not create duplicate resources.
 - Docker-volume profile replacement preserves files while changing allocation epoch.
 - E2B-native profile replacement fences and removes the old exact sandbox, then

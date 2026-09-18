@@ -325,8 +325,9 @@ class FilesystemPort(Protocol):
 ```
 
 Paths are absolute and must resolve below the profile's allowed roots. Workspace
-callers use `/workspace`; function runtime internals may additionally use a private
-ephemeral cache root. Symlink resolution is checked at the adapter boundary.
+callers use the sandbox user's home (`/home/user`), and the earlier `/workspace`
+is still accepted so a conversation recorded before the move keeps resolving;
+function runtime internals may additionally use a private ephemeral cache root. Symlink resolution is checked at the adapter boundary.
 
 Writes use a temporary sibling file, fsync when supported, and atomic rename. The
 API streams binary bytes and never base64-encodes through a shell command. Range
