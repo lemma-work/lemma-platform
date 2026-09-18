@@ -99,8 +99,6 @@ ENV PYTHONUNBUFFERED=1 \
     XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime \
     WORKSPACE_XVFB_SCREEN=1440x960x24 \
     AGENT_BROWSER_CONFIG=/tmp/lemma-browser/config.json \
-    AGENT_BROWSER_DASHBOARD_PORT=4848 \
-    AGENT_BROWSER_DASHBOARD_INTERNAL_PORT=4849 \
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome \
     AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile \
     AGENT_BROWSER_SESSION=workspace \
@@ -114,14 +112,10 @@ ENV PYTHONUNBUFFERED=1 \
     # sheds the browser before anything else decides what to do with it, and a
     # research batch mid-flight never sees it: every capture is a command.
     AGENT_BROWSER_IDLE_TIMEOUT_MS=120000 \
-    # What the live view costs on the wire. The stream server caps frames at
-    # these before they leave the sandbox, so a phone is not sent a 1600px
-    # picture to draw into a 400px pane -- the saving is in pixels never
-    # encoded, not in bytes dropped later. A viewer can ask for fewer frames
-    # still with a `config` message; it cannot ask for more than this.
-    AGENT_BROWSER_STREAM_QUALITY=60 \
-    AGENT_BROWSER_STREAM_MAX_WIDTH=1280 \
-    AGENT_BROWSER_STREAM_MAX_HEIGHT=800 \
+    # The largest framebuffer a viewer's `/display:resize` may ask for. RandR
+    # cannot grow a screen past what Xvfb allocated at startup, so this is the
+    # ceiling and `WORKSPACE_XVFB_SCREEN` is only where the display begins.
+    WORKSPACE_XVFB_MAX_SCREEN=1920x1200x24 \
     # Loopback-only ports for the VNC view of `:99`. `LEMMA_BROWSER_VNC_PORT`
     # is x11vnc's own raw VNC socket; `LEMMA_BROWSER_VNC_WS_PORT` is
     # websockify's WebSocket front door onto it. The relay is the only thing
@@ -192,6 +186,12 @@ RUN apt-get update \
         ripgrep \
         socat \
         tini \
+        # Somebody has to place the windows. Chrome is told its own size, but
+        # the OAuth popup a real sign-in opens is placed by the X server's
+        # default -- possibly off-screen, where the person watching sees
+        # nothing happen. matchbox is the smallest window manager that fixes
+        # it: one window at a time, filling the screen, no decoration.
+        matchbox-window-manager \
         # The human-facing view of the same Xvfb display. `x11vnc` shares
         # `:99` with Chromium rather than opening a second one; `websockify`
         # is what turns its raw VNC socket into something a browser can open
@@ -199,6 +199,10 @@ RUN apt-get update \
         # reached only through the relay, the same treatment raw CDP gets and
         # for the same reason (see `browser_relay/app.py`).
         websockify \
+        # `xrandr`, for resizing the display to match the pane somebody is
+        # watching it in. Xvfb carries the RandR extension either way; this is
+        # the client that drives it.
+        x11-xserver-utils \
         x11vnc \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
@@ -276,6 +280,7 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/contracts.py /app/sandbox
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/browser_relay /app/sandbox_runtime/browser_relay
 COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
+COPY lemma-backend/sandbox-images/scripts/set-display-size.sh /usr/local/bin/set-display-size
 COPY lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
 COPY lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
 COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
@@ -291,7 +296,7 @@ RUN chmod 0755 \
 
 WORKDIR /workspace
 USER 10001:10001
-EXPOSE 8080 4848 4850
+EXPOSE 8080 4850
 
 ENTRYPOINT ["tini", "--"]
 CMD ["start-workspace-runtime"]

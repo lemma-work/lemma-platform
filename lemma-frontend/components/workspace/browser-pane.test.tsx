@@ -28,6 +28,28 @@ class FakeSocket {
 vi.stubGlobal('WebSocket', FakeSocket);
 
 /**
+ * jsdom has no `ResizeObserver`, and the pane uses one to ask the sandbox
+ * display to match its own size. Never fired here: what a resize *does* is a
+ * round trip to the backend, which belongs to the tests for that endpoint
+ * rather than to a component test standing in front of a fake socket. This
+ * exists so constructing one does not throw.
+ */
+class FakeResizeObserver {
+    // Same signature as the real constructor, and it keeps what it is handed.
+    // A stub that took no callback would still work here -- nothing fires it --
+    // but it would be a narrower contract than the thing it replaces, which is
+    // how a test comes to pass against a call the browser would reject.
+    readonly callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+
+/**
  * A stand-in for `@novnc/novnc`'s `RFB` class.
  *
  * `BrowserPane` owns none of the input-capture or rendering logic RFB does
@@ -49,7 +71,7 @@ class FakeRfb {
     background = '';
     sentKeys: Array<[number, string, boolean]> = [];
     clipboardWrites: string[] = [];
-    private listeners: Record<string, Array<() => void>> = {};
+    private listeners: Record<string, Array<(event?: unknown) => void>> = {};
 
     constructor(target: Element, urlOrSocket: string | FakeSocket) {
         this.target = target;
@@ -66,12 +88,15 @@ class FakeRfb {
         rfbInstances.push(this);
     }
 
-    addEventListener(type: string, listener: () => void) {
+    addEventListener(type: string, listener: (event?: unknown) => void) {
         (this.listeners[type] ??= []).push(listener);
     }
 
-    emit(type: string) {
-        for (const listener of this.listeners[type] ?? []) listener();
+    // `event` is optional so the many `emit('connect')` callers stay as they
+    // are; the real RFB hands its listeners a CustomEvent, and `clipboard`
+    // is the one whose payload the pane actually reads.
+    emit(type: string, event?: unknown) {
+        for (const listener of this.listeners[type] ?? []) listener(event);
     }
 
     sendKey(keysym: number, code: string, down = true) {
@@ -96,8 +121,27 @@ class FakeRfb {
 
 vi.mock('@novnc/novnc', () => ({ default: FakeRfb }));
 
+// Where the fake browser says it is. `vi.hoisted` because `vi.mock` is
+// hoisted above the imports and would otherwise close over an undefined name.
+const page = vi.hoisted(() => ({ url: 'about:blank' }));
+vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
+    // Spread the real module: `vncSocketUrl` reaches for `getLemmaApiBaseUrl`
+    // from here, and a mock that answers only what this file names breaks
+    // every test in it rather than the one it meant to steer.
+    ...(await importOriginal<typeof import('@/lib/sdk/lemma-client')>()),
+    getLemmaClient: () => ({
+        workspace: {
+            browserCurrentPageUrl: async () => ({ url: page.url }),
+            // Exercised by the pane's ResizeObserver; the display fitting is
+            // not what these tests are about.
+            browserResizeDisplay: async () => ({ size: null }),
+        },
+    }),
+}));
+
 afterEach(() => {
     rfbInstances.length = 0;
+    page.url = 'about:blank';
     cleanup();
 });
 
@@ -109,15 +153,23 @@ const connect = async () => {
 };
 
 describe('opening the view', () => {
-    it('asks for view mode by default, and control mode with autoControl', async () => {
-        render(<BrowserPane origin="https://example.com" />);
-        const rfb = await connect();
-        expect(rfb.url).toContain('mode=view');
-        expect(rfb.viewOnly).toBe(true);
+    it('can be driven whether it is watching a run or showing a sign-in', async () => {
+        // There is no watch-only pane. It existed because the relay took a
+        // driving lease the moment a control socket opened, and for an
+        // ordinary watch that is the agent's own session -- so an open panel
+        // would have stopped the agent browsing. Opening read-only traded
+        // that for a browser nobody could click, which is not a browser.
+        // The lease is gone entirely: it was a no-op in the sign-in case it
+        // was written for (a different session) and only ever cost the agent
+        // its own browser, so the socket always carries input.
+        render(<BrowserPane conversationId="conv-1" />);
+        const watching = await connect();
+        expect(watching.url).toContain('mode=control');
+        expect(watching.viewOnly).toBe(false);
 
         cleanup();
         rfbInstances.length = 0;
-        render(<BrowserPane origin="https://example.com" autoControl />);
+        render(<BrowserPane origin="https://example.com" />);
         const driving = await connect();
         expect(driving.url).toContain('mode=control');
         expect(driving.viewOnly).toBe(false);
@@ -170,47 +222,33 @@ describe('opening the view', () => {
     });
 });
 
-describe('taking control', () => {
-    it('flips viewOnly on the live connection when the toggle is used', async () => {
-        const { getByRole } = render(<BrowserPane origin="https://example.com" />);
-        await connect();
-
-        fireEvent.click(getByRole('button', { name: 'Take control' }));
-
-        // A new connection: the mode is part of the URL, not a message sent
-        // over an existing one, so driving reconnects rather than upgrading.
-        await waitFor(() => expect(rfbInstances).toHaveLength(2));
-        const driving = rfbInstances[1];
-        act(() => driving.emit('connect'));
-        expect(driving.viewOnly).toBe(false);
-        expect(driving.url).toContain('mode=control');
-    });
-
+describe('reconnecting', () => {
     it('is not undone by the old connection reporting its own close late', async () => {
-        // The bug this pins: toggling `controlling` tears down the view-mode
-        // connection and starts a control-mode one in the same tick, but
+        // The bug this pins: anything that changes the socket's URL tears the
+        // old connection down and starts a new one in the same tick, but
         // `disconnect()` does not close the socket synchronously -- the real
-        // RFB fires `disconnect` only once the server actually confirms it,
-        // which lands *after* the new connection already exists. The old
-        // handler nulled the (shared, by-ref) `rfbRef` unconditionally, so
-        // every paste and keystroke after the first "Take control" landed on
-        // a null ref while the picture went on rendering the new
-        // connection's frames -- nothing on screen said so.
-        const { getByRole, container } = render(<BrowserPane origin="https://example.com" />);
-        const watching = await connect();
+        // RFB fires `disconnect` only once the server confirms it, which
+        // lands *after* the new connection already exists. The old handler
+        // nulled the (shared, by-ref) `rfbRef` unconditionally, so every
+        // paste and keystroke after that landed on a null ref while the
+        // picture went on rendering the new connection's frames.
+        const { container, rerender } = render(
+            <BrowserPane origin="https://a.example" />,
+        );
+        const first = await connect();
 
-        fireEvent.click(getByRole('button', { name: 'Take control' }));
+        rerender(<BrowserPane origin="https://b.example" />);
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
-        const driving = rfbInstances[1];
-        act(() => driving.emit('connect'));
+        const second = rfbInstances[1];
+        act(() => second.emit('connect'));
 
         // The stale instance's close finally reports in, after the new one
         // is already live.
-        act(() => watching.emit('disconnect'));
+        act(() => first.emit('disconnect'));
 
         const target = container.querySelector('[role="application"]');
         fireEvent.paste(target!, { clipboardData: { getData: () => 'hunter2' } });
-        expect(driving.clipboardWrites).toEqual(['hunter2']);
+        expect(second.clipboardWrites).toEqual(['hunter2']);
     });
 });
 
@@ -243,11 +281,14 @@ describe('a disconnect that will not fix itself by retrying', () => {
             first.emit('disconnect');
         });
 
-        expect(screen.getByText('The browser is not running')).toBeTruthy();
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
     });
 
-    it('keeps retrying on an ordinary drop, same as before', async () => {
+    it('keeps the picture through a drop it expects to recover from', async () => {
+        // Blanking to "Connecting..." on every hiccup is what made a live
+        // pane feel broken: the page was still there a second later, but the
+        // screen said the browser had gone. Once a frame has arrived it stays
+        // until something terminal replaces it.
         render(<BrowserPane origin="https://example.com" />);
         const first = await connect();
         act(() => {
@@ -255,8 +296,20 @@ describe('a disconnect that will not fix itself by retrying', () => {
             first.emit('disconnect');
         });
 
-        expect(screen.getByText('The connection dropped')).toBeTruthy();
+        expect(screen.queryByText('The connection dropped')).toBeNull();
         await waitFor(() => expect(rfbInstances).toHaveLength(2));
+    });
+
+    it('does explain itself when it never had a picture to keep', async () => {
+        render(<BrowserPane origin="https://example.com" />);
+        // No `connect` event: nothing has ever painted here.
+        await waitFor(() => expect(rfbInstances).toHaveLength(1));
+        act(() => {
+            rfbInstances[0].socket!.closeWith(1006);
+            rfbInstances[0].emit('disconnect');
+        });
+
+        expect(screen.getByText('The connection dropped')).toBeTruthy();
     });
 
     async function renderAndClose(code: number, title: string): Promise<void> {
@@ -280,7 +333,7 @@ describe('paste', () => {
 
     it('writes the clipboard and then sends a real Ctrl+V, in that order', async () => {
         const { container } = render(
-            <BrowserPane origin="https://example.com" autoControl />,
+            <BrowserPane origin="https://example.com" />,
         );
         const rfb = await connect();
         const target = container.querySelector('[role="application"]');
@@ -298,14 +351,107 @@ describe('paste', () => {
         expect(rfb.sentKeys[3]).toEqual([XK_CONTROL_L, 'ControlLeft', false]);
     });
 
-    it('does nothing while only watching', async () => {
-        const { container } = render(<BrowserPane origin="https://example.com" />);
+    it('works on a pane that is watching a run, not only on a sign-in', async () => {
+        // This used to assert the opposite, because a watch pane was
+        // read-only. Pasting into the agent's browser is now as legitimate as
+        // clicking in it, and neither holds the agent up.
+        const { container } = render(<BrowserPane conversationId="conv-1" />);
         const rfb = await connect();
-        const target = container.querySelector('[role="img"]');
+        const target = container.querySelector('[role="application"]');
+        expect(target).toBeTruthy();
 
         fireEvent.paste(target!, { clipboardData: { getData: () => 'hunter2' } });
 
-        expect(rfb.clipboardWrites).toEqual([]);
+        expect(rfb.clipboardWrites).toEqual(['hunter2']);
+    });
+});
+
+describe('a sign-in answered late', () => {
+    it('says it is still opening the site, rather than showing a blank browser', async () => {
+        // The case somebody hits after stepping away: the pause is hours old,
+        // the browser it was aimed at has been retired, and clicking "Open
+        // asur.work" reconnects to a display showing about:blank. The pane
+        // used to paint that and stop -- indistinguishable from "done".
+        page.url = 'about:blank';
+        render(<BrowserPane origin="https://asur.work" />);
+        await connect();
+
+        expect(await screen.findByText('Opening asur.work…')).toBeTruthy();
+    });
+
+    it('clears once the browser reports it got there', async () => {
+        page.url = 'https://asur.work/auth';
+        render(<BrowserPane origin="https://asur.work" />);
+        await connect();
+
+        await waitFor(() => expect(rfbInstances[0].url).toContain('origin='));
+        await waitFor(() =>
+            expect(screen.queryByText('Opening asur.work…')).toBeNull(),
+        );
+    });
+
+    it('offers a way to re-steer a browser that never arrived', async () => {
+        // Reconnecting is the re-steer: `ensure_browser` points the browser at
+        // the origin again on every connect. Without this the only recovery
+        // was reloading the page, because clicking "Open" a second time
+        // resolves the same origin and changes nothing the pane watches.
+        page.url = 'about:blank';
+        render(<BrowserPane origin="https://asur.work" />);
+        await connect();
+
+        await screen.findByText('Opening asur.work…');
+        expect(rfbInstances).toHaveLength(1);
+
+        screen.getByRole('button', { name: 'Try again' }).click();
+
+        await waitFor(() => expect(rfbInstances.length).toBe(2));
+    });
+});
+
+describe('the clipboard, both ways', () => {
+    const CTRL_L = 0xffe3;
+
+    it('sends Ctrl+C when a Mac presses Cmd+C', async () => {
+        // Passed through, Cmd arrives at a Linux browser as Super+c and
+        // copies nothing -- the gesture silently does nothing at all.
+        const { container } = render(<BrowserPane origin="https://asur.work" />);
+        const rfb = await connect();
+        const target = container.querySelector('[role="application"]')!;
+
+        fireEvent.keyDown(target, { key: 'c', metaKey: true });
+
+        expect(rfb.sentKeys).toEqual([
+            [CTRL_L, 'ControlLeft', true],
+            ['c'.charCodeAt(0), 'KeyC', true],
+            ['c'.charCodeAt(0), 'KeyC', false],
+            [CTRL_L, 'ControlLeft', false],
+        ]);
+    });
+
+    it('leaves Cmd+V to the paste event, so nothing is pasted twice', async () => {
+        // The paste event writes the remote clipboard first and then types,
+        // which is what makes it race-free. Handling the keystroke as well
+        // would fire a second, empty paste.
+        const { container } = render(<BrowserPane origin="https://asur.work" />);
+        const rfb = await connect();
+        const target = container.querySelector('[role="application"]')!;
+
+        fireEvent.keyDown(target, { key: 'v', metaKey: true });
+
         expect(rfb.sentKeys).toEqual([]);
+    });
+
+    it('puts what the remote copied onto this machine', async () => {
+        const written: string[] = [];
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: async (text: string) => void written.push(text) },
+        });
+        render(<BrowserPane origin="https://asur.work" />);
+        const rfb = await connect();
+
+        act(() => rfb.emit('clipboard', { detail: { text: 'copied over there' } }));
+
+        expect(written).toEqual(['copied over there']);
     });
 });

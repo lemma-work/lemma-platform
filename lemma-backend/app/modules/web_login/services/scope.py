@@ -13,13 +13,31 @@ There are two layers, and it matters that they are independent:
    later reusing a session for two sites, or a page setting a cookie for a
    parent domain.
 
-The rule is the browser's own: keep a cookie if the browser would send it to the
-login's origin. That is RFC 6265 domain-matching, and it is deliberately *not*
-"same registrable domain" -- a public-suffix list would answer a slightly
-different question, and the question worth answering is what the site actually
-receives. A cookie for `.example.com` is kept for a login at
-`accounts.example.com`, because the browser sends it there; a cookie for
-`other.example.com` is not, because it does not.
+The rule is **same site**: keep a cookie if the browser would send it to the
+login's origin (RFC 6265 domain-matching), or if it belongs to another host of
+the same registrable domain.
+
+That second half was missing, and it broke the feature on the first real site
+it met. A login is not one host. Lemma's own deployment serves its app on
+`asur.work` and its API on `api.asur.work`, and SuperTokens' session cookies --
+`sAccessToken` and `sRefreshToken`, the HttpOnly pair that *is* the session --
+are set by the API host. Domain-matching alone kept only what the website host
+had set: `sFrontToken` and a timestamp, the two cookies the frontend SDK reads
+to decide a session exists. Restoring that produced a browser that believed it
+was signed in, got a 401, and bounced to the login form -- so the agent asked
+again, and again, each time saving the same useless pair.
+
+The registrable domain is the web's own boundary for this, and it has to be a
+real public-suffix list rather than "the last two labels": `a.github.io` and
+`b.github.io` are different sites and must not share a login, while
+`app.example.co.uk` and `api.example.co.uk` are one. The private section of the
+list is what draws that first line, so it is switched on. A host with no
+registrable domain at all -- `localhost`, a bare IP -- falls back to exact
+matching, which is the only safe reading of "the same site" there.
+
+What this still drops is the thing worth dropping: a login that redirected
+through `accounts.google.com` leaves Google's cookies in the capture, and they
+are not this site's to keep.
 
 The first implementation of this feature kept the whole browser profile under
 one site's name -- every site the agent had ever visited, restored whenever any
@@ -28,7 +46,10 @@ agent asked for that one. That is what this exists to make impossible.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from urllib.parse import urlparse
+
+from tldextract import TLDExtract
 
 from app.modules.workspace.contracts.browser import (
     BrowserCookie,
@@ -40,8 +61,59 @@ from app.modules.workspace.contracts.browser import (
 #: Cookie and storage entries are bounded so one site cannot make a saved login
 #: into a row nothing can read back. A policy number, which is why it lives
 #: here rather than with the shape.
+#: Stands in for "never used" when ordering candidates.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
 MAX_COOKIES = 200
 MAX_ORIGINS = 20
+
+#: The public-suffix list, from the copy shipped inside `tldextract`.
+#:
+#: `suffix_list_urls=()` and `cache_dir=None` between them make this offline
+#: and deterministic: no fetch on first use, no cache directory to write, the
+#: same answer in a test, in a worker and in CI. The cost is that the snapshot
+#: ages with the dependency, which for this decision is the right trade -- a
+#: scoping rule that reaches the network is a scoping rule that can fail open.
+#:
+#: `include_psl_private_domains=True` is load-bearing, not a default worth
+#: leaving alone. Without it `github.io` is not a suffix, so `a.github.io` and
+#: `b.github.io` resolve to the same registrable domain and a login saved for
+#: one would restore the other's cookies.
+_registrable = TLDExtract(
+    suffix_list_urls=(), include_psl_private_domains=True, cache_dir=None
+)
+
+
+def site_of(host: str) -> str:
+    """The registrable domain `host` belongs to, or `""` if it has none.
+
+    Empty for `localhost`, for a bare IP address, and for a public suffix on
+    its own -- none of which have a "rest of the site" to speak of.
+    """
+    if not host:
+        return ""
+    return _registrable(host.lower()).top_domain_under_public_suffix
+
+
+def same_site(cookie_domain: str, host: str) -> bool:
+    """Whether a cookie's host and the login's host are one site.
+
+    Not the same question as `domain_matches`, and both are needed: that one
+    answers "would the browser send this cookie to the login's origin", which
+    covers a parent-domain cookie; this one covers a sibling, which is where
+    an API host's session cookies live.
+    """
+    candidate = (cookie_domain or "").lstrip(".").lower()
+    subject = (host or "").lower()
+    if not candidate or not subject:
+        return False
+    site = site_of(subject)
+    # No registrable domain means there is no site to be part of, so the only
+    # honest answer is the exact host -- `localhost` must not pull in cookies
+    # from every other single-label name.
+    if not site:
+        return candidate == subject
+    return site_of(candidate) == site
 
 
 def domain_matches(cookie_domain: str, host: str) -> bool:
@@ -67,6 +139,52 @@ def domain_matches(cookie_domain: str, host: str) -> bool:
     return subject.endswith(f".{candidate}")
 
 
+def pick_for_site(origin: str, candidates):
+    """Which of a person's saved logins authenticates `origin`.
+
+    Exact origin first, so a site that really does keep a separate login per
+    host gets its own. Otherwise the most recently used login of the same
+    registrable domain: a session captured at `mail.google.com` is one the
+    browser also sends to `calendar.google.com`, and `scope_state` keeps it
+    for that reason -- looking it back up by exact origin threw that away and
+    asked the person to sign in to an account they were already signed in to.
+
+    `None` when nothing fits, including when `origin` has no registrable
+    domain: `localhost` and bare IPs have no rest-of-the-site to borrow from,
+    and guessing would share one login between unrelated hosts.
+
+    Pure, and separate from the query that feeds it, because this is the part
+    worth being sure about -- a fake session cannot tell two queries apart and
+    a test against one would agree with whatever it was given.
+    """
+    wanted = normalized_origin_key(origin)
+    for candidate in candidates:
+        if normalized_origin_key(candidate.origin) == wanted:
+            return candidate
+
+    site = site_of(host_of(origin))
+    if not site:
+        return None
+    same_site = [c for c in candidates if site_of(host_of(c.origin)) == site]
+    if not same_site:
+        return None
+    # `last_used_at` is optional, and `None` sorts before any timestamp rather
+    # than blowing up the comparison.
+    return max(
+        same_site,
+        key=lambda c: (
+            c.last_used_at is not None,
+            c.last_used_at or _EPOCH,
+            c.origin,
+        ),
+    )
+
+
+def normalized_origin_key(origin: str) -> str:
+    """An origin reduced to what "the same origin" means here."""
+    return (origin or "").strip().rstrip("/").lower()
+
+
 def scope_state(
     state: BrowserState | dict[str, object], *, origin: str
 ) -> BrowserState:
@@ -85,7 +203,10 @@ def scope_state(
         cookie
         for cookie in _as_list(state.get("cookies"))[: MAX_COOKIES * 5]
         if isinstance(cookie, dict)
-        and domain_matches(str(cookie.get("domain", "")), host)
+        and (
+            domain_matches(str(cookie.get("domain", "")), host)
+            or same_site(str(cookie.get("domain", "")), host)
+        )
     ][:MAX_COOKIES]
 
     # Local storage is keyed by the exact origin that wrote it -- there is no
@@ -182,6 +303,29 @@ __all__ = [
     "MAX_ORIGINS",
     "domain_matches",
     "host_of",
+    "same_site",
+    "site_of",
     "looks_signed_in",
+    "pick_for_site",
     "scope_state",
 ]
+
+
+#: Words a page shows when it still wants a login. Crude on purpose: the
+#: alternative is asking a model, and a wrong answer here either asks a person
+#: who did not need asking or reports a sign-in that did not happen.
+_WALL_HINTS = ("sign in", "signin", "log in", "login", "password")
+
+
+def page_looks_like_a_login_wall(text: str) -> bool:
+    """Whether a page still appears to want a login.
+
+    Used after loading a saved session: if the site shows a login form anyway,
+    the session is dead and saying so now is what `PS-CONN-022` asks for.
+
+    Here rather than beside the service that calls it, because this is the
+    same question `looks_signed_in` asks from the other side -- and because a
+    service file is not the place for a word list.
+    """
+    lowered = (text or "").lower()[:4000]
+    return any(hint in lowered for hint in _WALL_HINTS)

@@ -11,8 +11,10 @@ specific to its subject; do not ship a generic dashboard wearing the pod's name.
 
 ## Keep The Boundary Clear
 
-- Read [`lemma-builder/references/apps.md`](../lemma-builder/references/apps.md)
-  before changing an app. Treat it as authoritative for HTML versus Vite,
+- Read `lemma-builder`'s `references/apps.md` before changing an app — load it
+  with `load_skill(name="lemma-builder", resource_path="references/apps.md")`.
+  A relative `../` path is refused: `resource_path` may only name a file inside
+  the skill you are loading. Treat it as authoritative for HTML versus Vite,
   `LemmaClient`, SDK hooks, auth, RLS, realtime, scaffolding, components, bundles,
   deployment, and technical testing.
 - Use this skill for experience strategy, information architecture, interaction,

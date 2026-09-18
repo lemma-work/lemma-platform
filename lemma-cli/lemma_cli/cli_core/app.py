@@ -112,6 +112,14 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
         SURFACE_PLATFORM_HELP,
         False,
     ),
+    # Named for the browser: `lemma auth login` already means "sign in to
+    # Lemma", and these are the site logins saved in the *agent's browser*.
+    "browser-logins": (
+        f"{_CMD}.browser_logins",
+        "app",
+        "Site logins saved from the agent's browser.",
+        False,
+    ),
     "profile": (
         f"{_CMD}.profile",
         "app",

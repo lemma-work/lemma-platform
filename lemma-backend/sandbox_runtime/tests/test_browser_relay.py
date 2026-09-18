@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -209,7 +210,7 @@ def test_the_state_directory_is_never_the_durable_volume() -> None:
 async def test_a_saved_session_leaves_no_file_behind(monkeypatch, tmp_path) -> None:
     written: dict[str, Path] = {}
 
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
+    async def fake_run(argv: list[str], *, session: str) -> tuple[int, str]:
         path = Path(argv[-1])
         written["path"] = path
         path.write_text(json.dumps({"cookies": [{"name": "s", "value": "v"}]}))
@@ -224,7 +225,7 @@ async def test_a_saved_session_leaves_no_file_behind(monkeypatch, tmp_path) -> N
 
 
 async def test_an_oversized_session_is_refused(monkeypatch, tmp_path) -> None:
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
+    async def fake_run(argv: list[str], *, session: str) -> tuple[int, str]:
         Path(argv[-1]).write_text(json.dumps({"junk": "x" * (3 * 1024 * 1024)}))
         return 0, ""
 
@@ -238,7 +239,7 @@ async def test_an_oversized_session_is_refused(monkeypatch, tmp_path) -> None:
 async def test_a_loaded_session_is_staged_and_removed(monkeypatch, tmp_path) -> None:
     seen: dict[str, object] = {}
 
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
+    async def fake_run(argv: list[str], *, session: str) -> tuple[int, str]:
         path = Path(argv[-1])
         seen["path"] = path
         seen["content"] = json.loads(path.read_text())
@@ -569,6 +570,70 @@ def test_a_vnc_viewer_is_checked_against_its_own_session_not_the_default(
     assert closed.value.code == CLOSE_UPSTREAM_GONE
 
 
+def test_the_vnc_keepalive_touches_the_session_being_watched(
+    monkeypatch, tmp_path
+) -> None:
+    """The bug this pins: the route kept the *default* session warm whatever
+    the viewer was actually looking at.
+
+    Watching is not a command, and `agent-browser` retires a browser after two
+    idle minutes -- which is the entire reason this loop exists. Pointed at the
+    default session, it let the browser actually on screen idle out from under
+    the person reading it: a sign-in's `login-<host>`, or a conversation's own
+    session. For a sign-in that is worse than a blank panel, because releasing
+    runs quiesce and takes the profile -- and the half-finished sign-in -- with
+    it. It also kept a browser nobody was watching alive, in a sandbox whose
+    memory guard kills on ~220 MB free.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+
+    async def fake_live_port(session=None):
+        return 12345
+
+    kept_warm: list[str] = []
+
+    async def _never_finishes() -> None:
+        await asyncio.Event().wait()
+
+    def fake_keepalive_loop(session: str):
+        # Recorded where the loop is *created*, not where it first runs: the
+        # real one sleeps for a minute before its first touch and this socket
+        # is over long before that. Which session it is handed is the whole of
+        # what regressed.
+        kept_warm.append(session)
+        return _never_finishes()
+
+    class _RefusingConnect:
+        # Same stand-in as the liveness test above: failing at websockify with
+        # its own close code proves the route got past the checks and reached
+        # the point where the keepalive has already been started.
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            raise OSError("no websockify in this test")
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app, "_keepalive_loop", fake_keepalive_loop)
+    monkeypatch.setattr(relay_app.websockets, "connect", _RefusingConnect)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?session=login-example.com",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+
+    assert closed.value.code == CLOSE_UPSTREAM_GONE
+    assert kept_warm == ["login-example.com"]
+
+
 #: Correctly-sized fake RFB client messages, by the protocol's own fixed and
 #: header-driven lengths -- a real message, not a plausible-looking prefix of
 #: one, is what the smuggling test below needs a legitimate message to be.
@@ -789,29 +854,52 @@ def test_the_cli_is_told_its_session_in_the_environment_too(monkeypatch) -> None
     assert "PATH" in env
 
 
-def test_one_viewer_leaving_does_not_release_another_viewers_wheel(
+@pytest.mark.asyncio
+async def test_saving_a_session_names_it_in_the_environment_too(
     monkeypatch, tmp_path
 ) -> None:
-    """The lease says who holds it, not merely that somebody does.
+    """The flags alone put the capture in the wrong browser when Chrome is cold.
 
-    Two people can have the same session open -- a second tab, a phone
-    alongside a laptop, a reconnect that overlaps its own close. The lease was
-    a file whose existence was the whole signal, so whichever socket closed
-    first deleted it, and the one still driving lost the wheel without being
-    told. The agent's script reads that file to decide whether to yield, so
-    what followed was a command typed into a page somebody was using.
+    `agent-browser` is the `lemma-node-tool` wrapper. On a cold sandbox it
+    bootstraps by running `start-browser`, and that script reads
+    `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PROFILE` from its environment --
+    it never sees a command-line flag. `chrome.py` passes `agent_browser_env`
+    at every call site for exactly this reason; the two state calls were the
+    only ones that did not.
+
+    Warm, the bootstrap short-circuits and the flags win, which is why this
+    looked fine. Cold -- a fresh display, or a Chrome the memory guard killed
+    -- it started Chrome in the image's default `workspace` profile and then
+    saved *that* browser's cookies under the login's name.
     """
-    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay import state as state_module
+    from sandbox_runtime.browser_relay.chrome import profile_for_session
 
-    monkeypatch.setattr(relay_app, "_WHEEL_DIR", tmp_path / "wheel")
+    seen: dict[str, object] = {}
 
-    first = relay_app._take_the_wheel("conv-abc")
-    second = relay_app._take_the_wheel("conv-abc")
-    assert first is not None and second is not None
-    assert first.token != second.token
+    async def fake_exec(*argv, **kwargs):
+        seen["argv"] = argv
+        seen["env"] = kwargs.get("env")
+        # Whatever `state save` would have written, so the caller can go on.
+        out = Path(argv[argv.index("save") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"cookies": [], "origins": []}))
 
-    relay_app._release_the_wheel(first)
-    assert relay_app.wheel_path("conv-abc").exists(), "the second viewer still holds it"
+        class _Done:
+            returncode = 0
+            stdout = None
 
-    relay_app._release_the_wheel(second)
-    assert not relay_app.wheel_path("conv-abc").exists()
+            async def wait(self):
+                return 0
+
+        return _Done()
+
+    monkeypatch.setattr(state_module, "_STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await state_module.save_session(session="login-asur.work")
+
+    env = seen["env"]
+    assert env is not None, "the capture must not inherit whatever the relay had"
+    assert env["AGENT_BROWSER_SESSION"] == "login-asur.work"
+    assert env["AGENT_BROWSER_PROFILE"] == profile_for_session("login-asur.work")

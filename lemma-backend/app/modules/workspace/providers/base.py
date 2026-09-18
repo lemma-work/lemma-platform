@@ -55,6 +55,20 @@ LABEL_PROFILE_NAME = "profile-name"
 # with, so releasing a new image actually reaches existing workspaces instead of
 # leaving them on the old one for as long as they live.
 LABEL_PROFILE_DIGEST = "profile-digest"
+# Which stack created this, when a machine runs more than one.
+#
+# `managed-by=lemma-workspace` says "a Lemma sandbox", not "*my* Lemma
+# sandbox", and a developer's laptop routinely has two stacks on one Docker
+# daemon: the dev stack they are using, and an e2e run. A sweep filtering on
+# the first label alone reaches into the other one -- which is not theoretical.
+# The e2e harness deleted a live dev stack's containers and volumes mid-use,
+# and the dev stack's pane went black while somebody was typing in it.
+#
+# Empty by default, which means unstamped and unfiltered: that is what every
+# container created before this label existed looks like, and a sweep that
+# suddenly stopped recognising them would leak every one of them. A stack that
+# wants to be told apart sets it.
+LABEL_OWNER = "lemma-owner"
 MANAGED_BY = "lemma-workspace"
 
 

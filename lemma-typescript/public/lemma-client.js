@@ -17312,8 +17312,17 @@ var LemmaClient = (() => {
     constructor(http) {
       __publicField(this, "http", http);
     }
-    list() {
-      return this.http.request("GET", "/web-logins");
+    /**
+     * One page of saved logins.
+     *
+     * Follow `next_page_token` to see the rest: a full page is not itself proof
+     * that more exist, and a login you cannot list is one you cannot revoke.
+     */
+    list(options = {}) {
+      const params = {};
+      if (options.limit !== void 0) params.limit = options.limit;
+      if (options.pageToken !== void 0) params.page_token = options.pageToken;
+      return this.http.request("GET", "/web-logins", { params });
     }
     /**
      * Forget a site.
@@ -17326,12 +17335,10 @@ var LemmaClient = (() => {
         params: { origin }
       });
     }
-    history(limit = 100) {
-      return this.http.request(
-        "GET",
-        "/web-logins/history",
-        { params: { limit } }
-      );
+    history(limit = 100, pageToken) {
+      const params = { limit };
+      if (pageToken !== void 0) params.page_token = pageToken;
+      return this.http.request("GET", "/web-logins/history", { params });
     }
     /** What a sign-in link is asking for, addressed by the pause it is for.
      *
@@ -17413,6 +17420,25 @@ var LemmaClient = (() => {
     browserCurrentPageUrl(origin) {
       return this.http.request("GET", "/workspace/browser/current-page-url", {
         params: { origin }
+      });
+    }
+    /**
+     * Fit the workspace display to the pane showing it.
+     *
+     * The pane is a box of an arbitrary shape and the display is a real screen
+     * with a fixed size, so one of them has to move. Scaling the picture is
+     * what made the browser a small letterboxed rectangle; resizing the display
+     * means the pixels sent are the pixels shown, and a narrow pane gets a
+     * narrow *viewport* — so sites serve their mobile layout on a phone.
+     *
+     * `size` is what the display actually became, which may be smaller than
+     * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
+     * could be resized (a sleeping computer, an older image), which is not an
+     * error — the pane keeps the picture it had.
+     */
+    browserResizeDisplay(width, height) {
+      return this.http.request("POST", "/workspace/browser/display-size", {
+        body: { width, height }
       });
     }
     /**
