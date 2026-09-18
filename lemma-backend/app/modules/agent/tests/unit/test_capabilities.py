@@ -1077,17 +1077,28 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
 
 
 @pytest.mark.anyio
-async def test_pod_is_deferred_but_names_itself_the_default_for_pod_data(monkeypatch):
-    """The deferred pod toolset must say it beats the CLI at its own job.
+async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypatch):
+    """The pod toolset is in the prefix, and still says it beats the CLI there.
 
-    Every other deferred toolset competes with nothing: if the model does not
-    search for `run_connector_operation`, the operation simply does not happen.
-    POD competes with `exec_command`, which is visible and used to carry a
-    `lemma` cookbook for the same tables and files. Traced runs split on nothing
-    but whether the model happened to call `search_tools` first -- the ones that
-    did not put every table and file read through `lemma ... | head`, losing
-    rows to truncation. A one-line entry in the deferred hint does not settle
-    that; naming the default in the prefix is what does.
+    Two separate things, and the second outlives the first. POD is unlike every
+    other optional toolset: if the model never searches for
+    `run_connector_operation` the operation simply does not happen, whereas POD
+    competes with `exec_command`, which is visible and once carried a `lemma`
+    cookbook for the same tables and files. Runs split on nothing but whether
+    the model happened to call `search_tools` first, and the ones that did not
+    put every table and file read through `lemma ... | head`, losing rows to
+    truncation.
+
+    That was first addressed by naming the default in the prefix while leaving
+    the tools deferred. They are now visible as well, for the pod-default agent
+    whose main job is this pod's data -- it should not have to find the tools
+    for its own job first. User-created agents never defer at all
+    (`_partition_core_extra`): a toolset somebody deliberately gave an agent is
+    a statement it will be used.
+
+    The prefix wording stays regardless. Visible tool schemas say what each tool
+    does, not which of two working paths to prefer, and preferring the wrong one
+    is the failure being prevented.
     """
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
@@ -1129,16 +1140,16 @@ async def test_pod_is_deferred_but_names_itself_the_default_for_pod_data(monkeyp
     agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
     await agent.run("hi", deps=deps)
 
-    # Still deferred: this fixes the steering, not the context budget.
-    assert {"pod_query", "pod_read_file", "pod_tables"} <= captured["deferred"]
-    assert not any(name.startswith("pod_") for name in captured["visible"])
+    # In the prefix, and not behind a search.
+    assert {"pod_query", "pod_read_file", "pod_tables"} <= captured["visible"]
+    assert not any(name.startswith("pod_") for name in captured["deferred"])
 
     pod = [
         c
         for c in capabilities
         if isinstance(c, InstructedToolsetCapability) and c.name == "pod"
     ]
-    assert len(pod) == 1, "deferring pod dropped its instructions"
+    assert len(pod) == 1, "pod lost its instructions"
     instructions = pod[0].get_instructions()
     # The preference has to be stated, not implied by a list of tool names.
     assert "not the `lemma` CLI" in instructions
