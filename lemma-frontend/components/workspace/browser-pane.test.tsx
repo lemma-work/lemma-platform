@@ -35,6 +35,14 @@ vi.stubGlobal('WebSocket', FakeSocket);
  * exists so constructing one does not throw.
  */
 class FakeResizeObserver {
+    // Same signature as the real constructor, and it keeps what it is handed.
+    // A stub that took no callback would still work here -- nothing fires it --
+    // but it would be a narrower contract than the thing it replaces, which is
+    // how a test comes to pass against a call the browser would reject.
+    readonly callback: ResizeObserverCallback;
+    constructor(callback: ResizeObserverCallback) {
+        this.callback = callback;
+    }
     observe() {}
     unobserve() {}
     disconnect() {}
