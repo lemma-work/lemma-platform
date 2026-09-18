@@ -319,3 +319,33 @@ class TestRefusals:
         assert "confidential_roadmap" not in response.text, (
             f"the refusal echoed the resource name back: {response.text[:300]}"
         )
+
+
+@scenario("A personal resource is not named in a listing either")
+@proves("PS-ACCESS-001")
+@covers("agent.create", "org.home")
+async def test_a_personal_resource_is_not_named_in_a_listing(team):
+    """Reach governs what a listing says exists, not only what opening it gives.
+
+    A refusal on the way in is half the promise. The organization's landing page
+    printed every agent in every pod a person could see -- name and description,
+    whatever its reach -- so a personal agent was never openable and always
+    readable, which is the same disclosure by a quieter route.
+    """
+    alice, bob, _outsider, pod = team
+    organization = {"id": pod["organization_id"]}
+
+    shared = await alice.creates_an_agent(in_pod=pod)
+    private = await alice.creates_an_agent(in_pod=pod, visibility="PERSONAL")
+    assert private["visibility"] == "PERSONAL", private
+
+    home = await bob.home_of(organization)
+    listed = next(entry for entry in home["pods"] if entry["id"] == pod["id"])
+    named = {agent["name"] for agent in listed["agents"]}
+
+    assert shared["name"] in named, (
+        "a pod-wide agent is what the listing is for; it must still be named"
+    )
+    assert private["name"] not in named, (
+        f"a personal agent was named to the rest of the pod: {sorted(named)}"
+    )
