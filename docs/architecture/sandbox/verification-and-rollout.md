@@ -567,6 +567,58 @@ callers. There is no live compatibility facade for the experimental API.
 - Run the complete shared workspace/browser/API/JOB catalog; enable Kubernetes only
   after independent provider verification.
 
+## 10.1 Moving the workspace root to `~/lemma`
+
+A one-off, and the steps are ordered because two of them are not reversible in
+the other order.
+
+**1. Ship the desktop build first.** Agent Host carries the sandbox root as a
+compiled-in constant and there is no auto-updater, so a copy installed before
+this release rejects a conversation created after it. Shipping the backend first
+breaks host-dispatched runs for anyone who has not updated.
+
+**2. Accept that every workspace disk is replaced once.** They were already being
+replaced on every template publish -- the defect this release removes -- so the
+last one is spent making the layout consistent. Afterwards a first-party code
+change reaches a running sandbox without an image at all.
+
+**3. Repoint conversations created before the move.** `/workspace` is no longer a
+root the code recognises, so a row still naming it raises on resolve rather than
+returning a directory. This runs once, against rows that will never be written in
+that shape again, which is why it is a statement here rather than a migration:
+
+```sql
+-- Size it first.
+SELECT count(*) FROM conversations
+WHERE conversation_metadata->>'cwd' LIKE '/workspace%';
+
+-- Paths under the old root keep their suffix.
+UPDATE conversations
+SET conversation_metadata = jsonb_set(
+        conversation_metadata,
+        '{cwd}',
+        to_jsonb('/home/user/lemma' || substring(conversation_metadata->>'cwd' from 11))
+    )
+WHERE conversation_metadata->>'cwd' LIKE '/workspace/%';
+
+-- The bare root has no suffix to carry.
+UPDATE conversations
+SET conversation_metadata = jsonb_set(
+        conversation_metadata, '{cwd}', to_jsonb('/home/user/lemma'::text)
+    )
+WHERE conversation_metadata->>'cwd' = '/workspace';
+```
+
+Both statements are idempotent: after the first run nothing matches `LIKE
+'/workspace%'` again. `from 11` is the character after `/workspace`, so
+`/workspace/c/x` becomes `/home/user/lemma/c/x`.
+
+**4. Land the `lemma-cloud` builder stage before expecting anything in
+production.** Production's image is built outside this repository and needs the
+same bundle-builder stage. Without it `runtime_bundle()` returns `None` there and
+the mechanism silently does nothing -- every sandbox stays on its baked copy,
+which is safe, and is not the fix.
+
 ## 11. Rollback rules
 
 - Workspace rollback does not restore experimental workspace data. Any rollback

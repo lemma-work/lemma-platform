@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import Sequence
+from typing import Protocol
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -33,6 +34,7 @@ from app.modules.workspace.infrastructure.runtime_bundle import (
     RuntimeBundle,
     runtime_bundle,
 )
+from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
 from app.modules.workspace.providers.base import (
     ProviderFailed,
@@ -42,7 +44,11 @@ from app.modules.workspace.providers.base import (
 )
 from sandbox_runtime import runtime_install
 from sandbox_runtime.errors import SandboxError
-from sandbox_runtime.protocol import ProcessState, WorkloadKind
+from sandbox_runtime.protocol import (
+    ProcessOutputSnapshot,
+    ProcessState,
+    WorkloadKind,
+)
 
 logger = get_logger(__name__)
 
@@ -134,8 +140,58 @@ def install_command(
     )
 
 
+class _ManagerClient(Protocol):
+    """The four calls this mixin makes on the workspace manager client.
+
+    A Protocol rather than the concrete class because the mixin is mixed *into*
+    that service: naming the real type here would be a cycle, and naming nothing
+    left `_get_manager_client` unresolvable, so every value taken from it was
+    untyped and a rename would have been silent.
+    """
+
+    async def read_file(
+        self, user_id: UUID, path: str, *, deadline_at: datetime
+    ) -> bytes: ...
+
+    async def write_file(
+        self,
+        user_id: UUID,
+        path: str,
+        data: bytes,
+        *,
+        deadline_at: datetime,
+        expected_sha256: str | None = None,
+    ) -> object: ...
+
+    async def start_process(
+        self,
+        kind: WorkloadKind,
+        user_id: UUID,
+        *,
+        operation_id: UUID,
+        deadline_at: datetime,
+        cwd: str,
+        shell_command: str,
+    ) -> object: ...
+
+    async def read_process_output(
+        self,
+        kind: WorkloadKind,
+        user_id: UUID,
+        operation_id: UUID,
+        *,
+        deadline_at: datetime,
+        after_sequence: int,
+        wait_seconds: int,
+    ) -> ProcessOutputSnapshot: ...
+
+
 class WorkspaceRuntimeBundleMixin:
     """``_ensure_runtime_bundle``, mixed into the workspace sandbox service."""
+
+    def _get_manager_client(self) -> _ManagerClient:
+        """Supplied by the service this is mixed into."""
+        raise NotImplementedError
 
     #: (loop, user, sandbox, epoch, generation) -> the version known installed.
     #: Class-level, like the directory caches beside it: the answer is about a
@@ -162,7 +218,7 @@ class WorkspaceRuntimeBundleMixin:
         return runtime_bundle()
 
     def _bundle_cache_key(
-        self, user_id: UUID, sandbox_info
+        self, user_id: UUID, sandbox_info: SandboxInfo
     ) -> tuple[int, UUID, str, int, int] | None:
         """Identity for "the overlay is installed", which belongs to the sandbox.
 
@@ -194,7 +250,9 @@ class WorkspaceRuntimeBundleMixin:
             sandbox_info.storage_generation,
         )
 
-    async def _ensure_runtime_bundle(self, user_id: UUID, sandbox_info) -> None:
+    async def _ensure_runtime_bundle(
+        self, user_id: UUID, sandbox_info: SandboxInfo
+    ) -> None:
         """Install the configured bundle into this sandbox, at most once.
 
         The warm path is a dictionary lookup and no I/O at all, which is the
@@ -269,7 +327,9 @@ class WorkspaceRuntimeBundleMixin:
         )
         return True
 
-    async def _installed_version(self, client, user_id: UUID) -> str | None:
+    async def _installed_version(
+        self, client: _ManagerClient, user_id: UUID
+    ) -> str | None:
         """What the sandbox itself says is installed, or None.
 
         Read rather than inferred: the stamp is written by the installer only
@@ -289,7 +349,9 @@ class WorkspaceRuntimeBundleMixin:
             return None
         return stamp.decode("utf-8", "replace").strip() or None
 
-    async def _deliver(self, client, user_id: UUID, bundle: RuntimeBundle) -> None:
+    async def _deliver(
+        self, client: _ManagerClient, user_id: UUID, bundle: RuntimeBundle
+    ) -> None:
         """Put the installer and the archive where the sandbox can reach them.
 
         Through the files API rather than a shell: a single argv entry caps at
@@ -321,7 +383,7 @@ class WorkspaceRuntimeBundleMixin:
         )
 
     async def _run_installer(
-        self, client, user_id: UUID, bundle: RuntimeBundle
+        self, client: _ManagerClient, user_id: UUID, bundle: RuntimeBundle
     ) -> None:
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
         operation_id = uuid4()
@@ -346,7 +408,13 @@ class WorkspaceRuntimeBundleMixin:
                 f"{self._tail(snapshot)}"
             )
 
-    async def _await_exit(self, client, user_id: UUID, operation_id: UUID, deadline_at):
+    async def _await_exit(
+        self,
+        client: _ManagerClient,
+        user_id: UUID,
+        operation_id: UUID,
+        deadline_at: datetime,
+    ) -> ProcessOutputSnapshot | None:
         """Wait on the process's own completion, never on the clock."""
         after = 0
         while datetime.now(timezone.utc) < deadline_at:

@@ -441,7 +441,9 @@ typecheck-critical:
 		app/modules/workspace/services/local_sandbox_client.py \
 		app/modules/workspace/services/port_access.py \
 		app/modules/workspace/services/sandbox_service.py \
-		app/modules/workspace/services/sandbox_sweeper.py
+		app/modules/workspace/services/sandbox_sweeper.py \
+		app/modules/workspace/services/workspace_runtime_bundle.py \
+		app/modules/workspace/infrastructure/runtime_bundle.py
 
 architecture:
 	uv run python scripts/check_architecture.py

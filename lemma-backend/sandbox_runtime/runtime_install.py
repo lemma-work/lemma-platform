@@ -111,7 +111,11 @@ def _extract(archive: Path, destination: Path) -> None:
             # A zip is attacker-controlled input in the general case, and this
             # runs as root. Refuse anything that resolves outside the target
             # rather than trusting the archive's own names.
-            if not str(target.resolve()).startswith(str(destination.resolve())):
+            #
+            # `is_relative_to`, not a string prefix: staging directories are
+            # siblings named `.incoming-<pid>`, so `startswith` let an entry
+            # under `.incoming-127` pass a check rooted at `.incoming-12`.
+            if not target.resolve().is_relative_to(destination.resolve()):
                 raise SystemExit(
                     f"bundle entry escapes its directory: {entry.filename}"
                 )
@@ -222,9 +226,22 @@ def _prune(root: Path, keep: Path) -> None:
     # lock-free story this module tells: racing installers are supposed to
     # cost a wasted copy, never a failed one.
     cutoff = time.time() - _ABANDONED_STAGING_SECONDS
-    for abandoned in root.glob(".incoming-*"):
+    # Both staging names this module creates. `_point_current_at` stages a
+    # `.current-<pid>` symlink before `os.replace` moves it, so a process killed
+    # between those two leaves one behind -- on a fabric where the sandbox is
+    # the disk, forever.
+    for abandoned in (*root.glob(".incoming-*"), *root.glob(".current-*")):
         try:
-            if abandoned.stat().st_mtime < cutoff:
+            # `lstat`, because `.current-*` is a symlink and `stat` would report
+            # the age of the version directory it points at -- which is younger
+            # than the cutoff for exactly as long as that version is current.
+            if abandoned.lstat().st_mtime >= cutoff:
+                continue
+            if abandoned.is_symlink():
+                # `rmtree` refuses a symlink, and refuses it silently under
+                # `ignore_errors`, so sweeping one needs `unlink`.
+                abandoned.unlink(missing_ok=True)
+            else:
                 shutil.rmtree(abandoned, ignore_errors=True)
         except OSError:
             continue
@@ -271,6 +288,11 @@ def install(
 ) -> dict[str, object]:
     already = probe(root, site_packages=site_packages)
     if already["version"] == version:
+        # Consumed here too. The backend probes before delivering, so reaching
+        # this means two installers raced and the loser is holding a copy of a
+        # bundle that is already installed -- left behind, it rides into every
+        # later snapshot of a disk the user owns.
+        archive.unlink(missing_ok=True)
         return {"version": version, "installed": False, "reason": "already current"}
 
     if archive_sha256 is not None:
@@ -289,8 +311,21 @@ def install(
 
     # Only after this passes does anything point at the new tree.
     _smoke_test(target / "site-packages", requires)
-    _point_current_at(root, target)
+    # Wired before it is published, not after. The stamp a reader finds through
+    # `current` is the whole claim that this overlay is installed -- the backend
+    # reads exactly that file -- so publishing first opens a window where a
+    # sandbox answers "installed" for a tree nothing imports from. Dying in that
+    # window is unrecoverable by design: the claim reads as true forever while
+    # the sandbox serves the baked copy, which is the one failure the smoke test
+    # exists to prevent.
+    #
+    # Safe in this order because the `.pth` names `current`, not a version, so
+    # it is the same bytes for every install and writing it early points at
+    # whatever `current` is now. Both images bake it already, which makes this a
+    # no-op in practice; it is the sandbox created from an image that does not
+    # that this ordering is for.
     _write_pth(root / CURRENT_LINK / "site-packages", site_packages)
+    _point_current_at(root, target)
     _prune(root, keep=target)
     # The archive is consumed, and only now is it safe to say so: before the
     # smoke test a failure still wants it on disk to retry against. Left behind

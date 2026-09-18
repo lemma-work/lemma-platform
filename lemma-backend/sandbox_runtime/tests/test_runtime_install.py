@@ -458,6 +458,129 @@ def test_an_intact_archive_passes_its_digest_check(
     assert runtime_install.probe(root, site_packages=site)["version"] == version
 
 
+def test_nothing_is_published_before_it_is_wired(
+    tmp_path: Path, root: Path, site: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sandbox must never answer "installed" for a tree nothing imports from.
+
+    The stamp reachable through `current` *is* the claim -- the backend reads
+    that exact file -- so if `current` moves before the `.pth` is written, a
+    process dying in between leaves the claim true forever while the sandbox
+    serves the baked copy. Unrecoverable, because every later ensure believes
+    the overlay is already there.
+
+    Simulated by failing the flip: with the order correct the wiring is already
+    on disk when that happens.
+    """
+    archive, version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+
+    def _die(*_args: object, **_kwargs: object) -> None:
+        raise SystemExit("killed while publishing")
+
+    monkeypatch.setattr(runtime_install, "_point_current_at", _die)
+
+    with pytest.raises(SystemExit):
+        runtime_install.install(
+            root=root,
+            archive=archive,
+            version=version,
+            requires=["probe_pkg"],
+            site_packages=site,
+        )
+
+    assert (site / runtime_install.PTH_NAME).is_file(), (
+        "the overlay was published before it was wired"
+    )
+
+
+def test_an_archive_for_a_version_already_installed_is_not_left_behind(
+    tmp_path: Path, root: Path, site: Path
+) -> None:
+    """Reaching the already-current path means two installers raced.
+
+    The loser is holding a copy of a bundle that is already installed, and on a
+    fabric where the sandbox is the disk anything left in the staging area rides
+    into every later snapshot of a disk the user owns.
+    """
+    archive, version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+    runtime_install.install(
+        root=root,
+        archive=archive,
+        version=version,
+        requires=["probe_pkg"],
+        site_packages=site,
+    )
+    again, _ = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+
+    outcome = runtime_install.install(
+        root=root,
+        archive=again,
+        version=version,
+        requires=["probe_pkg"],
+        site_packages=site,
+    )
+
+    assert outcome["installed"] is False
+    assert not again.exists(), "a redundant archive was left on the user's disk"
+
+
+def test_a_sibling_staging_directory_is_not_inside_this_one(
+    tmp_path: Path, root: Path, site: Path
+) -> None:
+    """Containment is a path relationship, not a string prefix.
+
+    Staging directories are siblings named `.incoming-<pid>`, so a prefix test
+    rooted at `.incoming-12` accepts every path under `.incoming-127`. The
+    sibling therefore has to extend *this* installer's own name, or the prefix
+    test refuses it for the wrong reason and the test proves nothing.
+    """
+    archive = tmp_path / "sibling.zip"
+    sibling = f".incoming-{os.getpid()}9"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr(f"../{sibling}/stowaway.txt", "escaped")
+    version = "sha256:" + hashlib.sha256(b"sibling").hexdigest()
+
+    with pytest.raises(SystemExit, match="escapes its directory"):
+        runtime_install.install(
+            root=root,
+            archive=archive,
+            version=version,
+            requires=[],
+            site_packages=site,
+        )
+
+
+def test_an_abandoned_current_symlink_is_swept(
+    tmp_path: Path, root: Path, site: Path
+) -> None:
+    """`_point_current_at` stages a symlink before `os.replace` moves it.
+
+    A process killed between those two leaves one behind, and on a fabric where
+    the sandbox is the disk it is there forever. Two details make sweeping it
+    different from sweeping a staging directory: `stat` follows the link and
+    reports the age of the version it points at, which stays young for as long
+    as that version is current; and `rmtree` refuses a symlink, silently so
+    under `ignore_errors`.
+    """
+    archive, version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+    runtime_install.install(
+        root=root,
+        archive=archive,
+        version=version,
+        requires=["probe_pkg"],
+        site_packages=site,
+    )
+    stranded = root / ".current-999999"
+    stranded.symlink_to(runtime_install._version_directory(root, version).name)
+    old = time.time() - (runtime_install._ABANDONED_STAGING_SECONDS + 60)
+    os.utime(stranded, (old, old), follow_symlinks=False)
+
+    runtime_install._prune(root, keep=runtime_install._version_directory(root, version))
+
+    assert not stranded.is_symlink(), "the stranded staging symlink was not swept"
+    assert (root / runtime_install.CURRENT_LINK).is_symlink(), "current was swept"
+
+
 def test_a_version_that_is_not_a_digest_is_refused(root: Path, tmp_path: Path) -> None:
     """The version names a directory, so it must not be able to name a path."""
     with pytest.raises(SystemExit):
