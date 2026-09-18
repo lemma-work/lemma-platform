@@ -176,3 +176,15 @@ async def test_progress_opens_one_native_stream_on_slack(
     assert stops[-1]["ts"] == chunks[-1]["ts"], (
         "the stream that was closed is not the one that was appended to"
     )
+
+    # Counted only now, with the answer delivered and the stream closed: a
+    # count taken while the turn is still running says nothing, because a
+    # second start has not had its chance to arrive yet. "One stream" is the
+    # claim in this test's name, and two would be two live messages racing to
+    # show the same work.
+    assert len(message_store.get_all("SLACK_STREAM_START")) == 1, (
+        f"expected one stream, got {message_store.get_all('SLACK_STREAM_START')}"
+    )
+    assert len(message_store.get_all("SLACK_STREAM_STOP")) == 1, (
+        f"expected one close, got {message_store.get_all('SLACK_STREAM_STOP')}"
+    )

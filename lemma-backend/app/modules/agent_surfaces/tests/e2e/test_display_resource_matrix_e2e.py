@@ -94,17 +94,6 @@ _TINY_INLINE_CAP_BYTES = 2048
 LINK_HOST = "app.example.test"
 
 
-class _FakeScheduleManager:
-    async def create_schedule(self, *, account, app_trigger, config) -> str:
-        return f"e2e-{app_trigger.id}"
-
-    async def delete_schedule(self, account, provider_id: str) -> None:
-        return None
-
-    async def get_schedule(self, account, provider_id: str):
-        return None
-
-
 #: platform -> (bucket a native attachment lands in, bucket a reply lands in).
 #: Teams has no native file send at all -- `TeamsSurfaceAdapter` does not
 #: override `_render_file`, so the base stub always returns False -- which is
