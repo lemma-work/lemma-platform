@@ -1043,6 +1043,109 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
 
 
 @pytest.mark.anyio
+async def test_pod_is_deferred_but_names_itself_the_default_for_pod_data(monkeypatch):
+    """The deferred pod toolset must say it beats the CLI at its own job.
+
+    Every other deferred toolset competes with nothing: if the model does not
+    search for `run_connector_operation`, the operation simply does not happen.
+    POD competes with `exec_command`, which is visible and used to carry a
+    `lemma` cookbook for the same tables and files. Traced runs split on nothing
+    but whether the model happened to call `search_tools` first -- the ones that
+    did not put every table and file read through `lemma ... | head`, losing
+    rows to truncation. A one-line entry in the deferred hint does not settle
+    that; naming the default in the prefix is what does.
+    """
+    from app.modules.agent.capabilities import todo_storage as storage_mod
+    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.capabilities.instructed_toolset import (
+        InstructedToolsetCapability,
+    )
+    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+
+    monkeypatch.setattr(
+        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
+    )
+
+    deps = BaseAgentContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        is_pod_default_agent=True,
+    )
+    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
+        agent=None,
+        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
+    )
+    capabilities = await build_lemma_harness_tooling(
+        ctx=deps,
+        full_toolsets=full_toolsets,
+        enable_prompt_caching=False,
+    )
+
+    captured: dict = {}
+
+    def model_fn(messages, info: AgentInfo):
+        captured["visible"] = {
+            t.name for t in info.function_tools if not t.defer_loading
+        }
+        captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
+    await agent.run("hi", deps=deps)
+
+    # Still deferred: this fixes the steering, not the context budget.
+    assert {"pod_query", "pod_read_file", "pod_tables"} <= captured["deferred"]
+    assert not any(name.startswith("pod_") for name in captured["visible"])
+
+    pod = [
+        c
+        for c in capabilities
+        if isinstance(c, InstructedToolsetCapability) and c.name == "pod"
+    ]
+    assert len(pod) == 1, "deferring pod dropped its instructions"
+    instructions = pod[0].get_instructions()
+    # The preference has to be stated, not implied by a list of tool names.
+    assert "not the `lemma` CLI" in instructions
+    assert "pod_query" in instructions and "pod_read_file" in instructions
+
+    # ...and the reason to build code in the workspace is the editing loop, not
+    # the destination. `PodWriteFileRequest` is (path, content, overwrite): no
+    # append, no patch, no line range, so a one-line change to a long file costs
+    # the whole file. The workspace applies a diff, which is the whole argument.
+    assert "applies a diff" in instructions
+    assert "replaces the file" in instructions
+    assert "lemma pods import" in instructions
+
+    # An earlier draft of this fragment led with the fact that `text/html` is on
+    # the indexable-document allow-list, which reads as a warning and steered
+    # agents off writing an app's markup to the pod at all. Writing a finished
+    # file there is fine and often the point; only the iteration belongs
+    # elsewhere. Guard the fragment against acquiring a prohibition again.
+    assert "not the destination" in instructions
+    for scary in ("does not go in pod files", "slips through", "Nothing warns you"):
+        assert scary not in instructions, (
+            f"fragment discourages a valid write: {scary!r}"
+        )
+
+    # And the CLI fragment must not still teach the operations it just lost.
+    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+
+    cli = load_workspace_cli_prompt()
+    for duplicated in (
+        "lemma tables list",
+        "lemma records list",
+        "lemma query run",
+        "lemma files ls",
+        "lemma files cat",
+        "lemma files write",
+        "lemma files search",
+    ):
+        assert duplicated not in cli, f"{duplicated!r} competes with a pod_* tool"
+
+
+@pytest.mark.anyio
 async def test_every_deferred_group_is_labelled(monkeypatch):
     """An unlabelled group renders as "Additional tools", which says nothing.
 

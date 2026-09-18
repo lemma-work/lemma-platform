@@ -2000,7 +2000,10 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     assert "lemma-user" in prompt
     assert "other conversations\nshare the workspace" in prompt
     assert "/me/<topic>/" in prompt
-    assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
+    # Reading a converted document is a pod-tool job now; the CLI fragment used
+    # to teach `lemma files cat --pages` for it and competed with `pod_read_file`.
+    assert "`pod_read_file` takes a page range" in prompt
+    assert "not the `lemma` CLI" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
     # does not exist, so guard the whole composed prompt against it coming back.
     assert "/pod/" not in prompt

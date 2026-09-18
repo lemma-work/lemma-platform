@@ -12,16 +12,14 @@ folded fields, and `--output json` is for piping or saving. Use `--data '<json>'
 or `--file <path.json>` for payloads. `--pod <id>` targets a pod.
 `lemma orgs select` and `lemma pods select` switch context.
 
+Pod tables and files are the `pod_*` tools' job, not the CLI's. Use the CLI for
+the resources those tools do not reach:
+
 ```bash
 lemma pods describe                       # inventory except apps
 lemma apps list
 lemma pods members
 lemma chat <agent> "message"
-lemma tables list
-lemma tables get <table>
-lemma records list <table> --limit 20
-lemma records create <table> --data '{"title":"New"}'
-lemma query run "select status, count(*) from <table> group by status"
 lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
 lemma connectors operations search <auth-config> "send email"
@@ -38,27 +36,23 @@ grants. Load `lemma-user` for approvals, workflow forms, links, and access issue
 and `/memory`, are shared. There is no `/pod` prefix. Save deliverables under
 `/me/<topic>/...` and present their pod paths.
 
+Read, write, list, and search them with the `pod_*` file tools. Build and revise
+code here first, where an edit is a diff rather than a whole-file rewrite, then
+write or import the finished result. The CLI covers what the pod tools do not:
+uploading a local file, and reaching a document's derived artifacts.
+
 ```bash
-lemma files ls /me
-lemma files tree /knowledge
-lemma files write /me/reports/note.md "draft..."
-lemma files search "refund policy" --scope /knowledge
 lemma files upload ./report.pdf /me/reports/report.pdf
-```
-
-Uploaded documents are auto-converted to page-marked markdown and page images;
-`has_markdown` reports availability. Read converted documents in place:
-
-```bash
-lemma files cat /knowledge/policy.pdf --pages 3-7   # 1-based, capped near 50k chars
-lemma files children /knowledge/policy.pdf
+lemma files children /knowledge/policy.pdf          # list derived artifacts
 lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg
 ```
 
-Search returns page numbers. Use `cat --pages` for text and inspect page images
-for layout, tables, charts, or scans. `view_image` takes exactly one of
-`pod_file_path` or `workspace_file_path`; pod images need no download.
-`pod_view_document_pages` displays document pages.
+Uploaded documents are auto-converted to page-marked markdown and page images;
+`has_markdown` reports availability. `pod_read_file` takes a page range on a
+converted document, and `pod_search_files` returns the page numbers to ask for.
+Inspect page images for layout, tables, charts, or scans: `view_image` takes
+exactly one of `pod_file_path` or `workspace_file_path`, and pod images need no
+download. `pod_view_document_pages` displays document pages.
 
 LiteParse is a fallback for local files or missing pod conversion:
 
