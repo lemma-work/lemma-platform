@@ -92,7 +92,9 @@ def _deadline(seconds: float) -> datetime:
     return datetime.now(timezone.utc) + timedelta(seconds=seconds)
 
 
-def install_command(*, version: str, requires: Sequence[str]) -> str:
+def install_command(
+    *, version: str, requires: Sequence[str], archive_sha256: str
+) -> str:
     """The shell command that installs a delivered bundle.
 
     Module-level so the real-sandbox test runs the command this actually emits
@@ -113,6 +115,7 @@ def install_command(*, version: str, requires: Sequence[str]) -> str:
         f"--root {RUNTIME_ROOT} "
         f"--archive {ARCHIVE_PATH} "
         f"--version {version} "
+        f"--archive-sha256 {archive_sha256} "
         f"--requires {','.join(requires)}"
     )
 
@@ -298,7 +301,11 @@ class WorkspaceRuntimeBundleMixin:
     ) -> None:
         deadline_at = _deadline(_INSTALL_BUDGET_SECONDS)
         operation_id = uuid4()
-        command = install_command(version=bundle.version, requires=bundle.requires)
+        command = install_command(
+            version=bundle.version,
+            requires=bundle.requires,
+            archive_sha256=bundle.archive_sha256,
+        )
         await client.start_process(
             WorkloadKind.WORKSPACE,
             user_id,

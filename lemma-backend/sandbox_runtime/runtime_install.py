@@ -230,19 +230,25 @@ def _prune(root: Path, keep: Path) -> None:
             continue
 
 
-def _verify(archive: Path, version: str) -> None:
-    """The version *is* the archive's digest, so this is checkable here.
+def _verify(archive: Path, archive_sha256: str) -> None:
+    """The staged archive is the one that was sent, or nothing unpacks.
 
-    Checked in the sandbox, against the bytes that actually landed, rather than
-    trusted from the delivery: `expected_sha256` means different things to
-    different providers -- the workspace runtime reads it as a precondition on
-    the file already at that path, E2B as a checksum of the outgoing bytes --
-    so no single value passed there verifies this on every fabric. Hashing the
-    staged file does, and it is the only check that sees transport corruption.
+    Against the *file* digest, which is a different number from the version:
+    the version digests the unpacked contents -- paths, bytes and modes -- so
+    that rebuilding the zip does not invent a new one, while this digests the
+    bytes on disk. Comparing the archive against the version would never match,
+    and did not.
+
+    Checked here rather than trusted from the delivery because `expected_sha256`
+    means different things to different providers -- the workspace runtime reads
+    it as a precondition on the file already at that path, E2B as a checksum of
+    the outgoing bytes -- so no single value passed there verifies this on every
+    fabric. Hashing what landed does, and it is the only check that sees
+    corruption introduced in transport.
     """
-    algorithm, _, expected = version.partition(":")
+    algorithm, _, expected = archive_sha256.partition(":")
     if algorithm != "sha256" or not expected:
-        raise SystemExit(f"unusable version: {version}")
+        raise SystemExit(f"unusable archive digest: {archive_sha256}")
     digest = hashlib.sha256()
     with archive.open("rb") as handle:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
@@ -250,7 +256,7 @@ def _verify(archive: Path, version: str) -> None:
     actual = digest.hexdigest()
     if actual != expected:
         raise SystemExit(
-            f"archive digest {actual} does not match the version {expected}"
+            f"archive digest {actual} does not match the expected {expected}"
         )
 
 
@@ -260,13 +266,15 @@ def install(
     archive: Path,
     version: str,
     requires: list[str],
+    archive_sha256: str | None = None,
     site_packages: Path | None = None,
 ) -> dict[str, object]:
     already = probe(root, site_packages=site_packages)
     if already["version"] == version:
         return {"version": version, "installed": False, "reason": "already current"}
 
-    _verify(archive, version)
+    if archive_sha256 is not None:
+        _verify(archive, archive_sha256)
     root.mkdir(parents=True, exist_ok=True)
     target = _version_directory(root, version)
     if not (target / STAMP_NAME).is_file():
@@ -304,6 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--version")
+    parser.add_argument("--archive-sha256")
     parser.add_argument(
         "--site-packages",
         type=Path,
@@ -327,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         archive=args.archive,
         version=args.version,
         requires=[item for item in args.requires.split(",") if item],
+        archive_sha256=args.archive_sha256,
         site_packages=args.site_packages,
     )
     # And the installer itself, which is staged the same way and just as

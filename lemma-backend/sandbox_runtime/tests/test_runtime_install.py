@@ -37,11 +37,22 @@ def _bundle(
     returned at build time because a successful install consumes the archive.
     """
     archive = tmp_path / f"{name}.zip"
+    entries = [(f"site-packages/{name}/__init__.py", body)]
+    if marker:
+        entries.append((f"site-packages/{marker}", ""))
     with zipfile.ZipFile(archive, "w") as bundle:
-        bundle.writestr(f"site-packages/{name}/__init__.py", body)
-        if marker:
-            bundle.writestr(f"site-packages/{marker}", "")
-    return archive, "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+        for entry, content in entries:
+            bundle.writestr(entry, content)
+    # A digest of the *contents*, like the real builder's, and deliberately not
+    # of the zip file. Making them the same number here would let a check
+    # against the wrong one pass in tests and fail against every bundle ever
+    # built -- which is what happened.
+    digest = hashlib.sha256()
+    for entry, content in entries:
+        digest.update(entry.encode())
+        digest.update(b"\0")
+        digest.update(content.encode())
+    return archive, "sha256:" + digest.hexdigest()
 
 
 @pytest.fixture
@@ -391,6 +402,60 @@ def test_the_pth_names_the_symlink_not_the_version(
     written = (site / runtime_install.PTH_NAME).read_text(encoding="utf-8")
     assert "/current/site-packages" in written
     assert "sha256-" not in written
+
+
+def test_an_archive_corrupted_in_transit_is_refused(
+    tmp_path: Path, root: Path, site: Path
+) -> None:
+    """Verified against the file digest, which is not the version.
+
+    The version digests the unpacked *contents* -- paths, bytes and modes -- so
+    rebuilding the zip does not invent a new identity. The archive digest is of
+    the bytes on disk. Checking the archive against the version compares two
+    numbers that are never equal, which is how this was written first: it
+    refused every real bundle, and only installing one showed it.
+    """
+    archive, version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+    sha = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+    archive.write_bytes(archive.read_bytes() + b"corrupted")
+
+    with pytest.raises(SystemExit, match="does not match the expected"):
+        runtime_install.install(
+            root=root,
+            archive=archive,
+            version=version,
+            requires=["probe_pkg"],
+            archive_sha256=sha,
+            site_packages=site,
+        )
+
+    assert runtime_install.probe(root, site_packages=site)["version"] is None
+    # Kept, not consumed: a retry has something to retry against.
+    assert archive.exists()
+
+
+def test_an_intact_archive_passes_its_digest_check(
+    tmp_path: Path, root: Path, site: Path
+) -> None:
+    """The half the corruption test cannot prove alone.
+
+    A verifier that rejected everything satisfies that one -- and the first
+    version of this check did exactly that, against every bundle ever built.
+    """
+    archive, version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+    sha = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    outcome = runtime_install.install(
+        root=root,
+        archive=archive,
+        version=version,
+        requires=["probe_pkg"],
+        archive_sha256=sha,
+        site_packages=site,
+    )
+
+    assert outcome == {"version": version, "installed": True}
+    assert runtime_install.probe(root, site_packages=site)["version"] == version
 
 
 def test_a_version_that_is_not_a_digest_is_refused(root: Path, tmp_path: Path) -> None:
