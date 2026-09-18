@@ -176,8 +176,9 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     A budget trip leaves by the path a pause already takes: it raises
     `AgentInputRequired`, which `pydantic_ai` turns into WAITING, and it queues a
     `request_approval` card first so there is something for the person to answer.
-    Hard-stopping instead would kill an 80%-done run and make the person re-ask,
-    which is where the re-work cost the study measured already lives.
+    Hard-stopping instead would kill a nearly-finished run and make the person
+    re-ask, and work redone because the first attempt was discarded is already
+    one of the larger costs here.
     """
     import asyncio
 

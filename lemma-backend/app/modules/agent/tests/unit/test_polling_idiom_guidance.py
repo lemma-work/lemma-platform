@@ -69,11 +69,12 @@ def test_waiting_is_the_documented_way_to_wait_for_a_process():
 def test_no_model_facing_text_teaches_a_poll_loop(path: Path):
     """Waiting by repetition is what `wait_for` exists to replace.
 
-    Measured before it existed: 34% of all tool time went on waiting the agent
-    could not block on -- `sleep` in a shell, or a poll capped at ~35s however
-    long it asked for -- and nine consecutive polls of one build returned
-    nothing. The tool is only half the fix; text that still teaches the loop is
-    the other half, and nothing but this test would notice it coming back.
+    Before it existed, a large share of all tool time went on waiting the agent
+    could not block on -- `sleep` in a shell, or a poll that returned on its own
+    short deadline however long it asked for, so a slow build absorbed a long
+    run of polls that each said nothing. The tool is only half the fix; text
+    that still teaches the loop is the other half, and nothing but this test
+    would notice it coming back.
     """
     text = path.read_text(encoding="utf-8").lower()
     for needle in ("keep polling", "poll it with", "poll that process", "poll again"):

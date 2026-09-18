@@ -38,11 +38,10 @@ class AgentSettings(BaseSettings):
     # a deployment that wants longer runs raises them, and setting one to 0
     # switches that dimension off.
     #
-    # The starting values come from a trace study of real runs: the median run
-    # made far fewer than 40 model calls and finished inside a minute, while the
-    # runs that never converged ran for tens of minutes and past 150 calls. They
-    # are set to sit above ordinary work and below a runaway, and are expected to
-    # move once spans carry outcomes and a healthy run can be described.
+    # Chosen to sit above ordinary work and below a runaway: an everyday run
+    # finishes well inside them, while a run that has stopped converging reaches
+    # them long before it would stop on its own. Raise them for a deployment
+    # whose work is genuinely longer-running.
     agent_run_budget_model_requests: int = Field(
         default=40,
         description=(

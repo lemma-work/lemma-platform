@@ -158,8 +158,8 @@ def test_a_returned_failure_is_marked_is_error(payload, expected_is_error):
     Almost nothing raises: `GracefulToolset` converts a raise into this exact
     shape so one bad call cannot end a run. Before this, the raised path set
     `is_error` and the returned path -- which is nearly every real failure --
-    did not, so a remote harness saw them as successful calls, and the
-    platform's measured tool-error rate read less than half the real one.
+    did not, so a remote harness saw them as successful calls and the
+    platform's own error rate read far below the truth.
     """
     result = tool_call_result(payload)
 

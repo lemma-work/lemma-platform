@@ -1,10 +1,10 @@
 """What one run may spend before it stops and asks whether to carry on.
 
-A trace study found the cost of agent runs is a tail, not an average: the median
-run was 47 s while the mean was 527 s, and three runs carried 56% of all wall
-time. One made 163 model calls to produce a 71-second video cut. Nothing in the
-system would have ended any of them earlier, because the only limit that existed
-was a model-request cap none of them reached.
+The cost of agent runs is a tail, not an average: most finish in well under a
+minute, and a small handful that never converge account for most of the wall
+time spent. Nothing in the system would have ended one of those earlier, because
+the only limit that existed was a model-request cap set high enough that a
+runaway reached its own natural end first.
 
 Three dimensions, because they catch different runaways and no one of them
 catches the others:
