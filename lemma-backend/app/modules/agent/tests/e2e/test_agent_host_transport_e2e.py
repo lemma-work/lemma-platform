@@ -480,9 +480,22 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
     )
 
     assert advanced["poll_after_ms"] > 0
-    assert advanced_elapsed < 0.7, "a real state advance should answer promptly"
     assert repeated["poll_after_ms"] == 0
     assert repeated_elapsed >= 0.7, "a repeated heartbeat kept cutting the poll short"
+    # The *gap* between the two, not a budget for either. What is claimed is
+    # that the advance skips the 0.8s hold the repeat takes, and the gap is the
+    # only thing that measures exactly that: both calls pay whatever the runner
+    # costs, so the shared overhead cancels and what is left is the hold.
+    #
+    # A ceiling on `advanced_elapsed` alone does not survive a loaded runner --
+    # it failed at 0.92s on a poll that held nothing, which is longer than the
+    # hold it was meant to prove absent. Comparing the two directly would be
+    # sound but weak: if the advance were wrongly held too, both land near the
+    # same value and `<` becomes a coin flip.
+    assert repeated_elapsed - advanced_elapsed >= 0.5, (
+        "a real state advance should skip the hold a repeated heartbeat takes: "
+        f"advance {advanced_elapsed:.3f}s, repeat {repeated_elapsed:.3f}s"
+    )
 
 
 @pytest.mark.asyncio
