@@ -65,6 +65,27 @@ def test_traversal_that_stays_inside_a_root_still_addresses_the_sandbox() -> Non
     assert not is_datastore_path("/tmp/./staged")
 
 
+def test_a_doubled_leading_slash_still_names_the_sandbox() -> None:
+    """`normpath` will not collapse exactly two, which is the reachable case.
+
+    POSIX leaves a leading `//` implementation-defined, so `//tmp/x` survives
+    normalisation while `///tmp/x` collapses to `/tmp/x`. Joining a cwd that
+    already ends in `/` to an absolute name produces the doubled form, and it
+    read as a pod path -- so the file was looked for on the disk that does not
+    have it.
+    """
+    assert not is_datastore_path("//tmp/staged")
+    assert not is_datastore_path(f"/{WORKSPACE_ROOT}/a.txt")
+    assert not is_datastore_path(f"/{LEGACY_WORKSPACE_ROOT}/a.txt")
+    assert not is_datastore_path("///tmp/x")
+
+
+def test_a_doubled_leading_slash_does_not_rescue_a_pod_path() -> None:
+    """Collapsing must not drag pod paths over to the sandbox either."""
+    assert is_datastore_path("//me/report")
+    assert is_datastore_path("///me/report")
+
+
 def test_pod_paths_address_the_datastore() -> None:
     assert is_datastore_path("/me")
     assert is_datastore_path("/me/reports/q3.md")

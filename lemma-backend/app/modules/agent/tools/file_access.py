@@ -66,8 +66,16 @@ def is_datastore_path(path: str) -> bool:
     Lexical only, deliberately -- symlinks are resolved by the containment clamp
     on the sandbox side, which is where the filesystem to resolve them against
     actually is.
+
+    Leading slashes collapse before that, because `normpath` will not do it:
+    POSIX leaves exactly two implementation-defined, so `//tmp/x` survives while
+    `///tmp/x` becomes `/tmp/x`. Joining a cwd that ends in `/` to an absolute
+    name produces precisely that doubled form, and it named the sandbox.
     """
-    candidate = posixpath.normpath((path or "").strip())
+    raw = (path or "").strip()
+    if raw.startswith("/"):
+        raw = "/" + raw.lstrip("/")
+    candidate = posixpath.normpath(raw)
     if not candidate.startswith("/"):
         return False
     return not any(
