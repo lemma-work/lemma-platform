@@ -44,11 +44,17 @@ def built(tmp_path_factory: pytest.TempPathFactory) -> tuple[dict, Path]:
 
 @pytest.fixture(scope="module")
 def payload(built: tuple[dict, Path], tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """The unpacked bundle root: `site-packages/` for imports, `bin/` for scripts."""
     _, out_dir = built
     extracted = tmp_path_factory.mktemp("payload")
     with zipfile.ZipFile(out_dir / "runtime-bundle.zip") as archive:
         archive.extractall(extracted)
-    return extracted / "site-packages"
+    return extracted
+
+
+@pytest.fixture(scope="module")
+def site_packages(payload: Path) -> Path:
+    return payload / "site-packages"
 
 
 def test_two_builds_of_one_source_tree_are_byte_identical(
@@ -80,20 +86,24 @@ def test_the_version_is_the_digest_of_the_contents(built: tuple[dict, Path]) -> 
     assert manifest["version"] != manifest["archive_sha256"]
 
 
-def test_the_bundle_carries_every_package_a_sandbox_imports(payload: Path) -> None:
+def test_the_bundle_carries_every_package_a_sandbox_imports(
+    site_packages: Path,
+) -> None:
     for relative in build_runtime_bundle.REQUIRED_PACKAGES:
-        package = payload / relative
+        package = site_packages / relative
         assert package.is_dir(), f"{relative} is missing from the bundle"
         assert any(package.iterdir()), f"{relative} is in the bundle but empty"
 
 
-def test_the_vendored_skills_travel_with_the_cli(payload: Path) -> None:
+def test_the_vendored_skills_travel_with_the_cli(site_packages: Path) -> None:
     """``lemma-terminal`` 0.4.1 shipped with an empty skills package.
 
     The vendoring runs in ``lemma-cli/setup.py`` at build time, so nothing about
     the source tree says whether it worked -- only the built artifact does.
     """
-    skills = sorted(path.parent.name for path in payload.glob("*/skills/*/SKILL.md"))
+    skills = sorted(
+        path.parent.name for path in site_packages.glob("*/skills/*/SKILL.md")
+    )
 
     assert skills, "the bundle carries no skills"
     assert "lemma-builder" in skills
@@ -109,6 +119,10 @@ def test_console_scripts_name_the_sandbox_interpreter(payload: Path) -> None:
     scripts = sorted((payload / "bin").iterdir())
 
     assert scripts, "the bundle ships no console scripts"
+    assert not (payload / "site-packages" / "bin").exists(), (
+        "console scripts are nested inside site-packages, where they are not "
+        "importable and nobody would look for them"
+    )
     for script in scripts:
         shebang = script.read_text(encoding="utf-8").splitlines()[0]
         assert shebang == f"#!{build_runtime_bundle.SANDBOX_PYTHON}"
@@ -131,7 +145,7 @@ def test_no_file_in_the_bundle_names_the_machine_that_built_it(payload: Path) ->
     assert offenders == []
 
 
-def test_record_agrees_with_what_the_bundle_actually_ships(payload: Path) -> None:
+def test_record_agrees_with_what_the_bundle_actually_ships(site_packages: Path) -> None:
     """Every ``RECORD`` entry hashes a file that is present and unmodified.
 
     The console-script rewrite invalidates the hash ``uv`` wrote, so the build
@@ -139,13 +153,13 @@ def test_record_agrees_with_what_the_bundle_actually_ships(payload: Path) -> Non
     manifest quietly disagreeing with its own contents.
     """
     stale: list[str] = []
-    for record in payload.glob("*.dist-info/RECORD"):
+    for record in site_packages.glob("*.dist-info/RECORD"):
         for line in record.read_text(encoding="utf-8").splitlines():
             relative, _, remainder = line.partition(",")
             expected = remainder.split(",")[0]
             if not relative or not expected:
                 continue
-            target = payload / relative
+            target = site_packages / relative
             if not target.is_file():
                 stale.append(f"{relative} (missing)")
                 continue
@@ -167,14 +181,14 @@ def test_the_manifest_names_the_archive_beside_it(built: tuple[dict, Path]) -> N
     assert on_disk["requires"] == list(build_runtime_bundle.REQUIRED_IMPORTS)
 
 
-def test_the_bundle_ships_no_second_copy_of_the_pod_bundle(payload: Path) -> None:
+def test_the_bundle_ships_no_second_copy_of_the_pod_bundle(site_packages: Path) -> None:
     """``lemma-terminal`` already vendors ``lemma_pod_bundle`` into its wheel.
 
     Building ``lemma-pod-bundle`` as a third wheel would unpack a competing copy
     of the same top-level package into the same directory, and which one won
     would depend on install order.
     """
-    dist_infos = sorted(path.name for path in payload.glob("*.dist-info"))
+    dist_infos = sorted(path.name for path in site_packages.glob("*.dist-info"))
 
     assert not any(name.startswith("lemma_pod_bundle-") for name in dist_infos)
-    assert (payload / "lemma_pod_bundle").is_dir()
+    assert (site_packages / "lemma_pod_bundle").is_dir()

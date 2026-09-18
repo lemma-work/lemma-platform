@@ -332,6 +332,34 @@ def workspace_template():
             "sys.path.insert(0, p) if p not in sys.path else None' "
             "> /opt/lemma-python/lib/python3.14/site-packages/"
             "lemma-workspace-overlay.pth && "
+            # Where the backend installs the first-party code this image also
+            # carries. The copy below is a *floor*, not the shipped version: the
+            # overlay supersedes it, so a Lemma code change no longer needs a
+            # template at all -- and on a provider where the sandbox is the
+            # disk, needing a template meant destroying workspaces to publish
+            # one.
+            #
+            # Both halves are baked, and that is the point. The directory is
+            # owned by the sandbox user and the `.pth` is written here, so
+            # installing needs no elevation; without them the backend has to
+            # reach root to write into `/opt`, which works on E2B only because
+            # its user happens to have passwordless sudo.
+            #
+            # `lemma-runtime-` sorts before `lemma-workspace-` and both insert
+            # at position 0, so the later one lands in front: a package the user
+            # pip-installs stays ahead of the overlay, and the overlay stays
+            # ahead of this image's own copy. Pointing at `current` rather than
+            # a version means an upgrade is a symlink flip and never a rewrite
+            # of this file. It naming a directory that does not exist yet is
+            # harmless -- sys.path tolerates it.
+            "mkdir -p /opt/lemma-runtime && "
+            "chown user:user /opt/lemma-runtime && "
+            "printf '%s\\n' "
+            "'import sys; "
+            'p="/opt/lemma-runtime/current/site-packages"; '
+            "sys.path.insert(0, p) if p not in sys.path else None' "
+            "> /opt/lemma-python/lib/python3.14/site-packages/"
+            "lemma-runtime-overlay.pth && "
             "test -x /opt/lemma-python/bin/python && "
             'test "$(/opt/lemma-python/bin/python -c '
             "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"

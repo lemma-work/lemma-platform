@@ -217,15 +217,25 @@ async def test_a_stale_sandbox_is_upgraded_without_being_replaced(
     sandbox_id = uuid4()
     instance = await _create(provider, sandbox_id)
     await _run(provider, instance, "echo mine > /workspace/user-work.txt")
-    before, _ = await _run(provider, instance, "lemma --version")
 
     output, exit_code = await _install(provider, instance, bundle)
-
     assert exit_code == 0, output
-    after, _ = await _run(provider, instance, "lemma --version")
-    assert after != before, (
-        f"the sandbox still reports {after.strip()!r} after installing "
-        f"{bundle.version} -- the overlay is not in front"
+
+    # The `lemma` on PATH is the image's own console script, and it must now be
+    # running the overlay's code. Compared against the overlay's own copy rather
+    # than against a version string: how far apart the two are depends on how
+    # stale the deployed template happens to be, and an assertion that only
+    # holds while something is out of date stops holding the moment it is fixed.
+    # (It was genuinely far apart when this was written -- the published
+    # template answered `lemma 0.7.0` against a 0.8.0 checkout, which is the
+    # staleness this whole mechanism exists to close.)
+    on_path, _ = await _run(provider, instance, "lemma --version")
+    from_overlay, _ = await _run(
+        provider, instance, f"{RUNTIME_ROOT}/current/bin/lemma --version"
+    )
+    assert on_path.strip() == from_overlay.strip(), (
+        f"`lemma` on PATH reports {on_path.strip()!r} but the overlay's own "
+        f"copy reports {from_overlay.strip()!r} -- the overlay is not in front"
     )
     survived, _ = await _run(provider, instance, "cat /workspace/user-work.txt")
     assert "mine" in survived, "the user's files did not survive the upgrade"

@@ -233,6 +233,22 @@ COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
 RUN printf '/app\n/workspace/.python/lib/python3.14/site-packages\n' \
       > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-paths.pth
 
+# Where the backend installs first-party code into a running sandbox. The copy
+# this image already carries is a floor, not the shipped version: the overlay
+# supersedes it, so a Lemma code change needs no new image -- which matters far
+# more on E2B, where the sandbox is the disk and publishing an image meant
+# destroying workspaces, but the mechanism is one so that the Docker lane can
+# actually exercise it.
+#
+# `lemma-runtime-` sorts before `lemma-workspace-overlay.pth` and both insert at
+# position 0, so the later one lands in front and a package the user installed
+# themselves stays ahead of ours. Naming `current` rather than a version keeps
+# an upgrade a symlink flip. Pointing at a directory that does not exist yet is
+# harmless; sys.path tolerates it.
+RUN printf '%s\n' \
+      'import sys; p="/opt/lemma-runtime/current/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+      > /opt/lemma-python/lib/python3.14/site-packages/lemma-runtime-overlay.pth
+
 COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
 COPY lemma-backend/sandbox-images/scripts/lemma-uv /usr/local/bin/uv
 RUN chmod 0755 /usr/local/bin/uv /usr/local/lib/lemma-uv-bin \
@@ -252,6 +268,7 @@ RUN groupadd --gid 10001 appuser \
         /app/sandbox_runtime/api \
         /app/sandbox_runtime/workspace \
         /workspace \
+        /opt/lemma-runtime \
         /run/lemma-bootstrap \
         /tmp/.X11-unix \
         /tmp/lemma-browser/runtime \
@@ -259,6 +276,7 @@ RUN groupadd --gid 10001 appuser \
     && chown -R 10001:10001 \
         /app \
         /workspace \
+        /opt/lemma-runtime \
         /home/appuser \
         /run/lemma-bootstrap \
         /tmp/lemma-browser \

@@ -186,7 +186,22 @@ def _copy_runtime_sources(site_packages: Path) -> None:
 _PROVENANCE_FILES = ("direct_url.json", "uv_cache.json")
 
 
-def _retarget_console_scripts(site_packages: Path) -> None:
+def _relocate_scripts(site_packages: Path, payload: Path) -> None:
+    """Lift the console scripts out of site-packages, to the payload root.
+
+    ``uv pip install --target`` writes them to ``<target>/bin``, which here puts
+    a ``bin`` directory *inside* site-packages -- importable, which it is not,
+    and a confusing place to look for ``lemma``. Moving it up gives the layout
+    the installed overlay actually presents: ``current/site-packages`` for
+    imports and ``current/bin`` for scripts.
+    """
+    nested = site_packages / "bin"
+    if not nested.is_dir():
+        raise SystemExit(f"the staged bundle has no console scripts at {nested}")
+    nested.rename(payload / "bin")
+
+
+def _retarget_console_scripts(payload: Path) -> None:
     """Point every console script at the sandbox's interpreter.
 
     Rewritten rather than regenerated because the body ``uv`` emits is already
@@ -194,9 +209,7 @@ def _retarget_console_scripts(site_packages: Path) -> None:
     wrong, and it is wrong in a way that both breaks the script and leaks the
     build machine into the bundle's identity.
     """
-    scripts = site_packages / "bin"
-    if not scripts.is_dir():
-        raise SystemExit(f"the staged bundle has no console scripts at {scripts}")
+    scripts = payload / "bin"
     for script in sorted(scripts.iterdir()):
         if not script.is_file():
             continue
@@ -322,7 +335,8 @@ def build(out_dir: Path) -> dict[str, object]:
         site_packages = scratch / "payload" / "site-packages"
         _unpack(wheels, site_packages)
         _copy_runtime_sources(site_packages)
-        _retarget_console_scripts(site_packages)
+        _relocate_scripts(site_packages, scratch / "payload")
+        _retarget_console_scripts(scratch / "payload")
         _normalise_dist_info(site_packages)
         _prune(site_packages)
         _verify_payload(site_packages)
