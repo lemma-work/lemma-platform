@@ -252,13 +252,52 @@ export class WorkspaceNamespace {
    * The query is built into the path because `requestBytes` takes no options —
    * it is the byte-returning sibling of `request`, not a full request builder.
    */
+  /**
+   * A file, or a slice of one.
+   *
+   * `range` sends an HTTP `Range` header and gets a 206 back. That is how a
+   * file larger than the server's single-read ceiling is reachable at all:
+   * ask for it a piece at a time. See `readWholeFile`, which does that for
+   * you.
+   */
   readFile(
     path: string,
-    options: { offset?: number; length?: number } = {},
+    options: { offset?: number; length?: number; range?: { start: number; end: number } } = {},
   ): Promise<Blob> {
     const query = new URLSearchParams({ path });
     if (options.offset) query.set("offset", String(options.offset));
     if (options.length) query.set("length", String(options.length));
-    return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`);
+    return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`, {
+      headers: options.range
+        ? { Range: `bytes=${options.range.start}-${options.range.end}` }
+        : undefined,
+    });
+  }
+
+  /**
+   * A whole file, however big, in as many requests as that takes.
+   *
+   * The server caps one read at 8 MiB, which used to mean a larger file
+   * could be listed and never opened — the pane offered a download that
+   * silently returned the first 8 MiB under the full name. Ranges are
+   * requested in order and stitched, so what a person saves is the file.
+   *
+   * `chunk` matches the server's ceiling. Asking for more gets 8 MiB anyway.
+   */
+  async readWholeFile(
+    path: string,
+    sizeBytes: number,
+    chunk = 8 * 1024 * 1024,
+  ): Promise<Blob> {
+    if (sizeBytes <= chunk) return this.readFile(path);
+    const parts: Blob[] = [];
+    for (let start = 0; start < sizeBytes; start += chunk) {
+      parts.push(
+        await this.readFile(path, {
+          range: { start, end: Math.min(start + chunk, sizeBytes) - 1 },
+        }),
+      );
+    }
+    return new Blob(parts);
   }
 }

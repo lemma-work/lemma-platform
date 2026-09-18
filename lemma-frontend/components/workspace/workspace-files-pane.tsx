@@ -251,9 +251,15 @@ function DownloadLink({ blob, path }: { blob: Blob; path: string }) {
     );
 }
 
-function FileBody({ path }: { path: string }) {
+function FileBody({ path, sizeBytes }: { path: string; sizeBytes: number }) {
     const kind = previewKindOf(path);
-    const { data, isPending, error } = useWorkspaceFile(path, kind !== 'text');
+    // The size comes from the listing, so a file past the server's 8 MiB
+    // single-read ceiling is fetched in pieces rather than silently truncated.
+    const { data, isPending, error } = useWorkspaceFile(
+        path,
+        kind !== 'text',
+        sizeBytes,
+    );
 
     if (isPending) {
         return <p className="p-4 text-sm text-[var(--text-tertiary)]">Reading…</p>;
@@ -539,7 +545,13 @@ export function WorkspaceFilesPane({
 
                 <div className="min-w-0 flex-1 overflow-auto">
                     {selected ? (
-                        <FileBody path={selected} />
+                        <FileBody
+                            path={selected}
+                            sizeBytes={
+                                data?.entries.find((entry) => entry.path === selected)
+                                    ?.size_bytes ?? 0
+                            }
+                        />
                     ) : (
                         <p className="p-4 text-sm text-[var(--text-tertiary)]">
                             Pick a file to read it.

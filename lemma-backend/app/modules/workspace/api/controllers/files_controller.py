@@ -33,8 +33,8 @@ from typing import AsyncIterator, Literal
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT, is_inside_home
@@ -92,6 +92,21 @@ class WorkspaceFileEntry(BaseModel):
     )
     size_bytes: int = Field(description="Size in bytes; 0 for a directory.")
     modified_at: datetime = Field(description="Last modification time.")
+    mode: int | None = Field(
+        default=None,
+        description=(
+            "POSIX permission bits, when the fabric reports them. A viewer "
+            "showing a file it cannot write should be able to say so."
+        ),
+    )
+    sha256: str | None = Field(
+        default=None,
+        description=(
+            "Content hash, when the fabric computes one. Doubles as the "
+            "`ETag` on a read, so re-opening a file a viewer already has is "
+            "a 304 rather than the bytes again."
+        ),
+    )
 
 
 class WorkspaceFileListResponse(BaseModel):
@@ -228,6 +243,13 @@ def _entry(stat: object) -> WorkspaceFileEntry:
         kind=_kind_of(stat),
         size_bytes=int(getattr(stat, "size_bytes", 0) or 0),
         modified_at=getattr(stat, "modified_at"),
+        # Both already on `FileStat` and both were dropped here, so a client
+        # had no way to tell a file it already holds from one it does not,
+        # and no way to know a file is read-only until a write failed.
+        mode=(
+            int(mode) if isinstance(mode := getattr(stat, "mode", None), int) else None
+        ),
+        sha256=(str(digest) if (digest := getattr(stat, "sha256", None)) else None),
     )
 
 
@@ -340,7 +362,13 @@ async def read_workspace_file(
     path: str = Query(min_length=1, max_length=4096),
     offset: int = Query(default=0, ge=0),
     length: int | None = Query(default=None, ge=1, le=_MAX_CONTENT_BYTES),
-) -> StreamingResponse:
+    # `Annotated` rather than a `Header(...)` default, so the default really
+    # is `None`. A unit test calls this function directly, and with the other
+    # spelling it would receive the `Header` object itself -- which reads as
+    # a truthy string right up until something calls `.lower()` on it.
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+) -> Response:
     target = _workspace_path(path)
     session = None
     try:
@@ -350,8 +378,32 @@ async def read_workspace_file(
         await session.__aenter__()
         # Statted before it is read. The extra round trip is what makes the
         # boundary hold: reading straight from the path asked for is what
-        # followed a symlink out of /workspace.
-        _inside_workspace(await session.stat_file(target))
+        # followed a symlink out of the home.
+        stat = await session.stat_file(target)
+        _inside_workspace(stat)
+        total = int(getattr(stat, "size_bytes", 0) or 0)
+        etag = f'"{digest}"' if (digest := getattr(stat, "sha256", None)) else None
+
+        # A viewer that already holds this exact content is told so rather
+        # than sent it again. Cheap on a file pane, where re-selecting the
+        # same file is the commonest thing a person does.
+        if etag and if_none_match and _matches(if_none_match, etag):
+            await _release(service, session)
+            return Response(
+                status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag}
+            )
+
+        wanted = _requested_range(range_header, total)
+        if isinstance(wanted, _Unsatisfiable):
+            await _release(service, session)
+            raise HTTPException(
+                status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                detail=f"That range is outside a {total}-byte file",
+                headers={"Content-Range": f"bytes */{total}"},
+            )
+        partial = wanted is not None
+        if wanted is not None:
+            offset, length = wanted
         content = await session.read_file(
             target, offset=offset, length=length or _MAX_CONTENT_BYTES
         )
@@ -368,18 +420,99 @@ async def read_workspace_file(
         finally:
             await _release(service, session)
 
+    headers = {
+        "Content-Length": str(len(content)),
+        # A workspace file is the person's own content and is never markup
+        # this app should render: served inline it would run as script on
+        # the API origin.
+        "Content-Disposition": "attachment",
+        "X-Content-Type-Options": "nosniff",
+        # Advertised so a client knows it may ask for part of a file at all.
+        # Without it, a file past `_MAX_CONTENT_BYTES` was simply unreachable:
+        # the read was capped and nothing told the caller there was more, or
+        # how to come back for it.
+        "Accept-Ranges": "bytes",
+    }
+    if etag:
+        headers["ETag"] = etag
+    if partial:
+        start = offset
+        end = start + len(content) - 1
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+
     return StreamingResponse(
         body(),
+        status_code=(
+            status.HTTP_206_PARTIAL_CONTENT
+            if wanted is not None
+            else status.HTTP_200_OK
+        ),
         media_type="application/octet-stream",
-        headers={
-            "Content-Length": str(len(content)),
-            # A workspace file is the person's own content and is never markup
-            # this app should render: served inline it would run as script on
-            # the API origin.
-            "Content-Disposition": "attachment",
-            "X-Content-Type-Options": "nosniff",
-        },
+        headers=headers,
     )
+
+
+class _Unsatisfiable:
+    """A `Range` that names nothing this file has.
+
+    A type of its own rather than a bare `object` sentinel so the caller's
+    `isinstance` actually narrows -- with `object` in the union, unpacking the
+    tuple case does not typecheck, and silencing that would be silencing the
+    check that makes this safe to unpack at all.
+    """
+
+
+_UNSATISFIABLE = _Unsatisfiable()
+
+
+def _matches(if_none_match: str, etag: str) -> bool:
+    """Whether the caller already holds this exact content.
+
+    `*` matches anything, and a list is comma-separated. Weak validators
+    (`W/"..."`) compare equal to their strong form for this purpose: the
+    question is only "is this the same bytes".
+    """
+    candidates = [part.strip() for part in if_none_match.split(",")]
+    if "*" in candidates:
+        return True
+    return any(part.removeprefix("W/") == etag for part in candidates)
+
+
+def _requested_range(
+    header: str | None, total: int
+) -> tuple[int, int] | _Unsatisfiable | None:
+    """A `Range` header as an offset and a length, or `None` for the whole file.
+
+    Only `bytes=` with a single range: multipart ranges would mean building a
+    multipart body, and nothing that reads a workspace file asks for one. A
+    header this does not understand is ignored rather than refused, which is
+    what RFC 9110 asks for -- the caller gets the whole file, which is always
+    a correct answer.
+
+    A suffix range (`bytes=-500`, the last 500 bytes) is supported because it
+    is how a reader peeks at the end of a log.
+    """
+    if not header or not header.lower().startswith("bytes="):
+        return None
+    spec = header[len("bytes=") :].strip()
+    if "," in spec or "-" not in spec:
+        return None
+    first, _, last = spec.partition("-")
+    try:
+        if not first:
+            length = int(last)
+            if length <= 0:
+                return None
+            start = max(total - length, 0)
+            return start, min(length, total - start)
+        start = int(first)
+        end = int(last) if last else total - 1
+    except ValueError:
+        return None
+    if start >= total or start > end:
+        return _UNSATISFIABLE
+    end = min(end, total - 1)
+    return start, min(end - start + 1, _MAX_CONTENT_BYTES)
 
 
 async def _release(service: WorkspaceSandboxService, session) -> None:

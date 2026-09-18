@@ -18750,6 +18750,18 @@
             "title": "Kind",
             "type": "string"
           },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "POSIX permission bits, when the fabric reports them. A viewer showing a file it cannot write should be able to say so.",
+            "title": "Mode"
+          },
           "modified_at": {
             "description": "Last modification time.",
             "format": "date-time",
@@ -18765,6 +18777,18 @@
             "description": "Absolute path inside the workspace.",
             "title": "Path",
             "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Content hash, when the fabric computes one. Doubles as the `ETag` on a read, so re-opening a file a viewer already has is a 304 rather than the bytes again.",
+            "title": "Sha256"
           },
           "size_bytes": {
             "description": "Size in bytes; 0 for a directory.",
@@ -37391,6 +37415,38 @@
                 }
               ],
               "title": "Length"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
             }
           }
         ],

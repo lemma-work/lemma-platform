@@ -67,11 +67,24 @@ export interface WorkspaceFileContent {
  * that reads a Blob has to do it in an effect, and an effect that sets state is
  * a render the reader sees flash empty first.
  */
-export const useWorkspaceFile = (path: string | null, binary: boolean) =>
+export const useWorkspaceFile = (
+    path: string | null,
+    binary: boolean,
+    sizeBytes = 0,
+) =>
     useQuery<WorkspaceFileContent>({
-        queryKey: [...workspaceFileQueryKey(path ?? ''), binary] as const,
+        queryKey: [...workspaceFileQueryKey(path ?? ''), binary, sizeBytes] as const,
         queryFn: async () => {
-            const blob = await getLemmaClient().workspace.readFile(path!);
+            // `readWholeFile` rather than `readFile`, because the server caps
+            // one read at 8 MiB. A bigger file used to come back truncated
+            // with no sign of it -- the pane showed a download that saved the
+            // first 8 MiB under the whole file's name, which is the worst
+            // possible way to lose the rest. `sizeBytes` comes from the
+            // listing; at 0 this behaves exactly as a single read.
+            const blob = await getLemmaClient().workspace.readWholeFile(
+                path!,
+                sizeBytes,
+            );
             // `binary` is the caller saying "do not decode this". Deciding it
             // here from the blob's own type is not an option: the sandbox
             // serves every file as one opaque stream, so an MP4 and a README
