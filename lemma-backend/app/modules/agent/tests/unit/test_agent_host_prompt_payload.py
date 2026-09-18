@@ -84,9 +84,19 @@ def _transcript() -> list[Message]:
     ]
 
 
+#: The shape `resolve_workspace_location` actually produces. Carried explicitly
+#: because every real run resolves a cwd and passes it; a context without one
+#: used to fall back to `<root>/conversations/<uuid>`, so these assertions were
+#: reading a path nothing else in the system generates.
+CONVERSATION_CWD = f"{WORKSPACE_ROOT}/c/2026-09-19/{CONVERSATION_ID.hex[:8]}"
+
+
 def _ctx() -> BaseAgentContext:
     return BaseAgentContext(
-        user_id=uuid7(), pod_id=POD_ID, conversation_id=CONVERSATION_ID
+        user_id=uuid7(),
+        pod_id=POD_ID,
+        conversation_id=CONVERSATION_ID,
+        workspace_cwd=CONVERSATION_CWD,
     )
 
 

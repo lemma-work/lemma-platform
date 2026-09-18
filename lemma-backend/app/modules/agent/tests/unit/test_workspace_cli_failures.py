@@ -86,11 +86,20 @@ class _FakeRuntime:
         self.process_sessions.pop(process_id, None)
 
 
-def _context() -> BaseAgentContext:
+def _context(cwd: str | None = None) -> BaseAgentContext:
+    """A context with a directory, because every real caller resolves one.
+
+    Left unset these tests leaned on `get_workspace_cwd`'s fallback, which used
+    to invent `<root>/conversations/<uuid>` -- a shape nothing else in the system
+    produces. The scoping tests below then compared two paths that only differed
+    because of that invention.
+    """
+    conversation_id = uuid4()
     return BaseAgentContext(
         user_id=uuid4(),
         pod_id=uuid4(),
-        conversation_id=uuid4(),
+        conversation_id=conversation_id,
+        workspace_cwd=cwd or f"{WORKSPACE_ROOT}/c/2026-09-19/{conversation_id.hex[:8]}",
     )
 
 
@@ -563,7 +572,7 @@ async def test_list_processes_hides_another_directorys_running_process(
         {
             "processes": [
                 _process(
-                    "proc-theirs", cwd=f"{WORKSPACE_ROOT}/conversations/someone-else"
+                    "proc-theirs", cwd=f"{WORKSPACE_ROOT}/c/2026-09-19/someoneelse"
                 ),
                 _process("proc-mine", cwd=own_cwd),
             ]

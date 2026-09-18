@@ -95,6 +95,24 @@ def test_pod_cwd_mirrors_overridden_workspace_cwd():
     assert resolve_pod_cwd(conversation) == "/me/project"
 
 
+def test_a_context_without_a_conversation_falls_back_to_the_project_root():
+    """Not to a directory named after the conversation id.
+
+    `resolve_workspace_location` puts conversations at `c/{date}/{slug}`, so a
+    fallback of `<root>/conversations/<uuid>` named a directory nothing else in
+    the system produces -- and the one caller that reaches it, the pod MCP
+    bridge, carries a *nil* conversation id, so the directory it named was all
+    zeroes. The root is the honest answer to "no conversation".
+    """
+    from app.modules.agent.tools.context import BaseAgentContext
+
+    ctx = BaseAgentContext(user_id=uuid4(), pod_id=uuid4(), conversation_id=uuid4())
+
+    assert ctx.get_workspace_cwd() == WORKSPACE_ROOT
+    assert "/conversations/" not in ctx.get_workspace_cwd()
+    assert str(ctx.conversation_id) not in ctx.get_workspace_cwd()
+
+
 def test_pod_cwd_from_workspace_cwd_edge_cases():
     assert pod_cwd_from_workspace_cwd(WORKSPACE_ROOT) == "/me"
     assert pod_cwd_from_workspace_cwd(f"{WORKSPACE_ROOT}/a/b") == "/me/a/b"

@@ -64,7 +64,15 @@ def _install_uv_command() -> str:
         f"-o /tmp/{archive} && "
         f"echo '{UV_LINUX_X64_SHA256}  /tmp/{archive}' | sha256sum -c - && "
         f"tar -xzf /tmp/{archive} -C /tmp && "
-        f"install -m 0755 /tmp/{directory}/uv /usr/local/bin/uv && "
+        # The real binary goes where the shim expects to find it, and the shim
+        # takes the name on PATH -- the same arrangement `Dockerfile.workspace`
+        # has. Without it `uv pip install` targets the shared interpreter's own
+        # site-packages, which is root-owned, and dies with a bare permission
+        # error while `pip install` beside it works: two installers on one PATH
+        # disagreeing about where a package goes, and the one the prompt
+        # recommends being the broken one. Measured on a live sandbox, not
+        # inferred.
+        f"install -m 0755 /tmp/{directory}/uv /usr/local/lib/lemma-uv-bin && "
         f"install -m 0755 /tmp/{directory}/uvx /usr/local/bin/uvx && "
         f"rm -rf /tmp/{archive} /tmp/{directory}"
     )
@@ -203,6 +211,13 @@ def workspace_template():
             "lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh",
             "/etc/profile.d/lemma-github.sh",
             mode=0o644,
+        )
+        .copy(
+            # Takes the name on PATH, with the real binary at
+            # `/usr/local/lib/lemma-uv-bin`. See `_install_uv_command`.
+            "lemma-backend/sandbox-images/scripts/lemma-uv",
+            "/usr/local/bin/uv",
+            mode=0o755,
         )
         .copy(
             "lemma-backend/sandbox-images/scripts/set-display-size.sh",
