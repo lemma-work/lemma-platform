@@ -35,7 +35,7 @@ from app.modules.workspace.providers.docker import (
 from app.modules.workspace.providers.docker_engine import DockerEngineClient
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.sandbox_service import SandboxService
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 
 pytestmark = [
     pytest.mark.e2e,
@@ -257,7 +257,10 @@ async def test_a_package_installed_from_the_shell_imports_in_execute_python(
     # to expose a module directory cannot pass this.
     assert "1.2 million" in output, output
     # Both installers reached the shared environment, not two different ones.
-    assert output.count(f"{WORKSPACE_ROOT}/.python/lib/") == 2, output
+    # `PIP_PREFIX` is `~/.python` -- the home, not the project root inside it --
+    # so this asks about `HOME_ROOT`. Asking about the project root names a
+    # directory nothing installs into, and the count would be 0 either way.
+    assert output.count(f"{HOME_ROOT}/.python/lib/") == 2, output
 
 
 async def test_a_project_venv_keeps_its_own_dependencies(sandbox_stack) -> None:
