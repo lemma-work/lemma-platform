@@ -443,15 +443,17 @@ lemma connectors auth-configs get acme-api      # read `auth_scheme` HERE
 
 Then one of two branches:
 
-**API key** — ask the person for it in the conversation, or point them at the UI.
-Both are fine; the second means the key never passes through a message:
+**API key** — send them to the UI. **Never ask for the key in the conversation.**
+A key pasted into a message is in the transcript for good, and passing it on a
+command line puts it in shell history and in `/proc/<pid>/cmdline`, where
+anything else in the sandbox can read it. There is no version of this worth the
+convenience:
 
 > "I've added Acme. It needs an API key — open **Connectors** in the workspace,
-> find *acme-api* and add an account, or paste the key here and I'll do it."
+> find *acme-api* and add an account. I never need to see the key."
 
-```bash
-lemma connectors accounts create --auth-config acme-api -d '{"api_key": "sk-..."}'
-```
+If a key has already been pasted into the conversation, say so plainly and ask
+them to rotate it: it cannot be unsent.
 
 **OAuth** — mint a link and hand it over. Do not try to follow it:
 

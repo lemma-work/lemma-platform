@@ -387,9 +387,30 @@ async def test_the_sweep_reads_real_metadata_without_claiming_strangers(
 
 
 async def test_a_real_published_port_resolves(provider: E2BSandboxProvider) -> None:
+    """`reach_port` answers with an endpoint, not a bare URL.
+
+    It used to return the string, and this asserted on it directly. Nothing
+    in CI runs this lane -- the provider tests need live credentials -- so the
+    test kept asserting `.startswith` on a dataclass long after the signature
+    moved, and said `AttributeError` the first time anybody ran it.
+
+    What the endpoint carries is worth pinning beyond the URL, because
+    `_require_private` reads it before letting anybody's session into this
+    browser.
+
+    `public` is False for a sandbox created *now*, and that is the safe
+    answer rather than a missing one: E2B publishes every port under a public
+    name, but new sandboxes are created with public traffic disabled and
+    answer 403 without the per-sandbox token. `True` means a sandbox made
+    before that flag existed, which stays open for its whole life and is what
+    the guard refuses. So this asserts the token is there and that we are not
+    the open kind.
+    """
     instance = await _create(provider, uuid4())
-    url = await provider.reach_port(instance, port=8080, deadline_at=_deadline())
-    assert url.startswith("https://8080-")
+    endpoint = await provider.reach_port(instance, port=8080, deadline_at=_deadline())
+    assert endpoint.url.startswith("https://8080-")
+    assert endpoint.public is False, "a newly created sandbox must not be open"
+    assert endpoint.headers, "without the traffic token the URL answers 403"
 
 
 async def test_real_python_keeps_state_across_executions(

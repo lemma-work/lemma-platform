@@ -5,4 +5,6 @@
 import type { WebLoginResponse } from './WebLoginResponse.js';
 export type WebLoginListResponse = {
     items: Array<WebLoginResponse>;
+    limit: number;
+    next_page_token?: (string | null);
 };

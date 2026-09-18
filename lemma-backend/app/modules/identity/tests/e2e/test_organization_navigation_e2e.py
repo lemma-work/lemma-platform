@@ -461,3 +461,60 @@ async def test_a_realistic_multi_org_workspace_stays_fast(
     )
     assert navigation_p95 < 250, f"navigation p95 {navigation_p95:.1f}ms"
     assert home_p95 < 250, f"home p95 {home_p95:.1f}ms"
+
+
+async def test_home_does_not_list_an_agent_its_reader_cannot_open(
+    authenticated_client, async_client, fixed_test_org
+):
+    """A pod member sees the pod's agents, not their colleague's private one.
+
+    The landing page lists every pod the caller can see, and it used to read
+    each pod's agents with no per-agent authorization at all -- so a PERSONAL
+    agent, whose whole point is that nobody else may open it, was published by
+    name and description to everyone in the pod. The endpoint caches per
+    (organization, user), which is why this uses a fresh organization and a
+    fresh second user: both halves have to miss the cache to measure anything.
+    """
+    org_id = fixed_test_org["id"]
+    pod_id = await _create_pod(
+        authenticated_client, org_id, f"shared-{uuid4().hex[:6]}"
+    )
+
+    shared_agent = f"shared{uuid4().hex[:6]}"
+    private_agent = f"private{uuid4().hex[:6]}"
+    await _create_agent(authenticated_client, pod_id, shared_agent)
+    await _create_agent(authenticated_client, pod_id, private_agent)
+    narrowed = await authenticated_client.patch(
+        f"/pods/{pod_id}/agents/{private_agent}",
+        json={"visibility": "PERSONAL"},
+    )
+    assert narrowed.status_code == status.HTTP_200_OK, narrowed.text
+
+    token, org_member_id = await _join_org_as_member(
+        authenticated_client, async_client, org_id
+    )
+    added = await authenticated_client.post(
+        f"/pods/{pod_id}/members",
+        json={"organization_member_id": org_member_id, "roles": ["POD_EDITOR"]},
+    )
+    assert added.status_code == status.HTTP_201_CREATED, added.text
+
+    home = await async_client.get(
+        f"/organizations/{org_id}/home", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert home.status_code == status.HTTP_200_OK, home.text
+    pod = next(item for item in home.json()["pods"] if item["id"] == pod_id)
+    names = {agent["name"] for agent in pod["agents"]}
+
+    assert shared_agent in names, (
+        "a pod-visible agent is what the page is for; the member must still see it"
+    )
+    assert private_agent not in names, (
+        f"a colleague's PERSONAL agent was listed to the whole pod: {sorted(names)}"
+    )
+
+    # And the owner still sees their own, or the filter has gone too far.
+    owner_home = await authenticated_client.get(f"/organizations/{org_id}/home")
+    assert owner_home.status_code == status.HTTP_200_OK, owner_home.text
+    owner_pod = next(item for item in owner_home.json()["pods"] if item["id"] == pod_id)
+    assert private_agent in {agent["name"] for agent in owner_pod["agents"]}

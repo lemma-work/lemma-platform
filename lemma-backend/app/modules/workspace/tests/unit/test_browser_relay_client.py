@@ -158,3 +158,76 @@ async def test_a_relay_that_will_not_come_up_still_fails(_key) -> None:
         assert len(provider.start_requests) == 1
     finally:
         relay.close()
+
+
+class _ResizeRelay:
+    """A relay that records the body it was POSTed, and answers a size."""
+
+    def __init__(self, *, answers: str = "1440x960") -> None:
+        self.bodies: list[bytes] = []
+        self.paths: list[str] = []
+        relay = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                relay.paths.append(self.path)
+                relay.bodies.append(self.rfile.read(length))
+                body = b'{"size": "%s"}' % relay.answers.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: object) -> None:
+                return
+
+        self.answers = answers
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+        Thread(target=self._server.serve_forever, daemon=True).start()
+
+    @property
+    def url(self) -> str:
+        host, port = self._server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+async def test_a_resize_reaches_the_relay_with_its_size(_key) -> None:
+    """Driven over real HTTP because the bug this pins was in the call itself.
+
+    `_request` takes `json_body`; the first version of this passed `json=`,
+    which is httpx's spelling and not this method's. Nothing failed until a
+    person opened the pane, because no test ever made the call -- it raised
+    `TypeError` inside the endpoint and the pane simply never resized.
+    """
+    relay = _ResizeRelay(answers="1440x960")
+    provider = _Provider(relay, starts_answering=False)
+    try:
+        size = await _client(provider).resize_display(width=1440, height=960)
+    finally:
+        relay.close()
+
+    assert size == "1440x960"
+    assert relay.paths == ["/display:resize"]
+    import json as _json
+
+    assert _json.loads(relay.bodies[0]) == {"width": 1440, "height": 960}
+
+
+async def test_a_clamped_resize_reports_what_the_display_became(_key) -> None:
+    """The sandbox's framebuffer is a ceiling RandR cannot raise, so asking for
+    more than it holds returns less. The caller is told the real size rather
+    than the one it asked for, because the pane scales against it."""
+    relay = _ResizeRelay(answers="1920x1200")
+    provider = _Provider(relay, starts_answering=False)
+    try:
+        size = await _client(provider).resize_display(width=4000, height=3000)
+    finally:
+        relay.close()
+
+    assert size == "1920x1200"

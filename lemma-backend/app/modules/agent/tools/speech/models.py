@@ -54,7 +54,12 @@ class SayRequest(BaseModel):
     )
     voice: str | None = Field(
         default=None,
-        description="Optional provider-specific voice/model id. None = default.",
+        description=(
+            "A specific voice, by its full name — `aura-2-andromeda-en`, not "
+            "`andromeda`. Omit it and one is chosen for `language`. Call "
+            "`list_voices` to see what exists; there are far more than one per "
+            "language, differing by accent, age and intended use."
+        ),
     )
 
 
@@ -65,4 +70,37 @@ class SayResponse(BaseModel):
     audio_file_path: str | None = Field(
         default=None,
         description="Pod datastore path of the generated audio file.",
+    )
+
+
+class ListVoicesRequest(BaseModel):
+    language: str | None = Field(
+        default=None,
+        description=(
+            "BCP-47 code to filter by, e.g. 'es' or 'ja'. Omit to see every "
+            "voice the provider has."
+        ),
+    )
+    limit: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="How many to return. There are roughly eighty in total.",
+    )
+
+
+class VoiceSummary(BaseModel):
+    name: str = Field(description="Pass this to `say` as `voice`.")
+    languages: list[str] = Field(default_factory=list)
+    accent: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class ListVoicesResponse(BaseModel):
+    success: bool = Field(default=False)
+    message: str | None = None
+    error: str | None = None
+    voices: list[VoiceSummary] = Field(default_factory=list)
+    total: int = Field(
+        default=0, description="How many matched before `limit` was applied."
     )

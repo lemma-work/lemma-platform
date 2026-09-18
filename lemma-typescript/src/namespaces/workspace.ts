@@ -84,8 +84,19 @@ export interface WebLoginAuditEntry {
 export class WebLoginsNamespace {
   constructor(private readonly http: HttpClient) {}
 
-  list(): Promise<{ items: WebLogin[] }> {
-    return this.http.request<{ items: WebLogin[] }>("GET", "/web-logins");
+  /**
+   * One page of saved logins.
+   *
+   * Follow `next_page_token` to see the rest: a full page is not itself proof
+   * that more exist, and a login you cannot list is one you cannot revoke.
+   */
+  list(
+    options: { limit?: number; pageToken?: string } = {},
+  ): Promise<{ items: WebLogin[]; limit: number; next_page_token: string | null }> {
+    const params: Record<string, string | number> = {};
+    if (options.limit !== undefined) params.limit = options.limit;
+    if (options.pageToken !== undefined) params.page_token = options.pageToken;
+    return this.http.request("GET", "/web-logins", { params });
   }
 
   /**
@@ -100,12 +111,17 @@ export class WebLoginsNamespace {
     });
   }
 
-  history(limit = 100): Promise<{ items: WebLoginAuditEntry[] }> {
-    return this.http.request<{ items: WebLoginAuditEntry[] }>(
-      "GET",
-      "/web-logins/history",
-      { params: { limit } },
-    );
+  history(
+    limit = 100,
+    pageToken?: string,
+  ): Promise<{
+    items: WebLoginAuditEntry[];
+    limit: number;
+    next_page_token: string | null;
+  }> {
+    const params: Record<string, string | number> = { limit };
+    if (pageToken !== undefined) params.page_token = pageToken;
+    return this.http.request("GET", "/web-logins/history", { params });
   }
 
   /** What a sign-in link is asking for, addressed by the pause it is for.
@@ -203,6 +219,29 @@ export class WorkspaceNamespace {
   browserCurrentPageUrl(origin: string): Promise<{ url: string | null }> {
     return this.http.request("GET", "/workspace/browser/current-page-url", {
       params: { origin },
+    });
+  }
+
+  /**
+   * Fit the workspace display to the pane showing it.
+   *
+   * The pane is a box of an arbitrary shape and the display is a real screen
+   * with a fixed size, so one of them has to move. Scaling the picture is
+   * what made the browser a small letterboxed rectangle; resizing the display
+   * means the pixels sent are the pixels shown, and a narrow pane gets a
+   * narrow *viewport* — so sites serve their mobile layout on a phone.
+   *
+   * `size` is what the display actually became, which may be smaller than
+   * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
+   * could be resized (a sleeping computer, an older image), which is not an
+   * error — the pane keeps the picture it had.
+   */
+  browserResizeDisplay(
+    width: number,
+    height: number,
+  ): Promise<{ size: string | null }> {
+    return this.http.request("POST", "/workspace/browser/display-size", {
+      body: { width, height },
     });
   }
 
