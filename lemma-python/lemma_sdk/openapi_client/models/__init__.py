@@ -201,6 +201,8 @@ _NAME_TO_MODULE = {
     'DecisionRule': 'decision_rule',
     'DirectoryTreeNode': 'directory_tree_node',
     'DirectoryTreeResponse': 'directory_tree_response',
+    'DisplaySizeRequest': 'display_size_request',
+    'DisplaySizeResponse': 'display_size_response',
     'EndNode': 'end_node',
     'EndNodeConfig': 'end_node_config',
     'EndNodePositionType0': 'end_node_position_type_0',
@@ -752,6 +754,8 @@ if TYPE_CHECKING:
     from .decision_rule import DecisionRule
     from .directory_tree_node import DirectoryTreeNode
     from .directory_tree_response import DirectoryTreeResponse
+    from .display_size_request import DisplaySizeRequest
+    from .display_size_response import DisplaySizeResponse
     from .end_node import EndNode
     from .end_node_config import EndNodeConfig
     from .end_node_position_type_0 import EndNodePositionType0
@@ -1316,6 +1320,8 @@ __all__ = [
     'DecisionRule',
     'DirectoryTreeNode',
     'DirectoryTreeResponse',
+    'DisplaySizeRequest',
+    'DisplaySizeResponse',
     'EndNode',
     'EndNodeConfig',
     'EndNodePositionType0',

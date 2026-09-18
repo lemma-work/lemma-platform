@@ -13,11 +13,19 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     *,
     limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
     params["limit"] = limit
+
+    json_page_token: None | str | Unset
+    if isinstance(page_token, Unset):
+        json_page_token = UNSET
+    else:
+        json_page_token = page_token
+    params["page_token"] = json_page_token
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -64,11 +72,13 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WebLoginAuditResponse]:
     """What has been done with your saved logins
 
     Args:
         limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -80,6 +90,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         limit=limit,
+        page_token=page_token,
     )
 
     response = client.get_httpx_client().request(
@@ -93,11 +104,13 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | WebLoginAuditResponse | None:
     """What has been done with your saved logins
 
     Args:
         limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -110,6 +123,7 @@ def sync(
     return sync_detailed(
         client=client,
         limit=limit,
+        page_token=page_token,
     ).parsed
 
 
@@ -117,11 +131,13 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WebLoginAuditResponse]:
     """What has been done with your saved logins
 
     Args:
         limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -133,6 +149,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         limit=limit,
+        page_token=page_token,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -144,11 +161,13 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
+    page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | WebLoginAuditResponse | None:
     """What has been done with your saved logins
 
     Args:
         limit (int | Unset):  Default: 100.
+        page_token (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -162,5 +181,6 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             limit=limit,
+            page_token=page_token,
         )
     ).parsed

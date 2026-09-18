@@ -33,6 +33,7 @@ from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
     LABEL_EPOCH,
     LABEL_MANAGED_BY,
+    LABEL_OWNER,
     LABEL_PROFILE_DIGEST,
     LABEL_PROFILE_NAME,
     LABEL_SANDBOX_ID,
@@ -65,6 +66,29 @@ from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeClient,
     WorkspaceRuntimeError,
 )
+
+
+def owner_label_for(tag: str | None) -> dict[str, str]:
+    """`{LABEL_OWNER: tag}` for a stack that has one, `{}` for a stack that
+    does not.
+
+    Pure, and separate from reading the setting, so the rule can be asserted
+    without standing in for the config object -- a test that patches settings
+    to check what settings say proves only that patching works.
+    """
+    cleaned = (tag or "").strip()
+    return {LABEL_OWNER: cleaned} if cleaned else {}
+
+
+def _owner_label() -> dict[str, str]:
+    """This stack's owner label, read at call time.
+
+    At call time rather than at import because the e2e harness sets the tag
+    after this module has been imported.
+    """
+    from app.modules.workspace.config import workspace_settings
+
+    return owner_label_for(workspace_settings.owner_tag)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +160,7 @@ class DockerSandboxProvider(DockerOpsMixin):
 
         labels = {
             LABEL_MANAGED_BY: MANAGED_BY,
+            **_owner_label(),
             LABEL_SANDBOX_ID: str(spec.sandbox_id),
             LABEL_SANDBOX_KIND: spec.kind.value,
             LABEL_EPOCH: str(spec.epoch),
@@ -409,6 +434,7 @@ class DockerSandboxProvider(DockerOpsMixin):
                     name=name,
                     labels={
                         LABEL_MANAGED_BY: MANAGED_BY,
+                        **_owner_label(),
                         LABEL_SANDBOX_ID: str(sandbox_id),
                     },
                 ),
@@ -450,7 +476,10 @@ class DockerSandboxProvider(DockerOpsMixin):
         sandbox was gone -- every sandbox ever created leaked one, forever.
         """
         found: list[ProviderObject] = []
-        for label_set in ({LABEL_MANAGED_BY: MANAGED_BY},):
+        # Owner-scoped for the same reason the e2e harness's sweep is: this is
+        # the list a reconcile acts on, and on a machine running two stacks an
+        # unscoped one hands this stack the other's sandboxes to tidy up.
+        for label_set in ({LABEL_MANAGED_BY: MANAGED_BY, **_owner_label()},):
             try:
                 containers = await self._engine.list_containers(
                     labels=label_set, deadline_at=deadline_at
@@ -461,7 +490,8 @@ class DockerSandboxProvider(DockerOpsMixin):
                 found.append(_as_object(container))
         try:
             volumes = await self._engine.list_volumes(
-                labels={LABEL_MANAGED_BY: MANAGED_BY}, deadline_at=deadline_at
+                labels={LABEL_MANAGED_BY: MANAGED_BY, **_owner_label()},
+                deadline_at=deadline_at,
             )
         except DockerEngineError as exc:
             raise ProviderRejected(str(exc)) from exc

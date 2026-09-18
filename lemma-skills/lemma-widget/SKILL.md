@@ -52,7 +52,14 @@ free-form input.
    | Bar chart grouped by one field | `assets/widget-chart-v1.html` |
    | One record with selected fields | `assets/widget-detail-v1.html` |
 
-3. Replace every uppercase `__PLACEHOLDER__` with inspected names and useful labels.
+3. Replace every uppercase `__PLACEHOLDER__` with inspected names and useful
+   labels — **except `__LEMMA_CONFIG__`, which must stay exactly as it is.**
+   That one is not a template slot: it is the runtime config the host injects,
+   and the starter's SDK loader reads it. Validation rejects a widget that
+   stops reading it. The slots you do fill are the data and label ones:
+   `__TABLE_NAME__`, `__RECORD_ID__`, `__GROUP_FIELD__`, `__STATUS_FIELD__`,
+   `__TITLE_FIELD__`, `__SUBTITLE_FIELD__`, `__FIELD_CONFIG__`,
+   `__WIDGET_TITLE__`, `__WIDGET_EYEBROW__`, `__EMPTY_LABEL__`.
    For `__FIELD_CONFIG__`, insert a JSON array such as
    `[{"label":"Owner","field":"owner"}]`. In the metric and chart starters
    `__TABLE_NAME__` and `__GROUP_FIELD__` land inside a SQL statement, so they take
@@ -321,7 +328,8 @@ chart starters do exactly this; keep their query rather than counting rows in JS
 - It opens with a tag — not a stray character, not a sentence — and is complete.
   An inline fragment gets no second look; a file can be edited afterwards.
 - Every value read off a query result uses the name that query aliases it to.
-- The closest versioned starter was used and all placeholders were replaced.
+- The closest versioned starter was used and every placeholder except
+  `__LEMMA_CONFIG__` was replaced.
 - Every tag opens with `<` and closes once; the fragment carries no full-document
   tags, secrets, hardcoded hosts, or pod ids.
 - Every `--lemma-widget-*` reference has a fallback value.

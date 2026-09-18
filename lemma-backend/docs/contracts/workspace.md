@@ -12,6 +12,7 @@ The table below is generated from the committed OpenAPI specification by `script
 | --- | --- | --- | --- |
 | `workspace.browser.access` | POST | `/workspace/apps/browser/access` | Create workspace browser access URL |
 | `workspace.browser.current_page_url` | GET | `/workspace/browser/current-page-url` | What page a sign-in's browser is actually showing |
+| `workspace.browser.resize_display` | POST | `/workspace/browser/display-size` | Fit the workspace display to the pane showing it |
 | `workspace.browser.status` | GET | `/workspace/browser/status` | Whether the workspace browser can be watched |
 | `workspace.files.content` | GET | `/workspace/files:content` | Read workspace file content |
 | `workspace.files.list` | GET | `/workspace/files` | List workspace files |

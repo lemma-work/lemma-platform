@@ -374,10 +374,26 @@ export function AssistantExperienceView({
     && isSignInToolName(activePendingApprovalInvocation.toolName);
   const scrollToPendingInteraction = useCallback(() => {
     if (!pendingInteractionCallId) return;
+    // A sign-in opens the browser beside the conversation, rather than only
+    // scrolling to the card that offers to. Scrolling alone was the whole of
+    // this button, and it is silent when it fails -- `scrollIntoView` on a
+    // missing element does nothing and says nothing, so a card that is not
+    // mounted reads to the person as a dead button. Opening the panel is also
+    // simply what "Sign in to continue" sounds like it should do.
+    if (pendingInteractionIsSignIn && onNavigateResource && activeConversationId) {
+      onNavigateResource("sign_in", pendingInteractionCallId, {
+        conversationId: activeConversationId,
+      });
+    }
     document
       .getElementById(interactionAnchorId(pendingInteractionCallId))
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [pendingInteractionCallId]);
+  }, [
+    pendingInteractionCallId,
+    pendingInteractionIsSignIn,
+    onNavigateResource,
+    activeConversationId,
+  ]);
 
   const canLoadOlder = hasOlderMessages && !isLoadingMessages && !isLoadingOlderMessages;
   const loadOlder = useCallback(() => {

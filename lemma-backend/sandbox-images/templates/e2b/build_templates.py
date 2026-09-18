@@ -124,7 +124,14 @@ def workspace_template():
                 # this or the VNC pane connects on one fabric and not the
                 # other -- the same failure mode the `ffmpeg` note above
                 # describes, for the same reason.
+                # Places the OAuth popup a real sign-in opens, which the X
+                # server would otherwise put wherever it liked -- possibly
+                # off-screen, where the person watching sees nothing happen.
+                "matchbox-window-manager",
                 "websockify",
+                # `xrandr`, for resizing the display to match the pane it is
+                # being watched in.
+                "x11-xserver-utils",
                 "x11vnc",
                 "xz-utils",
                 "xvfb",
@@ -200,6 +207,11 @@ def workspace_template():
             mode=0o644,
         )
         .copy(
+            "lemma-backend/sandbox-images/scripts/set-display-size.sh",
+            "/usr/local/bin/set-display-size",
+            mode=0o755,
+        )
+        .copy(
             "lemma-backend/sandbox-images/scripts/start-browser.sh",
             "/usr/local/bin/start-browser",
             mode=0o755,
@@ -247,14 +259,44 @@ def workspace_template():
             "/opt/lemma-node/webpage-to-markdown.mjs",
             mode=0o755,
         )
+        # Real Chrome, not the testing build.
+        #
+        # `workspace-chrome` used to be a symlink to whatever
+        # `agent-browser install` had downloaded, and that installer fetches
+        # from Google's *Chrome for Testing* CDN. So this fabric ran a build
+        # that announces itself in an infobar -- above the page a person is
+        # being asked to type their password into -- while the Docker fabric
+        # ran ordinary Chromium. Anti-bot systems treat the two differently,
+        # which matters most on exactly the sign-in pages this feature exists
+        # for.
+        #
+        # `apt install chromium` is not the answer here the way it is in
+        # `Dockerfile.workspace`: this template builds from E2B's Ubuntu-based
+        # `code-interpreter-v1`, where `chromium` is the snap transitional
+        # package and does not run in a container at all. Google's own apt
+        # repository is the one that gives a real, non-testing Chrome on this
+        # base.
+        .run_cmd(
+            "install -d -m 0755 /etc/apt/keyrings && "
+            "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub "
+            "| gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg && "
+            "chmod a+r /etc/apt/keyrings/google-chrome.gpg && "
+            "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] "
+            "https://dl.google.com/linux/chrome/deb/ stable main' "
+            "> /etc/apt/sources.list.d/google-chrome.list && "
+            "apt-get update && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "--no-install-recommends google-chrome-stable && "
+            "rm -rf /var/lib/apt/lists/*",
+            user="root",
+        )
         .run_cmd(
             "mkdir -p /workspace /tmp/lemma-browser/runtime "
             "/tmp/lemma-browser/profile && "
             "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
-            "find /home/user/.agent-browser/browsers -type f "
-            "-name chrome -perm /111 "
-            "-exec ln -sf {} /usr/local/bin/workspace-chrome \\; -quit && "
+            "ln -sf \"$(command -v google-chrome-stable)\" "
+            "/usr/local/bin/workspace-chrome && "
             "test -x /usr/local/bin/workspace-chrome && "
             "rm -rf /root/.cache/pnpm /root/.local/share/pnpm/store "
             "/home/user/.cache/pnpm /home/user/.local/share/pnpm/store && "
@@ -317,8 +359,6 @@ def workspace_template():
                 "XDG_RUNTIME_DIR": "/tmp/lemma-browser/runtime",
                 "WORKSPACE_XVFB_SCREEN": "1440x960x24",
                 "AGENT_BROWSER_CONFIG": "/tmp/lemma-browser/config.json",
-                "AGENT_BROWSER_DASHBOARD_PORT": "4848",
-                "AGENT_BROWSER_DASHBOARD_INTERNAL_PORT": "4849",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/workspace-chrome",
                 "AGENT_BROWSER_PROFILE": "/tmp/lemma-browser/profile",
                 "AGENT_BROWSER_SESSION": "workspace",
@@ -327,12 +367,10 @@ def workspace_template():
                 # long idle, which is what keeps a finished research session
                 # from holding the sandbox's whole memory budget.
                 "AGENT_BROWSER_IDLE_TIMEOUT_MS": "120000",
-                # See Dockerfile.workspace: what the live view costs on the
-                # wire. Capped where the frames are encoded, so a small pane is
-                # never sent pixels it cannot draw.
-                "AGENT_BROWSER_STREAM_QUALITY": "60",
-                "AGENT_BROWSER_STREAM_MAX_WIDTH": "1280",
-                "AGENT_BROWSER_STREAM_MAX_HEIGHT": "800",
+                # See Dockerfile.workspace: the ceiling on a viewer-requested
+                # resize, since RandR cannot grow the framebuffer Xvfb
+                # allocated at startup.
+                "WORKSPACE_XVFB_MAX_SCREEN": "1920x1200x24",
                 "LEMMA_BROWSER_RELAY_PORT": "4850",
                 "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
                 # Where the credential bridge writes gh's config.

@@ -24,10 +24,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass
-import hashlib
 import hmac
-import secrets
 import logging
 import os
 from pathlib import Path
@@ -47,6 +44,7 @@ from .chrome import (
     live_port,
     open_url,
     page_targets,
+    set_display_size,
 )
 from .stream_proxy import CONTROL, VIEW, pump_binary
 from .state import (
@@ -155,6 +153,25 @@ class EnsureResponse(BaseModel):
     #: carrying a target id from `workspace`. Saying which session was used is
     #: what makes the two sides unable to disagree.
     session: str
+
+
+class DisplayResizeRequest(BaseModel):
+    """The size a viewer wants the sandbox display to be.
+
+    Bounded here rather than trusted: these numbers come from a browser
+    window, and a display is a framebuffer somebody else's memory pays for.
+    The script clamps again against the framebuffer Xvfb actually allocated,
+    which is the limit that cannot be argued with.
+    """
+
+    width: int = Field(ge=320, le=4096)
+    height: int = Field(ge=240, le=4096)
+
+
+class DisplayResizeResponse(BaseModel):
+    #: What the display ended up as, which is not always what was asked for --
+    #: see the clamping in `set-display-size`.
+    size: str
 
 
 class StateSaveRequest(BaseModel):
@@ -299,6 +316,32 @@ def create_app() -> FastAPI:
             session=session,
         )
 
+    @app.post(
+        "/display:resize",
+        response_model=DisplayResizeResponse,
+        dependencies=[Depends(require_token)],
+    )
+    async def display_resize(request: DisplayResizeRequest) -> DisplayResizeResponse:
+        """Make the display the shape of the pane it is being watched in.
+
+        The alternative, and what this replaces, was one fixed display scaled
+        to fit whatever box it landed in: a 3:2 picture letterboxed into a
+        narrow sidebar, small and surrounded by dead space. Resizing the
+        display itself means the pixels sent are the pixels shown, and a
+        narrow pane gets a narrow *viewport* -- so a site serves its mobile
+        layout to somebody signing in on a phone rather than a shrunken
+        desktop one.
+
+        noVNC's own `resizeSession` cannot do this for us: it refuses while
+        the client is view-only, and watching is the default here.
+        """
+        size = await set_display_size(request.width, request.height)
+        if size is None:
+            raise HTTPException(
+                status_code=409, detail="the display could not be resized"
+            )
+        return DisplayResizeResponse(size=size)
+
     @app.post("/state:save", dependencies=[Depends(require_token)])
     async def state_save(request: StateSaveRequest) -> dict:
         session = _session_name(request.session, request.domain)
@@ -331,13 +374,10 @@ def create_app() -> FastAPI:
         is future work.
 
         `session` is not a selector either -- it cannot be, for the same
-        reason -- but it is still read, for the one thing that still needs a
-        session name even though the picture does not: the driving lease.
-        The caller resolves it beforehand (`/browser:ensure`'s reply says
-        which session a steer actually landed in) and passes that back here
-        so the agent's own script, which checks the lease for *its* session
-        before acting, is not told a login session's wheel is free while a
-        person is visibly turning it on this same screen.
+        reason -- but it is still read, because the liveness check and the
+        keepalive are both about one session's browser rather than about the
+        screen. The caller resolves it beforehand: `/browser:ensure`'s reply
+        says which session a steer actually landed in.
         """
         if not _authenticate(websocket.headers.get("x-lemma-relay-token", "")):
             await _refuse(
@@ -369,8 +409,25 @@ def create_app() -> FastAPI:
         await websocket.accept()
         # Watching is not a command, so without this the agent's idle timeout
         # retires the browser out from under somebody reading the page.
-        keepalive_task = create_background_task(_keepalive_loop(DEFAULT_SESSION))
-        driving = _take_the_wheel(session_name) if mode == CONTROL else None
+        #
+        # `session_name`, not the default -- the same distinction the liveness
+        # check above already makes. A sign-in runs in `login-<host>` and a
+        # watch names its conversation's session, so keeping the *default*
+        # session warm left the browser actually on screen idle: retired after
+        # two minutes, mid-page, and for a sign-in that also takes the profile
+        # with it. It kept a browser nobody was watching alive at the same
+        # time, in a sandbox where the memory guard kills on ~220 MB free.
+        keepalive_task = create_background_task(_keepalive_loop(session_name))
+        # Nothing is claimed here. There was a lease -- a file the agent's own
+        # commands read before acting, so a person driving could not be typed
+        # over -- and it was removed because it never covered the case it was
+        # written for and only ever cost the case it did reach. A sign-in runs
+        # in `login-<host>`, a session the agent never touches, so the lease
+        # was a no-op at the one moment somebody was typing a password; an
+        # ordinary watch attaches to the agent's *own* session, so the only
+        # thing it ever stopped was the agent using its own browser while
+        # somebody looked at it. Two parties acting at once costs a retry,
+        # which is cheaper than stalling the run.
         try:
             async with websockets.connect(
                 f"ws://127.0.0.1:{VNC_WS_PORT}/",
@@ -386,7 +443,6 @@ def create_app() -> FastAPI:
             with suppress(RuntimeError):
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)
         finally:
-            _release_the_wheel(driving)
             keepalive_task.cancel()
             # Awaited, not just cancelled: a cancelled task is not finished
             # until it has been collected, and leaving it uncollected is how a
@@ -444,72 +500,3 @@ def _host_of(url: str) -> str:
     # `user:pass@host:port` -- the host is what is left after the last `@` and
     # before the first `:`.
     return authority.rpartition("@")[2].split(":")[0]
-
-
-#: Where a control session records that somebody is driving. Under the relay's
-#: own directory rather than the browser profile's, because `quiesce` deletes
-#: the profile and a lease that vanished with it would read as "nobody is
-#: driving" to the next command.
-_WHEEL_DIR = Path("/tmp/lemma-relay/wheel")
-
-
-def wheel_path(session: str) -> Path:
-    """The lease file for one session's browser."""
-    digest = hashlib.sha256(session.encode()).hexdigest()[:32]
-    return _WHEEL_DIR / digest
-
-
-@dataclass(frozen=True, slots=True)
-class _Wheel:
-    """One viewer's claim on a session, and the proof that it is theirs."""
-
-    path: Path
-    token: str
-
-
-def _take_the_wheel(session: str) -> "_Wheel | None":
-    """Mark this session as being driven by a person.
-
-    A file rather than state in this process, because the other party is not in
-    this process: the agent's commands run in a shell, and what has to see the
-    lease is the script they run. Both are in this sandbox, so the filesystem is
-    the one thing they share.
-
-    Named from a digest for the same reason the profile directory is -- a
-    session name is a caller's string and must not become a path.
-    """
-    path = wheel_path(session)
-    # A token of this holder's own, written into the file. Without one the
-    # lease was just "a file exists", so two people driving the same session
-    # meant whichever of them closed *first* released it -- and the one still
-    # holding the wheel silently lost it, with the agent free to type into the
-    # page they were using.
-    token = secrets.token_hex(16)
-    try:
-        _WHEEL_DIR.mkdir(parents=True, exist_ok=True)
-        path.write_text(token)
-        return _Wheel(path=path, token=token)
-    except OSError:
-        # Not being able to take the lease must not stop somebody watching. The
-        # cost is that an agent command may land at the same time, which is what
-        # happened before this existed at all.
-        _log.warning("could not record the control lease for session %s", session)
-        return None
-
-
-def _release_the_wheel(held: "_Wheel | None") -> None:
-    """Give up the lease, but only if it is still ours.
-
-    A later viewer's token in the file means they took it after us, and it is
-    theirs to release. Read-then-unlink is not atomic and does not need to be:
-    the loser of that race releases a lease that was about to be re-taken, and
-    the next command re-reads the file rather than trusting a decision made
-    earlier.
-    """
-    if held is None:
-        return
-    with suppress(OSError):
-        if held.path.read_text().strip() != held.token:
-            return
-    with suppress(OSError):
-        held.path.unlink(missing_ok=True)

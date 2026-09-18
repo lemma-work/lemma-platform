@@ -86,4 +86,6 @@ Python variables persist between calls. Add packages with `pip install` or
 tabulate are installed. For pinned projects, use `uv sync` or `uv venv` and
 the virtualenv interpreter; `execute_python` stays on the shared interpreter.
 
-SDK sources: `/sdk/lemma-python` and `/sdk/lemma-typescript`.
+SDK sources ship at `/sdk/` on some workspace images and not others — check
+before relying on them (`ls /sdk`), and read the installed packages instead
+when they are absent.
