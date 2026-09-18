@@ -334,7 +334,11 @@ async def test_a_conversation_that_vanished_does_not_fail_the_person() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["https://x.test/login Home", "https://x.test/ Sign in", "https://x.test/ Password"],
+    [
+        "https://x.test/login Home",
+        "https://x.test/ Sign in",
+        "https://x.test/ Password",
+    ],
 )
 def test_a_page_asking_for_a_login_is_recognised(text: str) -> None:
     assert page_looks_like_a_login_wall(text)

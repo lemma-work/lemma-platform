@@ -268,9 +268,7 @@ def _service_with_relay(relay: _VncRelay):
     return _Service()
 
 
-async def test_no_caller_names_a_browser_session() -> (
-    None
-):
+async def test_no_caller_names_a_browser_session() -> None:
     """There is one browser per sandbox, so nothing picks between them.
 
     A conversation used to select `agent_session(conversation_id)`, a Chrome
@@ -286,9 +284,7 @@ async def test_no_caller_names_a_browser_session() -> (
     assert relay.ensured == {"origin": None, "session": None, "domain": None}
 
 
-async def test_a_plain_watch_with_no_conversation_lands_in_the_same_browser() -> (
-    None
-):
+async def test_a_plain_watch_with_no_conversation_lands_in_the_same_browser() -> None:
     relay = _VncRelay()
     await _service_with_relay(relay).open_vnc_session(uuid4(), mode="view")
     assert relay.ensured == {"origin": None, "session": None, "domain": None}

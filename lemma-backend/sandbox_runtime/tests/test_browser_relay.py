@@ -9,7 +9,6 @@ are mostly about what happened rather than about what came back.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest

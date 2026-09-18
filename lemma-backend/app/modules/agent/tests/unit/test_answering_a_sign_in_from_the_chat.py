@@ -70,9 +70,7 @@ async def test_a_site_still_showing_a_form_is_passed_on_as_a_warning() -> None:
     finishes and puts the answer on the decision. It is a warning rather than
     a failure: the check is a heuristic, and the person has already done what
     was asked."""
-    result = await _answer(
-        AgentRunApprovalDecision.APPROVE_ONCE, {"working": False}
-    )
+    result = await _answer(AgentRunApprovalDecision.APPROVE_ONCE, {"working": False})
 
     assert result["outcome"] == "signed_in"
     assert "still showed a login form" in result["message"]

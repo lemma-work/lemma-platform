@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { ChevronRight, Download, Folder, RefreshCw } from '@/components/ui/icons';
 import {
     HOME_ROOT,
-    WORKSPACE_ROOT,
     useWorkspaceFile,
     useWorkspaceFiles,
 } from '@/lib/hooks/use-workspace-files';

@@ -836,13 +836,12 @@ export function SignInCard({
   // See `_browser_sign_in_return`.
   const body = asRecord(resultData.output ?? resultData);
   const signedIn = asString(body.outcome) === "signed_in";
-  const kept = body.saved === true;
-  // `source` is "saved" when a stored login was restored and nobody was asked,
-  // and "person" when somebody actually signed in. The card used to read the
-  // same either way, so a run that quietly reused a saved login was
-  // indistinguishable from one the person had just answered -- which is how
-  // three "Signed in to asur.work" cards appeared in a row that nobody had
-  // clicked, each one a dead session being restored again.
+  // `source` is "saved" when the browser was already signed in and nobody was
+  // asked, and "person" when somebody actually signed in just now. The card
+  // used to read the same either way, so a run that quietly reused a login
+  // was indistinguishable from one the person had just answered -- which is
+  // how three "Signed in to asur.work" cards appeared in a row that nobody
+  // had clicked.
   const fromSaved = signedIn && asString(body.source) === "saved";
 
   // `new URL` throws on anything that is not absolute, and the origin comes
@@ -888,7 +887,7 @@ export function SignInCard({
         </span>
         {isResolved ? (
           <Badge variant={signedIn ? "success" : "warning"}>
-            {signedIn ? (kept ? "kept for next time" : "signed in") : "skipped"}
+            {signedIn ? "signed in" : "skipped"}
           </Badge>
         ) : null}
       </div>
@@ -899,13 +898,12 @@ export function SignInCard({
 
       {fromSaved ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {/* The only control that unsticks a dead saved login from inside the
-              conversation. It does not re-ask on the spot -- this run has
-              already been told it is signed in -- it forgets Lemma's copy, so
-              the next `browser_sign_in` finds nothing saved and asks. That is
-              the loop the person was stuck in: a stored session the site no
-              longer accepts, restored again on every attempt, with the only
-              remedy on a settings page they had to know to go and find. */}
+          {/* The way out of a login the site no longer accepts, from inside
+              the conversation. It does not re-ask on the spot -- this run has
+              already been told it is signed in -- it signs the browser out,
+              so the next `browser_sign_in` meets the wall and asks. Without
+              it the remedy lived on a settings page somebody had to know to
+              go and find. */}
           <Button
             variant="secondary"
             size="sm"
@@ -913,15 +911,15 @@ export function SignInCard({
             disabled={forget.isPending || forgotten}
           >
             {forgotten
-              ? "Forgotten"
+              ? "Signed out"
               : forget.isPending
-                ? "Forgetting…"
-                : "That didn’t work — forget it"}
+                ? "Signing out…"
+                : "That didn’t work — sign out"}
           </Button>
           <span className="text-xs text-[var(--text-tertiary)]">
             {forgotten
               ? "The next attempt will ask you to sign in."
-              : "Removes Lemma’s copy. It does not sign you out of the site."}
+              : "Signs the agent’s browser out, so it asks again."}
           </span>
         </div>
       ) : null}

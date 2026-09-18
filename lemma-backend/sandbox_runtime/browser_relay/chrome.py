@@ -20,7 +20,7 @@ instead does not work: ``agent-browser`` waits for that file and a forced port
 stops it appearing, which breaks every other browser tool in the process.
 
 **That file outlives the browser.** Chrome does not remove it on the way out,
-and the browser leaves often -- ``agent-browser`` retires it after two idle
+and the browser leaves often -- ``agent-browser`` retires it after five idle
 minutes, and the memory guard SIGKILLs it under pressure. So the file is a
 record of where Chrome *was*, and reading it alone reports a port that nothing
 is listening on. It cost a long debugging session: a viewer that asked to watch
@@ -47,7 +47,7 @@ import re
 
 import httpx
 
-from ..paths import BROWSER_PROFILE
+from sandbox_runtime.paths import BROWSER_PROFILE
 
 #: The browser, and the person's logins. Durable -- see ``paths.py``.
 _DEFAULT_PROFILE = BROWSER_PROFILE
@@ -516,7 +516,7 @@ async def set_display_size(width: int, height: int) -> str | None:
 async def keepalive(*, session: str | None = None) -> None:
     """Touch the browser so its idle timer does not retire it.
 
-    `agent-browser` closes Chrome after two minutes without a *command*, and
+    `agent-browser` closes Chrome after five minutes without a *command*, and
     watching is not a command. So a person reading a page, or typing a password
     slowly, is idle by that measure and would have the browser shut under them.
     Any command resets the timer; asking for the URL is the cheapest one that

@@ -88,16 +88,18 @@ canvas.
 
 ## Capability: Keep a way back in
 
-### PS-BROWSER-020 — A saved login is the person's own
+### PS-BROWSER-020 — A login is the person's own, and it stays
 **Status:** covered
 
-- The system shall keep only the session for the site it was captured on, and
-  shall not keep anything belonging to any other site the browser has visited.
-- The system shall encrypt it at rest and shall never return it to any caller,
-  at any privilege level, including the person who created it.
-- The system shall not let one person's saved login be used by another person.
-- While a saved login works, the system shall not ask that person for that site
-  again.
+- The agent's browser shall keep its own session for a site the person signed
+  in to, and that session shall survive the browser closing, the computer
+  being suspended, and the conversation ending.
+- The system shall never carry a session's contents out of the person's own
+  computer: what leaves it is which sites have one and when they lapse.
+- The system shall not let one person's browser session be used by another
+  person.
+- While the browser is still signed in to a site, the system shall not ask
+  that person for it again.
 
 **Contracts:** `web_login.list`
 
@@ -105,26 +107,26 @@ canvas.
 **Status:** manual
 
 Needs a site whose session can be expired on demand. Verified against a real
-sandbox: an injection that lands on a login wall marks the saved login, and the
-next run asks the person again.
+sandbox: opening the site lands on its login form, the agent is told the
+browser is not signed in, and the person is asked again.
 
-- When a saved login no longer signs a person in, the system shall record that
-  and shall ask them again rather than failing the task the same way twice.
+- When a site no longer accepts the browser's session, the system shall ask
+  the person again rather than failing the task the same way twice.
 
 **Contracts:** `web_login.list`
 
-### PS-BROWSER-022 — A person sees and removes what is saved
+### PS-BROWSER-022 — A person sees and undoes what their browser holds
 **Status:** covered
 
-- The system shall show a person every site it holds a login for, when each was
-  last used, and whether each still works.
-- The system shall let a person remove any of them.
-- Removing a saved login does not sign the person out at the site, and the
-  system shall say so rather than implying otherwise.
-- The system shall keep a durable record of what has been done with a person's
-  saved logins, answerable to them.
+- The system shall show a person every site their agent's browser is signed
+  in to, and roughly how long each will last.
+- The system shall let a person sign it out of any of them.
+- Signing out shall actually sign the browser out of that site, and shall
+  leave anywhere the person is signed in themselves untouched.
+- The system shall refuse rather than report success when the computer is not
+  running to be changed.
 
-**Contracts:** `web_login.delete`, `web_login.history`
+**Contracts:** `web_login.delete`
 
 ---
 

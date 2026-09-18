@@ -44,13 +44,22 @@ export interface WorkspaceFileListResponse {
  * compute open for as long as it was on screen.
  */
 export interface WebLogin {
-  id: string;
-  origin: string;
-  /** Whether the stored session still signs you in. */
-  working: boolean;
-  created_at: string;
-  updated_at: string;
-  last_used_at: string | null;
+  /**
+   * The site, as a person would name it.
+   *
+   * Grouped by registrable domain, so `asur.work` and `api.asur.work` are one
+   * login rather than two — the second being the half nobody visited on
+   * purpose.
+   */
+  site: string;
+  /** How many cookies it has. A rough sense of scale, not a health check. */
+  cookie_count: number;
+  /**
+   * When the soonest of them lapses, which is the closest a browser can come
+   * to "when will I have to sign in again". Null when they are all session
+   * cookies.
+   */
+  expires: string | null;
 }
 
 /** An agent waiting for somebody to sign a site in.
@@ -69,71 +78,51 @@ export interface PendingSignIn {
 export interface SignInOutcome {
   origin: string;
   signed_in: boolean;
-  /** Whether the login was kept for next time. */
-  saved: boolean;
-  /** Why it was not kept, when it was not. */
-  saved_detail: string | null;
-}
-
-/** One thing that was done with one saved login. */
-export interface WebLoginAuditEntry {
-  origin: string;
-  action: string;
-  outcome: string;
-  /** Why, when the outcome was not plain "ok" — in the platform's own words. */
-  detail: string | null;
-  /** The run that did it; null for something the person did themselves. */
-  conversation_id: string | null;
-  created_at: string;
+  /**
+   * Whether the site stopped asking for a login straight afterwards.
+   * Reported, not enforced — the check is a heuristic and the person has
+   * already done what was asked.
+   */
+  working: boolean;
 }
 
 /**
- * Saved site logins.
+ * The sites your sandbox's browser is signed in to.
  *
- * Nothing here ever returns a secret — not to an agent, and not to the person
- * who created it. `WebLogin` has no field to put one in.
+ * Read from the browser every time, not from a table: it keeps its own
+ * profile, so what it holds is the only true answer. Nothing here returns a
+ * secret, and that is now structural rather than a promise — cookie values
+ * never leave the sandbox at all.
  */
 export class WebLoginsNamespace {
   constructor(private readonly http: HttpClient) {}
 
   /**
-   * One page of saved logins.
+   * Every site the browser is signed in to.
    *
-   * Follow `next_page_token` to see the rest: a full page is not itself proof
-   * that more exist, and a login you cannot list is one you cannot revoke.
+   * Not paged: this is what one browser is holding, not a table that grows.
+   * `wake` is off by default so that rendering the list is never what starts
+   * somebody's computer — a paused one answers `sleeping`.
    */
   list(
-    options: { limit?: number; pageToken?: string } = {},
-  ): Promise<{ items: WebLogin[]; limit: number; next_page_token: string | null }> {
+    options: { wake?: boolean } = {},
+  ): Promise<{ items: WebLogin[]; sleeping: boolean }> {
     const params: Record<string, string | number> = {};
-    if (options.limit !== undefined) params.limit = options.limit;
-    if (options.pageToken !== undefined) params.page_token = options.pageToken;
+    if (options.wake) params.wake = "true";
     return this.http.request("GET", "/web-logins", { params });
   }
 
   /**
-   * Forget a site.
+   * Sign the browser out of a site.
    *
-   * Revokes Lemma's copy and nothing else: the session stays valid at the site
-   * until it expires or the person logs out there.
+   * Really signs it out, which its predecessor did not: that removed Lemma's
+   * encrypted copy and left the browser as it was. Needs the computer
+   * running, and says so rather than reporting a success it did not achieve.
    */
-  remove(origin: string): Promise<WebLogin> {
-    return this.http.request<WebLogin>("DELETE", "/web-logins", {
+  remove(origin: string): Promise<{ site: string; forgotten: boolean }> {
+    return this.http.request("DELETE", "/web-logins", {
       params: { origin },
     });
-  }
-
-  history(
-    limit = 100,
-    pageToken?: string,
-  ): Promise<{
-    items: WebLoginAuditEntry[];
-    limit: number;
-    next_page_token: string | null;
-  }> {
-    const params: Record<string, string | number> = { limit };
-    if (pageToken !== undefined) params.page_token = pageToken;
-    return this.http.request("GET", "/web-logins/history", { params });
   }
 
   /** What a sign-in link is asking for, addressed by the pause it is for.
@@ -152,19 +141,19 @@ export class WebLoginsNamespace {
   /**
    * Say whether you signed in, so the waiting run can carry on.
    *
-   * One call for both answers because it is one answer. `force` saves whatever
-   * the browser holds even when it does not look signed in, for sites the check
-   * reads wrongly.
+   * One call for both answers because it is one answer. Nothing is stored:
+   * the browser holds the session, so finishing is the person finishing. The
+   * reply says whether the site stopped asking, which the agent is told.
    */
   answerSignIn(
     conversationId: string,
     toolCallId: string,
-    options: { signedIn: boolean; force?: boolean },
+    options: { signedIn: boolean },
   ): Promise<SignInOutcome> {
     return this.http.request<SignInOutcome>(
       "POST",
       `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
-      { body: { signed_in: options.signedIn, force: Boolean(options.force) } },
+      { body: { signed_in: options.signedIn } },
     );
   }
 }

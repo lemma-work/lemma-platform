@@ -17313,32 +17313,28 @@ var LemmaClient = (() => {
       __publicField(this, "http", http);
     }
     /**
-     * One page of saved logins.
+     * Every site the browser is signed in to.
      *
-     * Follow `next_page_token` to see the rest: a full page is not itself proof
-     * that more exist, and a login you cannot list is one you cannot revoke.
+     * Not paged: this is what one browser is holding, not a table that grows.
+     * `wake` is off by default so that rendering the list is never what starts
+     * somebody's computer — a paused one answers `sleeping`.
      */
     list(options = {}) {
       const params = {};
-      if (options.limit !== void 0) params.limit = options.limit;
-      if (options.pageToken !== void 0) params.page_token = options.pageToken;
+      if (options.wake) params.wake = "true";
       return this.http.request("GET", "/web-logins", { params });
     }
     /**
-     * Forget a site.
+     * Sign the browser out of a site.
      *
-     * Revokes Lemma's copy and nothing else: the session stays valid at the site
-     * until it expires or the person logs out there.
+     * Really signs it out, which its predecessor did not: that removed Lemma's
+     * encrypted copy and left the browser as it was. Needs the computer
+     * running, and says so rather than reporting a success it did not achieve.
      */
     remove(origin) {
       return this.http.request("DELETE", "/web-logins", {
         params: { origin }
       });
-    }
-    history(limit = 100, pageToken) {
-      const params = { limit };
-      if (pageToken !== void 0) params.page_token = pageToken;
-      return this.http.request("GET", "/web-logins/history", { params });
     }
     /** What a sign-in link is asking for, addressed by the pause it is for.
      *
@@ -17355,15 +17351,15 @@ var LemmaClient = (() => {
     /**
      * Say whether you signed in, so the waiting run can carry on.
      *
-     * One call for both answers because it is one answer. `force` saves whatever
-     * the browser holds even when it does not look signed in, for sites the check
-     * reads wrongly.
+     * One call for both answers because it is one answer. Nothing is stored:
+     * the browser holds the session, so finishing is the person finishing. The
+     * reply says whether the site stopped asking, which the agent is told.
      */
     answerSignIn(conversationId, toolCallId, options) {
       return this.http.request(
         "POST",
         `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
-        { body: { signed_in: options.signedIn, force: Boolean(options.force) } }
+        { body: { signed_in: options.signedIn } }
       );
     }
   };

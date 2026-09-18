@@ -12,6 +12,8 @@ idempotent and there is no per-sandbox secret to keep in a table and rotate.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import asyncio
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
@@ -68,6 +70,25 @@ def relay_token(provider_id: str) -> str:
     return hmac.new(
         key.encode(), f"browser-relay:{provider_id}".encode(), hashlib.sha256
     ).hexdigest()
+
+
+class ProfileCookie(TypedDict):
+    """One cookie, as much of it as ever leaves the sandbox.
+
+    Host and expiry. Deliberately not the name and emphatically not the
+    value: this is enough to say "you are signed in to example.com" and
+    enough to delete it, and not enough to be anybody anywhere.
+    """
+
+    domain: str
+    expires: float | None
+
+
+class ProfileCookies(TypedDict):
+    """What the browser is holding, or that it is not running to be asked."""
+
+    running: bool
+    cookies: list[ProfileCookie]
 
 
 class BrowserRelayClient:
@@ -232,7 +253,7 @@ class BrowserRelayClient:
             )
         return response.json()
 
-    async def profile_cookies(self) -> dict[str, object]:
+    async def profile_cookies(self) -> ProfileCookies:
         """Which hosts the browser holds cookies for, with no values.
 
         Never starts a browser: a sandbox that is asleep answers
@@ -243,7 +264,23 @@ class BrowserRelayClient:
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
         body = response.json()
-        return body if isinstance(body, dict) else {"running": False, "cookies": []}
+        if not isinstance(body, dict):
+            return {"running": False, "cookies": []}
+        return {
+            "running": bool(body.get("running")),
+            "cookies": [
+                {
+                    "domain": str(cookie.get("domain") or ""),
+                    "expires": (
+                        float(cookie["expires"])
+                        if isinstance(cookie.get("expires"), (int, float))
+                        else None
+                    ),
+                }
+                for cookie in body.get("cookies") or []
+                if isinstance(cookie, dict) and cookie.get("domain")
+            ],
+        }
 
     async def forget_cookies(self, *, domains: list[str]) -> int:
         """Drop every cookie set for these hosts. Returns how many went."""

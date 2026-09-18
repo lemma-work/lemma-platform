@@ -67,6 +67,11 @@ def browser_view_service():
     return module.BrowserViewService
 
 
+from app.modules.workspace.services.browser_relay_client import (  # noqa: E402
+    ProfileCookie,
+)
+
+
 def browser_unavailable() -> type[Exception]:
     """What a browser call raises when the sandbox cannot answer."""
     from app.modules.workspace.services.browser_relay_client import (
@@ -78,6 +83,7 @@ def browser_unavailable() -> type[Exception]:
 
 __all__ = [
     "BrowserCookie",
+    "ProfileCookie",
     "BrowserOrigin",
     "BrowserState",
     "browser_unavailable",

@@ -6,27 +6,32 @@ from typing import Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-T = TypeVar("T", bound="AnswerSignInRequest")
+T = TypeVar("T", bound="ForgetResponse")
 
 
 @_attrs_define
-class AnswerSignInRequest:
+class ForgetResponse:
     """
     Attributes:
-        signed_in (bool): True when the person says they have signed in; false when they cannot right now.
+        forgotten (bool): False when the browser was holding nothing for this site.
+        site (str):
     """
 
-    signed_in: bool
+    forgotten: bool
+    site: str
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        signed_in = self.signed_in
+        forgotten = self.forgotten
+
+        site = self.site
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "signed_in": signed_in,
+                "forgotten": forgotten,
+                "site": site,
             }
         )
 
@@ -35,14 +40,17 @@ class AnswerSignInRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        signed_in = d.pop("signed_in")
+        forgotten = d.pop("forgotten")
 
-        answer_sign_in_request = cls(
-            signed_in=signed_in,
+        site = d.pop("site")
+
+        forget_response = cls(
+            forgotten=forgotten,
+            site=site,
         )
 
-        answer_sign_in_request.additional_properties = d
-        return answer_sign_in_request
+        forget_response.additional_properties = d
+        return forget_response
 
     @property
     def additional_keys(self) -> list[str]:

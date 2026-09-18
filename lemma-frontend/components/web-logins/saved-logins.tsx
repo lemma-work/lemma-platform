@@ -4,51 +4,80 @@ import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Lock, Trash2 } from '@/components/ui/icons';
-import {
-    useRemoveWebLogin,
-    useWebLoginHistory,
-    useWebLogins,
-} from '@/lib/hooks/use-web-logins';
+import { useRemoveWebLogin, useWebLogins } from '@/lib/hooks/use-web-logins';
 
-const relative = (iso: string | null): string => {
-    if (!iso) return 'never';
-    const seconds = (Date.now() - Date.parse(iso)) / 1000;
-    if (seconds < 60) return 'just now';
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    return `${Math.floor(seconds / 86400)}d ago`;
-};
-
-const hostOf = (origin: string): string => {
-    try {
-        return new URL(origin).host;
-    } catch {
-        return origin;
-    }
+const expiryNote = (iso: string | null): string => {
+    if (!iso) return 'until the browser restarts';
+    const days = (Date.parse(iso) - Date.now()) / 86_400_000;
+    if (days < 0) return 'expired';
+    if (days < 1) return 'expires today';
+    if (days < 2) return 'expires tomorrow';
+    if (days < 60) return `expires in ${Math.round(days)} days`;
+    return `expires in ${Math.round(days / 30)} months`;
 };
 
 /**
- * The sites an agent can sign in to on this person's behalf.
+ * The sites the agent's browser is signed in to.
  *
- * A credential store nobody can look at is one nobody can trust, so this is
- * deliberately plain: what is saved, when it was last used, and how to take it
- * away. Nothing here can show a secret — the API has no field to return one in.
+ * Read from the browser itself rather than from a store Lemma keeps, which
+ * changes what this screen can honestly say. It used to have to disclaim
+ * itself -- "forgetting removes Lemma's copy, it does not sign you out" --
+ * because that was true. Forgetting signs the browser out now, so the
+ * disclaimer is gone and the button means what it says.
+ *
+ * Nothing here can show a secret, and that is no longer a promise about the
+ * response shape: cookie values never leave the sandbox at all.
  */
 export function SavedLogins() {
-    const { data, isPending, error } = useWebLogins();
-    const [showHistory, setShowHistory] = useState(false);
-    const history = useWebLoginHistory(showHistory);
+    // Starts without waking anything. Asking the browser means a round trip
+    // into the sandbox, and opening a settings page is not a reason to start
+    // somebody's computer.
+    const [wake, setWake] = useState(false);
+    const { data, isPending, error } = useWebLogins(wake);
     const remove = useRemoveWebLogin();
     const [confirming, setConfirming] = useState<string | null>(null);
 
+    const heading = (
+        <div className="flex flex-col gap-1">
+            <h2 className="text-sm text-[var(--text-primary)]">Browser logins</h2>
+            <p className="max-w-prose text-sm text-[var(--text-tertiary)]">
+                Sites you have signed in to in the agent&rsquo;s browser. It keeps the
+                session the way your own browser does, never your password.
+            </p>
+        </div>
+    );
+
     if (isPending) {
-        return <p className="text-sm text-[var(--text-tertiary)]">Loading…</p>;
+        return (
+            <div className="flex flex-col gap-4">
+                {heading}
+                <p className="text-sm text-[var(--text-tertiary)]">Loading…</p>
+            </div>
+        );
     }
     if (error) {
         return (
-            <p className="text-sm text-[var(--text-tertiary)]">
-                Saved logins could not be loaded.
-            </p>
+            <div className="flex flex-col gap-4">
+                {heading}
+                <p className="text-sm text-[var(--text-tertiary)]">
+                    Your browser logins could not be read.
+                </p>
+            </div>
+        );
+    }
+
+    if (data?.sleeping) {
+        return (
+            <div className="flex flex-col items-start gap-3">
+                {heading}
+                <p className="max-w-prose text-sm text-[var(--text-tertiary)]">
+                    Your computer is asleep. Its browser still holds whatever it held —
+                    waking it is the only way to read the list or change it.
+                </p>
+                <Button variant="secondary" size="xs" onClick={() => setWake(true)}>
+                    Wake it and show them
+                </Button>
+            </div>
         );
     }
 
@@ -56,54 +85,39 @@ export function SavedLogins() {
 
     return (
         <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1">
-                <h2 className="text-sm text-[var(--text-primary)]">Saved logins</h2>
-                <p className="max-w-prose text-sm text-[var(--text-tertiary)]">
-                    Sites you have signed in to in the agent&rsquo;s browser. Lemma keeps the
-                    session, never your password.
-                </p>
-            </div>
+            {heading}
 
             {items.length === 0 ? (
                 <p className="text-sm text-[var(--text-tertiary)]">
-                    Nothing saved yet. When an agent needs to sign in somewhere, it will ask
-                    you once and remember it.
+                    Not signed in to anything. When an agent meets a login wall it will
+                    ask you once, and the browser will remember after that.
                 </p>
             ) : (
                 <ul className="flex flex-col divide-y divide-[var(--row-border)] border-y border-[var(--row-border)]">
                     {items.map((login) => (
                         <li
-                            key={login.id}
+                            key={login.site}
                             className="flex items-center gap-3 py-2.5 text-sm"
                         >
                             <Lock className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
                             <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
-                                {hostOf(login.origin)}
+                                {login.site}
                             </span>
-                            {!login.working ? (
-                                // Said here rather than left to a failed run:
-                                // a session that has stopped working is what
-                                // makes the next run ask again, and knowing
-                                // that now is what makes the asking sensible.
-                                <span className="shrink-0 text-xs text-[var(--state-warning)]">
-                                    stopped working
-                                </span>
-                            ) : null}
                             <span className="shrink-0 text-xs text-[var(--text-tertiary)]">
-                                used {relative(login.last_used_at)}
+                                {expiryNote(login.expires)}
                             </span>
-                            {confirming === login.origin ? (
+                            {confirming === login.site ? (
                                 <span className="flex shrink-0 items-center gap-1">
                                     <Button
                                         variant="destructive"
                                         size="xs"
                                         loading={remove.isPending}
                                         onClick={() => {
-                                            remove.mutate(login.origin);
+                                            remove.mutate(login.site);
                                             setConfirming(null);
                                         }}
                                     >
-                                        Forget it
+                                        Sign out
                                     </Button>
                                     <Button
                                         variant="quiet"
@@ -117,8 +131,8 @@ export function SavedLogins() {
                                 <Button
                                     variant="quiet"
                                     size="xs"
-                                    aria-label={`Forget ${hostOf(login.origin)}`}
-                                    onClick={() => setConfirming(login.origin)}
+                                    aria-label={`Sign out of ${login.site}`}
+                                    onClick={() => setConfirming(login.site)}
                                 >
                                     <Trash2 className="size-3.5" />
                                 </Button>
@@ -130,57 +144,10 @@ export function SavedLogins() {
 
             {confirming ? (
                 <p className="max-w-prose text-xs text-[var(--text-tertiary)]">
-                    Forgetting removes Lemma&rsquo;s copy. It does not sign you out at{' '}
-                    {hostOf(confirming)} — do that there if you want the session to stop
-                    working.
+                    This signs the agent&rsquo;s browser out of {confirming} and drops its
+                    cookies. It does not touch anywhere you are signed in yourself.
                 </p>
             ) : null}
-
-            <div className="flex flex-col gap-2">
-                <Button
-                    variant="quiet"
-                    size="xs"
-                    className="self-start"
-                    onClick={() => setShowHistory((open) => !open)}
-                >
-                    {showHistory ? 'Hide activity' : 'Show activity'}
-                </Button>
-                {showHistory ? (
-                    <ul className="flex flex-col gap-1 text-xs text-[var(--text-tertiary)]">
-                        {(history.data?.items ?? []).map((entry, index) => (
-                            <li key={`${entry.created_at}-${index}`} className="flex gap-2">
-                                <span className="shrink-0 tabular-nums">
-                                    {relative(entry.created_at)}
-                                </span>
-                                <span className="flex min-w-0 flex-1 flex-col">
-                                    <span className="truncate">
-                                        {entry.action} {hostOf(entry.origin)}
-                                        {entry.outcome === 'ok'
-                                            ? ''
-                                            : ` · ${entry.outcome}`}
-                                    </span>
-                                    {/* Why it went that way, in the platform's
-                                        own words. Without this the line says a
-                                        login failed and nothing about what to
-                                        do next, which is the only reason
-                                        somebody opened this list. */}
-                                    {entry.detail ? (
-                                        <span
-                                            className="truncate text-[var(--text-muted)]"
-                                            title={entry.detail}
-                                        >
-                                            {entry.detail}
-                                        </span>
-                                    ) : null}
-                                </span>
-                            </li>
-                        ))}
-                        {history.data?.items.length === 0 ? (
-                            <li>Nothing yet.</li>
-                        ) : null}
-                    </ul>
-                ) : null}
-            </div>
         </div>
     );
 }

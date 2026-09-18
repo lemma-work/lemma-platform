@@ -9,7 +9,7 @@ seconds, `lemma --version` never returned, and the agent saw `exit_code: 124`
 with no explanation.
 
 Three things already try to stop it getting there: a capture closes its own
-tab, the agent-browser daemon retires itself after two idle minutes, and
+tab, the agent-browser daemon retires itself after five idle minutes, and
 `release` sheds the browser before a pause can snapshot it. This is the one
 that holds when those cannot. Each of them needs a healthy process to act --
 the daemon has to be responsive enough to notice its own idle timer, and

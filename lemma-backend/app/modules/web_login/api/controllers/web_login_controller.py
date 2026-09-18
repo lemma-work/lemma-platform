@@ -32,6 +32,7 @@ from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.web_login.services.origin import InvalidOrigin, normalize_origin
 from app.modules.web_login.services.sites import same_site, site_of
+from app.modules.workspace.contracts.browser import ProfileCookie
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 router = APIRouter(prefix="/web-logins", tags=["Web Logins"])
@@ -91,7 +92,7 @@ def _browser():
     return browser_view_service()()
 
 
-def _as_sites(cookies: list[dict[str, object]]) -> list[WebLoginResponse]:
+def _as_sites(cookies: list[ProfileCookie]) -> list[WebLoginResponse]:
     """Group raw cookie hosts into the sites a person would recognise.
 
     Here rather than in the sandbox because this is the public-suffix
@@ -152,9 +153,9 @@ async def list_web_logins(
         return WebLoginListResponse(items=[])
     except _relay_unavailable():
         return WebLoginListResponse(items=[], sleeping=True)
-    if not answer.get("running"):
+    if not answer["running"]:
         return WebLoginListResponse(items=[], sleeping=True)
-    return WebLoginListResponse(items=_as_sites(list(answer.get("cookies") or [])))
+    return WebLoginListResponse(items=_as_sites(answer["cookies"]))
 
 
 @router.delete(
@@ -188,9 +189,9 @@ async def forget_web_login(
         ) from exc
 
     hosts = [
-        str(cookie.get("domain") or "")
-        for cookie in answer.get("cookies") or []
-        if same_site(str(cookie.get("domain") or ""), site)
+        cookie["domain"]
+        for cookie in answer["cookies"]
+        if same_site(cookie["domain"], site)
     ]
     if not hosts:
         return ForgetResponse(site=site, forgotten=False)

@@ -24,6 +24,7 @@ from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayClient,
     BrowserRelayUnavailable,
+    ProfileCookies,
 )
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
@@ -267,7 +268,7 @@ class BrowserViewService:
 
     async def signed_in_sites(
         self, user_id: UUID, *, wake: bool = False
-    ) -> dict[str, object]:
+    ) -> ProfileCookies:
         """Which hosts the browser holds cookies for, and nothing else.
 
         `wake` off by default: rendering a settings page must not be what
@@ -314,9 +315,7 @@ class BrowserViewService:
         # taken from it could only contain that site -- scoping by
         # construction, and the reason a sign-in then had to be carried into
         # the agent's own browser afterwards. Nothing is captured now.
-        landed = await relay.ensure_browser(
-            origin=origin, session=None, domain=None
-        )
+        landed = await relay.ensure_browser(origin=origin, session=None, domain=None)
         return landed if report else None
 
 

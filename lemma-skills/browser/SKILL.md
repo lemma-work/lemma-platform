@@ -32,11 +32,11 @@ Split them only where you genuinely need to see the output before choosing the n
 Environment facts:
 
 - Nothing is running at startup, and you do not have to start it. Any `agent-browser` command brings the browser up first if it is down. `start-browser [url]` still exists and is harmless, but it is no longer a step you must remember.
-- The browser is **this conversation's own**, not the sandbox's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself unless you genuinely need a second browser (see *Parallel isolated sessions*). Naming one by hand puts you in a different browser from the one a saved login was loaded into — and from the one the panel checks when deciding whether a browser is running for this conversation at all.
-- **The profile is scratch, not storage.** Cookies and logins survive across commands *inside a live workspace*, and nothing more: the browser daemon closes Chrome after 2 minutes with no command (`AGENT_BROWSER_IDLE_TIMEOUT_MS=120000`), and suspending the workspace deletes `/tmp/lemma-browser` outright. Never leave the only copy of anything there.
-- **Do not save session state into your working directory.** `agent-browser state save ./auth.json` writes cookies in plain text onto the durable root, where it outlives the run that made it and is readable by whatever runs next. Use `browser_sign_in` instead: it asks the person, keeps what they signed in to encrypted and scoped to that one site, and loads it back on the next run without asking again.
+- There is **one browser per sandbox**, and it is the person's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself unless you genuinely need a second browser at the same time (see *Parallel isolated sessions*). Naming one by hand opens a different, empty Chrome — not the one that is signed in and not the one the panel shows.
+- **The profile is durable, and it is the person's.** It lives in their home (`~/.lemma/browser/profile`), so a site they have signed in to stays signed in — across your run, across a suspend, and across conversations, exactly as the browser on their own desk does. Chrome itself still comes and goes: the daemon closes it after five idle minutes and the memory guard may kill it under pressure. That costs you a cold start, not the login.
+- **Do not write session state to disk yourself.** `agent-browser state save ./auth.json` puts cookies in plain text on the durable root, where they outlive the run that made them and are readable by whatever runs next. There is also no reason to: the profile already persists. If a site is not signed in, `browser_sign_in` asks the person.
 - **A person may be watching this browser, and may take it over.** It is streamed live into the workspace app's *Your computer → Browser* panel, where they can click and type in the page themselves. Nothing stops you acting at the same time and you do not need to wait: this is your browser and they are looking over your shoulder. If a step lands somewhere you did not expect — a page you did not navigate to, a field already filled — assume they did it, re-snapshot, and carry on from what is on screen rather than from what you last saw.
-- **The window size is not yours alone, and it can change under you.** One display serves the sandbox, and when somebody opens the *Your computer → Browser* panel it is resized to match their pane — so the viewport you measured at the start of a run may not be the one you have now. Mostly that is what you want: the page gets a real, human-shaped window. It bites when a task depends on a fixed size, and the usual casualty is a recording or a set of screenshots that turn out to be the wrong shape after the fact. If the size matters, set it and say so: `set-display-size <width> <height>` (bounded by `WORKSPACE_XVFB_MAX_SCREEN`), then take the recording. Re-read it with `xrandr --current` if you need to be sure rather than hopeful.
+- **The window size is shared, and it moves.** One display serves the sandbox. While somebody has the *Your computer → Browser* panel open it is sized to match their pane; when the last of them closes it, it returns to 1440x960. So the viewport you measured at the start of a run may not be the one you have now, and the usual casualty is a recording or a set of screenshots that turn out to be the wrong shape afterwards. If the size matters, set it yourself and say so: `set-display-size <width> <height>` (bounded by `WORKSPACE_XVFB_MAX_SCREEN`), then take the recording. Re-read it with `xrandr --current` if you need to be sure rather than hopeful.
 - Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
 - Never install Playwright or browser binaries — everything is preinstalled.
 
@@ -105,23 +105,23 @@ save-webpage https://example.com/article --formats markdown,pdf --out research
 
 **Login walls.** You do not sign in. Call `browser_sign_in(origin, reason)` and stop there.
 
-It loads a saved session if there is a working one, and otherwise asks the person, puts the site in front of them, and pauses your run until they answer — however long that takes. When it returns, open the page again and carry on.
+It opens the site and looks. If the browser is already signed in — which it often is, because the profile is durable and somebody may have signed in weeks ago in another conversation — it returns immediately and you carry on. Otherwise it puts the site in front of the person and pauses your run until they answer, however long that takes.
 
 ```bash
 # Never do any of these:
 #   ask the person for their password, in the conversation or on a page
 #   type a password you were given, or one you found in a file or an env var
 #   agent-browser auth save ... --password-stdin
-#   agent-browser state save ./auth.json     # plaintext cookies on the durable volume
+#   agent-browser state save ./auth.json     # plaintext cookies on the durable disk
 ```
 
-A password is never yours to hold, and a session you save by hand outlives the run that made it. `browser_sign_in` is the only sanctioned path: what it keeps is the site's session, encrypted, scoped to that one site, and visible to the person to remove.
+A password is never yours to hold. `browser_sign_in` is the only sanctioned path, and what it produces is the person's own browser session, held by their browser — visible to them on the connectors page, where signing out really signs the browser out.
 
 **Tabs.** `agent-browser tab` (list), `tab new <url>`, `tab 2`, `tab close 2`. Refs are per-page — re-snapshot after switching.
 
 **Parallel isolated sessions.** `agent-browser --session user-a --profile /tmp/lemma-browser/profile-user-a open ...` gives a separate browser with its own cookies, tabs and refs. Use it only when you genuinely need two at once — comparing two signed-in users, say.
 
-**Pass `--profile` with `--session`, always.** A session is a whole separate Chrome and needs a profile directory of its own; every session shares one default profile path, and Chrome locks it. `--session` on its own therefore exits immediately with nothing but `Chrome exited early`. Your ordinary commands already run in this conversation's own session with both set for you, which is the other reason not to name one by hand: a person watching sees the whole screen either way, but the panel checks *this conversation's* session to decide whether a browser is running at all.
+**Pass `--profile` with `--session`, always.** A session is a whole separate Chrome and needs a profile directory of its own; Chrome locks the one it opens. `--session` on its own therefore exits immediately with nothing but `Chrome exited early`. A named session's profile is also **scratch** — under `/tmp`, gone with the sandbox — so anything you sign in to there is lost. That is deliberate: the durable profile is the default one, and a second browser is for comparing two accounts, not for keeping one.
 
 **Dialogs and iframes.** `agent-browser dialog accept|dismiss`; iframes are auto-inlined in snapshots (refs work through them), or `agent-browser frame @e3` / `frame main` to switch context explicitly.
 

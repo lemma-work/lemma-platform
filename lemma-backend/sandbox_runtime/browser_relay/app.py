@@ -219,11 +219,15 @@ def _session_name(session: str | None, domain: str | None) -> str:
     A caller-supplied name is checked before it is used, because it becomes a
     profile directory. Refused with a 422 rather than coerced: a name silently
     rewritten would point the browser somewhere the caller did not ask for and
-    still report success. A name *derived* from a domain is safe by
-    construction, but goes through the same check so there is one answer to
-    "what may a session be called".
+    still report success.
+
+    `domain` no longer derives one. A sign-in used to open a browser named for
+    its site so that a capture taken from it could only contain that site;
+    nothing is captured now, and everything shares the one durable profile, so
+    a domain says which page to open and nothing about which browser.
     """
-    candidate = session or (session_for_domain(domain) if domain else DEFAULT_SESSION)
+    del domain
+    candidate = session or DEFAULT_SESSION
     if candidate != DEFAULT_SESSION and not is_safe_session(candidate):
         raise HTTPException(
             status_code=422, detail=f"{candidate!r} is not a usable session name"
@@ -349,9 +353,7 @@ def create_app() -> FastAPI:
         try:
             port = await live_port()
         except BrowserNotRunning:
-            raise HTTPException(
-                status_code=409, detail="the browser is not running"
-            )
+            raise HTTPException(status_code=409, detail="the browser is not running")
         return {"dropped": await forget_domains(request.domains, port=port)}
 
     @app.websocket("/vnc")
@@ -407,12 +409,13 @@ def create_app() -> FastAPI:
         # retires the browser out from under somebody reading the page.
         #
         # `session_name`, not the default -- the same distinction the liveness
-        # check above already makes. A sign-in runs in `login-<host>` and a
-        # watch names its conversation's session, so keeping the *default*
-        # session warm left the browser actually on screen idle: retired after
-        # two minutes, mid-page, and for a sign-in that also takes the profile
-        # with it. It kept a browser nobody was watching alive at the same
-        # time, in a sandbox where the memory guard kills on ~220 MB free.
+        # check above already makes. This used to keep the *default* session
+        # warm while a sign-in ran in `login-<host>` and a watch named its
+        # conversation's session -- so the browser actually on screen went
+        # idle and retired mid-page, taking a sign-in with it, while a browser
+        # nobody was watching was held open in a sandbox whose memory guard
+        # kills on ~220 MB free. There is one session now, so the name this
+        # keeps warm and the one being watched cannot disagree.
         keepalive_task = create_background_task(_keepalive_loop(session_name))
         # Nothing is claimed here. There was a lease -- a file the agent's own
         # commands read before acting, so a person driving could not be typed

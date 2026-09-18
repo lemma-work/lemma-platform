@@ -25,7 +25,6 @@ per-conversation name left to assert.
 
 from __future__ import annotations
 
-from uuid import uuid4
 
 import pytest
 
@@ -33,6 +32,7 @@ from app.modules.agent.tools.browser.pydantic_adapter import (
     BROWSER_TOOLS,
     browser_toolset,
 )
+
 pytestmark = pytest.mark.unit
 
 

@@ -22,9 +22,7 @@ repository, and nothing else the service holds.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import partial
-from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork

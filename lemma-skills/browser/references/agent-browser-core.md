@@ -180,11 +180,10 @@ The generic `agent-browser` recipes for this — filling a password into a form,
 `auth save --password-stdin`, `state save ./auth.json`, `--state`,
 `AGENT_BROWSER_SESSION_NAME` — **do not apply in a Lemma workspace and must not
 be used.** A password is never yours to hold, and a state file written by hand
-outlives the run that made it: the working directory is durable and readable by whatever
-runs next, and `/tmp/lemma-browser` is deleted when the workspace suspends. What
-`browser_sign_in` keeps instead is the site's session, encrypted, scoped to that
-one site, loaded into *this conversation's* browser, and visible to the person
-to remove.
+puts cookies in plain text on a durable disk, readable by whatever runs next.
+There is also nothing for them to solve: the browser's own profile is durable,
+so a site stays signed in on its own. `browser_sign_in` is how a site that is
+*not* signed in gets that way, and the person can see and undo it.
 
 ### Extract data
 
@@ -433,9 +432,11 @@ snapshot — fall back to `eval` in the iframe's origin or use the
 `--headers` flag to satisfy CORS.
 
 **Authentication expires mid-workflow**
-Use `--session-name <name>` or `state save`/`state load` so your session
-survives browser restarts. See the agent-browser session-management docs
-and the agent-browser auth docs.
+Nothing for you to arrange: the browser's profile is durable, so a session
+survives a browser restart, a suspend and the conversation itself. If a site
+has genuinely signed you out, call `browser_sign_in` — do not reach for
+`state save`/`state load` or `--session-name`, which are the generic recipes
+and are refused here.
 
 ## Global flags worth knowing
 

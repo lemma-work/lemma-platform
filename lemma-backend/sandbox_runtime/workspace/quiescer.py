@@ -9,7 +9,7 @@ import shutil
 import signal
 
 from .browser_guard import shed_browser
-from ..paths import BROWSER_PROFILE, HOME_ROOT
+from sandbox_runtime.paths import BROWSER_PROFILE, HOME_ROOT
 
 
 @dataclass(frozen=True, slots=True)
