@@ -266,6 +266,16 @@ class BrowserViewService:
         relay = await self._relay(user_id, start=False)
         return await relay.resize_display(width=width, height=height)
 
+    async def reset_display(self, user_id: UUID) -> str:
+        """Put the display back to its resting size.
+
+        Called when the last viewer disconnects. `start=False`, because a
+        paused sandbox has no display to reset and waking one to tidy it up
+        would be the opposite of the point.
+        """
+        relay = await self._relay(user_id, start=False)
+        return await relay.reset_display()
+
     async def signed_in_sites(
         self, user_id: UUID, *, wake: bool = False
     ) -> ProfileCookies:

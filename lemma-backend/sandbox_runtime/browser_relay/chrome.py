@@ -470,6 +470,25 @@ async def open_url(url: str, *, session: str | None = None) -> None:
 _SET_DISPLAY_SIZE = "/usr/local/bin/set-display-size"
 
 
+#: The size the display starts at, and returns to when nobody is watching.
+#:
+#: Read from the image's own `WORKSPACE_XVFB_SCREEN` rather than repeated
+#: here, because the image is what actually starts Xvfb at it. A default is
+#: kept for a sandbox that predates the variable, and it matches the image's.
+_FALLBACK_SCREEN = (1440, 960)
+
+
+def default_display_size() -> tuple[int, int]:
+    """What `WORKSPACE_XVFB_SCREEN` says, as width and height."""
+    raw = os.environ.get("WORKSPACE_XVFB_SCREEN", "")
+    parts = raw.lower().split("x")
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+        width, height = int(parts[0]), int(parts[1])
+        if width > 0 and height > 0:
+            return width, height
+    return _FALLBACK_SCREEN
+
+
 async def set_display_size(width: int, height: int) -> str | None:
     """Resize the shared display, returning the size it settled on.
 

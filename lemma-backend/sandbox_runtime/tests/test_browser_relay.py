@@ -822,3 +822,91 @@ def test_the_cli_is_told_its_session_in_the_environment_too(monkeypatch) -> None
     assert env["AGENT_BROWSER_PROFILE"] == profile_for_session("login-app.example.com")
     # The rest of the image's environment is what this is meant to run with.
     assert "PATH" in env
+
+
+# ---------------------------------------------------------------------------
+# The display, and who is allowed to make it big
+# ---------------------------------------------------------------------------
+
+
+def test_the_starting_size_comes_from_the_image(monkeypatch) -> None:
+    """One definition, in the thing that actually starts Xvfb at it."""
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1280x800x24")
+    assert chrome.default_display_size() == (1280, 800)
+    monkeypatch.delenv("WORKSPACE_XVFB_SCREEN")
+    assert chrome.default_display_size() == (1440, 960)
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "nonsense")
+    assert chrome.default_display_size() == (1440, 960)
+
+
+def test_a_viewer_cannot_push_the_display_past_its_starting_size(
+    monkeypatch, tmp_path
+) -> None:
+    """A maximised pane on a large monitor is not a reason to run a 2 GB
+    sandbox at 1920x1200 for the rest of its life.
+
+    That was measured to lose an `agent-browser record` part-way through on a
+    loaded runner -- 1.67x the pixels for x11vnc to encode and for ffmpeg to
+    grab. The framebuffer ceiling is still reachable, but only by an agent
+    asking for it on purpose with `set-display-size`.
+    """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    asked: list[tuple[int, int]] = []
+
+    async def fake_resize(width: int, height: int) -> str:
+        asked.append((width, height))
+        return f"{width}x{height}"
+
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:resize",
+        json={"width": 1900, "height": 1180},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+
+    assert response.status_code == 200
+    assert asked == [(1440, 960)]
+    # A pane smaller than the cap is passed through untouched.
+    client.post(
+        "/display:resize",
+        json={"width": 900, "height": 700},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+    assert asked[-1] == (900, 700)
+
+
+def test_the_display_can_be_put_back(monkeypatch, tmp_path) -> None:
+    """What the last viewer leaving triggers.
+
+    Without it the sandbox kept whichever shape the last pane happened to be
+    for the rest of its life, so an agent screenshotting afterwards inherited
+    the dimensions of a sidebar it could not see.
+    """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    asked: list[tuple[int, int]] = []
+
+    async def fake_resize(width: int, height: int) -> str:
+        asked.append((width, height))
+        return f"{width}x{height}"
+
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:reset", headers={"X-Lemma-Relay-Token": "token-abc"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["size"] == "1440x960"
+    assert asked == [(1440, 960)]
+
+
+def test_resetting_the_display_is_behind_the_token(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    assert client.post("/display:reset").status_code == 401

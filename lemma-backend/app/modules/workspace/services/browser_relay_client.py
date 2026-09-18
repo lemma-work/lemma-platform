@@ -253,6 +253,13 @@ class BrowserRelayClient:
             )
         return response.json()
 
+    async def reset_display(self) -> str:
+        """Put the display back to the size the image starts it at."""
+        response = await self._request("POST", "/display:reset", timeout=30.0)
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        return str(response.json().get("size") or "")
+
     async def profile_cookies(self) -> ProfileCookies:
         """Which hosts the browser holds cookies for, with no values.
 

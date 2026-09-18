@@ -144,6 +144,10 @@ export function BrowserPane({
     const containerRef = useRef<HTMLDivElement>(null);
     const rfbRef = useRef<NoVncClient | null>(null);
     const [state, setState] = useState<PaneState>('connecting');
+    //: The size last asked for, so a flurry of resize events is one request.
+    //: A ref rather than a closure variable because it has to outlive the
+    //: effect that reads it and be clearable by the one that re-runs.
+    const askedSize = useRef('');
     // Whether keystrokes are actually going to the page. RFB moves focus to
     // the remote session on click by default, but "driving" being on is not
     // the same claim as "this element currently has the keyboard" -- a person
@@ -349,32 +353,48 @@ export function BrowserPane({
     // Debounced because a person dragging the panel divider generates a
     // resize per frame, and each one is an X server mode change behind a
     // sandbox round trip.
+    //
+    // Re-asserted on every connect, and this is the part that was missing.
+    // The last requested size used to live in a closure with `[]` deps, so it
+    // survived reconnects while the display did not: after a sandbox resume,
+    // an idle retirement, or an Xvfb restart the display comes back at its
+    // starting size, the pane's own box never changed, no `ResizeObserver`
+    // fired, and the guard said "already asked for that". The picture stayed
+    // letterboxed with nothing to un-stick it short of dragging the window.
+    // Depending on `state` makes each fresh `live` re-send it; the ref is
+    // cleared at the same moment so the guard cannot veto that.
     useEffect(() => {
         const container = containerRef.current;
-        if (!container) return;
+        if (!container || state !== 'live') return;
         let cancelled = false;
         let timer: ReturnType<typeof setTimeout> | null = null;
-        let asked = '';
+        askedSize.current = '';
 
         const fit = (width: number, height: number) => {
             const target = `${Math.round(width)}x${Math.round(height)}`;
-            if (target === asked || width < 1 || height < 1) return;
-            asked = target;
+            if (target === askedSize.current || width < 1 || height < 1) return;
+            askedSize.current = target;
             void getLemmaClient()
                 .workspace.browserResizeDisplay(Math.round(width), Math.round(height))
                 .catch(() => {
                     // A display that would not resize is a worse fit, not a
                     // failure: the picture is still live and still scaled to
                     // fit. Let the next resize try again.
-                    if (!cancelled) asked = '';
+                    if (!cancelled) askedSize.current = '';
                 });
         };
 
+        // Straight away, not only on the next resize. This is the connect
+        // case: the box is whatever it already was and nothing is about to
+        // change it.
+        const box = container.getBoundingClientRect();
+        fit(box.width, box.height);
+
         const observer = new ResizeObserver((entries) => {
-            const box = entries[0]?.contentRect;
-            if (!box) return;
+            const measured = entries[0]?.contentRect;
+            if (!measured) return;
             if (timer) clearTimeout(timer);
-            timer = setTimeout(() => fit(box.width, box.height), RESIZE_SETTLE_MS);
+            timer = setTimeout(() => fit(measured.width, measured.height), RESIZE_SETTLE_MS);
         });
         observer.observe(container);
         return () => {
@@ -382,7 +402,7 @@ export function BrowserPane({
             if (timer) clearTimeout(timer);
             observer.disconnect();
         };
-    }, []);
+    }, [state]);
 
     // ⌘C on a Mac reaches a Linux browser as Super+c, which copies nothing.
     // The keystroke that works over there is Ctrl+c, so the native gesture is

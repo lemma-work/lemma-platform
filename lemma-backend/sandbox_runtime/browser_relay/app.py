@@ -41,6 +41,7 @@ from .chrome import (
     is_safe_session,
     ensure_port,
     keepalive,
+    default_display_size,
     live_port,
     open_url,
     page_targets,
@@ -328,12 +329,45 @@ def create_app() -> FastAPI:
 
         noVNC's own `resizeSession` cannot do this for us: it refuses while
         the client is view-only, and watching is the default here.
+
+        **Clamped to the starting size, not to the framebuffer ceiling.** A
+        maximised pane on a large monitor would otherwise leave a 1 vCPU /
+        2 GB sandbox running at 1920x1200 -- 1.67x the pixels for x11vnc to
+        encode and for `agent-browser record` to grab, which was measured to
+        lose a recording part-way through on a loaded runner. An agent that
+        genuinely wants the ceiling can still ask for it with
+        `set-display-size`, deliberately, for as long as it needs; a person
+        opening a panel should not be able to do it by accident.
         """
-        size = await set_display_size(request.width, request.height)
+        cap_width, cap_height = default_display_size()
+        size = await set_display_size(
+            min(request.width, cap_width), min(request.height, cap_height)
+        )
         if size is None:
             raise HTTPException(
                 status_code=409, detail="the display could not be resized"
             )
+        return DisplayResizeResponse(size=size)
+
+    @app.post(
+        "/display:reset",
+        response_model=DisplayResizeResponse,
+        dependencies=[Depends(require_token)],
+    )
+    async def display_reset() -> DisplayResizeResponse:
+        """Put the display back to its starting size.
+
+        Called when the last person watching disconnects. Without it the
+        sandbox kept whichever shape the last pane happened to be for the
+        rest of its life -- so an agent taking a screenshot or a recording
+        afterwards inherited the dimensions of a sidebar it could not see and
+        had no way to know about. A predictable resting size is something it
+        can plan against.
+        """
+        width, height = default_display_size()
+        size = await set_display_size(width, height)
+        if size is None:
+            raise HTTPException(status_code=409, detail="the display did not reset")
         return DisplayResizeResponse(size=size)
 
     @app.get("/profile:cookies", dependencies=[Depends(require_token)])

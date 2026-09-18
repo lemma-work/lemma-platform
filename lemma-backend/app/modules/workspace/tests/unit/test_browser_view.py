@@ -404,3 +404,75 @@ async def test_every_way_a_socket_is_seen_to_end_is_handled() -> None:
         socket = _WebSocketThatIsAlreadyGone(failure)
         await view._refuse(socket, view.CLOSE_NO_BROWSER)
         assert socket.close_attempts == 1, f"{type(failure).__name__} was not handled"
+
+
+# ---------------------------------------------------------------------------
+# Putting the display back
+# ---------------------------------------------------------------------------
+
+
+class _ResettableService:
+    """A view service that records whether it was asked to reset."""
+
+    def __init__(self, *, fails: bool = False) -> None:
+        self.resets = 0
+        self.fails = fails
+
+    async def reset_display(self, _user_id) -> str:
+        self.resets += 1
+        if self.fails:
+            raise RuntimeError("the relay went away")
+        return "1440x960"
+
+
+async def test_the_last_viewer_leaving_puts_the_display_back() -> None:
+    """Counted server-side, because a pane often never runs its cleanup.
+
+    A closed tab, a killed renderer or a dropped network fires no unmount.
+    The socket closing is the only signal that is always there, which is why
+    this does not live in the React effect it would be tidier in.
+    """
+    from app.modules.workspace.api.controllers import browser_view_controller as mod
+
+    watcher = uuid4()
+    service = _ResettableService()
+    mod._watchers[watcher] = 1
+    try:
+        await mod._watch_ended(service, watcher)
+    finally:
+        mod._watchers.pop(watcher, None)
+
+    assert service.resets == 1
+    assert watcher not in mod._watchers
+
+
+async def test_a_second_viewer_leaving_does_not_resize_under_the_first() -> None:
+    """Two people can watch one display. The first to close must not take the
+    other's picture back to the default shape underneath them."""
+    from app.modules.workspace.api.controllers import browser_view_controller as mod
+
+    watcher = uuid4()
+    service = _ResettableService()
+    mod._watchers[watcher] = 2
+    try:
+        await mod._watch_ended(service, watcher)
+        assert service.resets == 0, "somebody is still watching"
+        assert mod._watchers[watcher] == 1
+
+        await mod._watch_ended(service, watcher)
+        assert service.resets == 1
+    finally:
+        mod._watchers.pop(watcher, None)
+
+
+async def test_a_reset_that_fails_does_not_fail_the_socket() -> None:
+    """Tidying up is best effort. The socket has already done its job, and a
+    sandbox that went away between the last frame and the close is ordinary."""
+    from app.modules.workspace.api.controllers import browser_view_controller as mod
+
+    watcher = uuid4()
+    mod._watchers[watcher] = 1
+    try:
+        await mod._watch_ended(_ResettableService(fails=True), watcher)
+    finally:
+        mod._watchers.pop(watcher, None)

@@ -300,6 +300,37 @@ async def _resolve_user_id(websocket: WebSocket):
 _KEEP_AWAKE_SECONDS = 60.0
 
 
+#: How many sockets are currently watching each person's display.
+#:
+#: In memory, and that is the right scope rather than a compromise: the count
+#: exists to answer "is anybody still looking at *this* display", a display
+#: lives in one sandbox, and a sandbox is reached through one API process at a
+#: time. A restart loses the count and the display keeps whatever shape it
+#: had, which is exactly what happens today and is what this improves on
+#: rather than something it must also solve.
+_watchers: dict[UUID, int] = {}
+
+
+async def _watch_ended(service: BrowserViewService, user_id: UUID) -> None:
+    """Drop this viewer, and reset the display if they were the last.
+
+    Server-side, not in the pane's cleanup, because the pane often does not
+    get to run one: a closed tab, a killed renderer or a dropped network
+    never fires an unmount. The socket closing is the only signal that is
+    always there.
+
+    Best effort. Failing to tidy up a display must not turn into an error on
+    a socket that has already finished doing its job.
+    """
+    remaining = _watchers.get(user_id, 1) - 1
+    if remaining > 0:
+        _watchers[user_id] = remaining
+        return
+    _watchers.pop(user_id, None)
+    with contextlib.suppress(Exception):
+        await service.reset_display(user_id)
+
+
 async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
     """Tell the idle sweep this person is still here, until the socket closes."""
     while True:
@@ -507,8 +538,10 @@ async def browser_view(
     # counted as idle and had their computer stopped underneath them. Releasing
     # runs quiesce, which deletes the browser profile, so what a slow sign-in
     # lost was the sign-in.
+    watcher = UUID(user_id)
+    _watchers[watcher] = _watchers.get(watcher, 0) + 1
     awake = create_inherited_task(
-        _keep_awake(service, UUID(user_id)), name="workspace.browser_view.keep_awake"
+        _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
@@ -532,6 +565,10 @@ async def browser_view(
         await _hang_up(websocket, status.WS_1011_INTERNAL_ERROR, doing="failing")
     finally:
         await _collect(awake)
+        # Before `service.close()`: resetting needs the relay this service
+        # holds, and closing it first would make the tidy-up a no-op that
+        # looked like it had run.
+        await _watch_ended(service, watcher)
         await service.close()
 
 
