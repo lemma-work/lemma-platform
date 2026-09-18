@@ -39,11 +39,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Conversation
 
 _SLUG_ALPHABET = string.ascii_lowercase + string.digits
 _SLUG_LENGTH = 8
-_WORKSPACE_ROOT = "/workspace"
+_WORKSPACE_ROOT = WORKSPACE_ROOT
 _POD_ROOT = "/me"
 _REPOS_ROOT = f"{_WORKSPACE_ROOT}/repos"
 

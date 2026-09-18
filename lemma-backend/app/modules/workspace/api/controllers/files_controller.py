@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
@@ -62,7 +63,7 @@ def get_workspace_service() -> WorkspaceSandboxService:
 
 WorkspaceServiceDep = Annotated[WorkspaceSandboxService, Depends(get_workspace_service)]
 
-_ROOT = "/workspace"
+_ROOT = WORKSPACE_ROOT
 
 # One page of a directory. A workspace holding a `node_modules` is the ordinary
 # case, not the pathological one, and a pane that asks for all of it stalls on

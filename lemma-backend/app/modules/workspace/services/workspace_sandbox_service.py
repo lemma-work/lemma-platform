@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from opentelemetry import trace
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
@@ -394,7 +395,7 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
         user_id: UUID,
         pod_id: UUID | None,
         session_id: Optional[str] = None,
-        initial_cwd: str = "/workspace",
+        initial_cwd: str = WORKSPACE_ROOT,
         close_on_exit: bool = True,
         workload_type: str | None = None,
         workload_id: UUID | None = None,

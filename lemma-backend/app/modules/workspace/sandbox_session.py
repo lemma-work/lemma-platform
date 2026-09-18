@@ -10,17 +10,15 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 import httpx
 from opentelemetry import trace
 
-from sandbox_runtime.errors import (
-    SandboxError,
-    SandboxUnavailable,
-)
+from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.errors import SandboxError, SandboxUnavailable
 from sandbox_runtime.protocol import (
+    PythonExecutionState,
     EnvironmentVariable,
     FileStat,
     TerminalSize,
     WorkloadKind,
 )
-from sandbox_runtime.protocol import PythonExecutionState
 from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
@@ -83,7 +81,7 @@ class SandboxWorkspaceSession:
         sandbox_id: str | UUID,
         session_id: str | None = None,
         env_vars: dict[str, str] | None = None,
-        initial_cwd: str = "/workspace",
+        initial_cwd: str = WORKSPACE_ROOT,
         auto_close: bool = True,
         owns_client: bool = True,
         output_cursor_store=None,

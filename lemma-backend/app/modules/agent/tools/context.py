@@ -11,6 +11,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.subscription_models import SubscriptionModels
 from app.modules.agent.domain.vision import AgentVisionMode
@@ -76,14 +77,16 @@ class BaseAgentContext(AgentContext):
     def file_manager(self) -> WorkspaceFileManager:
         return WorkspaceFileManager(
             self.user_id,
-            cwd=self.get_workspace_cwd().removeprefix("/workspace/"),
+            cwd=self.get_workspace_cwd().removeprefix(f"{WORKSPACE_ROOT}/"),
         )
 
     async def get_subscription_models(self) -> SubscriptionModels:
         return await resolve_subscription_models(self.user_id)
 
     def get_workspace_cwd(self) -> str:
-        return self.workspace_cwd or f"/workspace/conversations/{self.conversation_id}"
+        return self.workspace_cwd or (
+            f"{WORKSPACE_ROOT}/conversations/{self.conversation_id}"
+        )
 
     def get_pod_cwd(self) -> str:
         # Callers on the main run path always set `pod_cwd` explicitly (see

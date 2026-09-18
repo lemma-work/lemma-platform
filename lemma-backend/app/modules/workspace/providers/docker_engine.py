@@ -9,6 +9,8 @@ from dataclasses import dataclass
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
+
 
 class DockerApiModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore", frozen=True)
@@ -46,7 +48,7 @@ class DockerContainerCreateRequest(DockerApiModel):
     command: tuple[str, ...] | None = Field(default=None, alias="Cmd")
     labels: dict[str, str] = Field(alias="Labels")
     user: str | None = Field(default=None, alias="User")
-    working_dir: str = Field(default="/workspace", alias="WorkingDir")
+    working_dir: str = Field(default=WORKSPACE_ROOT, alias="WorkingDir")
     env: tuple[str, ...] = Field(default=(), alias="Env")
     exposed_ports: dict[str, DockerEmptyObject] = Field(
         default_factory=dict, alias="ExposedPorts"
@@ -141,7 +143,7 @@ class DockerExecCreateRequest(DockerApiModel):
     attach_stdout: bool = Field(default=True, alias="AttachStdout")
     attach_stderr: bool = Field(default=True, alias="AttachStderr")
     tty: bool = Field(default=False, alias="Tty")
-    working_dir: str = Field(default="/workspace", alias="WorkingDir")
+    working_dir: str = Field(default=WORKSPACE_ROOT, alias="WorkingDir")
     env: tuple[str, ...] = Field(default=(), alias="Env")
 
 
@@ -464,7 +466,7 @@ class DockerEngineClient:
         container_id: str,
         argv: tuple[str, ...],
         *,
-        working_dir: str = "/workspace",
+        working_dir: str = WORKSPACE_ROOT,
         deadline_at: datetime,
     ) -> int:
         created = await self.create_exec(

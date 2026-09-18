@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from app.modules.agent.domain.value_objects import (
     AgentRunApprovalDecision,
     JsonObject,
@@ -158,7 +159,10 @@ def _reject_fields_from_other_types(
 # down, where the only thing left to do was render a card whose "Open file"
 # button pointed into a pod directory that does not exist. Caught here, the
 # agent is told the one thing that fixes it while it can still act on it.
-_NON_POD_FILE_ROOTS = ("/workspace", "/tmp", "/private", "/Users")
+#: A sandbox path is not a pod path, and saying so is what stops an agent
+#: offering a file the reader cannot open. The sandbox roots come from the
+#: one place that names them; the two macOS roots are the desktop host's.
+_NON_POD_FILE_ROOTS = (*RUNTIME_FILESYSTEM_ROOTS, "/private", "/Users")
 
 
 def _check_file(request: "DisplayResourceRequest") -> str | None:

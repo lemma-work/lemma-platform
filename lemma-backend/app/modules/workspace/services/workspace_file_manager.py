@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sandbox_runtime.errors import SandboxPathNotFound
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.domain.file_types import FileInfo
 from app.core.log.log import get_logger
 
@@ -25,10 +26,10 @@ class WorkspaceFileManager:
             return ""
         if "\x00" in cwd or cwd.startswith("/"):
             raise ValueError("workspace cwd must be relative to /workspace")
-        root = posixpath.normpath(posixpath.join("/workspace", cwd))
-        if root != "/workspace" and not root.startswith("/workspace/"):
+        root = posixpath.normpath(posixpath.join(WORKSPACE_ROOT, cwd))
+        if root != WORKSPACE_ROOT and not root.startswith(f"{WORKSPACE_ROOT}/"):
             raise ValueError("workspace cwd escapes /workspace")
-        return "" if root == "/workspace" else posixpath.relpath(root, "/workspace")
+        return "" if root == WORKSPACE_ROOT else posixpath.relpath(root, WORKSPACE_ROOT)
 
     def _workspace_path(self, path: str) -> str:
         """Resolve a caller's path against this session's root.
@@ -49,9 +50,9 @@ class WorkspaceFileManager:
         from there, instead of being refused.
         """
         root = posixpath.normpath(
-            posixpath.join("/workspace", self.cwd) if self.cwd else "/workspace"
+            posixpath.join(WORKSPACE_ROOT, self.cwd) if self.cwd else WORKSPACE_ROOT
         )
-        if path.startswith("/workspace/") or path == "/workspace":
+        if path.startswith(f"{WORKSPACE_ROOT}/") or path == WORKSPACE_ROOT:
             candidate = posixpath.normpath(path)
         else:
             candidate = posixpath.normpath(posixpath.join(root, path.lstrip("/")))
@@ -73,7 +74,7 @@ class WorkspaceFileManager:
             user_id=self.user_id,
             pod_id=None,
             session_id=f"files-{self.user_id.hex}",
-            initial_cwd="/workspace",
+            initial_cwd=WORKSPACE_ROOT,
             close_on_exit=False,
         )
 

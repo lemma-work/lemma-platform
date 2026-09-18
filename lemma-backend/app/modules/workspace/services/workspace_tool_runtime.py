@@ -10,6 +10,7 @@ from uuid import UUID
 
 import httpx
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
@@ -130,7 +131,7 @@ class WorkspaceToolRuntime:
         user_id: UUID,
         pod_id: UUID | None,
         session_id: str | None = None,
-        initial_cwd: str = "/workspace",
+        initial_cwd: str = WORKSPACE_ROOT,
         close_on_exit: bool = True,
         workload_type: str | None = None,
         workload_id: UUID | None = None,

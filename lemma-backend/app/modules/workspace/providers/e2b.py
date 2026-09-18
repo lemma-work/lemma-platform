@@ -77,8 +77,6 @@ from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
 
 logger = get_logger(__name__)
 
-WORKSPACE_MOUNT = "/workspace"
-
 
 class E2BSandboxProvider(E2BOpsMixin):
     name = "e2b"

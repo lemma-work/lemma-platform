@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import mimetypes
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from app.core.file_types import is_untyped_mime, sniff_media_mime
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.pod_data_access import pod_services
@@ -55,7 +56,10 @@ def is_datastore_path(path: str) -> bool:
     candidate = (path or "").strip()
     if not candidate.startswith("/"):
         return False
-    return candidate != "/workspace" and not candidate.startswith("/workspace/")
+    return not any(
+        candidate == root or candidate.startswith(f"{root}/")
+        for root in RUNTIME_FILESYSTEM_ROOTS
+    )
 
 
 async def read_pod_file_bytes(

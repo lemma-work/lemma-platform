@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.domain.sandbox import SandboxKind
 
@@ -77,7 +78,7 @@ def workspace_profile(*, image: str | None = None) -> SandboxProfile:
             WORKSPACE_BROWSER_PORT,
             WORKSPACE_BROWSER_RELAY_PORT,
         ),
-        working_dir="/workspace",
+        working_dir=WORKSPACE_ROOT,
     )
 
 
