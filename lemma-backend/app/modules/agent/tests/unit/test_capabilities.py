@@ -1122,7 +1122,9 @@ async def test_pod_is_deferred_but_names_itself_the_default_for_pod_data(monkeyp
     # elsewhere. Guard the fragment against acquiring a prohibition again.
     assert "not the destination" in instructions
     for scary in ("does not go in pod files", "slips through", "Nothing warns you"):
-        assert scary not in instructions, f"fragment discourages a valid write: {scary!r}"
+        assert scary not in instructions, (
+            f"fragment discourages a valid write: {scary!r}"
+        )
 
     # And the CLI fragment must not still teach the operations it just lost.
     from app.modules.agent.domain.prompts import load_workspace_cli_prompt
