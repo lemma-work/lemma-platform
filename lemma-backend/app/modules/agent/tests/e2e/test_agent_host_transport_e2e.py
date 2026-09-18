@@ -473,13 +473,21 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
     }
 
     # One throwaway poll first, with the hold turned right down so it costs
-    # only what it warms. The first host-authenticated call of a test pays for
-    # everything behind it once -- the pool's first connection, the first
-    # verification of this host's secret -- and that cost lands on whichever
-    # call happens to be first. Here that was the poll whose whole point is to
-    # return without holding, so the measurement below was really reading cold
-    # start: 14ms on a warm laptop, 790ms on a cold CI runner, against a
-    # ceiling of 700.
+    # only what it warms.
+    #
+    # The first poll of this test pays some one-off cost the later ones do not,
+    # and it lands on the call whose whole point is to return without holding --
+    # so the ceiling below was reading that cost rather than the hold it names:
+    # 14ms on a warm laptop, 790ms on a cold CI runner, against a ceiling of
+    # 700. The second poll came back in 803ms, which is the 800ms hold and
+    # almost nothing else, so whatever the cost is it is paid once per test and
+    # not per request.
+    #
+    # Deliberately not named here. It is not the secret check -- that is one
+    # sha256 and one indexed lookup -- and guessing in a comment is how the
+    # wrong cause gets believed by the next person to read it. Establishing
+    # which one-off it is would mean instrumenting the first pass on a cold
+    # runner; moving it off the measured call fixes the test either way.
     monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.05)
     await _elapsed_poll(scenario.async_client, machine, capacity=_capacity(1))
     monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.8)
