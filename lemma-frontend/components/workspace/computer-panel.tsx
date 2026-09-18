@@ -1,10 +1,12 @@
 'use client';
 
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import { BrowserPane } from '@/components/workspace/browser-pane';
 import { Button } from '@/components/ui/button';
 import { WorkspaceFilesPane } from '@/components/workspace/workspace-files-pane';
+import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { cn } from '@/lib/utils';
 
 type Tab = 'files' | 'browser';
@@ -19,11 +21,48 @@ type Tab = 'files' | 'browser';
 export function ComputerPanel({
     workspaceCwd,
     conversationId,
+    signInToolCallId,
 }: {
     workspaceCwd?: string;
     conversationId?: string;
+    /** A paused `browser_sign_in` to put in front of the person, named by the
+     *  URL. When set, the browser tab shows that sign-in — steered at the site
+     *  and answerable — rather than a plain watch of this conversation. */
+    signInToolCallId?: string | null;
 }) {
-    const [tab, setTab] = useState<Tab>('files');
+    // Derived, not stored-and-synced. This panel is one long-lived instance:
+    // it is usually already mounted, and often sitting on Files, when somebody
+    // clicks "Sign in to ..." — so lazy initial state would miss every click
+    // after the first, and an effect that called `setTab` would be a state
+    // write during render's shadow (and is what `react-hooks/set-state-in-effect`
+    // exists to stop). Instead the sign-in decides the tab, and a person's own
+    // click overrides it only for as long as that same sign-in is on screen:
+    // when a *different* pause arrives the override stops matching and the
+    // browser tab comes back.
+    const signInKey = signInToolCallId ?? null;
+    const [override, setOverride] = useState<{ tab: Tab; forSignIn: string | null } | null>(
+        null,
+    );
+    const tab: Tab =
+        override && override.forSignIn === signInKey
+            ? override.tab
+            : signInKey
+              ? 'browser'
+              : 'files';
+
+    // A sign-in names a site, and the browser has to be pointed at it. The id
+    // travels in the URL rather than the origin (an origin there survives
+    // reload and would re-steer a shared browser at a site the person has
+    // finished with), so it is resolved from the pause here — the same call
+    // the standalone page makes.
+    const signInRequest = useQuery({
+        queryKey: ['pending-sign-in', conversationId, signInToolCallId],
+        queryFn: () =>
+            getLemmaClient().webLogins.pendingSignIn(conversationId!, signInToolCallId!),
+        enabled: tab === 'browser' && !!signInToolCallId && !!conversationId,
+        retry: false,
+    });
+    const steerTo = signInRequest.data?.origin;
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-2">
@@ -33,7 +72,7 @@ export function ComputerPanel({
                         key={name}
                         variant="quiet"
                         size="xs"
-                        onClick={() => setTab(name)}
+                        onClick={() => setOverride({ tab: name, forSignIn: signInKey })}
                         aria-pressed={tab === name}
                         className={cn(
                             tab === name
@@ -58,7 +97,11 @@ export function ComputerPanel({
                     // Without this the pane checked the wrong session and
                     // refused forever with "no browser running" while the
                     // agent's browser was live the whole time.
-                    <BrowserPane conversationId={conversationId} />
+                    //
+                    // `origin` steers it at the site a sign-in named; the
+                    // answering happens on the card in the conversation, so
+                    // nothing but the browser is drawn here.
+                    <BrowserPane conversationId={conversationId} origin={steerTo} />
                 )}
             </div>
         </div>

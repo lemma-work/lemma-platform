@@ -665,6 +665,8 @@ export const AssistantTurnView = memo(function AssistantTurnView({
                 <SignInCard
                   invocation={item.invocation}
                   conversationId={activeConversationId}
+                  onNavigateResource={onNavigateResource}
+                  onResolveUserApproval={onResolveUserApproval}
                 />
               ) : isAsk ? (
                 <AskUserCard

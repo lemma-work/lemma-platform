@@ -25,7 +25,7 @@ import httpx
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -175,6 +175,91 @@ async def current_page_url(
     finally:
         await service.close()
     return CurrentPageUrlResponse(url=url)
+
+
+class DisplaySizeRequest(BaseModel):
+    """The size the pane wants its picture to be, in CSS pixels.
+
+    Bounded here because these numbers come from a browser window and decide
+    how much memory a framebuffer takes. The sandbox clamps again against the
+    framebuffer it actually allocated, which is the limit that cannot be
+    argued with.
+    """
+
+    width: int = Field(ge=320, le=4096)
+    height: int = Field(ge=240, le=4096)
+
+
+class DisplaySizeResponse(BaseModel):
+    #: What the display ended up as. Not always what was asked for, and the
+    #: pane is told so rather than left to assume.
+    size: str | None = None
+
+
+@router.post(
+    "/display-size",
+    response_model=DisplaySizeResponse,
+    operation_id="workspace.browser.resize_display",
+    summary="Fit the workspace display to the pane showing it",
+)
+async def resize_display(
+    user: CurrentUser,
+    service: Annotated[BrowserViewService, Depends(browser_view_service)],
+    request: DisplaySizeRequest,
+) -> DisplaySizeResponse:
+    """Resize the sandbox display so the picture matches the pane.
+
+    The alternative, and what this replaces, is one fixed display scaled to
+    fit: a 3:2 screen letterboxed into whatever box it lands in, small and
+    ringed with dead space. Resizing the display itself means the pixels sent
+    are the pixels shown -- and a narrow pane gets a narrow *viewport*, so a
+    site serves its mobile layout to somebody signing in on a phone.
+
+    A failure here is not an error for the person: they keep the display they
+    had. So an unreachable or sleeping sandbox answers with no size rather
+    than a status code the pane would have to special-case.
+    """
+    # Every branch below logs. Answering the viewer with "no size" is right --
+    # they keep a working picture either way -- but answering *silently* meant
+    # a display that never resized looked exactly like one that had nothing to
+    # resize, and the pane letterboxed a 1920x1200 screen for days with no
+    # trace anywhere of why. A degraded path still has to say it degraded.
+    try:
+        size = await service.resize_display(
+            user.id, width=request.width, height=request.height
+        )
+    except SandboxCapabilityUnsupported:
+        logger.warning(
+            "workspace.browser_view.resize_unsupported.degraded",
+            width=request.width,
+            height=request.height,
+        )
+        return DisplaySizeResponse()
+    except BrowserRelayUnavailable as exc:
+        logger.warning(
+            "workspace.browser_view.resize_no_relay.degraded",
+            width=request.width,
+            height=request.height,
+            error_type=type(exc).__name__,
+        )
+        return DisplaySizeResponse()
+    except (OSError, httpx.HTTPError, _engine_error()) as exc:
+        logger.warning(
+            "workspace.browser_view.resize_failed.degraded",
+            error_type=type(exc).__name__,
+        )
+        return DisplaySizeResponse()
+    finally:
+        await service.close()
+    if not size:
+        # The relay answered and still changed nothing, which is its own
+        # outcome and not the same as any failure above.
+        logger.warning(
+            "workspace.browser_view.resize_had_no_effect.degraded",
+            width=request.width,
+            height=request.height,
+        )
+    return DisplaySizeResponse(size=size or None)
 
 
 async def _resolve_user_id(websocket: WebSocket):

@@ -31,9 +31,21 @@ class WebLogins(Resource):
     person who created it. The listed shape has no field to put one in.
     """
 
-    def list(self) -> WebLoginListResponse:
-        """Every site with a saved login, and whether each still works."""
-        return self._call(web_login_list)
+    def list(
+        self, *, limit: int | None = None, page_token: str | None = None
+    ) -> WebLoginListResponse:
+        """One page of sites with a saved login, and whether each still works.
+
+        Follow ``next_page_token`` to see the rest: a full page is not itself
+        proof that more exist, and a login you cannot list is one you cannot
+        revoke.
+        """
+        kwargs: dict[str, object] = {}
+        if limit is not None:
+            kwargs["limit"] = limit
+        if page_token is not None:
+            kwargs["page_token"] = page_token
+        return self._call(web_login_list, **kwargs)
 
     def remove(self, origin: str) -> WebLoginResponse:
         """Forget a site.
@@ -44,9 +56,15 @@ class WebLogins(Resource):
         """
         return self._call(web_login_delete, origin=origin)
 
-    def history(self, *, limit: int | None = None) -> WebLoginAuditResponse:
+    def history(
+        self, *, limit: int | None = None, page_token: str | None = None
+    ) -> WebLoginAuditResponse:
         """What has been done with your saved logins, and by which agent."""
-        kwargs = {} if limit is None else {"limit": limit}
+        kwargs: dict[str, object] = {}
+        if limit is not None:
+            kwargs["limit"] = limit
+        if page_token is not None:
+            kwargs["page_token"] = page_token
         return self._call(web_login_history, **kwargs)
 
     # ------------------------------------------------------------------

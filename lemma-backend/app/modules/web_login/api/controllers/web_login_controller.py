@@ -13,6 +13,7 @@ rather than a rule somebody has to remember.
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
@@ -23,6 +24,7 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.modules.web_login.domain.entities import WebLogin
 from app.modules.web_login.infrastructure.repository import (
+    MAX_LOGINS_LISTED,
     WebLoginNotFound,
     WebLoginRepository,
 )
@@ -54,6 +56,11 @@ class WebLoginResponse(BaseModel):
 
 class WebLoginListResponse(BaseModel):
     items: list[WebLoginResponse]
+    limit: int
+    #: Pass back as ``page_token`` to continue. ``None`` means this is the last
+    #: page -- a full page is not itself proof that more exist, so this is the
+    #: only signal, and a caller revoking logins must follow it.
+    next_page_token: str | None = None
 
 
 class WebLoginAuditEntry(BaseModel):
@@ -79,6 +86,56 @@ class WebLoginAuditEntry(BaseModel):
 
 class WebLoginAuditResponse(BaseModel):
     items: list[WebLoginAuditEntry]
+    limit: int
+    #: As above. The token is opaque: this list orders by ``(created_at, id)``
+    #: and carries both, because several rows share a timestamp often enough
+    #: that a cursor on time alone repeats or drops them.
+    next_page_token: str | None = None
+
+
+# Page tokens are opaque to the caller and base64 so nothing in them can be
+# mistaken for a value to act on -- the origin one literally holds a URL, and a
+# token that looks like a link invites somebody to open it. Both decode
+# defensively: a token is a string a client hands back, so a malformed one is a
+# 400 rather than a traceback.
+
+
+def _encode_origin_token(after_origin: str | None) -> str | None:
+    if not after_origin:
+        return None
+    return base64.urlsafe_b64encode(after_origin.encode("utf-8")).decode("ascii")
+
+
+def _decode_origin_token(page_token: str | None) -> str | None:
+    if not page_token:
+        return None
+    try:
+        return base64.urlsafe_b64decode(page_token.encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid page_token"
+        ) from exc
+
+
+def _encode_audit_token(after: tuple[datetime, UUID] | None) -> str | None:
+    if after is None:
+        return None
+    created_at, row_id = after
+    raw = f"{created_at.isoformat()}|{row_id}"
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def _decode_audit_token(page_token: str | None) -> tuple[datetime, UUID] | None:
+    if not page_token:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(page_token.encode("ascii")).decode("utf-8")
+        stamp, _, row_id = raw.rpartition("|")
+        return datetime.fromisoformat(stamp), UUID(row_id)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid page_token"
+        ) from exc
 
 
 def _view(login: WebLogin) -> WebLoginResponse:
@@ -99,10 +156,19 @@ def _view(login: WebLogin) -> WebLoginResponse:
     summary="List saved site logins",
 )
 async def list_web_logins(
-    user: CurrentUser, repository: RepositoryDep
+    user: CurrentUser,
+    repository: RepositoryDep,
+    limit: int = Query(default=100, ge=1, le=MAX_LOGINS_LISTED),
+    page_token: str | None = Query(default=None),
 ) -> WebLoginListResponse:
-    logins = await repository.list_for_user(user.id)
-    return WebLoginListResponse(items=[_view(login) for login in logins])
+    logins, next_origin = await repository.page_for_user(
+        user.id, limit=limit, after_origin=_decode_origin_token(page_token)
+    )
+    return WebLoginListResponse(
+        items=[_view(login) for login in logins],
+        limit=limit,
+        next_page_token=_encode_origin_token(next_origin),
+    )
 
 
 @router.delete(
@@ -156,9 +222,14 @@ async def web_login_history(
     user: CurrentUser,
     repository: RepositoryDep,
     limit: int = Query(default=100, ge=1, le=500),
+    page_token: str | None = Query(default=None),
 ) -> WebLoginAuditResponse:
-    rows = await repository.history_for_user(user.id, limit=limit)
+    rows, next_after = await repository.page_history_for_user(
+        user.id, limit=limit, after=_decode_audit_token(page_token)
+    )
     return WebLoginAuditResponse(
+        limit=limit,
+        next_page_token=_encode_audit_token(next_after),
         items=[
             WebLoginAuditEntry(
                 origin=row.origin,
@@ -169,5 +240,5 @@ async def web_login_history(
                 created_at=row.created_at,
             )
             for row in rows
-        ]
+        ],
     )

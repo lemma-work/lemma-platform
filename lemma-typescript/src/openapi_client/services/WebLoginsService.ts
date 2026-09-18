@@ -40,29 +40,44 @@ export class WebLoginsService {
     }
     /**
      * List saved site logins
+     * @param limit
+     * @param pageToken
      * @returns WebLoginListResponse Successful Response
      * @throws ApiError
      */
-    public static webLoginList(): CancelablePromise<WebLoginListResponse> {
+    public static webLoginList(
+        limit: number = 100,
+        pageToken?: (string | null),
+    ): CancelablePromise<WebLoginListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/web-logins',
+            query: {
+                'limit': limit,
+                'page_token': pageToken,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
         });
     }
     /**
      * What has been done with your saved logins
      * @param limit
+     * @param pageToken
      * @returns WebLoginAuditResponse Successful Response
      * @throws ApiError
      */
     public static webLoginHistory(
         limit: number = 100,
+        pageToken?: (string | null),
     ): CancelablePromise<WebLoginAuditResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/web-logins/history',
             query: {
                 'limit': limit,
+                'page_token': pageToken,
             },
             errors: {
                 422: `Validation Error`,
