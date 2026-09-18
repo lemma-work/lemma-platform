@@ -74,14 +74,14 @@ pub(crate) fn build_run_arguments(
                 .expect("workspace runtime token must have a private directory");
             arguments.extend([
                 "--mount".into(),
-                format!("type=bind,src={},dst=/workspace", workspace.display()),
+                format!("type=bind,src={},dst=/home/user", workspace.display()),
                 "--mount".into(),
                 format!(
                     "type=bind,src={},dst=/run/lemma-bootstrap",
                     runtime_token_mount.display()
                 ),
                 "--workdir".into(),
-                "/workspace".into(),
+                "/home/user".into(),
             ]);
         }
         WorkloadKind::Function => {

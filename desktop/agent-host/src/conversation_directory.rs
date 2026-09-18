@@ -15,10 +15,26 @@ pub fn workspace_root() -> anyhow::Result<PathBuf> {
     Ok(root)
 }
 
+/// Sandbox roots a persisted conversation cwd may be written under.
+///
+/// Two, because the root moved and conversation rows are never rewritten. A
+/// host that knew only the current one would reject every conversation created
+/// before the move; one that knew only the previous one — which is every copy
+/// already installed on somebody's machine — rejects every conversation created
+/// after it. Accepting both is what makes the two releases able to pass each
+/// other.
+const SANDBOX_ROOTS: [&str; 2] = ["/home/user/", "/workspace/"];
+
 fn suffix(cwd: &str) -> anyhow::Result<&str> {
-    let suffix = cwd
-        .strip_prefix("/workspace/")
-        .ok_or_else(|| anyhow::anyhow!("conversation cwd must be beneath /workspace"))?;
+    let suffix = SANDBOX_ROOTS
+        .iter()
+        .find_map(|root| cwd.strip_prefix(root))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "conversation cwd must be beneath one of {}",
+                SANDBOX_ROOTS.join(", ")
+            )
+        })?;
     anyhow::ensure!(
         suffix.len() <= 4096
             && suffix.split('/').all(|part| {
@@ -175,6 +191,24 @@ pub fn prepare(root: &Path, target: Uuid, cwd: &str) -> anyhow::Result<PathBuf> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_sandbox_roots_map_onto_the_same_host_directory() {
+        // The root moved, and conversation rows are never rewritten -- so a host
+        // meets both spellings, often on the same machine on the same day. They
+        // have to land in the same place: a conversation resumed after the
+        // backend moved must reopen the directory it already has files in, not
+        // a second one beside it.
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("lemma");
+        let target = Uuid::new_v4();
+        let suffix = "c/2026-09-18/ab3f2k7q";
+
+        let old = prepare(&root, target, &format!("/workspace/{suffix}")).unwrap();
+        let new = prepare(&root, target, &format!("/home/user/{suffix}")).unwrap();
+
+        assert_eq!(old, new);
+    }
 
     #[test]
     fn saved_suffix_and_files_survive_new_runs_and_host_restarts() {

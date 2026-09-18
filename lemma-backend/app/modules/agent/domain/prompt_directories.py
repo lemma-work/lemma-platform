@@ -17,6 +17,7 @@ import json
 import re
 from typing import TYPE_CHECKING
 
+from sandbox_runtime.paths import LEGACY_WORKSPACE_ROOT, WORKSPACE_ROOT
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.services.workspace_location import (
     resolve_pod_cwd,
@@ -210,6 +211,16 @@ def _sandbox_root(cwd: str) -> str:
         # one handed the string straight back, backticks and all, into the same
         # code spans.
         return "the working directory"
+    # A root we actually know wins over guessing at one. The guess below takes
+    # the first path segment, which was right while the root was a single
+    # segment and silently wrong the moment it stopped being: a cwd under
+    # `/home/user` reported `/home`, so every sentence built from this told the
+    # agent to work one directory above the one it was given.
+    for known in (WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT):
+        if trimmed == known or trimmed.startswith(f"{known}/"):
+            return known
+    # Otherwise the cwd is a host path from a native run, where the root really
+    # is unknown and its first segment is the best available answer.
     first = trimmed.strip("/").split("/", 1)[0]
     if not first:
         return "/"
@@ -245,8 +256,8 @@ def _workspace_directory_section(
             "Agent Host supplies its exact path in Native Working Directory; "
             "it persists across conversation turns. You have no Lemma sandbox "
             "execution tools on this run. Work only in the directory you were "
-            "given; do not invent a sandbox path such as `/workspace` for "
-            "native tools. Tool approvals still apply."
+            "given; do not invent a sandbox path such as "
+            f"`{WORKSPACE_ROOT}` for native tools. Tool approvals still apply."
         )
     repo = _workspace_repo(ctx)
     orientation = (

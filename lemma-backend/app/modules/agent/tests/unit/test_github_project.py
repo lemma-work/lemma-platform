@@ -1,4 +1,5 @@
 from __future__ import annotations
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 from uuid import uuid4
 
@@ -99,9 +100,11 @@ async def test_clone_never_runs_over_an_existing_checkout(
     await github_project.ensure_project_checkout(_context(_REPO), session)
 
     command = session.commands[0]
-    assert command.startswith("[ -e /workspace/repos/acme/web/.git ] || git clone ")
+    assert command.startswith(
+        f"[ -e {WORKSPACE_ROOT}/repos/acme/web/.git ] || git clone "
+    )
     assert "https://github.com/acme/web.git" in command
-    assert command.endswith("/workspace/repos/acme/web")
+    assert command.endswith(f"{WORKSPACE_ROOT}/repos/acme/web")
     # Nothing that could move or discard work in an existing tree.
     for destructive in ("pull", "fetch", "reset", "checkout", "clean"):
         assert destructive not in command
@@ -136,7 +139,7 @@ async def test_a_failed_clone_tells_the_agent_why_the_directory_is_empty(
 
     assert notice is not None
     assert "acme/web" in notice
-    assert "/workspace/repos/acme/web" in notice
+    assert f"{WORKSPACE_ROOT}/repos/acme/web" in notice
     # git's own words survive: they distinguish a missing repo from no access.
     assert "Repository not found." in notice
     # Cached, so a burst of commands doesn't re-run a slow failing clone...

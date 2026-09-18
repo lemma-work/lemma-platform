@@ -6,7 +6,7 @@ from uuid import UUID
 
 from sandbox_runtime.errors import SandboxPathNotFound
 
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS, WORKSPACE_ROOT
 from app.modules.workspace.domain.file_types import FileInfo
 from app.core.log.log import get_logger
 
@@ -25,10 +25,10 @@ class WorkspaceFileManager:
         if not cwd:
             return ""
         if "\x00" in cwd or cwd.startswith("/"):
-            raise ValueError("workspace cwd must be relative to /workspace")
+            raise ValueError(f"workspace cwd must be relative to {WORKSPACE_ROOT}")
         root = posixpath.normpath(posixpath.join(WORKSPACE_ROOT, cwd))
         if root != WORKSPACE_ROOT and not root.startswith(f"{WORKSPACE_ROOT}/"):
-            raise ValueError("workspace cwd escapes /workspace")
+            raise ValueError(f"workspace cwd escapes {WORKSPACE_ROOT}")
         return "" if root == WORKSPACE_ROOT else posixpath.relpath(root, WORKSPACE_ROOT)
 
     def _workspace_path(self, path: str) -> str:
@@ -52,7 +52,17 @@ class WorkspaceFileManager:
         root = posixpath.normpath(
             posixpath.join(WORKSPACE_ROOT, self.cwd) if self.cwd else WORKSPACE_ROOT
         )
-        if path.startswith(f"{WORKSPACE_ROOT}/") or path == WORKSPACE_ROOT:
+        # Any root this platform has used counts as already-rooted, not just
+        # the current one. A path under the previous root that fell through to
+        # the join below was lstripped and re-homed under the caller's own
+        # root -- which is the silent re-homing this guard exists to stop,
+        # and it came straight back the moment the root moved. Recognised
+        # here, such a path is compared against the caller's root and
+        # refused, which is what it deserves.
+        if any(
+            path == root or path.startswith(f"{root}/")
+            for root in RUNTIME_FILESYSTEM_ROOTS
+        ):
             candidate = posixpath.normpath(path)
         else:
             candidate = posixpath.normpath(posixpath.join(root, path.lstrip("/")))

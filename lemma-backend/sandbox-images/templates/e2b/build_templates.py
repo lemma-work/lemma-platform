@@ -291,7 +291,7 @@ def workspace_template():
             user="root",
         )
         .run_cmd(
-            "mkdir -p /workspace /tmp/lemma-browser/runtime "
+            "mkdir -p /home/user /tmp/lemma-browser/runtime "
             "/tmp/lemma-browser/profile && "
             "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
@@ -300,7 +300,7 @@ def workspace_template():
             "test -x /usr/local/bin/workspace-chrome && "
             "rm -rf /root/.cache/pnpm /root/.local/share/pnpm/store "
             "/home/user/.cache/pnpm /home/user/.local/share/pnpm/store && "
-            "chown -R user:user /workspace /tmp/lemma-browser",
+            "chown -R user:user /home/user /tmp/lemma-browser",
             user="root",
         )
         # Layer order is cache order, and these two blocks were the wrong way
@@ -328,7 +328,7 @@ def workspace_template():
             "--locked --no-dev --no-editable && "
             "printf '%s\\n' "
             "'import sys; "
-            'p="/workspace/.python/lib/python3.14/site-packages"; '
+            'p="/home/user/.python/lib/python3.14/site-packages"; '
             "sys.path.insert(0, p) if p not in sys.path else None' "
             "> /opt/lemma-python/lib/python3.14/site-packages/"
             "lemma-workspace-overlay.pth && "
@@ -406,23 +406,25 @@ def workspace_template():
                 "GH_NO_UPDATE_NOTIFIER": "1",
                 "GH_PAGER": "cat",
                 "NODE_PATH": "/opt/lemma-node/node_modules",
-                "PNPM_HOME": "/home/user/.local/share/pnpm",
-                "PIP_PREFIX": "/workspace/.python",
+                "PNPM_HOME": "/home/user/.pnpm",
+                "PIP_PREFIX": "/home/user/.python",
                 "PYTHONPATH": (
-                    "/workspace/.python/lib/python3.14/site-packages:"
+                    "/home/user/.python/lib/python3.14/site-packages:"
                     "/opt/lemma-python/lib/python3.14/site-packages:"
                     # Where the browser relay package lives.
                     "/app"
                 ),
                 "PATH": (
-                    "/workspace/.python/bin:/opt/lemma-python/bin:"
+                    "/home/user/.python/bin:/home/user/.pnpm:/home/user/.local/bin:"
+                    "/opt/lemma-python/bin:"
                     "/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"
                 ),
                 "MPLBACKEND": "Agg",
+                "UV_CACHE_DIR": "/home/user/.uv-cache",
             }
         )
-        .set_workdir("/workspace")
+        .set_workdir("/home/user")
         .set_user("user")
     )
 

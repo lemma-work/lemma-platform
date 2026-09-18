@@ -85,7 +85,7 @@ RUN uv sync \
         --no-dev \
         --no-editable \
     && printf '%s\n' \
-        'import sys; p="/workspace/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+        'import sys; p="/home/user/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
         > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-overlay.pth \
     && uv cache clean
 
@@ -93,8 +93,8 @@ FROM ${PYTHON_IMAGE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_PREFIX=/workspace/.python \
-    HOME=/home/appuser \
+    PIP_PREFIX=/home/user/.python \
+    HOME=/home/user \
     DISPLAY=:99 \
     XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime \
     WORKSPACE_XVFB_SCREEN=1440x960x24 \
@@ -132,11 +132,11 @@ ENV PYTHONUNBUFFERED=1 \
     # being recreated — and, less obviously, the only place pnpm can do its job.
     # pnpm links packages into node_modules from its store, and a hard link
     # cannot cross a filesystem: with the store on the container layer and the
-    # project on /workspace, every install silently fell back to copying. So the
+    # project on the durable root, every install silently fell back to copying. So the
     # store was neither faster nor smaller than npm's. Here it is both, and it
     # survives to the next conversation.
-    PNPM_HOME=/workspace/.pnpm \
-    UV_CACHE_DIR=/workspace/.uv-cache \
+    PNPM_HOME=/home/user/.pnpm \
+    UV_CACHE_DIR=/home/user/.uv-cache \
     # `/usr/local/bin` before the npm bin directory, because that is where the
     # `lemma-node-tool` wrappers live and being found is the whole of their job.
     # With the npm directory first, a bare `agent-browser` resolved to the raw
@@ -151,7 +151,7 @@ ENV PYTHONUNBUFFERED=1 \
     # trap in a comment and works around it by spelling the path absolutely;
     # the shell an agent gets had no such workaround, and reported both errors
     # in a real transcript.
-    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/home/user/.python/bin:/home/user/.pnpm:/home/user/.local/bin:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \
@@ -229,8 +229,8 @@ COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
 # came first. A .pth file is read only by the interpreter that owns the
 # site-packages holding it, so the shared environment stays available to
 # `execute_python` and invisible to a venv. Missing directories are skipped, so
-# this is safe before /workspace/.python exists.
-RUN printf '/app\n/workspace/.python/lib/python3.14/site-packages\n' \
+# this is safe before /home/user/.python exists.
+RUN printf '/app\n/home/user/.python/lib/python3.14/site-packages\n' \
       > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-paths.pth
 
 # Where the backend installs first-party code into a running sandbox. The copy
@@ -263,11 +263,11 @@ RUN chmod 0755 /usr/local/bin/uv /usr/local/lib/lemma-uv-bin \
     && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/pnpm
 
 RUN groupadd --gid 10001 appuser \
-    && useradd --uid 10001 --gid 10001 --home-dir /home/appuser --create-home appuser \
+    && useradd --uid 10001 --gid 10001 --home-dir /home/user --create-home appuser \
     && mkdir -p \
         /app/sandbox_runtime/api \
         /app/sandbox_runtime/workspace \
-        /workspace \
+        /home/user \
         /opt/lemma-runtime \
         /run/lemma-bootstrap \
         /tmp/.X11-unix \
@@ -275,9 +275,8 @@ RUN groupadd --gid 10001 appuser \
     && chmod 1777 /tmp/.X11-unix \
     && chown -R 10001:10001 \
         /app \
-        /workspace \
+        /home/user \
         /opt/lemma-runtime \
-        /home/appuser \
         /run/lemma-bootstrap \
         /tmp/lemma-browser \
     && chmod 0700 /run/lemma-bootstrap
@@ -312,7 +311,7 @@ RUN chmod 0755 \
         /usr/local/lib/webpage-to-markdown.mjs \
     && python -m compileall -q /app/sandbox_runtime
 
-WORKDIR /workspace
+WORKDIR /home/user
 USER 10001:10001
 EXPOSE 8080 4850
 

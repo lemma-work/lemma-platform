@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import LEGACY_WORKSPACE_ROOT, WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Conversation
 
 _SLUG_ALPHABET = string.ascii_lowercase + string.digits
@@ -299,14 +299,22 @@ async def ensure_recorded_location(
 def pod_cwd_from_workspace_cwd(workspace_cwd: str) -> str:
     """Mirror a workspace cwd into the pod filesystem under ``/me``.
 
-    ``/workspace/c/{date}/{slug}`` -> ``/me/c/{date}/{slug}``. A cwd not under
-    ``/workspace`` is placed under ``/me`` as-is (defensive; overrides today are
-    always under ``/workspace``).
+    ``<root>/c/{date}/{slug}`` -> ``/me/c/{date}/{slug}``.
+
+    Both roots are stripped, not just the current one. Every conversation
+    created before the root moved has the old one written into its metadata, and
+    those rows are never rewritten -- so a mirror that knew only the new root
+    would answer ``/me/workspace/c/...`` for all of them, inventing a directory
+    under the pod that nothing has ever written to.
+
+    A cwd under neither is placed under ``/me`` as-is, which is defensive rather
+    than expected.
     """
-    if workspace_cwd == _WORKSPACE_ROOT:
-        return _POD_ROOT
-    if workspace_cwd.startswith(f"{_WORKSPACE_ROOT}/"):
-        return f"{_POD_ROOT}/{workspace_cwd[len(_WORKSPACE_ROOT) + 1 :]}"
+    for root in (_WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT):
+        if workspace_cwd == root:
+            return _POD_ROOT
+        if workspace_cwd.startswith(f"{root}/"):
+            return f"{_POD_ROOT}/{workspace_cwd[len(root) + 1 :]}"
     return f"{_POD_ROOT}/{workspace_cwd.lstrip('/')}"
 
 

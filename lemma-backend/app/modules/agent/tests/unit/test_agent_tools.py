@@ -59,6 +59,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli import workspace_cli_toolset
 from app.modules.function.domain.entities import FunctionEntity, FunctionType
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 
 def _agent_run_with_messages(run_index: int, message_count: int = 5) -> AgentRun:
@@ -1715,8 +1716,9 @@ async def test_root_conversation_gets_own_cwd():
     # A root gets its own pretty c/{date}/{slug} cwd stamped into metadata.
     date = convo.created_at.date().isoformat()
     cwd = convo.metadata["cwd"]
-    assert cwd.startswith(f"/workspace/c/{date}/")
-    assert cwd.count("/") == 4  # /workspace/c/{date}/{slug}
+    assert cwd.startswith(f"{WORKSPACE_ROOT}/c/{date}/")
+    # <root>/c/{date}/{slug}: one segment past the root, whatever the root is.
+    assert cwd.count("/") == WORKSPACE_ROOT.count("/") + 3
 
 
 @pytest.mark.asyncio

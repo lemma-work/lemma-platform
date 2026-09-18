@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxMount
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -170,7 +171,7 @@ class DockerSandboxProvider(DockerOpsMixin):
         binds: list[str] = []
         if spec.volume_name is not None:
             labels["workspace-storage-id"] = spec.volume_name
-            binds.append(f"{spec.volume_name}:/workspace")
+            binds.append(f"{spec.volume_name}:{WORKSPACE_ROOT}")
         binds.extend(_bind(mount) for mount in spec.mounts)
         return labels, binds
 

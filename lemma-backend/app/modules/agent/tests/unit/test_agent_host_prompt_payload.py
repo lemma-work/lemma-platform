@@ -19,6 +19,7 @@ import pytest
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
@@ -228,9 +229,11 @@ class TestNativeAndSandboxDirectories:
 
     async def test_sandbox_paths_are_scoped_to_sandbox_tools(self) -> None:
         prompt = _system_prompt(toolsets=[AgentToolset.WORKSPACE_CLI])
-        assert "Your Lemma sandbox working directory is `/workspace/" in prompt
+        assert f"Your Lemma sandbox working directory is `{WORKSPACE_ROOT}/" in prompt
         assert "no automatic mount or sync" in prompt
-        assert "Do not use a sandbox `/workspace` path with native tools" in prompt
+        assert (
+            f"Do not use a sandbox `{WORKSPACE_ROOT}` path with native tools" in prompt
+        )
 
     async def test_the_sandbox_root_comes_from_the_cwd_this_run_was_given(
         self,

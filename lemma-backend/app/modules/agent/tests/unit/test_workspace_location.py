@@ -20,6 +20,7 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli.workspace_cli import (
     workspace_runtime_context,
 )
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 
 def test_defaults_to_pretty_conversation_scoped_cwd_and_single_workspace():
@@ -28,9 +29,10 @@ def test_defaults_to_pretty_conversation_scoped_cwd_and_single_workspace():
     location = resolve_workspace_location(conversation)
 
     date = conversation.created_at.date().isoformat()
-    assert location.cwd.startswith(f"/workspace/c/{date}/")
-    # /workspace/c/{date}/{slug}
-    assert location.cwd.count("/") == 4
+    assert location.cwd.startswith(f"{WORKSPACE_ROOT}/c/{date}/")
+    # <root>/c/{date}/{slug}
+    # <root>/c/{date}/{slug}: one segment past the root, whatever the root is.
+    assert location.cwd.count("/") == WORKSPACE_ROOT.count("/") + 3
     assert location.workspace_id == "default"
 
 
@@ -245,7 +247,7 @@ def test_parse_project_repo_normalizes_a_pasted_repo_name():
 
     assert repo == ProjectRepo(owner="acme", repo="web", ref="main")
     assert repo.full_name == "acme/web"
-    assert repo.cwd == "/workspace/repos/acme/web"
+    assert repo.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
 
 
 def test_parse_project_repo_drops_a_ref_git_would_read_as_a_flag():
@@ -275,7 +277,7 @@ def test_repo_metadata_derives_the_working_directory():
 
     location = resolve_workspace_location(conversation)
 
-    assert location.cwd == "/workspace/repos/acme/web"
+    assert location.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
     assert location.repo is not None
     assert location.repo.ref == "main"
     # Both filesystems still line up, exactly as they do for a scratchpad.
@@ -309,7 +311,7 @@ async def test_creating_against_a_repo_stamps_the_directory_and_a_filterable_nam
 
     await service._apply_inherited_cwd(conversation, parent_id=None)
 
-    assert conversation.metadata["cwd"] == "/workspace/repos/acme/web"
+    assert conversation.metadata["cwd"] == f"{WORKSPACE_ROOT}/repos/acme/web"
     # Rewritten from the parsed form, not stored as the client sent it.
     assert conversation.metadata["repo"] == {"owner": "acme", "repo": "web"}
     # Flat, because conversation listing filters metadata by JSONB containment
@@ -329,7 +331,7 @@ async def test_an_unusable_repo_leaves_the_conversation_on_a_scratchpad():
 
     assert "repo" not in conversation.metadata
     assert "repo_full_name" not in conversation.metadata
-    assert conversation.metadata["cwd"].startswith("/workspace/c/")
+    assert conversation.metadata["cwd"].startswith(f"{WORKSPACE_ROOT}/c/")
 
 
 async def test_a_subagent_inherits_the_parent_project():
@@ -346,6 +348,6 @@ async def test_a_subagent_inherits_the_parent_project():
     await service._apply_inherited_cwd(child, parent_id=parent.id)
 
     child_location = resolve_workspace_location(child)
-    assert child_location.cwd == "/workspace/repos/acme/web"
+    assert child_location.cwd == f"{WORKSPACE_ROOT}/repos/acme/web"
     assert child_location.repo == resolve_workspace_location(parent).repo
     assert child.metadata["repo_full_name"] == "acme/web"

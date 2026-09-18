@@ -23,7 +23,7 @@ from __future__ import annotations
 #: the durable thing is what stops each one needing to be redirected by hand --
 #: which is how ``PNPM_HOME`` came to point into the volume on one fabric and
 #: into the home directory on the other.
-WORKSPACE_ROOT = "/workspace"
+WORKSPACE_ROOT = "/home/user"
 
 #: What workspaces created before the move use. Read, never written.
 LEGACY_WORKSPACE_ROOT = "/workspace"

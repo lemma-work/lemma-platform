@@ -27,6 +27,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.workspace.infrastructure.runtime_bundle import (
     RuntimeBundle,
     runtime_bundle,
@@ -171,7 +172,10 @@ class WorkspaceRuntimeBundleMixin:
 
         task = self._inflight_bundles.get(key) if key is not None else None
         if task is None:
-            task = asyncio.create_task(self._install_bundle(user_id, bundle))
+            task = create_inherited_task(
+                self._install_bundle(user_id, bundle),
+                name=f"workspace-runtime-bundle:{user_id}",
+            )
             if key is not None:
                 self._inflight_bundles[key] = task
                 task.add_done_callback(
