@@ -226,3 +226,37 @@ def test_no_login_is_ever_borrowed_from_another_site() -> None:
         pick_for_site("http://localhost:3000", [_Saved("http://otherhost:3000")])
         is None
     )
+
+
+def test_a_page_token_round_trips_and_a_bad_one_is_a_bad_request() -> None:
+    """Tokens are opaque to the caller, so a malformed one is their mistake to
+    be told about -- not a traceback, and not silently the first page again."""
+    from fastapi import HTTPException
+
+    from app.modules.web_login.api.controllers.web_login_controller import (
+        _decode_audit_token,
+        _decode_origin_token,
+        _encode_audit_token,
+        _encode_origin_token,
+    )
+    from uuid import uuid4
+
+    origin = "https://app.example.com"
+    assert _decode_origin_token(_encode_origin_token(origin)) == origin
+    # Base64 rather than the bare origin: a token that looks like a URL invites
+    # somebody to open it.
+    assert _encode_origin_token(origin) != origin
+    assert _encode_origin_token(None) is None
+    assert _decode_origin_token(None) is None
+
+    after = (datetime(2026, 9, 18, 12, 0, tzinfo=timezone.utc), uuid4())
+    assert _decode_audit_token(_encode_audit_token(after)) == after
+    assert _encode_audit_token(None) is None
+
+    for bad in ("not-base64!!", "d2hhdGV2ZXI="):
+        try:
+            _decode_audit_token(bad)
+        except HTTPException as exc:
+            assert exc.status_code == 400
+        else:
+            raise AssertionError(f"{bad!r} should have been refused")

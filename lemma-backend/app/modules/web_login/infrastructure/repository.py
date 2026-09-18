@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import get_secret_cipher
@@ -55,22 +55,41 @@ class WebLoginRepository:
     async def list_for_user(
         self, user_id: UUID, *, limit: int = MAX_LOGINS_LISTED
     ) -> list[WebLogin]:
-        """Every site this person has a saved login for.
+        """Every site this person has a saved login for, up to `limit`.
 
-        Bounded. One per site and one site per sign-in makes a large number
-        unlikely, but "unlikely" is not a limit -- a person who has been using
-        this for a year has whatever they have, and the page that renders this
-        should not be the thing that discovers the number.
+        The unpaged read, for callers that want the whole set in memory --
+        `pick_for_site` is the one that matters, because choosing between
+        saved logins cannot be done a page at a time. `page_for_user` is what
+        the API serves.
         """
-        rows = (
-            await self._session.execute(
-                select(WebLoginModel)
-                .where(WebLoginModel.user_id == user_id)
-                .order_by(WebLoginModel.origin)
-                .limit(limit)
-            )
-        ).scalars()
-        return [_to_entity(row) for row in rows]
+        page, _ = await self.page_for_user(user_id, limit=limit, after_origin=None)
+        return page
+
+    async def page_for_user(
+        self, user_id: UUID, *, limit: int, after_origin: str | None
+    ) -> tuple[list[WebLogin], str | None]:
+        """One page of saved logins, and the origin to continue after.
+
+        Keyset rather than offset: `(user_id, origin)` is unique and is
+        already the sort key, so a cursor on it cannot skip or repeat a row
+        when the set changes between pages -- which it does, because forgetting
+        a login is the main thing people do on this screen.
+
+        One row is read beyond the page to decide whether there is another,
+        because a full page is not itself proof that more exist.
+        """
+        statement = (
+            select(WebLoginModel)
+            .where(WebLoginModel.user_id == user_id)
+            .order_by(WebLoginModel.origin)
+            .limit(limit + 1)
+        )
+        if after_origin:
+            statement = statement.where(WebLoginModel.origin > after_origin)
+        rows = list((await self._session.execute(statement)).scalars())
+        has_more = len(rows) > limit
+        page = [_to_entity(row) for row in rows[:limit]]
+        return page, (page[-1].origin if has_more and page else None)
 
     async def get_for_origin(self, user_id: UUID, origin: str) -> WebLogin | None:
         row = await self._row_for_origin(user_id, origin)
@@ -194,16 +213,44 @@ class WebLoginRepository:
     async def history_for_user(
         self, user_id: UUID, *, limit: int = 100
     ) -> list[WebLoginAuditModel]:
-        return list(
-            (
-                await self._session.execute(
-                    select(WebLoginAuditModel)
-                    .where(WebLoginAuditModel.user_id == user_id)
-                    .order_by(WebLoginAuditModel.created_at.desc())
-                    .limit(limit)
-                )
-            ).scalars()
+        """The newest `limit` audit rows. `page_history_for_user` paginates."""
+        page, _ = await self.page_history_for_user(user_id, limit=limit, after=None)
+        return page
+
+    async def page_history_for_user(
+        self, user_id: UUID, *, limit: int, after: tuple[datetime, UUID] | None
+    ) -> tuple[list[WebLoginAuditModel], tuple[datetime, UUID] | None]:
+        """One page of the audit trail, newest first, and where to continue.
+
+        Keyed on `(created_at, id)` rather than `created_at` alone: several
+        rows can share a timestamp -- a capture and the inject that follows it
+        land in the same millisecond often enough -- and a cursor that cannot
+        break that tie either repeats them or drops them.
+
+        Offset paging would be worse than untidy here. This log is append-only
+        and read newest-first, so anything written between two pages shifts
+        every later row down and the reader sees the same entry twice.
+        """
+        statement = (
+            select(WebLoginAuditModel)
+            .where(WebLoginAuditModel.user_id == user_id)
+            .order_by(
+                WebLoginAuditModel.created_at.desc(), WebLoginAuditModel.id.desc()
+            )
+            .limit(limit + 1)
         )
+        if after is not None:
+            created_at, row_id = after
+            statement = statement.where(
+                tuple_(WebLoginAuditModel.created_at, WebLoginAuditModel.id)
+                < tuple_(created_at, row_id)
+            )
+        rows = list((await self._session.execute(statement)).scalars())
+        has_more = len(rows) > limit
+        page = rows[:limit]
+        if not (has_more and page):
+            return page, None
+        return page, (page[-1].created_at, page[-1].id)
 
     async def _row_for_origin(self, user_id: UUID, origin: str) -> WebLoginModel | None:
         return (

@@ -17344,10 +17344,26 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
           }
         },
         "required": [
-          "items"
+          "items",
+          "limit"
         ],
         "title": "WebLoginAuditResponse",
         "type": "object"
@@ -17360,10 +17376,26 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "next_page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Page Token"
           }
         },
         "required": [
-          "items"
+          "items",
+          "limit"
         ],
         "title": "WebLoginListResponse",
         "type": "object"
@@ -36970,6 +37002,36 @@
       },
       "get": {
         "operationId": "web_login.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -36980,6 +37042,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "summary": "List saved site logins",
@@ -36988,7 +37060,7 @@
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": false,
+          "paginates": true,
           "resource": "web_login",
           "result": "collection",
           "verb": "list"
@@ -37009,6 +37081,22 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
             }
           }
         ],
