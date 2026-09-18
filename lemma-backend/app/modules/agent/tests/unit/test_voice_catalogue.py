@@ -10,6 +10,7 @@ pages disagreed about which languages are covered; the API does not.
 from __future__ import annotations
 
 import pytest
+from redis.exceptions import RedisError
 
 from app.modules.agent.tools.speech.voice_catalogue import (
     FALLBACK_VOICE_BY_LANGUAGE,
@@ -78,3 +79,59 @@ def test_a_language_with_no_voice_is_told_so_rather_than_given_one():
     which is the same defect as a wrong transcript.
     """
     assert default_voice_for("hi", ()) is None
+
+
+class _UnreachableCache:
+    """A Redis that is down, in the two ways this module touches it."""
+
+    def __init__(self) -> None:
+        self.writes = 0
+
+    async def get_json(self, suffix: str):
+        raise RedisError("connection refused")
+
+    async def set_json(self, suffix: str, value, **_kwargs) -> None:
+        self.writes += 1
+        raise RedisError("connection refused")
+
+
+async def test_a_cache_that_is_down_does_not_stop_the_agent_speaking(monkeypatch):
+    """This module's promise is that failing to *list* voices never stops
+    something being said -- the fallback map exists for exactly that.
+
+    Both cache calls sat outside the handler that keeps that promise, which
+    covered only the HTTP fetch. A Redis outage therefore escaped `list_voices`
+    and, through `voice_for_language`, made `say` fail before synthesis had
+    even been attempted: the one moment the fallback was written for was the
+    one moment it was skipped.
+    """
+    import httpx
+
+    from app.modules.agent.tools.speech.voice_catalogue import load_voices
+
+    class _OfflineClient:
+        """The provider is unreachable too, so only the cache is under test."""
+
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc) -> None:
+            return None
+
+        async def get(self, *_args, **_kwargs):
+            raise httpx.ConnectError("no network in a unit test")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _OfflineClient)
+    cache = _UnreachableCache()
+
+    voices = await load_voices(api_key="test-key", cache=cache)
+
+    assert voices == (), "an unreadable cache is a miss, not an exception"
+
+
+def test_the_fallback_still_answers_when_the_catalogue_is_empty():
+    """The point of the above: empty is a usable answer, not a dead end."""
+    assert default_voice_for("es", ()) == FALLBACK_VOICE_BY_LANGUAGE["es"]

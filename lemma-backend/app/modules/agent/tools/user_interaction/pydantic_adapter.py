@@ -76,7 +76,7 @@ async def display_resource(
 
     Set `type` and, for most types, a `name` — omit `name` to show all resources
     of that type. FILE takes a pod `path`, so upload sandbox deliverables with
-    `pod_upload_file` first; a workspace path is not pod-visible. WIDGET takes
+    `lemma files upload` first; a workspace path is not pod-visible. WIDGET takes
     exactly one of `path`, `content`, or `public_url`; load the `lemma-widget`
     skill before your first widget. React, routing, or real state means an app.
 

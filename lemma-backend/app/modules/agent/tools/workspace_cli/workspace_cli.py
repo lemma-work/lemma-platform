@@ -323,7 +323,9 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
-        stdout, stderr = render_terminal_result(result, tty=request.tty)
+        stdout, stderr = render_terminal_result(
+            result, tty=request.tty, max_output_tokens=request.max_output_tokens
+        )
         stdout = _with_recreation_notice(
             stdout, recreated=workspace_session.workspace_recreated
         )

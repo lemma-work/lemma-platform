@@ -542,11 +542,10 @@ def test_display_resource_rejects_the_agents_own_sandbox_paths():
         path="/workspace/c/2026-08-23/93utvspz/lemma-aug-2026-shiplog.pdf",
     )
     assert "sandbox path" in error
-    # The message has to carry the fix, or the model retries the same call --
-    # and the fix is the tool, not the shell. Naming `lemma files upload` here
-    # was the bypass being taught at the one moment the model is looking for a
-    # way out of it.
-    assert "pod_upload_file" in error
+    # The message has to carry the fix, or the model retries the same call.
+    # The fix here really is the shell: the file is in the sandbox, which is
+    # where the CLI runs, and no pod tool reaches across that line.
+    assert "lemma files upload" in error
 
     for private_root in ("/tmp/out.pdf", "/private/x", "/Users/me/x", "/workspace"):
         assert _payload_error(type=DisplayResourceType.FILE, path=private_root)

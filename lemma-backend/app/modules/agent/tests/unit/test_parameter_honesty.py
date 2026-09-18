@@ -114,3 +114,35 @@ def test_the_two_clocks_are_independent(kwargs, expected):
     from app.modules.agent.tools.workspace_cli.workspace_cli import exec_clocks
 
     assert exec_clocks(ExecCommandRequest(**kwargs)) == expected
+
+
+def test_every_render_call_passes_the_cap_the_caller_asked_for():
+    """The renderer honouring `max_output_tokens` is only half of it: a call
+    site that forgets to pass it leaves the parameter documented and dead.
+
+    That is what happened. `write_stdin` forwarded it and `exec_command` did
+    not, in the same file, so the tool an agent reaches for most was the one
+    whose cap did nothing. Checked structurally rather than by driving a
+    sandbox, because the defect is the *absence* of an argument and the
+    cheapest thing that notices an absence is reading the call.
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path("app/modules/agent/tools/workspace_cli/workspace_cli.py")
+    tree = ast.parse(source.read_text())
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "render_terminal_result"
+    ]
+
+    assert calls, "the renderer is no longer called here; retarget this test"
+    for call in calls:
+        passed = {keyword.arg for keyword in call.keywords}
+        assert "max_output_tokens" in passed, (
+            f"render_terminal_result at line {call.lineno} drops the caller's "
+            "cap, so the parameter is accepted and ignored"
+        )

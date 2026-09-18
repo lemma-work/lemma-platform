@@ -18,9 +18,12 @@ idea of what voices exist.
 
 from __future__ import annotations
 
+import asyncio
+
 from dataclasses import dataclass
 
 import httpx
+from redis.exceptions import RedisError
 
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
@@ -119,19 +122,37 @@ def _parse(payload: object) -> tuple[Voice, ...]:
     return tuple(voices)
 
 
-async def load_voices(*, api_key: str | None = None) -> tuple[Voice, ...]:
+async def load_voices(
+    *, api_key: str | None = None, cache: RedisJsonCache | None = None
+) -> tuple[Voice, ...]:
     """Every TTS voice this deployment's key can use, cached. Empty when unknown.
 
     Empty is a real answer and not an error: without a key, or with the provider
     unreachable, the caller falls back to a known voice rather than refusing to
     speak. A failure to *list* voices must never be a failure to say something.
+
+    `cache` is a parameter so a test can hand in one that fails, which is the
+    only way to cover the degraded paths below without reaching into this
+    module to replace a name inside it.
     """
     key = api_key or agent_settings.deepgram_api_key
     if not key:
         return ()
 
-    cache = _get_cache()
-    cached = await cache.get_json("deepgram")
+    cache = cache or _get_cache()
+    # A cache that cannot be reached is a miss, not a failure. This function
+    # promises above that listing voices never stops the caller speaking, and
+    # Redis being down is exactly the moment that promise has to hold: the
+    # fallback map is right there, and propagating would take `say` down with
+    # the cache.
+    try:
+        cached = await cache.get_json("deepgram")
+    except (RedisError, OSError, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "agent.speech.voice_catalogue_cache_unreadable.degraded",
+            error_type=type(exc).__name__,
+        )
+        cached = None
     if isinstance(cached, list):
         return _parse({"tts": cached})
 
@@ -151,7 +172,15 @@ async def load_voices(*, api_key: str | None = None) -> tuple[Voice, ...]:
 
     entries = payload.get("tts") if isinstance(payload, dict) else None
     if isinstance(entries, list):
-        await cache.set_json("deepgram", entries)
+        # Non-fatal for the same reason: the catalogue is in hand, and failing
+        # to store it for next time is no reason to withhold it from this call.
+        try:
+            await cache.set_json("deepgram", entries)
+        except (RedisError, OSError, asyncio.TimeoutError) as exc:
+            logger.warning(
+                "agent.speech.voice_catalogue_cache_unwritable.degraded",
+                error_type=type(exc).__name__,
+            )
     return _parse(payload)
 
 

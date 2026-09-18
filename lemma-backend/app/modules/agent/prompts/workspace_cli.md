@@ -38,12 +38,11 @@ and `/memory`, are shared. There is no `/pod` prefix. Save deliverables under
 
 Read, write, list, and search them with the `pod_*` file tools. Build and revise
 code here first, where an edit is a diff rather than a whole-file rewrite, then
-write or import the finished result. `pod_upload_file` copies a workspace file
-into pod files with its bytes intact — what a PDF or an image a command produced
-needs, since `pod_write_file` is UTF-8 only. The CLI covers the one thing no
-tool reaches: a document's derived artifacts.
+write or import the finished result. The CLI covers what the pod tools do not:
+uploading a local file, and reaching a document's derived artifacts.
 
 ```bash
+lemma files upload ./report.pdf /me/reports/report.pdf
 lemma files children /knowledge/policy.pdf          # list derived artifacts
 lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg
 ```

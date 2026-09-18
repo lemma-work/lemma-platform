@@ -169,29 +169,6 @@ class PodWriteFileRequest(BaseModel):
     )
 
 
-class PodUploadFileRequest(BaseModel):
-    workspace_path: str = Field(
-        ...,
-        description=(
-            "File in your sandbox to copy into the pod, e.g. `/workspace/report.pdf`."
-        ),
-    )
-    path: str = Field(
-        ...,
-        description=(
-            "Where it lands in pod files. A relative path resolves against "
-            "`/me/c/{date}/{slug}` — write there unless a specific shared "
-            "location is needed."
-        ),
-    )
-    overwrite: bool = Field(
-        default=True, description="If false, reject the upload when the file exists."
-    )
-    description: str | None = Field(
-        default=None, description="Optional file description."
-    )
-
-
 class PodReadFileRequest(BaseModel):
     path: str = Field(
         ...,

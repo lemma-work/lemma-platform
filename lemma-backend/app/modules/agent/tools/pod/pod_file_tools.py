@@ -25,11 +25,8 @@ from app.modules.agent.domain.value_objects import JsonObject, to_json_value
 from app.modules.agent.domain.vision import AgentVisionMode
 from app.modules.agent.services.agent_memory_brief import invalidate_memory_brief
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.agent.tools.tool_errors import safe_error_text
-from sandbox_runtime.errors import SandboxError
 from app.modules.agent.tools.pod.file_reads import read_file_text, search_files
 from app.modules.agent.tools.pod.models import (
-    PodUploadFileRequest,
     GetFileUrlRequest,
     PodListFilesRequest,
     PodReadFileRequest,
@@ -172,91 +169,6 @@ async def pod_write_file(
 
     return await run_pod_tool(
         ctx.deps, tool_name="pod_write_file", args=request.model_dump(), op=op
-    )
-
-
-async def pod_upload_file(
-    ctx: RunContext[BaseAgentContext],
-    request: PodUploadFileRequest,
-) -> JsonObject:
-    """Copy a file out of your sandbox into pod files, bytes intact.
-
-    This is how a deliverable a command produced — a PDF, a spreadsheet, an
-    image, a zip — becomes something a person can open. `pod_write_file` is
-    text only, so anything else had to go through the shell before this existed.
-
-    Same placement rules as `pod_write_file`: a relative path lands in your
-    default pod working directory, writes under your own `/me/...` need no
-    approval, and a shared pod path may.
-    """
-
-    async def op(services: PodServices) -> JsonObject:
-        from app.modules.agent.tools.file_access import read_workspace_file_bytes
-
-        try:
-            content_bytes, _mime = await read_workspace_file_bytes(
-                ctx.deps, request.workspace_path
-            )
-        except (FileNotFoundError, SandboxError, OSError) as exc:
-            # The three ways the read fails for a reason the agent can act on:
-            # wrong path, the sandbox is gone, the transport broke. Anything
-            # else is a bug and should surface rather than be reported to the
-            # model as a bad path.
-            return {
-                "success": False,
-                "error": (
-                    f"Could not read '{request.workspace_path}' from the "
-                    f"workspace: {safe_error_text(exc)}"
-                ),
-            }
-
-        resolved_path = resolve_pod_path(ctx.deps, request.path)
-        directory_path, name = split_pod_path(resolved_path)
-        try:
-            entity = await services.file.create_file(
-                services.ctx.pod_id,
-                name,
-                content_bytes,
-                services.ctx,
-                description=request.description,
-                directory_path=directory_path,
-            )
-            return {
-                "success": True,
-                "path": to_me_path(entity.path, services.ctx.user_id),
-                "size_bytes": entity.size_bytes,
-                "created": True,
-            }
-        except DatastoreConflictError:
-            if not request.overwrite:
-                return {
-                    "success": False,
-                    "path": resolved_path,
-                    "error": (
-                        f"A file already exists at '{resolved_path}'. Pass "
-                        "overwrite=true to replace it."
-                    ),
-                }
-            update_entity = DatastoreFileUpdateEntity(
-                path=resolved_path,
-                content=content_bytes,
-                description=request.description,
-            )
-            plan = await services.file.resolve_update_file(
-                services.ctx.pod_id, update_entity, services.ctx
-            )
-            await services.file.write_update_storage(plan, update_entity)
-            updated = await services.file.persist_update_file(plan)
-            await services.file.finalize_update_file(plan, updated)
-            return {
-                "success": True,
-                "path": to_me_path(updated.path, services.ctx.user_id),
-                "size_bytes": updated.size_bytes,
-                "created": False,
-            }
-
-    return await run_pod_tool(
-        ctx.deps, tool_name="pod_upload_file", args=request.model_dump(), op=op
     )
 
 

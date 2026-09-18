@@ -86,10 +86,12 @@ def test_pod_toolset_exposes_exactly_these_tools():
         "pod_list_files",
         "pod_read_file",
         "pod_write_file",
-        # Bytes, not text. `pod_write_file` is UTF-8 only, so a PDF or an image
-        # a command produced had to go out through `lemma files upload` — which
-        # `display_resource`'s own description used to tell the model to do.
-        "pod_upload_file",
+        # No `pod_upload_file`. Copying a sandbox file into pod files needs a
+        # sandbox, and an agent with one has `lemma files upload` already --
+        # while POD is implied by a folder or table grant, so an agent can hold
+        # these tools with no workspace at all and could only ever fail such a
+        # call. The pod tools are for pod data; crossing from the sandbox is
+        # the CLI's job, because that is where the file is.
         "pod_view_document_pages",
         "pod_get_file_url",
         "pod_search_files",

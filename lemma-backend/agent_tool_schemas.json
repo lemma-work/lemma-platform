@@ -1780,7 +1780,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`pod_upload_file` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `path`, `content`, or `public_url`; load the `lemma-widget`\nskill before your first widget. React, routing, or real state means an app.\n\nA WIDGET is a live view, not a picture: it reads pod data through the browser\nSDK, filters and opens records in place, and can offer the person their next\nquestion in the composer. It cannot send one \u2014 `ask_user` is for an answer\nthis run needs.\n\nGive a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`\n(`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the\nfile says, so correcting one is an edit to the file. `content` inlines the\nHTML instead and freezes it in this call.\n\nA display that succeeds is already in front of the person. Nothing here\nreplaces or edits an earlier one, so calling again adds a second resource\nbelow the first rather than correcting it \u2014 which is the other reason to\nkeep the HTML in a file.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
+    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `path`, `content`, or `public_url`; load the `lemma-widget`\nskill before your first widget. React, routing, or real state means an app.\n\nA WIDGET is a live view, not a picture: it reads pod data through the browser\nSDK, filters and opens records in place, and can offer the person their next\nquestion in the composer. It cannot send one \u2014 `ask_user` is for an answer\nthis run needs.\n\nGive a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`\n(`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the\nfile says, so correcting one is an edit to the file. `content` inlines the\nHTML instead and freezes it in this call.\n\nA display that succeeds is already in front of the person. Nothing here\nreplaces or edits an earlier one, so calling again adds a second resource\nbelow the first rather than correcting it \u2014 which is the other reason to\nkeep the HTML in a file.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -3613,50 +3613,6 @@
         }
       },
       "title": "PodTablesRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "additionalProperties": true,
-      "type": "object"
-    }
-  },
-  {
-    "tool_name": "pod_upload_file",
-    "toolset": "POD",
-    "description": "Copy a file out of your sandbox into pod files, bytes intact.\n\nThis is how a deliverable a command produced \u2014 a PDF, a spreadsheet, an\nimage, a zip \u2014 becomes something a person can open. `pod_write_file` is\ntext only, so anything else had to go through the shell before this existed.\n\nSame placement rules as `pod_write_file`: a relative path lands in your\ndefault pod working directory, writes under your own `/me/...` need no\napproval, and a shared pod path may.",
-    "input_schema": {
-      "properties": {
-        "workspace_path": {
-          "description": "File in your sandbox to copy into the pod, e.g. `/workspace/report.pdf`.",
-          "type": "string"
-        },
-        "path": {
-          "description": "Where it lands in pod files. A relative path resolves against `/me/c/{date}/{slug}` \u2014 write there unless a specific shared location is needed.",
-          "type": "string"
-        },
-        "overwrite": {
-          "default": true,
-          "description": "If false, reject the upload when the file exists.",
-          "type": "boolean"
-        },
-        "description": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Optional file description."
-        }
-      },
-      "required": [
-        "workspace_path",
-        "path"
-      ],
-      "title": "PodUploadFileRequest",
       "type": "object"
     },
     "output_schema": {

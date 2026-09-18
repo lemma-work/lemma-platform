@@ -125,6 +125,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.speech.say_failed.degraded': EventSpec('warning', frozenset()),
     'agent.speech.transcript_reuse_lookup_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent.speech.transcript_reused.observed': EventSpec('info', frozenset({'conversation_id'})),
+    'agent.speech.voice_catalogue_cache_unreadable.degraded': EventSpec('warning', frozenset({'error_type'})),
+    'agent.speech.voice_catalogue_cache_unwritable.degraded': EventSpec('warning', frozenset({'error_type'})),
     'agent.speech.voice_catalogue_unavailable.degraded': EventSpec('warning', frozenset({'error_type'})),
     'agent.speech.voice_note_delivery_failed.degraded': EventSpec('warning', frozenset({'platform'})),
     'agent.streaming.subscription_close_failed.degraded': EventSpec('warning', frozenset()),
