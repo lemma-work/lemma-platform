@@ -96,6 +96,22 @@ class WorkspaceFileEntry(BaseModel):
 
 class WorkspaceFileListResponse(BaseModel):
     path: str = Field(description="The directory that was listed.")
+    home_root: str = Field(
+        default=HOME_ROOT,
+        description=(
+            "The durable root, and the furthest up a caller may browse. Served "
+            "rather than assumed: this path has moved once already, and the "
+            "clients that had hardcoded the old one went on asking for a "
+            "directory that no longer existed."
+        ),
+    )
+    workspace_root: str = Field(
+        default=WORKSPACE_ROOT,
+        description=(
+            "Where projects and conversation directories live. Inside "
+            "`home_root`, and the sensible place for a file browser to open."
+        ),
+    )
     sleeping: bool = Field(
         default=False,
         description=(
@@ -128,7 +144,7 @@ class WorkspaceFileListResponse(BaseModel):
 
 
 def _workspace_path(path: str | None) -> str:
-    """Resolve a caller path to an absolute one under ``/workspace``.
+    """Resolve a caller path to an absolute one under the durable home.
 
     Rejects rather than clamps, so a caller asking for ``/tmp`` or ``/etc`` is
     told no instead of quietly being handed the workspace root and believing the

@@ -11,12 +11,24 @@ export interface WorkspaceFileEntry {
 
 export interface WorkspaceFileListResponse {
   path: string;
+  /**
+   * The durable root, and the furthest up a caller may browse.
+   *
+   * Served rather than assumed. This path has moved once already, and the
+   * clients holding a hardcoded copy went on asking for a directory that no
+   * longer existed — which lists identically to an empty one.
+   */
+  home_root: string;
+  /** Where projects live, inside `home_root`. Where a browser should open. */
+  workspace_root: string;
   /** The workspace is paused and was not started to answer. */
   sleeping: boolean;
   /** The directory holds more entries than were returned. */
   truncated: boolean;
   /** Pass back as `after` for the next page; null on the last one. */
   next_after?: string | null;
+  /** False when the directory is not there, as against merely empty. */
+  exists: boolean;
   entries: WorkspaceFileEntry[];
 }
 

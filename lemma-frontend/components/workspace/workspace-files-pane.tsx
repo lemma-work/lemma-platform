@@ -7,6 +7,7 @@ import { getDocumentPreviewType } from '@/components/documents/preview-renderers
 import { Button } from '@/components/ui/button';
 import { ChevronRight, Download, Folder, RefreshCw } from '@/components/ui/icons';
 import {
+    HOME_ROOT,
     WORKSPACE_ROOT,
     useWorkspaceFile,
     useWorkspaceFiles,
@@ -19,17 +20,22 @@ const formatSize = (bytes: number): string => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const parentOf = (path: string): string | null => {
-    if (path === WORKSPACE_ROOT) return null;
+/** The next directory up, stopping at the ceiling rather than climbing past it. */
+const parentOf = (path: string, ceiling: string): string | null => {
+    if (path === ceiling) return null;
     const cut = path.lastIndexOf('/');
-    return cut <= WORKSPACE_ROOT.length - 1 ? WORKSPACE_ROOT : path.slice(0, cut);
+    return cut <= ceiling.length - 1 ? ceiling : path.slice(0, cut);
 };
 
 /** Segments between `from` and `path`, for the breadcrumb. */
-const segmentsOf = (path: string, from: string): { name: string; path: string }[] => {
+const segmentsOf = (
+    path: string,
+    from: string,
+    ceiling: string,
+): { name: string; path: string }[] => {
     if (path === from) return [];
     const inside = path.startsWith(`${from}/`);
-    const base = inside ? from : WORKSPACE_ROOT;
+    const base = inside ? from : ceiling;
     if (path === base) return [];
     return path
         .slice(base.length + 1)
@@ -330,7 +336,11 @@ export function WorkspaceFilesPane({
     //
     // Until the record arrives there is no honest conversation directory to
     // show, so the whole machine is the fallback rather than a guess.
-    const home = workspaceCwd ?? WORKSPACE_ROOT;
+    // The machine, not the project root: with no conversation directory to
+    // show there is nothing to be specific about, and the crumb above already
+    // says "Whole computer". These were the same path until the durable root
+    // moved into the home, which is what made the label wrong here.
+    const home = workspaceCwd ?? HOME_ROOT;
     const [directory, setDirectory] = useState(home);
     const [wake, setWake] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
@@ -373,11 +383,17 @@ export function WorkspaceFilesPane({
         setSelected(path);
     }, []);
 
-    const parent = parentOf(directory);
+    // The ceiling is the durable home, which is as far up as the files route
+    // will answer -- and it is a level above where projects live, so "whole
+    // computer" now really is the machine rather than the project root. Taken
+    // from the listing when there is one: the constant is only a first guess,
+    // and the last time this value moved the hardcoded copy stayed behind.
+    const ceiling = data?.home_root ?? HOME_ROOT;
+    const parent = parentOf(directory, ceiling);
     // Above the conversation's own directory the crumb is the whole machine,
     // because that is what the person is actually looking at up there.
     const inHome = directory === home || directory.startsWith(`${home}/`);
-    const segments = segmentsOf(directory, home);
+    const segments = segmentsOf(directory, home, ceiling);
 
     if (data?.sleeping) {
         return (
@@ -399,7 +415,7 @@ export function WorkspaceFilesPane({
                     variant="quiet"
                     size="xs"
                     onClick={() => {
-                        setDirectory(inHome ? home : WORKSPACE_ROOT);
+                        setDirectory(inHome ? home : ceiling);
                         setSelected(null);
                         setAfter(undefined);
                     }}

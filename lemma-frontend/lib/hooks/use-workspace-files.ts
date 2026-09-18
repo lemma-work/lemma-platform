@@ -5,7 +5,24 @@ import type { WorkspaceFileListResponse } from 'lemma-sdk';
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
-export const WORKSPACE_ROOT = '/workspace';
+/**
+ * The furthest up the pane may browse, and where it lands by default.
+ *
+ * These are two different paths and used to be one. The sandbox root moved
+ * into the user's home so that everything a tool writes to `~` -- `~/.npm`,
+ * `~/.cargo`, a browser profile -- survives a suspend along with it; projects
+ * then live one level down in `~/lemma`. The frontend kept asking for
+ * `/workspace`, which stopped existing, and a missing directory listed exactly
+ * like an empty one, so the pane showed a working, empty folder instead of a
+ * mistake.
+ *
+ * Both are defaults, not the answer: every listing carries `home_root` and
+ * `workspace_root`, and the pane prefers those. Serving them is what stops
+ * this drifting a third time -- a constant here can only ever be as current as
+ * the last person to remember it.
+ */
+export const HOME_ROOT = '/home/user';
+export const WORKSPACE_ROOT = `${HOME_ROOT}/lemma`;
 
 export const workspaceFilesQueryKey = (path: string, wake: boolean, after?: string) =>
     ['workspace-files', path, wake, after ?? ''] as const;

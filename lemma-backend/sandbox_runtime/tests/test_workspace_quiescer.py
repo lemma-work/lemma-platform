@@ -35,6 +35,56 @@ async def test_quiescer_removes_only_declared_ephemeral_state(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_a_suspend_keeps_the_login_and_drops_only_the_dead_locks(
+    tmp_path: Path,
+) -> None:
+    """The profile survives a pause; the files naming a dead process do not.
+
+    This class removes *nonportable compute state*, and it used to read that
+    as "the whole browser profile". The distinction it was missing is the one
+    that matters to a person: `SingletonLock` names a process that a suspend
+    has already ended, so Chrome refuses to start against it and it has to go.
+    `Cookies` names nothing -- it is the login, and deleting it is why signing
+    in lasted exactly as long as the sandbox did.
+    """
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "Cookies").write_text("the session")
+    (profile / "Preferences").write_text("{}")
+    (profile / "Local Storage").mkdir()
+    (profile / "SingletonLock").symlink_to("hostname-1234")
+    (profile / "DevToolsActivePort").write_text("41337\n/devtools/browser/x")
+
+    await WorkspaceQuiescer(
+        ephemeral_directories=(),
+        ephemeral_files=(),
+        browser_profile=profile,
+        isolated_process_namespace=False,
+        shed_browser_processes=lambda: 0,
+    ).quiesce()
+
+    assert (profile / "Cookies").read_text() == "the session"
+    assert (profile / "Preferences").exists()
+    assert (profile / "Local Storage").is_dir()
+    # `is_symlink` rather than `exists`: the target never existed, so a
+    # dangling link reports `exists() is False` while still being in the way.
+    assert not (profile / "SingletonLock").is_symlink()
+    assert not (profile / "DevToolsActivePort").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_profile_is_not_an_error(tmp_path: Path) -> None:
+    """The common case: nothing has run a browser in this sandbox yet."""
+    await WorkspaceQuiescer(
+        ephemeral_directories=(),
+        ephemeral_files=(),
+        browser_profile=tmp_path / "never-created",
+        isolated_process_namespace=False,
+        shed_browser_processes=lambda: 0,
+    ).quiesce()
+
+
+@pytest.mark.asyncio
 async def test_a_shared_namespace_still_sheds_the_browser(tmp_path: Path) -> None:
     """The E2B path, which is the one carrying production.
 

@@ -43,6 +43,27 @@ WORKSPACE_ROOT = f"{HOME_ROOT}/lemma"
 #: narrower surface than a shell. See ``api/controllers/files_controller``.
 RUNTIME_FILESYSTEM_ROOTS = (HOME_ROOT, "/tmp")
 
+#: The browser's profile, and therefore where a person's logins live.
+#:
+#: In the home because that is the durable root, which is the whole point: a
+#: sign-in that does not outlive the sandbox is a sign-in the person gets asked
+#: for again on the next conversation. The previous design put the profile in
+#: ``/tmp`` and reconstructed logins afterwards from a scoped, encrypted copy of
+#: the cookies -- which meant guessing which cookies *were* the login, and
+#: getting that wrong three separate times. Chrome already knows. Let it keep
+#: its own state and there is nothing left to guess.
+#:
+#: Not ``~/.agent-browser``: that is the CLI's own cache of downloaded browser
+#: binaries and scratch sessions, and quiesce still clears it wholesale.
+BROWSER_PROFILE_ROOT = f"{HOME_ROOT}/.lemma/browser"
+
+#: The one profile. One per person, because a sandbox is one machine per person
+#: and Chrome locks a profile directory -- so "a persistent profile" and "one
+#: browser" are the same statement. Parallel isolated browsers are still
+#: available by passing ``--session`` with a ``--profile`` of their own, and
+#: those stay under ``/tmp`` where they die with the sandbox.
+BROWSER_PROFILE = f"{BROWSER_PROFILE_ROOT}/profile"
+
 
 def is_inside_home(path: str) -> bool:
     """Whether this absolute path is under the durable root.
@@ -55,6 +76,8 @@ def is_inside_home(path: str) -> bool:
 
 
 __all__ = [
+    "BROWSER_PROFILE",
+    "BROWSER_PROFILE_ROOT",
     "HOME_ROOT",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",

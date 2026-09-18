@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { WorkspaceFilesPane } from './workspace-files-pane';
 
 const asked = vi.hoisted(() => ({ paths: [] as string[] }));
 // What `useWorkspaceFile` answers, so a test can put a real file in the
 // detail pane instead of the empty default.
-const listing = vi.hoisted(() => ({ entries: [] as Array<Record<string, unknown>> }));
+const listing = vi.hoisted(() => ({
+    entries: [] as Array<Record<string, unknown>>,
+    homeRoot: '/home/user',
+}));
 const file = vi.hoisted(() => ({
     data: undefined as { blob: Blob; text: string | null; tooLarge: boolean; sizeBytes: number } | undefined,
 }));
@@ -20,6 +23,8 @@ vi.mock('@/lib/hooks/use-workspace-files', async (importOriginal) => {
             return {
                 data: {
                     path,
+                    home_root: listing.homeRoot,
+                    workspace_root: `${listing.homeRoot}/lemma`,
                     sleeping: false,
                     truncated: false,
                     exists: true,
@@ -39,22 +44,23 @@ afterEach(() => {
     asked.paths = [];
     file.data = undefined;
     listing.entries = [];
+    listing.homeRoot = '/home/user';
     cleanup();
 });
 
 describe('which directory the pane opens', () => {
     it('opens the directory the server resolved, not one it worked out', () => {
-        // The bug: the pane built `/workspace/conversations/{id}` itself,
+        // The bug: the pane built `/home/user/lemma/conversations/{id}` itself,
         // mirroring `get_workspace_cwd()`'s *fallback* branch. Every real run
-        // resolves to `/workspace/c/{date}/{slug}`, so the pane asked for a
+        // resolves to `~/lemma/c/{date}/{slug}`, so the pane asked for a
         // directory that has never existed — and saw no error, because a
         // missing directory and an empty one answer identically.
         render(
-            <WorkspaceFilesPane workspaceCwd="/workspace/c/2026-09-16/quiet-harbour" />,
+            <WorkspaceFilesPane workspaceCwd="/home/user/lemma/c/2026-09-16/quiet-harbour" />,
         );
 
-        expect(asked.paths[0]).toBe('/workspace/c/2026-09-16/quiet-harbour');
-        expect(asked.paths.join(' ')).not.toContain('/workspace/conversations/');
+        expect(asked.paths[0]).toBe('/home/user/lemma/c/2026-09-16/quiet-harbour');
+        expect(asked.paths.join(' ')).not.toContain('/conversations/');
     });
 
     it('shows the whole machine rather than guessing when the cwd is unknown', () => {
@@ -62,7 +68,7 @@ describe('which directory the pane opens', () => {
         // The honest answer is the machine, not a path invented from the id.
         render(<WorkspaceFilesPane />);
 
-        expect(asked.paths[0]).toBe('/workspace');
+        expect(asked.paths[0]).toBe('/home/user');
         expect(screen.getByRole('button', { name: 'Whole computer' })).toBeTruthy();
     });
 
@@ -70,14 +76,31 @@ describe('which directory the pane opens', () => {
         // The pane almost always mounts before the record is fetched, so the
         // first render has no cwd at all. `useState` takes its argument once —
         // seeding from the prop is not following it, and without this the pane
-        // opened on /workspace and stayed there for the life of the mount.
+        // opened on the root and stayed there for the life of the mount.
         const { rerender } = render(<WorkspaceFilesPane />);
-        expect(asked.paths[0]).toBe('/workspace');
+        expect(asked.paths[0]).toBe('/home/user');
 
-        rerender(<WorkspaceFilesPane workspaceCwd="/workspace/c/2026-09-16/quiet-harbour" />);
+        rerender(<WorkspaceFilesPane workspaceCwd="/home/user/lemma/c/2026-09-16/quiet-harbour" />);
 
-        expect(asked.paths.at(-1)).toBe('/workspace/c/2026-09-16/quiet-harbour');
+        expect(asked.paths.at(-1)).toBe('/home/user/lemma/c/2026-09-16/quiet-harbour');
         expect(screen.getByRole('button', { name: 'This conversation' })).toBeTruthy();
+    });
+
+    it('stops climbing at the root the server reports, not one it was compiled with', () => {
+        // The drift this exists to stop. The sandbox root moved into the home
+        // and the frontend kept its own copy of the old value, so it asked for
+        // a directory that no longer existed -- and a missing directory lists
+        // exactly like an empty one, so it looked like a machine with nothing
+        // on it. Every listing now carries the root, and taking the ceiling
+        // from there is what makes a third move a non-event.
+        listing.homeRoot = '/srv/somewhere-else';
+
+        render(<WorkspaceFilesPane workspaceCwd="/srv/somewhere-else/project" />);
+        act(() => screen.getByRole('button', { name: '..' }).click());
+
+        expect(asked.paths.at(-1)).toBe('/srv/somewhere-else');
+        // At the ceiling there is nowhere further up to offer.
+        expect(screen.queryByRole('button', { name: '..' })).toBeNull();
     });
 });
 
@@ -111,9 +134,9 @@ describe('saving a file to your own machine', () => {
                 sizeBytes: 5,
             };
             listing.entries = [
-                { path: '/workspace/notes.txt', name: 'notes.txt', kind: 'file', size_bytes: 5 },
+                { path: '/home/user/lemma/notes.txt', name: 'notes.txt', kind: 'file', size_bytes: 5 },
             ];
-            render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+            render(<WorkspaceFilesPane workspaceCwd="/home/user/lemma" />);
             screen.getByRole('button', { name: /notes\.txt/ }).click();
 
             // Rendering the detail pane must not have minted anything.
@@ -155,9 +178,9 @@ describe('what the detail pane will and will not render', () => {
             sizeBytes: 4,
         };
         listing.entries = [
-            { path: '/workspace/clip.mp4', name: 'clip.mp4', kind: 'file', size_bytes: 4 },
+            { path: '/home/user/lemma/clip.mp4', name: 'clip.mp4', kind: 'file', size_bytes: 4 },
         ];
-        render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+        render(<WorkspaceFilesPane workspaceCwd="/home/user/lemma" />);
         screen.getByRole('button', { name: /clip\.mp4/ }).click();
         expect(await screen.findByRole('button', { name: /download/i })).toBeTruthy();
 
@@ -173,9 +196,9 @@ describe('what the detail pane will and will not render', () => {
             sizeBytes: 2048,
         };
         listing.entries = [
-            { path: '/workspace/report.docx', name: 'report.docx', kind: 'file', size_bytes: 2048 },
+            { path: '/home/user/lemma/report.docx', name: 'report.docx', kind: 'file', size_bytes: 2048 },
         ];
-        render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+        render(<WorkspaceFilesPane workspaceCwd="/home/user/lemma" />);
         screen.getByRole('button', { name: /report\.docx/ }).click();
         expect(await screen.findByRole('button', { name: /download/i })).toBeTruthy();
 
@@ -191,9 +214,9 @@ describe('what the detail pane will and will not render', () => {
             sizeBytes: 5,
         };
         listing.entries = [
-            { path: '/workspace/notes.txt', name: 'notes.txt', kind: 'file', size_bytes: 5 },
+            { path: '/home/user/lemma/notes.txt', name: 'notes.txt', kind: 'file', size_bytes: 5 },
         ];
-        render(<WorkspaceFilesPane workspaceCwd="/workspace" />);
+        render(<WorkspaceFilesPane workspaceCwd="/home/user/lemma" />);
         screen.getByRole('button', { name: /notes\.txt/ }).click();
         expect(await screen.findByRole('button', { name: /download/i })).toBeTruthy();
 
