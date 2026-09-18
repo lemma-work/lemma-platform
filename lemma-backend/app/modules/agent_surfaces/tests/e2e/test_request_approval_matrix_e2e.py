@@ -175,7 +175,7 @@ async def test_a_tapped_approve_runs_the_tool_and_resumes_the_run(
 
     assert await stage.saw("Show a widget"), "the request never reached the person"
     approve = await stage.control("Approve")
-    await stage.press(approve, context=context)
+    await stage.press(approve)
 
     await run_deferred_reconciliation(
         db_session, conversation_id=context.conversation_id, pod_id=context.pod_id
@@ -223,7 +223,7 @@ async def test_a_tapped_deny_skips_the_wrapped_tool(
     )
 
     deny = await stage.control("Deny")
-    await stage.press(deny, context=context)
+    await stage.press(deny)
     # No reconciliation: only an approved tool defers its execution to a job.
     await stage.resume(context, approval_id=TOOL_CALL_ID)
 

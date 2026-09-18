@@ -1,21 +1,27 @@
-"""ask_user tool-coverage matrix: native rendering + resume, across every
-platform that supports native choices (Slack, Teams, Telegram, WhatsApp), plus
-negative cases proving the tool is suppressed on email surfaces (Gmail,
-Outlook, Resend) where the agent must complete via its single reply-tool call
-instead of ever pausing on a question.
+"""``ask_user``: the question renders natively, and the answer comes back.
 
-Unlike the old ``AskUserHarness`` (which hand-crafted a WAITING ``AgentEvent``
-without ever calling the real tool), these tests script the LLM only — the
-real ``ask_user`` tool runs for real, genuinely raises ``AgentInputRequired``,
-and the synthesized ``AskUserResponse`` genuinely flows back through history.
-This is what proves the mechanism (real harness + mock_llm_script) end-to-end
-before it's reused for every other tool-matrix file.
+One journey, four platforms. The agent asks; the platform renders the choices
+in whatever native control it has; the person answers; the run resumes with the
+real ``AskUserResponse`` in its history. `stage.answer` covers both shapes of
+"answer" -- Telegram and WhatsApp give each option its own button, so answering
+is pressing one, while Slack renders a select and Teams an Adaptive Card, so
+answering is a submission. Neither restates a token: both read it off what the
+agent actually rendered.
+
+Unlike the old ``AskUserHarness``, which hand-crafted a WAITING ``AgentEvent``
+without ever calling the tool, these script the LLM only. The real ``ask_user``
+runs, genuinely raises ``AgentInputRequired``, and the synthesized response
+genuinely flows back through history -- which is what the final assertion here
+reads, and what the old fake could never have proved.
+
+Two cases are not that journey and keep their own tests below: Slack refusing
+the native render and falling back to text, and email, where the tool is
+suppressed entirely and the agent must complete in its single reply.
 """
 
 from __future__ import annotations
 
 import json
-import urllib.parse
 from uuid import UUID
 
 import pytest
@@ -23,65 +29,52 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
-from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    E2E_SLACK_APP_ID,
-    REAL_TEAMS_CHANNEL_ID,
-    REAL_TEAMS_TENANT_ID,
-    REAL_TEAMS_THREAD_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _load_slack_dm_fixture,
-    _load_teams_channel_mention_fixture,
     _messages_for_conversation,
     _resend_payload,
-    _seed_external_user,
-    _set_user_mobile_number,
-    _telegram_payload,
-    _whatsapp_payload,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
-    build_slack_signature_headers,
-    build_telegram_secret_headers,
-    build_whatsapp_signature_headers,
     wait_for_messages,
     wait_for_slack_text,
 )
+from app.modules.agent_surfaces.tests.e2e.platform_payloads import (
+    slack as slack_payloads,
+)
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
-    resume_latest_scripted_run,
     script_ask_user,
     script_text,
+)
+from app.modules.agent_surfaces.tests.e2e.surface_journey import (
+    CHAT_PLATFORMS,
+    stage_surface,
 )
 from app.modules.connectors.domain.connector import AuthProvider
 
 pytestmark = pytest.mark.e2e
 
+_TOOL_CALL_ID = "tool-ask-1"
+ANSWERED = "Thanks — recorded your answer."
 
-class _FakeScheduleManager:
-    async def create_schedule(self, *, account, app_trigger, config) -> str:
-        return f"e2e-{app_trigger.id}"
-
-    async def delete_schedule(self, account, provider_id: str) -> None:
-        return None
-
-    async def get_schedule(self, account, provider_id: str):
-        return None
-
-
-_QUESTIONS = [
+QUESTIONS = [
     {
         "question": "Pick a color",
         "header": "color",
         "options": [{"label": "Red"}, {"label": "Blue"}],
     }
 ]
+
+#: Two questions, one of them multi-select and one option carrying a
+#: description and a recommendation -- the shape the text fallback below has to
+#: render readably when the native control is refused.
 _MULTI_QUESTIONS = [
     {
         "question": "Which incident priorities should the agent monitor?",
@@ -108,158 +101,101 @@ _MULTI_QUESTIONS = [
         ],
     },
 ]
-_TOOL_CALL_ID = "tool-ask-1"
+
+#: What a native render looks like in the wire payload, per platform. This is
+#: the assertion the matrix exists for -- "natively where the platform supports
+#: it" is only a promise if something checks the control is native rather than
+#: a paragraph of text.
+NATIVE_CONTROL = {
+    SurfacePlatform.SLACK: "static_select",
+    SurfacePlatform.TEAMS: "AdaptiveCard",
+    SurfacePlatform.TELEGRAM: "inline_keyboard",
+    SurfacePlatform.WHATSAPP: "interactive",
+}
 
 
-def _slack_ask_user_submission_payload(
-    *, callback_id: str, user_id: str, channel_id: str, header: str, label: str
-) -> dict:
-    """A Slack block_actions submission answering a native ask_user question.
+class _FakeScheduleManager:
+    async def create_schedule(self, *, account, app_trigger, config) -> str:
+        return f"e2e-{app_trigger.id}"
 
-    The native render keys the select by the question header (block_id) and
-    uses the option label as its value, so the answer flattens to
-    ``{header: label}``.
-    """
+    async def delete_schedule(self, account, provider_id: str) -> None:
+        return None
+
+    async def get_schedule(self, account, provider_id: str):
+        return None
+
+
+@pytest.fixture
+def platform_fake(fake_slack, fake_teams, fake_telegram, fake_whatsapp):
     return {
-        "type": "block_actions",
-        "api_app_id": E2E_SLACK_APP_ID,
-        "user": {"id": user_id},
-        "team": {"id": "T0123456"},
-        "channel": {"id": channel_id},
-        "container": {"message_ts": "1700000000.700700"},
-        "message": {"ts": "1700000000.700700"},
-        "actions": [
-            {
-                "action_id": "lemma_form_submit",
-                "value": callback_id,
-                "action_ts": "1700000000.700800",
-            }
-        ],
-        "state": {
-            "values": {
-                header: {
-                    header: {
-                        "type": "static_select",
-                        "selected_option": {"value": label},
-                    }
-                }
-            }
-        },
+        SurfacePlatform.SLACK: fake_slack,
+        SurfacePlatform.TEAMS: fake_teams,
+        SurfacePlatform.TELEGRAM: fake_telegram,
+        SurfacePlatform.WHATSAPP: fake_whatsapp,
     }
 
 
-async def test_ask_user_native_slack_blocks_then_resumes_with_answer(
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
+async def test_the_question_renders_natively_and_the_answer_resumes_the_run(
+    platform: SurfacePlatform,
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
-    fake_slack,
+    fixed_test_org,
     message_store,
     monkeypatch,
-):
-    """ask_user renders as native Slack choices; a block_actions answer resumes
-    the paused run with a REAL, structured ``AskUserResponse``."""
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="slack",
-        credentials={
-            "access_token": "xoxb-ask-matrix",
-            "scope": "chat:write",
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "bot_user_id": "U0AGSSTQZLH",
-                "team_id": "T0123456",
-                "api_base_url": fake_slack.base_url,
-            },
-        },
-    )
-    agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "SLACK", "account_id": str(account.id)},
+    platform_fake,
+) -> None:
+    stage = await stage_surface(
+        platform,
+        fake=platform_fake[platform],
         toolsets=["USER_INTERACTION"],
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
     )
-
-    dm_payload = _load_slack_dm_fixture(text="which color?", ts="1700000000.600600")
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
+    context = await stage.say(
+        "ask me something",
         script=[
-            script_ask_user(_QUESTIONS, tool_call_id=_TOOL_CALL_ID),
-            script_text("Thanks — recorded your answer."),
+            script_ask_user(QUESTIONS, tool_call_id=_TOOL_CALL_ID),
+            script_text(ANSWERED),
         ],
     )
-    assert isinstance(context, SurfaceChatContext)
-    conversation_id = str(context.conversation_id)
-    sender_id = dm_payload["event"]["user"]
-    channel_id = dm_payload["event"]["channel"]
 
-    # The real ask_user tool call was rendered as a native Slack select — not a
-    # plain-text question.
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=1)
-    rendered = json.dumps(slack_messages)
-    assert "Pick a color" in rendered
-    assert "Blue" in rendered and "static_select" in rendered
+    assert await stage.saw("Pick a color"), "the question never reached the person"
+    rendered = json.dumps(await stage.delivered(), default=str, ensure_ascii=False)
+    assert NATIVE_CONTROL[platform] in rendered, (
+        f"{platform.value}: the question was not rendered as a native control"
+    )
+    assert "Blue" in rendered, "the options were not offered"
 
-    submission = _slack_ask_user_submission_payload(
-        callback_id=f"{conversation_id}|{_TOOL_CALL_ID}",
-        user_id=sender_id,
-        channel_id=channel_id,
-        header="color",
-        label="Blue",
-    )
-    form_body = urllib.parse.urlencode({"payload": json.dumps(submission)}).encode(
-        "utf-8"
-    )
-    headers = build_slack_signature_headers(
-        raw_body=form_body, signing_secret="slack-secret"
-    )
-    headers["Content-Type"] = "application/x-www-form-urlencoded"
-    resp = await authenticated_client.post(
-        "/surfaces/webhooks/slack", content=form_body, headers=headers
-    )
-    assert resp.status_code == 200, resp.text
+    await stage.answer({"color": "Blue"})
+    await stage.resume(context)
 
-    uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
-    handled = await handler.try_handle_interaction(
-        SurfacePlatformWebhookIngress(source="slack", payload=submission, headers={})
-    )
-    assert handled is True
-    await uow.commit()
+    assert await stage.saw(ANSWERED[:-1]), "the resumed run never reached the person"
 
-    await resume_latest_scripted_run(
-        db_session,
-        conversation_id=context.conversation_id,
-        user_id=context.user_id,
-        pod_id=context.pod_id,
-        agent_name=context.agent_name,
-    )
-
-    delivered = await wait_for_slack_text(
-        message_store, "Thanks — recorded your answer."
-    )
-    assert any("Thanks — recorded your answer." in text for text in delivered), (
-        f"the resumed run never reached Slack: {delivered}"
-    )
-
-    # Proof the mechanism gives that the old fake harness never could: the REAL
-    # AskUserResponse shape flowed through persisted history.
+    # The proof the old fake harness could never give: the real AskUserResponse
+    # shape flowed through persisted history.
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=conversation_id
+        authenticated_client,
+        pod_id=stage.pod_id,
+        conversation_id=str(context.conversation_id),
     )
     tool_return = next(
-        m
-        for m in messages
-        if m.get("tool_call_id") == _TOOL_CALL_ID and m.get("kind") == "TOOL_RETURN"
+        message
+        for message in messages
+        if message.get("tool_call_id") == _TOOL_CALL_ID
+        and message.get("kind") == "TOOL_RETURN"
     )
     assert tool_return["tool_result"]["answers"] == {"color": "Blue"}
+
+
+# -- Not that journey: a refused native render, and email -------------------
 
 
 async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
@@ -306,7 +242,7 @@ async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
     )
 
     fake_slack.chat_post_blocks_error = "invalid_blocks"
-    first_payload = _load_slack_dm_fixture(
+    first_payload = slack_payloads.dm(
         text="Help me configure incident notifications",
         ts="1700000000.610610",
     )
@@ -333,7 +269,7 @@ async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
     assert "2. Which response channel" in fallback
     assert "you can pick more than one" in fallback
 
-    reply_payload = _load_slack_dm_fixture(
+    reply_payload = slack_payloads.dm(
         text="Use standard incident defaults",
         ts="1700000000.610611",
         thread_ts="1700000000.610610",
@@ -367,397 +303,6 @@ async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
         "priorities": "Use standard incident defaults",
         "channel": "Use standard incident defaults",
     }
-
-
-async def test_ask_user_native_teams_adaptive_card_then_resumes_with_answer(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_teams,
-    message_store,
-    monkeypatch,
-):
-    """ask_user renders as a native Teams Adaptive Card Input.ChoiceSet; an
-    Action.Submit answer resumes the paused run with a REAL AskUserResponse."""
-    from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-
-    async def _fake_bot_token(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return "teams-bot-token"
-
-    async def _disable_graph(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return None
-
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_bot_token", _fake_bot_token)
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_graph_token", _disable_graph)
-    monkeypatch.setattr(
-        surface_settings,
-        "microsoft_bot_openid_config_url",
-        fake_teams.openid_config_url,
-    )
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="microsoft_teams",
-        credentials={
-            "access_token": "teams-token",
-            "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
-        },
-    )
-    agent, surface = await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={
-            "type": "TEAMS",
-            "account_id": str(account.id),
-            "allowed_channel_ids": [REAL_TEAMS_CHANNEL_ID],
-        },
-        toolsets=["USER_INTERACTION"],
-    )
-
-    payload = _load_teams_channel_mention_fixture(fake_teams)
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="teams", payload=payload, headers={}),
-        script=[
-            script_ask_user(_QUESTIONS, tool_call_id=_TOOL_CALL_ID),
-            script_text("Thanks — recorded your answer."),
-        ],
-    )
-    assert isinstance(context, SurfaceChatContext)
-    conversation_id = str(context.conversation_id)
-
-    teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    rendered = json.dumps(teams_messages)
-    assert "Pick a color" in rendered
-    assert "Input.ChoiceSet" in rendered and "Blue" in rendered
-
-    submission = {
-        "type": "message",
-        "id": "teams-answer-activity-1",
-        "serviceUrl": fake_teams.service_url,
-        "from": payload["from"],
-        "conversation": payload["conversation"],
-        "channelData": payload["channelData"],
-        "replyToId": REAL_TEAMS_THREAD_ID,
-        "value": {
-            "lemma_form_callback_id": f"{conversation_id}|{_TOOL_CALL_ID}",
-            "color": "Blue",
-        },
-    }
-    raw_body = json.dumps(submission).encode("utf-8")
-    resp = await authenticated_client.post(
-        "/surfaces/webhooks/teams",
-        content=raw_body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": (
-                f"Bearer {fake_teams.issue_webhook_token(audience='teams-app-id')}"
-            ),
-        },
-    )
-    assert resp.status_code == 200, resp.text
-
-    uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
-    handled = await handler.try_handle_interaction(
-        SurfacePlatformWebhookIngress(source="teams", payload=submission, headers={})
-    )
-    assert handled is True
-    await uow.commit()
-
-    await resume_latest_scripted_run(
-        db_session,
-        conversation_id=context.conversation_id,
-        user_id=context.user_id,
-        pod_id=context.pod_id,
-        agent_name=context.agent_name,
-    )
-
-    teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=2)
-    text_bodies = [
-        item["body"]
-        for item in teams_messages
-        if item.get("body", {}).get("type") == "message"
-    ]
-    assert "Thanks — recorded your answer." in text_bodies[-1].get("text", "")
-
-    messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=conversation_id
-    )
-    tool_return = next(
-        m
-        for m in messages
-        if m.get("tool_call_id") == _TOOL_CALL_ID and m.get("kind") == "TOOL_RETURN"
-    )
-    assert tool_return["tool_result"]["answers"] == {"color": "Blue"}
-
-
-async def test_ask_user_native_telegram_inline_keyboard_then_resumes_with_answer(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    message_store,
-    monkeypatch,
-):
-    """ask_user renders as a native Telegram inline keyboard; a callback_query
-    tap resumes the paused run with a REAL AskUserResponse."""
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
-        f"{fake_telegram.api_base}/bot",
-    )
-    pod_id = test_pod["id"]
-    sender_id = 555010203
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "TELEGRAM"},
-        toolsets=["USER_INTERACTION"],
-    )
-    await _seed_external_user(
-        db_session,
-        platform="TELEGRAM",
-        external_user_id=str(sender_id),
-        resolved_user_id=UUID(fixed_test_user["id"]),
-    )
-
-    payload = _telegram_payload(
-        text="which color?", message_id=901, sender_id=sender_id
-    )
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        script=[
-            script_ask_user(_QUESTIONS, tool_call_id=_TOOL_CALL_ID),
-            script_text("Thanks — recorded your answer."),
-        ],
-    )
-    assert isinstance(context, SurfaceChatContext)
-    conversation_id = str(context.conversation_id)
-    pod_id_from_ctx = pod_id
-
-    telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
-    rendered = json.dumps(telegram_messages)
-    assert "Pick a color" in rendered
-    keyboard_message = next(m for m in telegram_messages if "reply_markup" in m)
-    inline_keyboard = keyboard_message["reply_markup"]["inline_keyboard"]
-    assert inline_keyboard[1][0]["text"] == "Blue"
-    blue_token = inline_keyboard[1][0]["callback_data"]
-
-    submission = {
-        "update_id": 100501,
-        "callback_query": {
-            "id": "cbq-1",
-            "from": {
-                "id": sender_id,
-                "is_bot": False,
-                "first_name": "Surface",
-                "username": "surfaceuser",
-            },
-            "message": {
-                "message_id": 902,
-                "chat": {"id": sender_id, "type": "private"},
-                "date": 1700000200,
-                "text": "Pick a color",
-            },
-            "chat_instance": "1234567890123456789",
-            "data": blue_token,
-        },
-    }
-    raw_body = json.dumps(submission).encode("utf-8")
-    resp = await authenticated_client.post(
-        "/surfaces/webhooks/telegram",
-        content=raw_body,
-        headers=build_telegram_secret_headers("native-secret"),
-    )
-    assert resp.status_code == 200, resp.text
-
-    uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
-    handled = await handler.try_handle_interaction(
-        SurfacePlatformWebhookIngress(source="telegram", payload=submission, headers={})
-    )
-    assert handled is True
-    await uow.commit()
-
-    await resume_latest_scripted_run(
-        db_session,
-        conversation_id=context.conversation_id,
-        user_id=context.user_id,
-        pod_id=context.pod_id,
-        agent_name=context.agent_name,
-    )
-
-    telegram_messages = message_store.get_all("TELEGRAM")
-    # Telegram renders MarkdownV2, which escapes the trailing "." — match the
-    # unescaped portion of the reply text only.
-    assert any(
-        "Thanks" in m.get("text", "") and "recorded your answer" in m.get("text", "")
-        for m in telegram_messages
-    )
-
-    messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id_from_ctx, conversation_id=conversation_id
-    )
-    tool_return = next(
-        m
-        for m in messages
-        if m.get("tool_call_id") == _TOOL_CALL_ID and m.get("kind") == "TOOL_RETURN"
-    )
-    assert tool_return["tool_result"]["answers"] == {"color": "Blue"}
-
-
-async def test_ask_user_native_whatsapp_buttons_then_resumes_with_answer(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_whatsapp,
-    message_store,
-    monkeypatch,
-):
-    """ask_user renders as native WhatsApp reply buttons; a button_reply
-    resumes the paused run with a REAL AskUserResponse."""
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
-        f"{fake_whatsapp.api_base}/v21.0",
-    )
-    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
-    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-001")
-    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "wa-secret")
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    pod_id = test_pod["id"]
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "WHATSAPP"},
-        toolsets=["USER_INTERACTION"],
-    )
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="15550555555",
-    )
-
-    payload = _whatsapp_payload(
-        text="which color?",
-        message_id="wamid-e2e-ask-001",
-        phone_number_id="1234567890",
-        waba_id="waba-001",
-        sender_phone="15550555555",
-    )
-    context = await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="whatsapp", payload=payload, headers={}),
-        script=[
-            script_ask_user(_QUESTIONS, tool_call_id=_TOOL_CALL_ID),
-            script_text("Thanks — recorded your answer."),
-        ],
-    )
-    assert isinstance(context, SurfaceChatContext)
-    conversation_id = str(context.conversation_id)
-
-    whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=1)
-    interactive_messages = [
-        m for m in whatsapp_messages if m.get("type") == "interactive"
-    ]
-    assert interactive_messages
-    rendered = json.dumps(interactive_messages)
-    assert "Pick a color" in rendered and "Blue" in rendered
-
-    submission = {
-        "object": "whatsapp_business_account",
-        "entry": [
-            {
-                "id": "waba-001",
-                "changes": [
-                    {
-                        "value": {
-                            "messaging_product": "whatsapp",
-                            "metadata": {"phone_number_id": "1234567890"},
-                            "contacts": [
-                                {
-                                    "wa_id": "15550555555",
-                                    "profile": {"name": "Surface Test User"},
-                                }
-                            ],
-                            "messages": [
-                                {
-                                    "from": "15550555555",
-                                    "id": "wamid-e2e-reply-001",
-                                    "type": "interactive",
-                                    "interactive": {
-                                        "type": "button_reply",
-                                        "button_reply": {
-                                            "id": (
-                                                f"{conversation_id}|{_TOOL_CALL_ID}"
-                                                "~color~Blue"
-                                            ),
-                                            "title": "Blue",
-                                        },
-                                    },
-                                    "timestamp": "1700000001",
-                                }
-                            ],
-                        }
-                    }
-                ],
-            }
-        ],
-    }
-    raw_body = json.dumps(submission).encode("utf-8")
-    resp = await authenticated_client.post(
-        "/surfaces/webhooks/whatsapp",
-        content=raw_body,
-        headers=build_whatsapp_signature_headers(
-            raw_body=raw_body, app_secret="wa-secret"
-        ),
-    )
-    assert resp.status_code == 200, resp.text
-
-    uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
-    handled = await handler.try_handle_interaction(
-        SurfacePlatformWebhookIngress(source="whatsapp", payload=submission, headers={})
-    )
-    assert handled is True
-    await uow.commit()
-
-    await resume_latest_scripted_run(
-        db_session,
-        conversation_id=context.conversation_id,
-        user_id=context.user_id,
-        pod_id=context.pod_id,
-        agent_name=context.agent_name,
-    )
-
-    whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=2)
-    text_messages = [m for m in whatsapp_messages if m.get("type") == "text"]
-    assert "Thanks — recorded your answer." in text_messages[-1]["text"]["body"]
-
-    messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=conversation_id
-    )
-    tool_return = next(
-        m
-        for m in messages
-        if m.get("tool_call_id") == _TOOL_CALL_ID and m.get("kind") == "TOOL_RETURN"
-    )
-    assert tool_return["tool_result"]["answers"] == {"color": "Blue"}
 
 
 async def test_ask_user_on_resend_completes_in_the_one_reply(

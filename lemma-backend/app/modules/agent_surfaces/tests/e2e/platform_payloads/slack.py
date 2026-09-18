@@ -42,6 +42,8 @@ CHANNEL_ID = "C0123456"
 #: message rather than restated — see `control_value`.
 APPROVE_ACTION_ID = "lemma_approval_approve"
 DENY_ACTION_ID = "lemma_approval_deny"
+#: The submit button a native `ask_user` form renders.
+FORM_SUBMIT_ACTION_ID = "lemma_form_submit"
 
 
 def envelope(
@@ -171,13 +173,19 @@ def button_press(
 def form_submit(
     *,
     value: str,
-    action_id: str,
     fields: dict[str, str],
+    action_id: str = FORM_SUBMIT_ACTION_ID,
     channel: str = DM_CHANNEL_ID,
     sender: str = SENDER_ID,
     message_ts: str = "1700000000.700900",
 ) -> dict[str, Any]:
-    """A `block_actions` submit carrying collected input values."""
+    """A `block_actions` submit carrying the answers a native form collected.
+
+    The native render keys each select by the question's header (which is the
+    `block_id`) and uses the option label as its value, so an answer flattens
+    to `{header: label}`. `static_select` rather than a text input because that
+    is what `ask_user` renders.
+    """
     payload = button_press(
         value=value,
         action_id=action_id,
@@ -187,8 +195,13 @@ def form_submit(
     )
     payload["state"] = {
         "values": {
-            block: {block: {"type": "plain_text_input", "value": answer}}
-            for block, answer in fields.items()
+            header: {
+                header: {
+                    "type": "static_select",
+                    "selected_option": {"value": answer},
+                }
+            }
+            for header, answer in fields.items()
         }
     }
     return payload

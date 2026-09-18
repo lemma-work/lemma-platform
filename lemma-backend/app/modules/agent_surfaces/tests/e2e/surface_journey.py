@@ -224,12 +224,47 @@ class SurfaceStage:
         )
         return found
 
-    async def press(
-        self, control: RenderedControl, *, context: SurfaceChatContext
-    ) -> None:
+    async def press(self, control: RenderedControl) -> None:
         """Submit the tap, through the real interaction path."""
-        del context  # Kept in the signature: a tap always belongs to a turn.
-        payload = _PRESS_BUILDERS[self.platform](self, control)
+        await self._submit(_PRESS_BUILDERS[self.platform](self, control))
+
+    async def answer(self, fields: dict[str, str]) -> None:
+        """Answer a rendered question, however this platform asks it.
+
+        The promise is that the person may respond either way, and the two ways
+        are not the same shape: Telegram and WhatsApp render each option as its
+        own button, so answering *is* pressing one. Slack renders a select and
+        Teams an Adaptive Card, so answering is a submission carrying the
+        fields. Both take the token off what was rendered rather than
+        restating it.
+        """
+        if self.platform in (SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP):
+            for label in fields.values():
+                await self.press(await self.control(label))
+            return
+
+        messages = await self.delivered()
+        if self.platform is SurfacePlatform.SLACK:
+            submit = _slack_control_by_action(
+                messages, slack_payloads.FORM_SUBMIT_ACTION_ID
+            )
+            assert submit is not None, (
+                f"Slack rendered no submit control: {_rendered(messages)[:2000]}"
+            )
+            payload = slack_payloads.form_submit(
+                value=submit.value, fields=fields, sender=self.sender_id
+            )
+        else:
+            card = _teams_submit_data(messages)
+            assert card is not None, (
+                f"Teams rendered no submitted-card action: {_rendered(messages)[:2000]}"
+            )
+            payload = teams_payloads.card_submit(
+                service_url=self.surface["_service_url"], values={**card, **fields}
+            )
+        await self._submit(payload)
+
+    async def _submit(self, payload: dict[str, Any]) -> None:
         uow = SqlAlchemyUnitOfWork(self.db_session)
         handled = await build_surface_event_handler(uow).try_handle_interaction(
             SurfacePlatformWebhookIngress(
@@ -237,8 +272,8 @@ class SurfaceStage:
             )
         )
         assert handled is True, (
-            f"{self.platform.value}: the interaction path refused a control it "
-            "had just rendered"
+            f"{self.platform.value}: the interaction path refused a submission "
+            "for a form it had just rendered"
         )
         await uow.commit()
 
@@ -291,6 +326,34 @@ def _slack_control(
                         value=str(element.get("value") or ""),
                         action=str(element["action_id"]),
                     )
+    return None
+
+
+def _slack_control_by_action(
+    messages: list[dict[str, Any]], action_id: str
+) -> RenderedControl | None:
+    """A Slack control found by what it does rather than by what it says."""
+    for message in reversed(messages):
+        for block in _slack_blocks(message):
+            for element in block.get("elements") or []:
+                if isinstance(element, dict) and element.get("action_id") == action_id:
+                    return RenderedControl(
+                        label=str((element.get("text") or {}).get("text") or ""),
+                        value=str(element.get("value") or ""),
+                        action=action_id,
+                    )
+    return None
+
+
+def _teams_submit_data(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The `data` an Adaptive Card's submit action carries, token and all."""
+    for message in reversed(messages):
+        for attachment in (message.get("body") or {}).get("attachments") or []:
+            content = (attachment or {}).get("content") or {}
+            for action in content.get("actions") or []:
+                data = (action or {}).get("data")
+                if isinstance(data, dict) and teams_payloads.FORM_CALLBACK_KEY in data:
+                    return dict(data)
     return None
 
 
