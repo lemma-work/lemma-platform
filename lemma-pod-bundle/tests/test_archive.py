@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import io
 import json
 import os
@@ -21,6 +22,20 @@ def _make_bundle_dir(tmp_path: Path, name: str = "demo") -> Path:
         json.dumps({"name": "items", "columns": []}), encoding="utf-8"
     )
     return root
+
+
+def _symlink_to_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except NotImplementedError as exc:
+        pytest.skip(f"symlink creation is not supported: {exc}")
+    except OSError as exc:
+        if (
+            getattr(exc, "winerror", None) == 1314
+            or exc.errno in {errno.EACCES, errno.EPERM}
+        ):
+            pytest.skip(f"symlink creation is not permitted: {exc}")
+        raise
 
 
 def test_pack_and_extract_round_trip(tmp_path: Path):
@@ -56,7 +71,7 @@ def test_pack_bundle_missing_dir(tmp_path: Path):
 
 def test_pack_bundle_rejects_symlink(tmp_path: Path):
     source = _make_bundle_dir(tmp_path)
-    (source / "link.json").symlink_to(source / "pod.json")
+    _symlink_to_or_skip(source / "link.json", source / "pod.json")
     with pytest.raises(ValueError, match="symlink"):
         pack_bundle(source)
 

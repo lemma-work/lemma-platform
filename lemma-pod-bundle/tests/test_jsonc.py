@@ -67,6 +67,11 @@ def test_loads_jsonc_plain_json_passthrough():
     assert loads_jsonc("[]") == []
 
 
+def test_loads_jsonc_rejects_unterminated_block_comment():
+    with pytest.raises(json.JSONDecodeError, match="Unterminated block comment"):
+        loads_jsonc('{"a": 1} /* missing close')
+
+
 def test_loads_jsonc_invalid_still_raises():
     with pytest.raises(json.JSONDecodeError):
         loads_jsonc('{"a": }')
