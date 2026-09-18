@@ -67,14 +67,17 @@ RESUMED_BY_PERSON = "approval_resume"
 
 
 def _with_budget(framing: str, *, unattended: bool) -> str:
-    """Append what this run may spend before it has to stop and ask.
+    """Append the backstop this run stops at, and say it is not a deadline.
 
-    The trace study's first finding was that nothing in the brief says stop:
-    there was no iteration, time or spend limit stated anywhere, while both base
-    prompts said "complete the requested work". A run that knows it has twenty
-    minutes can choose the short route; one that discovers the wall by hitting
-    it cannot. The numbers are the same ones enforced in the loop, read from the
-    same settings, so the brief cannot drift from the behaviour.
+    Nothing otherwise states a limit, while the base prompts say to complete
+    the work -- so a run could only discover the ceiling by hitting it. Saying
+    it up front is worth the tokens, but *how* it is said decides what the run
+    does with it: given a number and no framing, a model treats it as a target
+    and rushes. It is not one. The work should take as long as it takes, and
+    these sit far enough out that only a run going in circles arrives.
+
+    The numbers are the same ones enforced in the loop, read from the same
+    settings, so the brief cannot drift from the behaviour.
     """
     steps = agent_settings.agent_run_budget_model_requests
     seconds = (
@@ -87,15 +90,15 @@ def _with_budget(framing: str, *, unattended: bool) -> str:
 
     limits = []
     if steps > 0:
-        limits.append(f"about {steps} steps")
+        limits.append(f"{steps} steps")
     if seconds > 0:
         limits.append(f"{int(seconds // 60)} minutes")
     return (
         f"{framing}\n"
-        f"- You have {' or '.join(limits)}, whichever comes first. Past that "
-        "this run pauses and asks a person whether to carry on, so aim for the "
-        "shortest route to a usable result and say what is left rather than "
-        "starting something you cannot finish."
+        "- Take the time the work needs; a long run that returns the thing "
+        f"asked for is a good outcome. As a backstop, past roughly "
+        f"{' or '.join(limits)} this run pauses and asks a person whether to "
+        "carry on, and you will be told before you are near it."
     )
 
 

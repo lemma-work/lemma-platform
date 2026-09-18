@@ -1,10 +1,22 @@
 """What one run may spend before it stops and asks whether to carry on.
 
-The cost of agent runs is a tail, not an average: most finish in well under a
-minute, and a small handful that never converge account for most of the wall
-time spent. Nothing in the system would have ended one of those earlier, because
-the only limit that existed was a model-request cap set high enough that a
-runaway reached its own natural end first.
+These are backstops for a run that has stopped making progress, not a schedule
+for one that is working. Long work is wanted here: a run that spends an hour and
+returns the thing asked for is a success, and nothing below should hurry it. The
+ceilings sit far enough out that ordinary work -- including slow, patient,
+genuinely long work -- never reaches them, and only a run going round in circles
+does.
+
+The cost of agent runs is a tail, not an average: most finish quickly, and a
+small handful that never converge account for most of the wall time spent.
+Nothing in the system would have ended one of those earlier, because the only
+limit that existed was a model-request cap set high enough that a runaway
+reached its own natural end first.
+
+A run is told before it arrives. Hitting a ceiling unannounced turns a budget
+into a trap -- the run is interrupted mid-thought with no chance to land what it
+has -- so each dimension warns first, once, and the run gets to choose what to
+do with the room that is left.
 
 Three dimensions, because they catch different runaways and no one of them
 catches the others:
@@ -26,7 +38,7 @@ without a model, a run or a database.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -52,6 +64,46 @@ _EXHAUSTED_REASONS = {
         "that is not working."
     ),
 }
+
+
+#: What the *model* is told as it nears a ceiling, per dimension. Addressed to
+#: the run rather than to a person: it says how much room is left and what to do
+#: with it, because the point of warning early is to let the run land what it
+#: has rather than be cut off holding it.
+_APPROACHING_NOTICES = {
+    BudgetDimension.MODEL_REQUESTS: (
+        "You have used about {spent} of roughly {limit} steps for this run. "
+        "There is room left -- keep going if the work needs it -- but if you "
+        "are not close, start landing what you have: record the useful parts "
+        "and say plainly what remains."
+    ),
+    BudgetDimension.WALL_CLOCK: (
+        "This run has been going about {spent} minutes of roughly {limit}. "
+        "There is time left -- keep going if the work needs it -- but if you "
+        "are not close, start landing what you have rather than beginning "
+        "something you cannot finish."
+    ),
+    BudgetDimension.TOOL_FAILURES: (
+        "{spent} actions in a row have now failed, and the run stops to ask at "
+        "{limit}. Whatever is being retried is not working: change approach, or "
+        "report what is blocking you, rather than repeating it."
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetWarning:
+    """A ceiling coming into view, and what to tell the run about it."""
+
+    dimension: BudgetDimension
+    spent: int
+    limit: int
+
+    @property
+    def notice(self) -> str:
+        return _APPROACHING_NOTICES[self.dimension].format(
+            spent=self.spent, limit=self.limit
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +140,13 @@ class RunSpend:
     budget: RunBudget
     model_requests: int = 0
     consecutive_tool_failures: int = 0
+    #: Notices waiting to be handed to the model, oldest first. Filled here and
+    #: drained by whoever is next to build a request, so the decision that a
+    #: warning is due stays with the thing that counts the spending.
+    notices: list[str] = field(default_factory=list)
+    #: Dimensions already warned about. A warning repeated every step would be
+    #: nagging rather than news, and the run cannot act on it twice.
+    warned: set[BudgetDimension] = field(default_factory=set)
 
     def record_model_request(self) -> None:
         self.model_requests += 1
@@ -103,6 +162,58 @@ class RunSpend:
             self.consecutive_tool_failures += 1
         else:
             self.consecutive_tool_failures = 0
+
+    def approaching(self, *, elapsed_seconds: float, at: float) -> BudgetWarning | None:
+        """The first ceiling this run is within `at` of, warned about once.
+
+        Queues the notice as a side effect, because "has been warned" and "the
+        warning still needs delivering" are the same fact and splitting them
+        across two objects is how one of them goes stale. `at` outside (0, 1)
+        switches warning off without touching the ceilings themselves.
+        """
+        if not 0 < at < 1:
+            return None
+        budget = self.budget
+        # Measured raw and reported rounded: minutes read better than seconds in
+        # a notice, but a threshold compared in minutes would fire a minute late.
+        dimensions = (
+            (
+                BudgetDimension.MODEL_REQUESTS,
+                float(self.model_requests),
+                float(budget.model_requests),
+                self.model_requests,
+                budget.model_requests,
+            ),
+            (
+                BudgetDimension.WALL_CLOCK,
+                elapsed_seconds,
+                budget.wall_clock_seconds,
+                int(elapsed_seconds // 60),
+                int(budget.wall_clock_seconds // 60),
+            ),
+            (
+                BudgetDimension.TOOL_FAILURES,
+                float(self.consecutive_tool_failures),
+                float(budget.consecutive_tool_failures),
+                self.consecutive_tool_failures,
+                budget.consecutive_tool_failures,
+            ),
+        )
+        for dimension, spent, limit, shown_spent, shown_limit in dimensions:
+            if limit <= 0 or dimension in self.warned:
+                continue
+            if spent < limit * at:
+                continue
+            self.warned.add(dimension)
+            warning = BudgetWarning(dimension, spent=shown_spent, limit=shown_limit)
+            self.notices.append(warning.notice)
+            return warning
+        return None
+
+    def take_notices(self) -> list[str]:
+        """Hand over the queued notices and forget them."""
+        pending, self.notices = self.notices, []
+        return pending
 
     def exhausted(self, *, elapsed_seconds: float) -> BudgetExhausted | None:
         """The first ceiling reached, or None while there is room left."""

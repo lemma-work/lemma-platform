@@ -50,6 +50,7 @@ from app.modules.agent.tools.tool_errors import (
     result_is_failure,
 )
 
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -160,8 +161,23 @@ class NodeLoop[DepsT]:
         if spend is None:
             return
         spend.record_model_request()
-        exhausted = spend.exhausted(elapsed_seconds=time.monotonic() - self._started_at)
+        elapsed_seconds = time.monotonic() - self._started_at
+        exhausted = spend.exhausted(elapsed_seconds=elapsed_seconds)
         if exhausted is None:
+            # Not there yet, but possibly close enough to say so. The notice is
+            # queued on the spend and picked up by the history processor that
+            # builds the very request this step is about to make, so the run
+            # hears it while it still has room to act on it.
+            warning = spend.approaching(
+                elapsed_seconds=elapsed_seconds,
+                at=agent_settings.agent_run_warn_at,
+            )
+            if warning is not None:
+                logger.info(
+                    "agent.run_budget.approaching.observed",
+                    agent_run_id=str(self.agent_run_id),
+                    dimension=warning.dimension.value,
+                )
             return
 
         tool_call_id = budget_pause_tool_call_id()
