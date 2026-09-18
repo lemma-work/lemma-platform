@@ -1,35 +1,36 @@
-"""Getting a run past a login wall, and keeping what that produced.
+"""Getting a run past a login wall.
 
-Three things happen here, and they are deliberately separate calls rather than
-one "log in" that does whatever is needed:
+Three calls, and between them they are the whole feature:
 
-`try_saved_login` loads a stored session into the browser and says whether the
-site accepted it. `open_request` records that a person is being asked, and puts
-the site in front of them. `finish` captures what they signed in to and stores
-it, scoped to that site.
+`already_signed_in` steers the browser to the site and looks at where it
+landed. `open_request` puts the site in front of the person. `answer` lets the
+waiting run carry on.
 
-Every one of them goes through `resolve_owner` first, which is where the
-permission is actually checked.
+Notice what is *not* here any more. There is no capture, no scoping, no
+encryption, no injection and no re-injection check, because there is nothing
+to store: the sandbox's browser keeps its own profile in the durable home, so
+a person who signs in stays signed in the way they do on their own machine.
 
-The secret never travels as an argument to a command and never lands in the
-sandbox's filesystem where the agent could read it: it goes in the body of an
-authenticated request to the relay, which hands it straight to the browser.
+That removed a whole category of defect rather than one instance of it. The
+previous design read the browser's cookies out, guessed which of them
+constituted "a login", encrypted that guess, and rebuilt it in a different
+browser later -- then guessed again about whether the rebuild had worked. Both
+guesses were wrong in production, in three different ways, and the last one
+told a person their login had been kept when what had been kept was a cookie
+banner's consent flag and a clock-skew number.
+
+The question this asks now is the one a person would ask: open the page, and
+see whether it is still asking you to sign in.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
-from app.modules.web_login.domain.entities import (
-    PendingSignIn,
-    SignInOutcome,
-    WebLoginSecret,
-)
-from app.modules.web_login.infrastructure.repository import WebLoginRepository
+from app.modules.web_login.domain.entities import PendingSignIn, SignInOutcome
 from app.modules.web_login.services.origin import normalize_origin
 from app.modules.web_login.services.pauses import (
     OwnerOfConversation,
@@ -40,32 +41,10 @@ from app.modules.web_login.services.pauses import (
     resume_through_approvals,
 )
 from app.modules.web_login.services.resolution import resolve_owner
-from app.modules.web_login.services.scope import (
-    BrowserState,
-    host_of,
-    looks_signed_in,
-    page_looks_like_a_login_wall,
-    scope_state,
-)
+from app.modules.web_login.services.sites import page_looks_like_a_login_wall
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
-if TYPE_CHECKING:
-    from app.modules.workspace.contracts.browser import BrowserState
-
 logger = get_logger(__name__)
-
-
-def _agent_browser(conversation_id: UUID | None) -> str | None:
-    """The browser session a conversation's agent works in, if one is named.
-
-    `None` leaves the relay to decide from the site, which is what a sign-in
-    wants and what everything else got by accident.
-    """
-    if conversation_id is None:
-        return None
-    from app.modules.workspace.contracts.browser import agent_session
-
-    return agent_session(conversation_id)
 
 
 class SignInService:
@@ -104,8 +83,7 @@ class SignInService:
 
         Deferred because constructing it imports the whole workspace provider
         stack -- Docker, the E2B SDK, httpx -- and every process that merely
-        registers these routes would pay for it at import. The sign-in paths
-        that touch a browser are a minority of what this service does.
+        registers these routes would pay for it at import.
         """
         if self._browser_override is not None:
             return self._browser_override
@@ -123,135 +101,51 @@ class SignInService:
         if built is not None:
             await built.close()
 
-    async def try_saved_login(
-        self,
-        *,
-        origin: str,
-        conversation_id: UUID | None = None,
-        auth_ctx: Context | None = None,
-    ) -> tuple[bool, str]:
-        """Load a stored session for this site into the browser that will use it.
+    async def already_signed_in(
+        self, *, origin: str, auth_ctx: Context | None = None
+    ) -> bool:
+        """Whether the browser can already reach this site signed in.
 
-        Returns whether the browser now holds one, and a sentence for the
-        agent. A session that is present but marked dead is not tried: the
-        point of marking it was to stop a run failing on it.
+        Opens the page and reads where it landed. A site that wants a login
+        sends the browser to a form and says so in the address or the title;
+        one that does not, does not.
 
-        **`conversation_id` names the browser the agent works in**, and getting
-        that wrong was the whole feature failing quietly. A capture is taken
-        from `login-<host>` -- a separate Chrome, so that what is captured is
-        bounded by the site the person signed in to, and so that the agent
-        cannot drive the page while somebody types a password into it. But the
-        *load* has to land where the agent browses. It went to `login-<host>`
-        too: the cookies were injected into a browser nothing else opened, the
-        check that the site accepted them looked at that same browser and
-        passed, and the agent carried on signed out with "signed in with a
-        saved login" in its transcript.
+        The honest limits, because the previous version of this question
+        claimed more than it could deliver. A site serving its login form at
+        the same address under a neutral title reads as signed in here -- and
+        that is the *safe* direction to be wrong, because the agent then meets
+        the wall itself and calls this tool again, saying so. Being wrong the
+        other way is what used to happen: reporting a working login and
+        looping.
+
+        An unreachable browser answers `False`. Not knowing is a reason to ask
+        the person, not a reason to claim they are signed in.
         """
         owner = await resolve_owner(auth_ctx=auth_ctx)
-        site = normalize_origin(origin)
-        domain = host_of(site)
+        return await self._site_is_open(owner, normalize_origin(origin))
 
-        # Two origins from here on: `site` is what the agent asked for,
-        # `stored` is the origin the row was saved under, which may be a
-        # sibling host of the same site (see `pick_for_site`). The row is
-        # read, marked used and marked dead under `stored`; whether it worked
-        # is judged against `site`, because that is the page that has to open.
-        async with self._uow_factory() as uow:
-            repository = WebLoginRepository(uow.session)
-            saved = await repository.get_for_site(owner, site)
-            if saved is None:
-                return False, "no saved login for this site"
-            if not saved.is_usable:
-                return False, "the saved login for this site has stopped working"
-            stored = saved.origin
-            secret = await repository.reveal_secret(owner, stored)
+    async def _site_is_open(self, owner: UUID, site: str) -> bool:
+        """The same question, for a caller that has already been authorised.
 
-        if secret is None or secret.is_empty():
-            return False, "the saved login for this site is empty"
-
-        # Outside the unit of work: a sandbox round trip must not be made
-        # holding a pooled database connection.
-        try:
-            await self._browser.load_login_state(
-                owner,
-                {"cookies": secret.cookies, "origins": secret.origins},
-                domain=domain,
-                session=_agent_browser(conversation_id),
-            )
-        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
-            await self._audit(
-                owner, stored, action="inject", outcome="failed", detail=str(exc)
-            )
-            return False, "the saved login could not be loaded into the browser"
-
-        # Loading a session is not the same as the site accepting it, and this
-        # used to report success on the strength of the load alone. A revoked
-        # or expired session then read as "signed in" for ever: the tool told
-        # the agent to call again if the page still asked for a login, the next
-        # call loaded the same dead state, and said "signed in" again. Nothing
-        # in production ever marked a login dead -- the method for it existed
-        # with no caller.
-        if not await self._site_accepted(owner, site, conversation_id=conversation_id):
-            await self.mark_saved_login_dead(origin=stored, auth_ctx=auth_ctx)
-            return False, "the saved login for this site has stopped working"
-
-        async with self._uow_factory() as uow:
-            await WebLoginRepository(uow.session).mark_used(owner, stored)
-        await self._audit(owner, stored, action="inject", outcome="ok")
-        return True, "signed in with a saved login"
-
-    async def _site_accepted(
-        self, owner: UUID, site: str, *, conversation_id: UUID | None = None
-    ) -> bool:
-        """Whether the site let us in, judged by where the browser ended up.
-
-        Open the page with the session loaded and look at what came back. A
-        site that rejected it sends the browser to a login form, and both the
-        address and the page's own title say so.
-
-        This reads the destination rather than the page body because the
-        destination is already in the reply -- no second round trip into the
-        sandbox for something that is true in the common case. It is not a
-        complete test, and is not claimed to be: a site that serves a login
-        form at the same address under a neutral title will pass it. What it
-        removes is the failure that mattered, which was reporting success
-        without looking at all. A run that gets past this and still meets a
-        wall has `browser_sign_in` to fall back to.
+        `answer` reaches this rather than the public method above: it is
+        already scoped by `pending`, which compares the conversation's owner
+        against the caller, and resolving the permission a second time there
+        would fail for want of a request context that a page's POST does not
+        carry into the service.
         """
         try:
             landed = await self._browser.ensure_for_sign_in(
-                owner,
-                origin=site,
-                report=True,
-                session=_agent_browser(conversation_id),
+                owner, origin=site, report=True
             )
         except _relay_unavailable(), SandboxCapabilityUnsupported:
-            # The browser is not reachable, which says nothing either way about
-            # the session. Treated as accepted so an unreachable sandbox does
-            # not mark a working login dead.
-            return True
+            logger.warning(
+                "web_login.sign_in.browser_unreachable.degraded", origin=site
+            )
+            return False
         if not isinstance(landed, dict):
-            return True
-        return not page_looks_like_a_login_wall(
-            f"{landed.get('url', '')} {landed.get('title', '')}"
-        )
-
-    async def mark_saved_login_dead(
-        self, *, origin: str, auth_ctx: Context | None = None
-    ) -> None:
-        """Record that a stored session no longer works.
-
-        Called when a page loaded with an injected session still shows a login
-        wall. This is what makes the next run ask the person instead of failing
-        the same way again.
-        """
-        owner = await resolve_owner(auth_ctx=auth_ctx)
-        site = normalize_origin(origin)
-        async with self._uow_factory() as uow:
-            await WebLoginRepository(uow.session).mark_dead(owner, site)
-        await self._audit(
-            owner, site, action="inject", outcome="failed", detail="session rejected"
-        )
+            return False
+        where = f"{landed.get('url', '')} {landed.get('title', '')}"
+        return not page_looks_like_a_login_wall(where)
 
     async def open_request(
         self,
@@ -276,7 +170,7 @@ class SignInService:
         """
         owner = await resolve_owner(auth_ctx=auth_ctx)
         site = normalize_origin(origin)
-        del reason, tool_call_id  # carried by the pause, not by this call
+        del reason, tool_call_id, conversation_id  # carried by the pause
 
         try:
             await self._browser.ensure_for_sign_in(owner, origin=site)
@@ -285,14 +179,6 @@ class SignInService:
             # person landing on a cold browser waits, and knowing it started
             # cold is what explains the wait.
             logger.warning("web_login.sign_in.browser_not_ready.degraded")
-
-        await self._audit(
-            owner,
-            site,
-            action="request",
-            outcome="opened",
-            conversation_id=conversation_id,
-        )
         return site
 
     async def pending(
@@ -334,9 +220,8 @@ class SignInService:
         tool_call_id: str,
         user_id: UUID,
         signed_in: bool,
-        force: bool = False,
     ) -> SignInOutcome:
-        """Capture what the person did, and let the waiting run carry on.
+        """Let the waiting run carry on, and say what the site looks like now.
 
         One method for both answers because they are one answer: a person is
         telling us whether they signed in. It used to be `finish` and `decline`
@@ -349,148 +234,25 @@ class SignInService:
         lock, first writer wins, and this resolves through the same endpoint an
         approval button does.
 
-        Refuses when the browser holds nothing for this site, unless forced --
-        said while the person is still here and can do something about it,
-        rather than stored as a login that will not work.
+        Nothing is stored. The browser holds the session, so "did it work" is a
+        question about the browser and is answered by looking at it -- and the
+        answer rides back to the agent rather than blocking the person, who has
+        already done the thing they were asked to do.
         """
         found = await self.pending(conversation_id=conversation_id, user_id=user_id)
         if found is None or found.tool_call_id != tool_call_id:
             raise SignInNotPending(tool_call_id)
 
         site = found.origin
-        if not signed_in:
-            await self._audit(user_id, site, action="request", outcome="declined")
-            await self._tell_the_agent(
-                conversation_id=conversation_id,
-                tool_call_id=tool_call_id,
-                user_id=user_id,
-                approved=False,
-            )
-            return SignInOutcome(origin=site, signed_in=False, saved=False)
-
-        saved, detail = await self.capture(
-            user_id=user_id, origin=site, conversation_id=conversation_id, force=force
-        )
-
-        await self._audit(
-            user_id,
-            site,
-            action="capture",
-            outcome="ok" if saved else "empty",
-            detail=detail,
-            conversation_id=conversation_id,
-        )
+        working = await self._site_is_open(user_id, site) if signed_in else False
         await self._tell_the_agent(
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
             user_id=user_id,
-            approved=True,
-            saved=saved,
-            saved_detail=detail,
+            approved=signed_in,
+            working=working,
         )
-        return SignInOutcome(
-            origin=site, signed_in=True, saved=saved, saved_detail=detail
-        )
-
-    async def capture(
-        self,
-        *,
-        user_id: UUID,
-        origin: str,
-        conversation_id: UUID | None,
-        force: bool = False,
-    ) -> tuple[bool, str | None]:
-        """Read the signed-in browser, keep what is there, hand it to the run.
-
-        Returns whether anything was kept and, when it was not, why. Shared by
-        the two surfaces that can answer a sign-in, because doing it twice
-        would mean two implementations of the one step that has to be right.
-
-        `force` is about whether there is somebody to argue with. The
-        standalone page passes it false first: it can refuse, tell the person
-        "the browser holds nothing for this site", and let them press "Save
-        anyway" -- which only works while they are still in front of it. When
-        the answer arrives through the ordinary approval path there is nobody
-        waiting, so the caller takes what is there and reports the rest.
-        """
-        site = normalize_origin(origin)
-        domain = host_of(site)
-        detail: str | None = None
-
-        try:
-            state: (
-                BrowserState | dict[str, object]
-            ) = await self._browser.save_login_state(user_id, domain=domain)
-        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
-            state = {}
-            detail = f"the browser could not be read: {exc}"
-
-        if state and not looks_signed_in(state, origin=site) and not force:
-            raise NotSignedInYet(site)
-
-        if not state:
-            return False, detail
-
-        scoped = scope_state(state, origin=site)
-        if not (scoped["cookies"] or scoped["origins"]):
-            return False, detail or "nothing for this site was in the browser"
-
-        async with self._uow_factory() as uow:
-            await WebLoginRepository(uow.session).save(
-                user_id=user_id,
-                origin=site,
-                secret=WebLoginSecret(
-                    cookies=scoped["cookies"], origins=scoped["origins"]
-                ),
-            )
-        # Handed to the browser the run will resume into, here and not on the
-        # next run. The person signed in to `login-<host>`; the agent works in
-        # the conversation's own browser, and without this it resumes into one
-        # that has never seen the site. Saving and transferring are two steps
-        # because they are two browsers, and the whole point of the second one
-        # is that it is separate.
-        await self._hand_to_the_agent(
-            user_id,
-            origin=site,
-            conversation_id=conversation_id,
-            scoped=scoped,
-        )
-        return True, detail
-
-    async def _hand_to_the_agent(
-        self,
-        owner: UUID,
-        *,
-        origin: str,
-        conversation_id: UUID | None,
-        scoped: BrowserState,
-    ) -> None:
-        """Put the captured session into the browser the run resumes into.
-
-        Best effort, and deliberately not fatal: the login is already stored, so
-        a transfer that fails costs the run one more `browser_sign_in` -- which
-        will find the saved login and load it -- rather than losing what the
-        person just did.
-        """
-        session = _agent_browser(conversation_id)
-        if session is None:
-            return
-        try:
-            await self._browser.load_login_state(
-                owner,
-                {"cookies": scoped["cookies"], "origins": scoped["origins"]},
-                domain=host_of(origin),
-                session=session,
-            )
-        except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
-            await self._audit(
-                owner,
-                origin,
-                action="inject",
-                outcome="failed",
-                detail=f"could not reach the agent's browser: {exc}",
-                conversation_id=conversation_id,
-            )
+        return SignInOutcome(origin=site, signed_in=signed_in, working=working)
 
     async def _tell_the_agent(
         self,
@@ -499,8 +261,7 @@ class SignInService:
         tool_call_id: str | None,
         user_id: UUID,
         approved: bool,
-        saved: bool = False,
-        saved_detail: str | None = None,
+        working: bool = False,
     ) -> None:
         """Resolve the paused tool call, carrying the outcome with it.
 
@@ -509,15 +270,13 @@ class SignInService:
         is the double-submit lock, and self-healing, which is what makes it safe
         to call from a retry.
 
-        `saved` and `saved_detail` ride on the decision's `response`, which is
-        the channel `ask_user` already uses for its answers. They used to live in
-        a table of this feature's own, which the resume path then had to go and
-        read; two stores for two booleans, and they disagreed.
+        `working` rides on the decision's `response`, which is the channel
+        `ask_user` already uses for its answers.
 
         `approved` maps to APPROVE_ONCE, never APPROVE_FOR_SESSION: signing in
         once is not standing consent to be asked nothing next time. What makes
-        the next run quiet is the saved login, which the person can see and
-        delete -- not a blanket approval they never gave.
+        the next run quiet is the browser still being signed in, which the
+        person can see and undo.
         """
         if conversation_id is None or not tool_call_id:
             # A sign-in asked for outside a run -- from the CLI, or a test.
@@ -531,41 +290,15 @@ class SignInService:
                 tool_call_id=tool_call_id,
                 user_id=user_id,
                 approved=approved,
-                response={"saved": saved, "saved_detail": saved_detail},
+                response={"working": working},
             )
         if not reached:
-            # The conversation is gone. The person still finished, and their
-            # login is still saved -- so this is worth a line, not an error
-            # thrown back at somebody who did what was asked of them.
+            # The conversation is gone. The person still finished, and the
+            # browser is still signed in -- so this is worth a line, not an
+            # error thrown back at somebody who did what was asked of them.
             logger.warning(
                 "web_login.sign_in.conversation_gone.degraded",
                 conversation_id=str(conversation_id),
-            )
-
-    async def _audit(
-        self,
-        user_id: UUID,
-        origin: str,
-        *,
-        action: str,
-        outcome: str,
-        detail: str | None = None,
-        conversation_id: UUID | None = None,
-    ) -> None:
-        """Append to the trail a person can read back.
-
-        `conversation_id` is passed because it is known here and the column
-        existed unwritten: a credential log that cannot say which run used a
-        login answers half the question it is for.
-        """
-        async with self._uow_factory() as uow:
-            await WebLoginRepository(uow.session).record(
-                user_id=user_id,
-                origin=origin,
-                action=action,
-                outcome=outcome,
-                detail=detail,
-                conversation_id=conversation_id,
             )
 
 
@@ -578,10 +311,6 @@ def _relay_unavailable() -> type[Exception]:
     from app.modules.workspace.contracts.browser import browser_unavailable
 
     return browser_unavailable()
-
-
-class NotSignedInYet(Exception):
-    """The browser holds nothing for this site, so there is nothing to keep."""
 
 
 class SignInNotPending(Exception):
@@ -597,4 +326,4 @@ class SignInNotPending(Exception):
         self.tool_call_id = tool_call_id
 
 
-__all__ = ["NotSignedInYet", "SignInService", "page_looks_like_a_login_wall"]
+__all__ = ["SignInNotPending", "SignInService", "page_looks_like_a_login_wall"]

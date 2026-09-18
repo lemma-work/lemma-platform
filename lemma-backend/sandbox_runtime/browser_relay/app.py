@@ -47,12 +47,7 @@ from .chrome import (
     set_display_size,
 )
 from .stream_proxy import CONTROL, VIEW, pump_binary
-from .state import (
-    StateOperationFailed,
-    load_session,
-    save_session,
-    session_for_domain,
-)
+from .cookies import forget_domains, list_cookie_domains
 
 #: Deliberately not under `/tmp/lemma-browser`, which `quiesce` deletes before a
 #: pause: the token has to survive a resume, and the browser profile must not.
@@ -174,15 +169,10 @@ class DisplayResizeResponse(BaseModel):
     size: str
 
 
-class StateSaveRequest(BaseModel):
-    domain: str | None = None
-    session: str | None = None
-
-
-class StateLoadRequest(BaseModel):
-    state: dict = Field(default_factory=dict)
-    domain: str | None = None
-    session: str | None = None
+class ForgetRequest(BaseModel):
+    #: Exact cookie hosts, chosen by the backend. The relay does not know
+    #: which of them are "one site" and must not guess -- see `cookies.py`.
+    domains: list[str] = Field(default_factory=list)
 
 
 def _token() -> str:
@@ -342,21 +332,27 @@ def create_app() -> FastAPI:
             )
         return DisplayResizeResponse(size=size)
 
-    @app.post("/state:save", dependencies=[Depends(require_token)])
-    async def state_save(request: StateSaveRequest) -> dict:
-        session = _session_name(request.session, request.domain)
+    @app.get("/profile:cookies", dependencies=[Depends(require_token)])
+    async def profile_cookies() -> dict:
+        """Which hosts the browser holds cookies for. No values, ever."""
         try:
-            return {"state": await save_session(session=session)}
-        except StateOperationFailed as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            port = await live_port()
+        except BrowserNotRunning:
+            # A browser that is not running holds nothing a person can act on,
+            # and starting one to say so would turn opening a settings page
+            # into waking a sandbox.
+            return {"running": False, "cookies": []}
+        return {"running": True, "cookies": await list_cookie_domains(port=port)}
 
-    @app.post("/state:load", status_code=204, dependencies=[Depends(require_token)])
-    async def state_load(request: StateLoadRequest) -> None:
-        session = _session_name(request.session, request.domain)
+    @app.post("/profile:forget", dependencies=[Depends(require_token)])
+    async def profile_forget(request: ForgetRequest) -> dict:
         try:
-            await load_session(request.state, session=session)
-        except StateOperationFailed as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            port = await live_port()
+        except BrowserNotRunning:
+            raise HTTPException(
+                status_code=409, detail="the browser is not running"
+            )
+        return {"dropped": await forget_domains(request.domains, port=port)}
 
     @app.websocket("/vnc")
     async def vnc_socket(

@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.modules.web_login.services.sign_in import (
-    NotSignedInYet,
     SignInNotPending,
     SignInService,
 )
@@ -46,25 +45,19 @@ class AnswerSignInRequest(BaseModel):
             "cannot right now."
         )
     )
-    force: bool = Field(
-        default=False,
-        description=(
-            "Save whatever the browser holds even though it does not look "
-            "signed in. For sites the check reads wrongly."
-        ),
-    )
 
 
 class SignInOutcomeResponse(BaseModel):
     origin: str
     signed_in: bool
-    saved: bool = Field(
+    working: bool = Field(
         default=False,
-        description="Whether the login was kept for next time.",
-    )
-    saved_detail: str | None = Field(
-        default=None,
-        description="Why it was not kept, in words, when it was not.",
+        description=(
+            "Whether the site stopped asking for a login straight afterwards. "
+            "Reported, not enforced: the person has already done what was "
+            "asked, and a site that shows a form at the same address under a "
+            "neutral title reads as still asking."
+        ),
     )
 
 
@@ -111,11 +104,12 @@ async def answer_sign_in(
     body: AnswerSignInRequest,
     user: CurrentUser,
 ) -> SignInOutcomeResponse:
-    """Capture what the browser now holds, and let the waiting run carry on.
+    """Let the waiting run carry on, and check the site while they are here.
 
-    The capture happens here, while the person is still present, rather than
-    later in the resumed run -- so that "it did not work" is something they can
-    be told at the moment they can still fix it.
+    Nothing is captured: the browser keeps its own profile, so finishing a
+    sign-in is the person finishing it. What this does do is look at the site
+    straight afterwards, while they are still present -- so "it still wants a
+    login" is something they hear now rather than the agent discovering it.
 
     One route for both answers because it is one answer. Two routes meant two
     status writes with two different guards, and the weaker one let a stale tab
@@ -128,26 +122,16 @@ async def answer_sign_in(
             tool_call_id=tool_call_id,
             user_id=user.id,
             signed_in=body.signed_in,
-            force=body.force,
         )
     except SignInNotPending:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No sign-in is waiting on this link",
         )
-    except NotSignedInYet:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "It does not look like you are signed in yet — the browser "
-                "holds nothing for this site. Finish signing in, then try again."
-            ),
-        )
     finally:
         await service.close()
     return SignInOutcomeResponse(
         origin=outcome.origin,
         signed_in=outcome.signed_in,
-        saved=outcome.saved,
-        saved_detail=outcome.saved_detail,
+        working=outcome.working,
     )

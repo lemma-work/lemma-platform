@@ -268,29 +268,25 @@ def _service_with_relay(relay: _VncRelay):
     return _Service()
 
 
-async def test_a_plain_watch_with_a_conversation_lands_in_that_conversations_session() -> (
+async def test_no_caller_names_a_browser_session() -> (
     None
 ):
-    """`run_browser_script` puts every agent browser command in
-    `agent_session(conversation_id)` -- its own session and profile, so one
-    conversation's agent never inherits another's cookies. A plain watch/drive
-    naming that same conversation has to resolve the same session, or it
-    finds nothing the agent touched."""
-    from app.modules.workspace.contracts.browser import agent_session
+    """There is one browser per sandbox, so nothing picks between them.
 
+    A conversation used to select `agent_session(conversation_id)`, a Chrome
+    and profile of its own -- which is exactly what forced a sign-in to be
+    captured in one browser and rebuilt in another, and the rebuilding is what
+    kept being wrong. The conversation id is still accepted, for logging and
+    the keepalive; it must no longer steer anything.
+    """
     relay = _VncRelay()
-    conversation_id = uuid4()
     await _service_with_relay(relay).open_vnc_session(
-        uuid4(), mode="view", conversation_id=conversation_id
+        uuid4(), mode="view", conversation_id=uuid4()
     )
-    assert relay.ensured == {
-        "origin": None,
-        "session": agent_session(conversation_id),
-        "domain": None,
-    }
+    assert relay.ensured == {"origin": None, "session": None, "domain": None}
 
 
-async def test_a_plain_watch_with_no_conversation_lands_in_the_shared_default_session() -> (
+async def test_a_plain_watch_with_no_conversation_lands_in_the_same_browser() -> (
     None
 ):
     relay = _VncRelay()
@@ -298,10 +294,9 @@ async def test_a_plain_watch_with_no_conversation_lands_in_the_shared_default_se
     assert relay.ensured == {"origin": None, "session": None, "domain": None}
 
 
-async def test_a_sign_ins_own_site_session_wins_over_a_conversation() -> None:
-    """`save_login_state` reads a sign-in's capture back by the site's own
-    domain-derived session name -- a conversation id present alongside
-    `origin` must not steer it into the conversation's session instead."""
+async def test_a_sign_in_steers_the_one_browser_rather_than_opening_another() -> None:
+    """An origin still steers -- it just does so in the browser everything
+    else is already using, instead of a session named for the site."""
 
     relay = _VncRelay()
     await _service_with_relay(relay).open_vnc_session(

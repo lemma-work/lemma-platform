@@ -67,23 +67,6 @@ def browser_view_service():
     return module.BrowserViewService
 
 
-def agent_session(conversation_id) -> str:
-    """The browser session one conversation's agent works in.
-
-    Published here because the agent module decides *when* a browser command
-    runs and this module decides *which browser* it runs in. The naming lives
-    in `workspace.domain.browser_context` next to the profile derivation it has
-    to agree with; re-exported through the contract because `domain` is not a
-    surface another module may reach into, and a rule the caller cannot import
-    is a rule the caller will re-invent.
-    """
-    from app.modules.workspace.domain.browser_context import (
-        agent_session as _agent_session,
-    )
-
-    return _agent_session(conversation_id)
-
-
 def browser_unavailable() -> type[Exception]:
     """What a browser call raises when the sandbox cannot answer."""
     from app.modules.workspace.services.browser_relay_client import (
@@ -99,6 +82,5 @@ __all__ = [
     "BrowserState",
     "browser_unavailable",
     "browser_view_service",
-    "agent_session",
     "host_of",
 ]

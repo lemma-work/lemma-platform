@@ -47,13 +47,22 @@ import re
 
 import httpx
 
+from ..paths import BROWSER_PROFILE
+
+#: The browser, and the person's logins. Durable -- see ``paths.py``.
+_DEFAULT_PROFILE = BROWSER_PROFILE
+
 #: Chrome writes the port here on launch; the second line is the browser's own
 #: WebSocket path, which is not what a page-level client wants.
-_ACTIVE_PORT_FILE = Path("/tmp/lemma-browser/profile/DevToolsActivePort")
+_ACTIVE_PORT_FILE = Path(_DEFAULT_PROFILE) / "DevToolsActivePort"
 
-#: Where the image points every browser by default. One directory, so two
-#: browsers cannot both use it.
-_DEFAULT_PROFILE = "/tmp/lemma-browser/profile"
+#: Where an explicitly-named session's profile goes, and it is deliberately not
+#: the durable one. Naming a session is how an agent asks for a *second*,
+#: separate browser -- two signed-in users side by side, say -- and that is a
+#: scratch thing by construction. Under ``/tmp`` so it dies with the sandbox
+#: rather than accumulating profiles in the person's home, one per name anyone
+#: ever passed.
+_SCRATCH_PROFILE_BASE = "/tmp/lemma-browser/profile"
 
 #: The session the image's own tooling uses, and the one that owns the default
 #: profile directory.
@@ -124,7 +133,7 @@ def profile_for_session(session: str | None) -> str | None:  # noqa: D401
     # Nobody reads this directory's name: the *session* keeps the readable
     # `login-app.example.com`, and that is what appears in commands and logs.
     fingerprint = hashlib.sha256(session.encode()).hexdigest()[:32]
-    return f"{_DEFAULT_PROFILE}-{fingerprint}"
+    return f"{_SCRATCH_PROFILE_BASE}-{fingerprint}"
 
 
 def active_port_file(session: str | None = None) -> Path:

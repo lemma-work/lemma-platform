@@ -259,6 +259,10 @@ def workspace_template():
             "/app/sandbox_runtime/tasks.py",
         )
         .copy(
+            "lemma-backend/sandbox_runtime/paths.py",
+            "/app/sandbox_runtime/paths.py",
+        )
+        .copy(
             "lemma-backend/sandbox_runtime/browser_relay",
             "/app/sandbox_runtime/browser_relay",
         )
@@ -304,8 +308,8 @@ def workspace_template():
             user="root",
         )
         .run_cmd(
-            "mkdir -p /home/user /home/user/lemma /tmp/lemma-browser/runtime "
-            "/tmp/lemma-browser/profile && "
+            "mkdir -p /home/user /home/user/lemma /home/user/.lemma/browser "
+            "/tmp/lemma-browser/runtime && "
             "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
             'ln -sf "$(command -v google-chrome-stable)" '
@@ -401,13 +405,13 @@ def workspace_template():
                 "WORKSPACE_XVFB_SCREEN": "1440x960x24",
                 "AGENT_BROWSER_CONFIG": "/tmp/lemma-browser/config.json",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/workspace-chrome",
-                "AGENT_BROWSER_PROFILE": "/tmp/lemma-browser/profile",
+                "AGENT_BROWSER_PROFILE": "/home/user/.lemma/browser/profile",
                 "AGENT_BROWSER_SESSION": "workspace",
                 "AGENT_BROWSER_HEADED": "true",
                 # See Dockerfile.workspace: the daemon closes Chrome after this
                 # long idle, which is what keeps a finished research session
                 # from holding the sandbox's whole memory budget.
-                "AGENT_BROWSER_IDLE_TIMEOUT_MS": "120000",
+                "AGENT_BROWSER_IDLE_TIMEOUT_MS": "300000",
                 # See Dockerfile.workspace: the ceiling on a viewer-requested
                 # resize, since RandR cannot grow the framebuffer Xvfb
                 # allocated at startup.

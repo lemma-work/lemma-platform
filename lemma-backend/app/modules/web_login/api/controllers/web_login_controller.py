@@ -1,244 +1,204 @@
-"""Seeing and removing what has been saved on your behalf.
+"""Seeing and undoing what your browser is signed in to.
 
 A credential store nobody can inspect is one nobody can trust. These are the
-routes that make a saved login a thing the person owns rather than a thing that
-accumulates: what is saved, when it was last used, what has been done with it,
-and how to take it away.
+routes that make that inspectable -- with the difference that there is no
+store any more. The sandbox's browser keeps its own profile, so this asks the
+browser and reports what it says, every time.
 
-**Nothing here returns a secret**, at any privilege level, including to the
-person who created it — the same promise `connector.auth_config.get` makes. The
-listed shape has no field to put one in, which is why the promise is structural
-rather than a rule somebody has to remember.
+Three consequences worth naming, because they are what changed:
+
+**Nothing here returns a secret**, which used to be a promise kept by leaving
+the field out of a response model. It is now kept by the value never crossing
+the sandbox boundary at all -- `browser_relay/cookies.py` reads hosts and
+expiries and nothing else.
+
+**Delete really signs you out.** The previous version removed Lemma's
+encrypted copy and left the browser as it was, which is why the UI had to say
+"this does not sign you out at the site". It does now.
+
+**Listing does not wake anything.** A paused sandbox answers `sleeping`, the
+same shape the files routes use, rather than starting a computer because
+somebody opened a settings page.
 """
 
 from __future__ import annotations
 
-import base64
-from datetime import datetime
-from typing import Annotated
-from uuid import UUID
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from app.core.api.dependencies import CurrentUser, UoWDep
-from app.modules.web_login.domain.entities import WebLogin
-from app.modules.web_login.infrastructure.repository import (
-    MAX_LOGINS_LISTED,
-    WebLoginNotFound,
-    WebLoginRepository,
-)
+from app.core.api.dependencies import CurrentUser
+from app.core.log.log import get_logger
 from app.modules.web_login.services.origin import InvalidOrigin, normalize_origin
+from app.modules.web_login.services.sites import same_site, site_of
+from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 router = APIRouter(prefix="/web-logins", tags=["Web Logins"])
 
-
-def get_repository(uow: UoWDep) -> WebLoginRepository:
-    return WebLoginRepository(uow.session)
-
-
-RepositoryDep = Annotated[WebLoginRepository, Depends(get_repository)]
+logger = get_logger(__name__)
 
 
 class WebLoginResponse(BaseModel):
-    id: UUID
-    origin: str
-    created_at: datetime
-    updated_at: datetime
-    last_used_at: datetime | None
-    working: bool = Field(
+    site: str = Field(
         description=(
-            "Whether the stored session still signs you in. False means it "
-            "stopped working and the next run will ask you again."
+            "The site, as a person would name it. Cookies are grouped by "
+            "registrable domain, so `asur.work` and `api.asur.work` are one "
+            "login rather than two -- the second being the half nobody "
+            "visited on purpose."
+        )
+    )
+    cookie_count: int = Field(
+        description="How many cookies this site has. A rough sense of scale."
+    )
+    expires: datetime | None = Field(
+        default=None,
+        description=(
+            "When the soonest of them lapses, which is the closest thing to "
+            "'when will I have to sign in again'. Null when they are all "
+            "session cookies, which go when the browser does."
         ),
     )
 
 
 class WebLoginListResponse(BaseModel):
     items: list[WebLoginResponse]
-    limit: int
-    #: Pass back as ``page_token`` to continue. ``None`` means this is the last
-    #: page -- a full page is not itself proof that more exist, so this is the
-    #: only signal, and a caller revoking logins must follow it.
-    next_page_token: str | None = None
-
-
-class WebLoginAuditEntry(BaseModel):
-    """One thing that was done with one saved login.
-
-    `detail` is why, when the outcome was not plain "ok" — "session rejected",
-    "nothing for this site was in the browser". It is the platform's own words
-    rather than an agent's paraphrase, which is the point of reading it here.
-    """
-
-    origin: str
-    action: str
-    outcome: str
-    detail: str | None
-    conversation_id: UUID | None = Field(
+    sleeping: bool = Field(
+        default=False,
         description=(
-            "The run that did it, or null for something the person did "
-            "themselves from the saved-logins screen."
+            "True when the computer is paused and was not woken to answer. "
+            "Items are empty; its browser still holds whatever it held."
         ),
     )
-    created_at: datetime
 
 
-class WebLoginAuditResponse(BaseModel):
-    items: list[WebLoginAuditEntry]
-    limit: int
-    #: As above. The token is opaque: this list orders by ``(created_at, id)``
-    #: and carries both, because several rows share a timestamp often enough
-    #: that a cursor on time alone repeats or drops them.
-    next_page_token: str | None = None
-
-
-# Page tokens are opaque to the caller and base64 so nothing in them can be
-# mistaken for a value to act on -- the origin one literally holds a URL, and a
-# token that looks like a link invites somebody to open it. Both decode
-# defensively: a token is a string a client hands back, so a malformed one is a
-# 400 rather than a traceback.
-
-
-def _encode_origin_token(after_origin: str | None) -> str | None:
-    if not after_origin:
-        return None
-    return base64.urlsafe_b64encode(after_origin.encode("utf-8")).decode("ascii")
-
-
-def _decode_origin_token(page_token: str | None) -> str | None:
-    if not page_token:
-        return None
-    try:
-        return base64.urlsafe_b64decode(page_token.encode("ascii")).decode("utf-8")
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid page_token"
-        ) from exc
-
-
-def _encode_audit_token(after: tuple[datetime, UUID] | None) -> str | None:
-    if after is None:
-        return None
-    created_at, row_id = after
-    raw = f"{created_at.isoformat()}|{row_id}"
-    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
-
-
-def _decode_audit_token(page_token: str | None) -> tuple[datetime, UUID] | None:
-    if not page_token:
-        return None
-    try:
-        raw = base64.urlsafe_b64decode(page_token.encode("ascii")).decode("utf-8")
-        stamp, _, row_id = raw.rpartition("|")
-        return datetime.fromisoformat(stamp), UUID(row_id)
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid page_token"
-        ) from exc
-
-
-def _view(login: WebLogin) -> WebLoginResponse:
-    return WebLoginResponse(
-        id=login.id,
-        origin=login.origin,
-        created_at=login.created_at,
-        updated_at=login.updated_at,
-        last_used_at=login.last_used_at,
-        working=login.is_usable,
+class ForgetResponse(BaseModel):
+    site: str
+    forgotten: bool = Field(
+        description="False when the browser was holding nothing for this site."
     )
+
+
+def _browser():
+    """The browser service, imported at call time.
+
+    Naming it at module scope pulls the whole provider stack -- Docker, the
+    E2B SDK -- into the import graph of every process that merely registers
+    these routes.
+    """
+    from app.modules.workspace.contracts.browser import browser_view_service
+
+    return browser_view_service()()
+
+
+def _as_sites(cookies: list[dict[str, object]]) -> list[WebLoginResponse]:
+    """Group raw cookie hosts into the sites a person would recognise.
+
+    Here rather than in the sandbox because this is the public-suffix
+    question, and the suffix list lives on this side. The relay reports hosts
+    and deletes the hosts it is given; it does not know that two of them are
+    one login.
+    """
+    grouped: dict[str, list[float | None]] = {}
+    for cookie in cookies:
+        host = str(cookie.get("domain") or "")
+        if not host:
+            continue
+        # A host with no registrable domain -- `localhost`, a bare IP -- is
+        # its own site. Grouping those under "" would collapse every one of
+        # them into a single meaningless row.
+        key = site_of(host) or host
+        expires = cookie.get("expires")
+        grouped.setdefault(key, []).append(
+            float(expires) if isinstance(expires, (int, float)) else None
+        )
+    items = []
+    for site, expiries in sorted(grouped.items()):
+        real = [e for e in expiries if e]
+        items.append(
+            WebLoginResponse(
+                site=site,
+                cookie_count=len(expiries),
+                expires=(
+                    datetime.fromtimestamp(min(real), tz=timezone.utc) if real else None
+                ),
+            )
+        )
+    return items
 
 
 @router.get(
     "",
     response_model=WebLoginListResponse,
     operation_id="web_login.list",
-    summary="List saved site logins",
+    summary="List the sites your browser is signed in to",
 )
 async def list_web_logins(
-    user: CurrentUser,
-    repository: RepositoryDep,
-    limit: int = Query(default=100, ge=1, le=MAX_LOGINS_LISTED),
-    page_token: str | None = Query(default=None),
+    current_user: CurrentUser,
+    wake: bool = Query(
+        default=False,
+        description=(
+            "Start the computer if it is paused. Off by default so that "
+            "rendering this list is never what wakes one."
+        ),
+    ),
 ) -> WebLoginListResponse:
-    logins, next_origin = await repository.page_for_user(
-        user.id, limit=limit, after_origin=_decode_origin_token(page_token)
-    )
-    return WebLoginListResponse(
-        items=[_view(login) for login in logins],
-        limit=limit,
-        next_page_token=_encode_origin_token(next_origin),
-    )
+    browser = _browser()
+    try:
+        answer = await browser.signed_in_sites(current_user.id, wake=wake)
+    except SandboxCapabilityUnsupported:
+        # A fabric with no reachable browser. Not an error to a reader: there
+        # is nothing signed in because there is nowhere to be signed in.
+        return WebLoginListResponse(items=[])
+    except _relay_unavailable():
+        return WebLoginListResponse(items=[], sleeping=True)
+    if not answer.get("running"):
+        return WebLoginListResponse(items=[], sleeping=True)
+    return WebLoginListResponse(items=_as_sites(list(answer.get("cookies") or [])))
 
 
 @router.delete(
     "",
-    response_model=WebLoginResponse,
+    response_model=ForgetResponse,
     operation_id="web_login.delete",
-    summary="Remove a saved site login",
+    summary="Sign your browser out of a site",
 )
-async def delete_web_login(
-    user: CurrentUser,
-    repository: RepositoryDep,
-    origin: str = Query(min_length=1, max_length=255),
-) -> WebLoginResponse:
-    """Forget a site.
-
-    Removing the row is the whole revocation from Lemma's side. It does **not**
-    sign the person out at the site, and the response says so — a saved session
-    that has been deleted here is still a valid session there until they log out
-    or it expires, and implying otherwise would be the more dangerous lie.
-    """
+async def forget_web_login(
+    current_user: CurrentUser,
+    origin: str = Query(description="The site to forget, as an origin or a host."),
+) -> ForgetResponse:
     try:
-        normalized = normalize_origin(origin)
+        site = site_of(normalize_origin(origin).split("://", 1)[-1]) or origin
     except InvalidOrigin as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
-        )
+        ) from exc
+
+    browser = _browser()
     try:
-        removed = await repository.delete(user.id, normalized)
-    except WebLoginNotFound:
+        answer = await browser.signed_in_sites(current_user.id)
+    except (SandboxCapabilityUnsupported, _relay_unavailable()) as exc:
+        # Refusing rather than reporting success: a person pressing "forget"
+        # on a sleeping computer has not had their browser signed out, and
+        # telling them otherwise is the failure this whole change exists to
+        # stop.
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Nothing saved for {normalized}",
-        )
-    await repository.record(
-        user_id=user.id,
-        origin=normalized,
-        action="delete",
-        outcome="ok",
-        detail="removed by the person",
-    )
-    return _view(removed)
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This computer is not running, so its browser cannot be changed yet.",
+        ) from exc
+
+    hosts = [
+        str(cookie.get("domain") or "")
+        for cookie in answer.get("cookies") or []
+        if same_site(str(cookie.get("domain") or ""), site)
+    ]
+    if not hosts:
+        return ForgetResponse(site=site, forgotten=False)
+    dropped = await browser.forget_sites(current_user.id, domains=sorted(set(hosts)))
+    return ForgetResponse(site=site, forgotten=dropped > 0)
 
 
-@router.get(
-    "/history",
-    response_model=WebLoginAuditResponse,
-    operation_id="web_login.history",
-    summary="What has been done with your saved logins",
-)
-async def web_login_history(
-    user: CurrentUser,
-    repository: RepositoryDep,
-    limit: int = Query(default=100, ge=1, le=500),
-    page_token: str | None = Query(default=None),
-) -> WebLoginAuditResponse:
-    rows, next_after = await repository.page_history_for_user(
-        user.id, limit=limit, after=_decode_audit_token(page_token)
-    )
-    return WebLoginAuditResponse(
-        limit=limit,
-        next_page_token=_encode_audit_token(next_after),
-        items=[
-            WebLoginAuditEntry(
-                origin=row.origin,
-                action=row.action,
-                outcome=row.outcome,
-                detail=row.detail,
-                conversation_id=row.conversation_id,
-                created_at=row.created_at,
-            )
-            for row in rows
-        ],
-    )
+def _relay_unavailable() -> type[Exception]:
+    from app.modules.workspace.contracts.browser import browser_unavailable
+
+    return browser_unavailable()

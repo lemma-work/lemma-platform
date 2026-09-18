@@ -70,18 +70,6 @@ def relay_token(provider_id: str) -> str:
     ).hexdigest()
 
 
-def _state_target(*, domain: str, session: str | None) -> dict[str, str]:
-    """Which browser a capture is read from or written into.
-
-    The relay has always accepted either; this client only ever sent `domain`,
-    so every load went into the site's *login* session -- including the loads
-    meant for the browser the agent actually works in. That is the whole of the
-    bug where a person signed in, the state was kept, and the next run browsed
-    signed out: the cookies were in a Chrome nothing else opened.
-    """
-    return {"session": session} if session else {"domain": domain}
-
-
 class BrowserRelayClient:
     """One sandbox's relay, reached through whatever door its fabric has."""
 
@@ -244,38 +232,31 @@ class BrowserRelayClient:
             )
         return response.json()
 
-    async def save_state(
-        self, *, domain: str, session: str | None = None
-    ) -> dict[str, object]:
-        """Read a browser session out, by name or by the site it belongs to.
+    async def profile_cookies(self) -> dict[str, object]:
+        """Which hosts the browser holds cookies for, with no values.
 
-        `session` names one exactly; `domain` lets the relay name the site's own
-        login session. Both, because reading and writing are not symmetrical
-        here: a capture is taken from the browser the person signed in to, and
-        loaded into the browser the agent works in.
+        Never starts a browser: a sandbox that is asleep answers
+        `running: False`, which is a state a settings page can render rather
+        than an error it has to explain.
         """
+        response = await self._request("GET", "/profile:cookies", timeout=30.0)
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        body = response.json()
+        return body if isinstance(body, dict) else {"running": False, "cookies": []}
+
+    async def forget_cookies(self, *, domains: list[str]) -> int:
+        """Drop every cookie set for these hosts. Returns how many went."""
         response = await self._request(
             "POST",
-            "/state:save",
-            json_body=_state_target(domain=domain, session=session),
-            timeout=120.0,
+            "/profile:forget",
+            json_body={"domains": domains},
+            timeout=60.0,
         )
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
-        state = response.json().get("state")
-        return state if isinstance(state, dict) else {}
-
-    async def load_state(
-        self, state: dict[str, object], *, domain: str, session: str | None = None
-    ) -> None:
-        response = await self._request(
-            "POST",
-            "/state:load",
-            json_body={"state": state, **_state_target(domain=domain, session=session)},
-            timeout=120.0,
-        )
-        if response.status_code not in (200, 204):
-            raise BrowserRelayUnavailable(_detail(response))
+        dropped = response.json().get("dropped")
+        return int(dropped) if isinstance(dropped, int) else 0
 
     async def vnc_socket_url(
         self, *, mode: str, session: str | None = None

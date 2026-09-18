@@ -30,7 +30,7 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 )
 from typing import TypedDict
 
-from app.modules.workspace.contracts.browser import BrowserState, agent_session, host_of
+from app.modules.workspace.contracts.browser import host_of
 from app.modules.workspace.providers.base import ProviderGone
 from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxUnavailable
 
@@ -187,17 +187,11 @@ class BrowserViewService:
         needed -- but the session the steer actually landed in is still
         wanted, for the driving lease. See `vnc_socket_url`.
 
-        `conversation_id`, when given and `origin` is not, names which
-        conversation's own browser this is watching or driving --
-        `run_browser_script` puts every agent browser command in
-        `agent_session(conversation_id)`, its own session and profile
-        (isolating one conversation's cookies from another's), so a plain
-        watch/drive with no session named here would resolve to the
-        *default* session instead and find nothing the agent has touched. A
-        sign-in's `origin` still wins when both are given: that session is
-        named for the site being signed in to, the same name
-        `save_login_state` reads back later, and has to agree with it
-        regardless of which conversation asked for the sign-in.
+        `conversation_id` is carried for logging and for the keepalive, not
+        to pick a browser: there is one per sandbox and everything shares it.
+        It used to select `agent_session(conversation_id)`, a Chrome and
+        profile of its own per conversation, which is what made a sign-in
+        need carrying from one browser to another.
 
         `ensure_browser` is called either way, `origin` or not: it is what
         starts Xvfb, Chrome, and -- through `start-browser.sh` -- the VNC
@@ -210,23 +204,19 @@ class BrowserViewService:
         """
         relay = await self._relay(user_id, start=True)
         # The same rule the state paths hold, on the path a person actually
-        # uses. `load_login_state` and `ensure_for_sign_in` both refused a
+        # uses. `forget_sites` and `ensure_for_sign_in` both refused a
         # sandbox the internet can reach; this one -- the socket somebody types
         # a password into -- did not, so the guard was on the two doors nobody
         # was walking through.
         await _require_private(relay, doing="watch or drive this browser")
-        # A site named means a sign-in: it belongs in that site's own session,
-        # the one `save_login_state` later reads. Named from `domain`,
-        # matching `ensure_for_sign_in` -- the two are the halves of one
-        # journey and must resolve the session the same way. Otherwise, a
-        # conversation named means its own agent session; neither named means
-        # the shared default session, same as before this parameter existed.
-        wanted_session = (
-            agent_session(conversation_id) if conversation_id and not origin else None
-        )
+        # No session is named, by any caller, ever. There is one browser in a
+        # sandbox and it keeps its own profile, so a sign-in, an agent's
+        # command and a person's pane are all looking at the same Chrome --
+        # which is the point, and what removed the whole business of carrying
+        # a captured login from one browser into another.
         found = await relay.ensure_browser(
             origin=origin,
-            session=wanted_session,
+            session=None,
             domain=host_of(origin) if origin else None,
         )
         # The session the relay says it used, never one worked out again
@@ -275,23 +265,28 @@ class BrowserViewService:
         relay = await self._relay(user_id, start=False)
         return await relay.resize_display(width=width, height=height)
 
-    async def save_login_state(
-        self, user_id: UUID, *, domain: str, session: str | None = None
-    ) -> "BrowserState":
-        relay = await self._relay(user_id, start=True)
-        return await relay.save_state(domain=domain, session=session)
+    async def signed_in_sites(
+        self, user_id: UUID, *, wake: bool = False
+    ) -> dict[str, object]:
+        """Which hosts the browser holds cookies for, and nothing else.
 
-    async def load_login_state(
-        self,
-        user_id: UUID,
-        state: "BrowserState | dict[str, object]",
-        *,
-        domain: str,
-        session: str | None = None,
-    ) -> None:
+        `wake` off by default: rendering a settings page must not be what
+        starts somebody's computer, so a paused sandbox answers
+        `running: False` and an empty list instead. No cookie value crosses
+        this boundary -- see `browser_relay/cookies.py`.
+        """
+        relay = await self._relay(user_id, start=wake)
+        return await relay.profile_cookies()
+
+    async def forget_sites(self, user_id: UUID, *, domains: list[str]) -> int:
+        """Drop the cookies for these hosts, and say how many went.
+
+        Unlike the delete this replaces, which removed Lemma's encrypted copy
+        and left the browser signed in, this signs the browser out.
+        """
         relay = await self._relay(user_id, start=True)
-        await _require_private(relay, doing="load a saved login")
-        await relay.load_state(state, domain=domain, session=session)
+        await _require_private(relay, doing="forget a saved login")
+        return await relay.forget_cookies(domains=domains)
 
     async def ensure_for_sign_in(
         self,
@@ -299,7 +294,6 @@ class BrowserViewService:
         *,
         origin: str,
         report: bool = False,
-        session: str | None = None,
     ) -> dict[str, object] | None:
         """Put the site in front of the person before they arrive.
 
@@ -309,25 +303,19 @@ class BrowserViewService:
         common case where they click straight away.
 
         `report` returns where the browser landed -- address and page title --
-        for the one caller that needs to know whether the site accepted a
-        restored session or bounced it to a login form. Off by default because
-        the other callers are opening a page for a person, not asking a
-        question about it.
+        which is how `already_signed_in` decides whether the person needs
+        asking at all. Off by default because the other callers are opening a
+        page for a person, not asking a question about it.
         """
         relay = await self._relay(user_id, start=True)
         await _require_private(relay, doing="sign in to a site")
-        # In the site's own session, which is the session `save_login_state`
-        # reads. Opening it in the default one and capturing from the login one
-        # means capturing from a browser nobody ever signed in to.
-        #
-        # `session` overrides that for the one caller that is not opening a
-        # page for a person: checking whether a restored session still works
-        # has to look at the browser the *agent* will use, or it answers a
-        # question nobody asked.
+        # The one browser, the one anybody watching is already looking at.
+        # This used to open a Chrome named for the site, so that a capture
+        # taken from it could only contain that site -- scoping by
+        # construction, and the reason a sign-in then had to be carried into
+        # the agent's own browser afterwards. Nothing is captured now.
         landed = await relay.ensure_browser(
-            origin=origin,
-            session=session,
-            domain=None if session else host_of(origin),
+            origin=origin, session=None, domain=None
         )
         return landed if report else None
 

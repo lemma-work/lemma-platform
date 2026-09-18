@@ -67,15 +67,9 @@ class _Service:
         self.tried: list[dict] = []
         self.closed = False
 
-    async def try_saved_login(self, *, origin, conversation_id=None, auth_ctx=None):
-        self.tried.append(
-            {
-                "origin": origin,
-                "conversation_id": conversation_id,
-                "auth_ctx": auth_ctx,
-            }
-        )
-        return self._loaded, self._detail
+    async def already_signed_in(self, *, origin, auth_ctx=None):
+        self.tried.append({"origin": origin, "auth_ctx": auth_ctx})
+        return self._loaded
 
     async def open_request(self, **kwargs):
         self.requests.append(kwargs)
@@ -243,14 +237,16 @@ def test_the_response_cannot_carry_a_secret_either() -> None:
         assert not any(banned in f for f in fields), banned
 
 
-async def test_the_tool_names_the_browser_its_run_will_use(patched) -> None:
-    """A saved login has to land where this conversation browses.
+async def test_the_tool_asks_about_the_site_it_was_given(patched) -> None:
+    """There is one browser, so the only thing left to get right is the site.
 
-    Told nothing, the service loads it into the site's own login browser --
-    a separate Chrome that this run never opens. The agent then carries on
-    signed out, with "signed in with a saved login" in its transcript.
+    This used to have to name which *browser* to load a saved login into --
+    a conversation's own Chrome, separate from the site's login Chrome -- and
+    getting that wrong is how a run carried on signed out with "signed in
+    with a saved login" in its transcript. One durable profile removed the
+    choice, so there is nothing left to pass but the origin.
     """
-    service = _Service(loaded=True, detail="signed in with a saved login")
+    service = _Service(loaded=True)
     patched(service)
 
     await sign_in_internal(
@@ -258,4 +254,4 @@ async def test_the_tool_names_the_browser_its_run_will_use(patched) -> None:
         BrowserSignInRequest(origin="app.example.com", reason="pull invoices"),
         tool_call_id="call-9",
     )
-    assert service.tried[0]["conversation_id"] == _Deps.conversation_id
+    assert service.tried[0]["origin"] == "https://app.example.com"
