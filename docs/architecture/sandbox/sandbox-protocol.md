@@ -325,8 +325,9 @@ class FilesystemPort(Protocol):
 ```
 
 Paths are absolute and must resolve below the profile's allowed roots. Workspace
-callers use `/workspace`; function runtime internals may additionally use a private
-ephemeral cache root. Symlink resolution is checked at the adapter boundary.
+callers address the sandbox user's home (`/home/user`), within which
+`/home/user/lemma` is the project root that conversations are created under;
+function runtime internals may additionally use a private ephemeral cache root. Symlink resolution is checked at the adapter boundary.
 
 Writes use a temporary sibling file, fsync when supported, and atomic rename. The
 API streams binary bytes and never base64-encodes through a shell command. Range
@@ -436,13 +437,14 @@ Session IDs are DNS-safe, bounded strings. They are not authorization tokens.
 ### 5.4 Filesystem routes
 
 ```text
-GET    .../files:stat?path=/workspace/a.txt
-GET    .../files?path=/workspace
-GET    .../files:content?path=/workspace/a.txt
-PUT    .../files:content?path=/workspace/a.txt
+GET    .../files:stat?path=/home/user/a.txt
+GET    .../files?path=/home/user
+GET    .../files:content?path=/home/user/a.txt
+PUT    .../files:content?path=/home/user/a.txt
 POST   .../files:move
-DELETE .../files?path=/workspace/a.txt&recursive=false
+DELETE .../files?path=/home/user/a.txt&recursive=false
 ```
+
 
 Read/write bodies use `application/octet-stream`. Metadata is carried in response
 headers and typed JSON for `stat`/`list`. Conditional writes accept an optional

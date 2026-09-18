@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.modules.agent.tests.e2e.test_agent_e2e import _create_test_pod
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.e2e]
 
@@ -42,11 +43,11 @@ async def test_project_groups_children_and_shares_cwd(
         {
             "title": "My Project",
             "type": "PROJECT",
-            "metadata": {"cwd": "/workspace/projects/alpha"},
+            "metadata": {"cwd": f"{WORKSPACE_ROOT}/projects/alpha"},
         },
     )
     assert project["type"] == "PROJECT"
-    assert project["metadata"]["cwd"] == "/workspace/projects/alpha"
+    assert project["metadata"]["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
 
     # A PROJECT is a root conversation: it shows in the default list and under a
     # type=PROJECT filter.
@@ -63,7 +64,7 @@ async def test_project_groups_children_and_shares_cwd(
         {"title": "task under project", "type": "CHAT", "parent_id": project["id"]},
     )
     assert child["parent_id"] == project["id"]
-    assert child["metadata"]["cwd"] == "/workspace/projects/alpha"
+    assert child["metadata"]["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
     # It is a normal conversation, not a spawned sub-agent.
     assert not child["metadata"].get("is_sub_agent")
 
@@ -84,5 +85,7 @@ async def test_root_conversation_records_own_cwd(authenticated_client, fixed_tes
     # cwd is always recorded in metadata; a root gets its own c/{date}/{slug} dir,
     # sharing its suffix with the pod filesystem default (`/me/{suffix}`).
     cwd = convo["metadata"]["cwd"]
-    assert cwd.startswith("/workspace/c/")
-    assert cwd.count("/") == 4  # /workspace/c/{date}/{slug}
+    assert cwd.startswith(f"{WORKSPACE_ROOT}/c/")
+    # Counted relative to the root, so this says "c/{date}/{slug}" however
+    # deep the root itself is.
+    assert cwd.removeprefix(f"{WORKSPACE_ROOT}/").count("/") == 2, cwd

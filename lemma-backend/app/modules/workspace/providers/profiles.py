@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sandbox_runtime.paths import HOME_ROOT
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.domain.sandbox import SandboxKind
 
@@ -77,7 +78,12 @@ def workspace_profile(*, image: str | None = None) -> SandboxProfile:
             WORKSPACE_BROWSER_PORT,
             WORKSPACE_BROWSER_RELAY_PORT,
         ),
-        working_dir="/workspace",
+        # The home, not the project root inside it. A container's working
+        # directory is created by the engine when it does not exist -- as root,
+        # which would leave uid 10001 unable to write to its own cwd on any
+        # volume that predates the project root. Every session passes the cwd it
+        # actually wants, and the runtime creates that one as the sandbox user.
+        working_dir=HOME_ROOT,
     )
 
 

@@ -24,6 +24,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from sandbox_runtime.protocol import ByteRange, ProcessState
 from sandbox_runtime.tasks import create_inherited_task
 
@@ -91,7 +92,7 @@ def _load_token(explicit_token: str | None) -> str:
 def create_app(
     *,
     token: str | None = None,
-    allowed_roots: tuple[str, ...] = ("/workspace", "/tmp"),
+    allowed_roots: tuple[str, ...] = RUNTIME_FILESYSTEM_ROOTS,
     max_file_transfer_bytes: int | None = None,
 ) -> FastAPI:
     runtime_token = _load_token(token)

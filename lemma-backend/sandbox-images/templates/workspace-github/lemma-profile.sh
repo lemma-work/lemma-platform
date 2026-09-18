@@ -11,7 +11,7 @@
 # test harness -- inherits it.
 #
 # /tmp, like git's credential file: a session-scoped credential must not
-# survive on the durable /workspace volume.
+# survive on the durable root.
 GH_CONFIG_DIR=/tmp/lemma-gh
 export GH_CONFIG_DIR
 

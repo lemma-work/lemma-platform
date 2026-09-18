@@ -17,9 +17,7 @@ NODE_LINUX_X64_SHA256 = (
 )
 PNPM_VERSION = "11.15.1"
 GH_VERSION = "2.97.0"
-GH_LINUX_X64_SHA256 = (
-    "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
-)
+GH_LINUX_X64_SHA256 = "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
 DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
 
@@ -66,7 +64,15 @@ def _install_uv_command() -> str:
         f"-o /tmp/{archive} && "
         f"echo '{UV_LINUX_X64_SHA256}  /tmp/{archive}' | sha256sum -c - && "
         f"tar -xzf /tmp/{archive} -C /tmp && "
-        f"install -m 0755 /tmp/{directory}/uv /usr/local/bin/uv && "
+        # The real binary goes where the shim expects to find it, and the shim
+        # takes the name on PATH -- the same arrangement `Dockerfile.workspace`
+        # has. Without it `uv pip install` targets the shared interpreter's own
+        # site-packages, which is root-owned, and dies with a bare permission
+        # error while `pip install` beside it works: two installers on one PATH
+        # disagreeing about where a package goes, and the one the prompt
+        # recommends being the broken one. Measured on a live sandbox, not
+        # inferred.
+        f"install -m 0755 /tmp/{directory}/uv /usr/local/lib/lemma-uv-bin && "
         f"install -m 0755 /tmp/{directory}/uvx /usr/local/bin/uvx && "
         f"rm -rf /tmp/{archive} /tmp/{directory}"
     )
@@ -207,6 +213,13 @@ def workspace_template():
             mode=0o644,
         )
         .copy(
+            # Takes the name on PATH, with the real binary at
+            # `/usr/local/lib/lemma-uv-bin`. See `_install_uv_command`.
+            "lemma-backend/sandbox-images/scripts/lemma-uv",
+            "/usr/local/bin/uv",
+            mode=0o755,
+        )
+        .copy(
             "lemma-backend/sandbox-images/scripts/set-display-size.sh",
             "/usr/local/bin/set-display-size",
             mode=0o755,
@@ -291,16 +304,16 @@ def workspace_template():
             user="root",
         )
         .run_cmd(
-            "mkdir -p /workspace /tmp/lemma-browser/runtime "
+            "mkdir -p /home/user /home/user/lemma /tmp/lemma-browser/runtime "
             "/tmp/lemma-browser/profile && "
             "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
-            "ln -sf \"$(command -v google-chrome-stable)\" "
+            'ln -sf "$(command -v google-chrome-stable)" '
             "/usr/local/bin/workspace-chrome && "
             "test -x /usr/local/bin/workspace-chrome && "
             "rm -rf /root/.cache/pnpm /root/.local/share/pnpm/store "
             "/home/user/.cache/pnpm /home/user/.local/share/pnpm/store && "
-            "chown -R user:user /workspace /tmp/lemma-browser",
+            "chown -R user:user /home/user /tmp/lemma-browser",
             user="root",
         )
         # Layer order is cache order, and these two blocks were the wrong way
@@ -328,10 +341,38 @@ def workspace_template():
             "--locked --no-dev --no-editable && "
             "printf '%s\\n' "
             "'import sys; "
-            'p="/workspace/.python/lib/python3.14/site-packages"; '
+            'p="/home/user/.python/lib/python3.14/site-packages"; '
             "sys.path.insert(0, p) if p not in sys.path else None' "
             "> /opt/lemma-python/lib/python3.14/site-packages/"
             "lemma-workspace-overlay.pth && "
+            # Where the backend installs the first-party code this image also
+            # carries. The copy below is a *floor*, not the shipped version: the
+            # overlay supersedes it, so a Lemma code change no longer needs a
+            # template at all -- and on a provider where the sandbox is the
+            # disk, needing a template meant destroying workspaces to publish
+            # one.
+            #
+            # Both halves are baked, and that is the point. The directory is
+            # owned by the sandbox user and the `.pth` is written here, so
+            # installing needs no elevation; without them the backend has to
+            # reach root to write into `/opt`, which works on E2B only because
+            # its user happens to have passwordless sudo.
+            #
+            # `lemma-runtime-` sorts before `lemma-workspace-` and both insert
+            # at position 0, so the later one lands in front: a package the user
+            # pip-installs stays ahead of the overlay, and the overlay stays
+            # ahead of this image's own copy. Pointing at `current` rather than
+            # a version means an upgrade is a symlink flip and never a rewrite
+            # of this file. It naming a directory that does not exist yet is
+            # harmless -- sys.path tolerates it.
+            "mkdir -p /opt/lemma-runtime && "
+            "chown user:user /opt/lemma-runtime && "
+            "printf '%s\\n' "
+            "'import sys; "
+            'p="/opt/lemma-runtime/current/site-packages"; '
+            "sys.path.insert(0, p) if p not in sys.path else None' "
+            "> /opt/lemma-python/lib/python3.14/site-packages/"
+            "lemma-runtime-overlay.pth && "
             "test -x /opt/lemma-python/bin/python && "
             'test "$(/opt/lemma-python/bin/python -c '
             "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
@@ -379,22 +420,32 @@ def workspace_template():
                 "GH_PAGER": "cat",
                 "NODE_PATH": "/opt/lemma-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
-                "PIP_PREFIX": "/workspace/.python",
+                "PIP_PREFIX": "/home/user/.python",
+                # Deliberately *not* the user's own site-packages. A path
+                # already on PYTHONPATH is already on sys.path, so
+                # `lemma-workspace-overlay.pth`'s "insert unless present" guard
+                # does nothing -- and the runtime overlay, which has no such
+                # competition, lands in front of it. That inverts the one
+                # ordering this design promises: a package the agent installed
+                # itself must outrank the one we ship. Docker dropped PYTHONPATH
+                # for the same class of reason and says so in its own comment.
                 "PYTHONPATH": (
-                    "/workspace/.python/lib/python3.14/site-packages:"
                     "/opt/lemma-python/lib/python3.14/site-packages:"
                     # Where the browser relay package lives.
                     "/app"
                 ),
                 "PATH": (
-                    "/workspace/.python/bin:/opt/lemma-python/bin:"
+                    "/home/user/.python/bin:/home/user/.local/share/pnpm:"
+                    "/home/user/.local/bin:"
+                    "/opt/lemma-python/bin:"
                     "/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"
                 ),
                 "MPLBACKEND": "Agg",
+                "UV_CACHE_DIR": "/home/user/.uv-cache",
             }
         )
-        .set_workdir("/workspace")
+        .set_workdir("/home/user/lemma")
         .set_user("user")
     )
 

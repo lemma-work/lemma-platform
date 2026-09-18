@@ -185,10 +185,20 @@ is harmless, but it is not a substitute for the one that matters.
 
 **Under `e2b`, the images are not what a sandbox is made from — the templates
 are.** `E2BSandboxProvider.create` passes `template=...` and never reads the
-image, so leaving `WORKSPACE_IMAGE` at its default is correct there. What
-still matters on E2B is the profile digest: it is stamped into sandbox
-metadata and is the only thing that moves an existing workspace onto a
-rebuilt template.
+image, so leaving `WORKSPACE_IMAGE` at its default is correct there.
+
+**Nothing moves an existing workspace onto a rebuilt template**, and that is
+deliberate: on E2B the sandbox *is* the disk, so replacing one to adopt a newer
+image deletes the user's files. Both the template and the profile digest are
+stamped into sandbox metadata, drift in either is recorded, and the sandbox is
+adopted as it stands. The first-party Lemma code a workspace runs — the CLI, the
+SDK, the skills, the browser relay — is installed into the running sandbox
+instead (`WORKSPACE_RUNTIME_BUNDLE_DIR`), so shipping a code change no longer
+needs a template at all. A genuinely new base image reaches an existing
+workspace only when that workspace is next created from scratch.
+
+Function sandboxes are the opposite, because they own no durable disk: drift
+replaces them, which costs a cold start and nothing else.
 
 ```dotenv
 WORKSPACE_PROVIDER=docker
@@ -210,13 +220,28 @@ WORKSPACE_SWEEP_CRON=*/5 * * * *
 
 ### Making a new sandbox image take effect
 
-A sandbox is reused only when the profile digest recorded on it matches
-`WORKSPACE_PROFILE_DIGEST` (or `FUNCTION_PROFILE_DIGEST` for function runtimes).
-This is the supported way to force existing workspaces onto a new image:
-publish the image, point `WORKSPACE_IMAGE` at it, and bump the digest in the
-same change. Without the bump, a workspace that already exists keeps running the
-image it was created from for as long as it lives, and a fix shipped in the
-image never reaches anyone who already has a workspace.
+What a digest bump does depends on whether the sandbox owns a disk separate from
+itself, so this is stated per provider.
+
+**Under `docker` and `lemma_local`,** a sandbox is reused only when the profile
+digest recorded on it matches `WORKSPACE_PROFILE_DIGEST` (or
+`FUNCTION_PROFILE_DIGEST` for function runtimes). This is the supported way to
+force existing workspaces onto a new image: publish the image, point
+`WORKSPACE_IMAGE` at it, and bump the digest in the same change. The container
+is destroyed and rebuilt; its volume is a separate object and is adopted
+afterwards, so the user's files survive. Without the bump, a workspace that
+already exists keeps running the image it was created from for as long as it
+lives, and a fix shipped in the image never reaches anyone who already has a
+workspace.
+
+**Under `e2b`, a bump does not move an existing workspace.** There the sandbox
+*is* the disk, so the drift is recorded and the sandbox adopted as it stands --
+see above. Bump the digest anyway when you publish a template: it is what
+workspaces created from then on are stamped with, and it is what makes function
+sandboxes, which own no disk, pick the new template up. But do not expect it to
+re-home a workspace that already exists; nothing does, by design. Ship
+first-party code changes through the runtime bundle instead, which reaches
+running workspaces without a template at all.
 
 The digest is an opaque identity — any `sha256:` value works, as long as it
 changes when the image does.
@@ -292,8 +317,8 @@ These five are the whole backend-side E2B surface. In particular:
   build those runs exercise. Setting them in a deployment environment does
   nothing; do not treat a template id alone as an unpinned deployment.
 - A template name is a moving pointer: rebuilding a template under the same
-  name changes what a *new* sandbox is made from. It does not touch sandboxes
-  that already exist — bump `WORKSPACE_PROFILE_DIGEST` for that.
+  name changes what a *new* sandbox is made from. It does not touch workspace
+  sandboxes that already exist, and no setting makes it — see above.
 
 ### Reaching a sandbox
 

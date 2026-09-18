@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sandbox_runtime.errors import SandboxPathNotFound
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS, WORKSPACE_ROOT
 from app.modules.workspace.domain.file_types import FileInfo
 from app.core.log.log import get_logger
 
@@ -21,23 +22,34 @@ class WorkspaceFileManager:
 
     @staticmethod
     def _normalize_cwd(cwd: str | None) -> str:
+        """This session's directory, relative to the workspace root.
+
+        An absolute cwd is accepted when it is under that root, which is how a
+        stored conversation cwd arrives; a relative one resolves against it.
+        """
         if not cwd:
             return ""
-        if "\x00" in cwd or cwd.startswith("/"):
-            raise ValueError("workspace cwd must be relative to /workspace")
-        root = posixpath.normpath(posixpath.join("/workspace", cwd))
-        if root != "/workspace" and not root.startswith("/workspace/"):
-            raise ValueError("workspace cwd escapes /workspace")
-        return "" if root == "/workspace" else posixpath.relpath(root, "/workspace")
+        if "\x00" in cwd:
+            raise ValueError("workspace cwd must not contain a null byte")
+        if cwd.startswith("/"):
+            resolved = posixpath.normpath(cwd)
+        else:
+            resolved = posixpath.normpath(posixpath.join(WORKSPACE_ROOT, cwd))
+        if resolved != WORKSPACE_ROOT and not resolved.startswith(f"{WORKSPACE_ROOT}/"):
+            raise ValueError(f"workspace cwd must be relative to {WORKSPACE_ROOT}")
+        return (
+            ""
+            if resolved == WORKSPACE_ROOT
+            else posixpath.relpath(resolved, WORKSPACE_ROOT)
+        )
 
     def _workspace_path(self, path: str) -> str:
         """Resolve a caller's path against this session's root.
 
-        An absolute ``/workspace/...`` path is taken as already rooted, rather
+        An absolute in-root path is taken as already rooted, rather
         than being joined onto the root a second time. ``lstrip("/")`` alone
-        leaves ``workspace/...``, which joined onto a root that already ends in
-        it produced
-        ``/workspace/conversations/<id>/workspace/conversations/<id>/file`` --
+        leaves the root's own leading segment, which joined onto a root that
+        already ends in it produced a doubled path --
         so every tool documented as accepting "a pod datastore path or a
         workspace path" rejected the absolute form of its own root, while the
         relative form worked. `listen` is where it was noticed; `view_image` and
@@ -49,9 +61,17 @@ class WorkspaceFileManager:
         from there, instead of being refused.
         """
         root = posixpath.normpath(
-            posixpath.join("/workspace", self.cwd) if self.cwd else "/workspace"
+            posixpath.join(WORKSPACE_ROOT, self.cwd) if self.cwd else WORKSPACE_ROOT
         )
-        if path.startswith("/workspace/") or path == "/workspace":
+        # An absolute path under any root the runtime serves counts as already
+        # rooted. Falling through to the join below would lstrip it and re-home
+        # it under the caller's own directory -- reading another conversation's
+        # file as if it were yours -- which is the silent re-homing this guard
+        # exists to stop.
+        if any(
+            path == known or path.startswith(f"{known}/")
+            for known in RUNTIME_FILESYSTEM_ROOTS
+        ):
             candidate = posixpath.normpath(path)
         else:
             candidate = posixpath.normpath(posixpath.join(root, path.lstrip("/")))
@@ -73,7 +93,7 @@ class WorkspaceFileManager:
             user_id=self.user_id,
             pod_id=None,
             session_id=f"files-{self.user_id.hex}",
-            initial_cwd="/workspace",
+            initial_cwd=WORKSPACE_ROOT,
             close_on_exit=False,
         )
 

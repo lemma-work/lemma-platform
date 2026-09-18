@@ -12,7 +12,7 @@ delegated identity token (`WorkspaceSandboxService.get_env_vars` mints a
 short-lived `LEMMA_TOKEN` once per session) and the sandbox runtime's stated design
 principle that dynamic credentials belong to a session, never to a sandbox's
 persisted profile: the token is written once per session into `/tmp` (which
-does not survive a workspace recreation, unlike the durable `/workspace`
+does not survive a workspace recreation, unlike the durable home
 volume), re-provisioned periodically rather than trusted forever, and never
 returned to the caller, logged, or placed in a tool-result string.
 """

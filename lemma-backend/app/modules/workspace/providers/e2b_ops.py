@@ -64,8 +64,6 @@ from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
-WORKSPACE_MOUNT = "/workspace"
-
 # A process that has stopped will produce no further output, so a reader
 # waiting for more has nothing left to wait for.
 _FINISHED_PROCESS_STATES = frozenset(

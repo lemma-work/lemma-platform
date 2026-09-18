@@ -17,7 +17,7 @@ Options:
 
 Examples:
   save-webpage https://arxiv.org/abs/1706.03762
-  save-webpage https://example.com --formats markdown,pdf,jpeg --out /workspace/research
+  save-webpage https://example.com --formats markdown,pdf,jpeg --out ~/research
 EOF
 }
 

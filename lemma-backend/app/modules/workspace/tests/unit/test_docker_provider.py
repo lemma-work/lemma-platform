@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.domain.sandbox import SandboxKind, SandboxMount
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -282,7 +283,7 @@ async def test_local_mounts_are_bound_alongside_the_volume() -> None:
         mounts=(
             SandboxMount(
                 host_path="/Users/me/code",
-                container_path="/workspace/code",
+                container_path=f"{WORKSPACE_ROOT}/code",
                 read_only=True,
             ),
         ),

@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT, is_inside_home
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
@@ -62,7 +63,7 @@ def get_workspace_service() -> WorkspaceSandboxService:
 
 WorkspaceServiceDep = Annotated[WorkspaceSandboxService, Depends(get_workspace_service)]
 
-_ROOT = "/workspace"
+_ROOT = WORKSPACE_ROOT
 
 # One page of a directory. A workspace holding a `node_modules` is the ordinary
 # case, not the pathological one, and a pane that asks for all of it stalls on
@@ -143,10 +144,14 @@ def _workspace_path(path: str | None) -> str:
         candidate if candidate.startswith("/") else posixpath.join(_ROOT, candidate)
     )
     normalized = posixpath.normpath(absolute)
-    if normalized != _ROOT and not normalized.startswith(f"{_ROOT}/"):
+    # The home rather than the project root: a sandbox belongs to one user and
+    # browsing their own `~/.config` is not a boundary worth enforcing, since
+    # the shell can already read it. `/tmp` is outside it, which is the whole
+    # point of asking this question here rather than deferring to the runtime.
+    if not is_inside_home(normalized):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
     return normalized
 
@@ -178,12 +183,12 @@ def _inside_workspace(stat) -> None:
     if getattr(stat, "kind", None) == FileKind.SYMLINK:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
-    if reported and reported != _ROOT and not reported.startswith(f"{_ROOT}/"):
+    if reported and not is_inside_home(reported):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
 
 
