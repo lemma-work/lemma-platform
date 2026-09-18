@@ -15,6 +15,7 @@ conclusions for the same reasons; this follows it deliberately.
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -174,3 +175,29 @@ async def test_the_warning_comes_back_for_every_later_compaction():
 
     await compactor(ctx, list(short))
     assert len(notices.take()) == 1, "re-armed for the next cycle"
+
+
+async def test_a_notice_is_measured_by_the_ceiling_it_has_to_fit_inside():
+    """Capabilities run in registration order, and the history processors
+    include the hard-ceiling guard.
+
+    Registered after them, this one appends to a request the guard has already
+    measured and passed: the notice rides along unaccounted for, and the
+    ceiling stops being a ceiling. It is not a large overflow -- a notice is a
+    paragraph -- but it is an overflow of the one limit whose whole job is to
+    keep a request inside what the model will accept, and the guard exists
+    because being wrong about that costs the whole turn.
+
+    Pinned on the assembled order rather than by measuring tokens, because the
+    ordering *is* the guarantee.
+    """
+    from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness
+
+    source = inspect.getsource(harness.PydanticAIHarness)
+    notice_at = source.index("capabilities.append(RunNoticeCapability")
+    processors_at = source.index("ProcessHistory(processor) for processor")
+
+    assert notice_at < processors_at, (
+        "RunNoticeCapability must be registered before the history processors, "
+        "or the hard-ceiling guard never sees the notice it has to fit"
+    )
