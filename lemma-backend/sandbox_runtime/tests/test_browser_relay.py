@@ -210,7 +210,7 @@ def test_the_state_directory_is_never_the_durable_volume() -> None:
 async def test_a_saved_session_leaves_no_file_behind(monkeypatch, tmp_path) -> None:
     written: dict[str, Path] = {}
 
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
+    async def fake_run(argv: list[str], *, session: str) -> tuple[int, str]:
         path = Path(argv[-1])
         written["path"] = path
         path.write_text(json.dumps({"cookies": [{"name": "s", "value": "v"}]}))
@@ -225,7 +225,7 @@ async def test_a_saved_session_leaves_no_file_behind(monkeypatch, tmp_path) -> N
 
 
 async def test_an_oversized_session_is_refused(monkeypatch, tmp_path) -> None:
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
+    async def fake_run(argv: list[str], *, session: str) -> tuple[int, str]:
         Path(argv[-1]).write_text(json.dumps({"junk": "x" * (3 * 1024 * 1024)}))
         return 0, ""
 
@@ -239,7 +239,7 @@ async def test_an_oversized_session_is_refused(monkeypatch, tmp_path) -> None:
 async def test_a_loaded_session_is_staged_and_removed(monkeypatch, tmp_path) -> None:
     seen: dict[str, object] = {}
 
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
+    async def fake_run(argv: list[str], *, session: str) -> tuple[int, str]:
         path = Path(argv[-1])
         seen["path"] = path
         seen["content"] = json.loads(path.read_text())
@@ -955,3 +955,54 @@ def test_moving_the_mouse_over_the_page_is_not_driving() -> None:
     # Packed into one frame, the way a client that is not noVNC may send them:
     # the click still has to be seen.
     assert _carries_real_input(motion + click) is True
+
+
+@pytest.mark.asyncio
+async def test_saving_a_session_names_it_in_the_environment_too(
+    monkeypatch, tmp_path
+) -> None:
+    """The flags alone put the capture in the wrong browser when Chrome is cold.
+
+    `agent-browser` is the `lemma-node-tool` wrapper. On a cold sandbox it
+    bootstraps by running `start-browser`, and that script reads
+    `AGENT_BROWSER_SESSION` and `AGENT_BROWSER_PROFILE` from its environment --
+    it never sees a command-line flag. `chrome.py` passes `agent_browser_env`
+    at every call site for exactly this reason; the two state calls were the
+    only ones that did not.
+
+    Warm, the bootstrap short-circuits and the flags win, which is why this
+    looked fine. Cold -- a fresh display, or a Chrome the memory guard killed
+    -- it started Chrome in the image's default `workspace` profile and then
+    saved *that* browser's cookies under the login's name.
+    """
+    from sandbox_runtime.browser_relay import state as state_module
+    from sandbox_runtime.browser_relay.chrome import profile_for_session
+
+    seen: dict[str, object] = {}
+
+    async def fake_exec(*argv, **kwargs):
+        seen["argv"] = argv
+        seen["env"] = kwargs.get("env")
+        # Whatever `state save` would have written, so the caller can go on.
+        out = Path(argv[argv.index("save") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"cookies": [], "origins": []}))
+
+        class _Done:
+            returncode = 0
+            stdout = None
+
+            async def wait(self):
+                return 0
+
+        return _Done()
+
+    monkeypatch.setattr(state_module, "_STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    await state_module.save_session(session="login-asur.work")
+
+    env = seen["env"]
+    assert env is not None, "the capture must not inherit whatever the relay had"
+    assert env["AGENT_BROWSER_SESSION"] == "login-asur.work"
+    assert env["AGENT_BROWSER_PROFILE"] == profile_for_session("login-asur.work")

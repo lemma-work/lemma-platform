@@ -9,6 +9,7 @@ make that impossible.
 from __future__ import annotations
 
 from app.modules.web_login.services.scope import (
+    same_site,
     domain_matches,
     host_of,
     looks_signed_in,
@@ -41,10 +42,54 @@ def test_a_cookie_the_site_would_receive_is_kept() -> None:
     assert len(scoped["cookies"]) == 1
 
 
-def test_a_sibling_subdomain_is_not_kept() -> None:
-    """`other.example.com` cookies are never sent to `accounts.example.com`."""
-    state = {"cookies": [_cookie("other", "other.example.com")], "origins": []}
-    assert scope_state(state, origin="https://accounts.example.com")["cookies"] == []
+def test_the_sites_api_host_is_kept() -> None:
+    """The bug this whole rule was widened for.
+
+    A login is not one host. Lemma's own deployment serves its app on
+    `asur.work` and its API on `api.asur.work`, and SuperTokens sets the
+    HttpOnly pair that *is* the session -- `sAccessToken`, `sRefreshToken` --
+    from the API host. Keeping only what the website host had set stored
+    `sFrontToken` and a timestamp: exactly the cookies the frontend SDK reads
+    to decide a session exists. So the restored browser believed it was signed
+    in, got a 401, bounced to the login form, and the agent asked again.
+    """
+    state = {
+        "cookies": [
+            _cookie("sFrontToken", "asur.work"),
+            _cookie("sAccessToken", "api.asur.work"),
+            _cookie("sRefreshToken", "api.asur.work"),
+            _cookie("SID", "accounts.google.com"),
+        ],
+        "origins": [],
+    }
+
+    kept = [
+        c["name"] for c in scope_state(state, origin="https://asur.work")["cookies"]
+    ]
+
+    assert kept == ["sFrontToken", "sAccessToken", "sRefreshToken"]
+
+
+def test_another_tenant_on_shared_hosting_is_still_a_different_site() -> None:
+    """Why the public suffix list has to be real, and its private half on.
+
+    "The last two labels" would make every GitHub Pages site one site, so a
+    login saved for one would restore another's cookies. `github.io` is a
+    suffix only in the list's private section.
+    """
+    state = {"cookies": [_cookie("theirs", "b.github.io")], "origins": []}
+    assert scope_state(state, origin="https://a.github.io")["cookies"] == []
+
+    assert same_site("api.example.co.uk", "app.example.co.uk") is True
+    assert same_site("y.herokuapp.com", "x.herokuapp.com") is False
+
+
+def test_a_host_with_no_registrable_domain_matches_only_itself() -> None:
+    """`localhost` and bare IPs have no "rest of the site" to belong to, so
+    widening there would put every single-label name in one bucket."""
+    assert same_site("localhost", "localhost") is True
+    assert same_site("otherhost", "localhost") is False
+    assert same_site("127.0.0.2", "127.0.0.1") is False
 
 
 def test_a_lookalike_domain_is_not_a_match() -> None:
