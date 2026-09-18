@@ -42,6 +42,7 @@ from sandbox_runtime.protocol import ByteRange
 from app.modules.workspace.providers.base import ProviderCreateSpec
 from app.modules.workspace.providers.e2b import E2BProviderConfig, E2BSandboxProvider
 from app.modules.workspace.testing.fake_output_buffer import InMemoryOutputBuffer
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.integration, pytest.mark.provider, pytest.mark.asyncio]
 
@@ -187,7 +188,7 @@ async def test_a_pause_and_resume_keeps_the_files_and_the_sandbox(
         created, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
     )
 
-    sentinel = "/workspace/cross-namespace-sentinel.txt"
+    sentinel = f"{WORKSPACE_ROOT}/cross-namespace-sentinel.txt"
 
     async def payload():
         yield b"survived"

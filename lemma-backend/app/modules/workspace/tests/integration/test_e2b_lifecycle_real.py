@@ -55,6 +55,7 @@ from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import ProviderCreateSpec
 from app.modules.workspace.providers.e2b import E2BProviderConfig, E2BSandboxProvider
 from app.modules.workspace.providers.e2b_output import E2BOutputBuffer
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.integration, pytest.mark.provider, pytest.mark.asyncio]
 
@@ -154,7 +155,7 @@ async def _run(
             operation_id=uuid4(),
             shell_command=command,
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(EnvironmentVariable(name="LEMMA_TEST", value="1"),),
             tty=None,
             output_limit_bytes=256 * 1024,
@@ -233,7 +234,7 @@ async def test_a_paused_sandbox_keeps_its_files_and_still_runs_commands(
     works."""
     sandbox_id = uuid4()
     instance = await _create(provider, sandbox_id)
-    await _run(provider, instance, "echo persisted > /workspace/marker.txt")
+    await _run(provider, instance, f"echo persisted > {WORKSPACE_ROOT}/marker.txt")
 
     await provider.release(
         instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
@@ -255,7 +256,7 @@ async def test_a_paused_sandbox_keeps_its_files_and_still_runs_commands(
     )
 
     elapsed, output, exit_code, _ = await _run(
-        provider, instance, "cat /workspace/marker.txt"
+        provider, instance, f"cat {WORKSPACE_ROOT}/marker.txt"
     )
     assert b"persisted" in output, output
     assert exit_code == 0
@@ -329,7 +330,7 @@ async def test_output_arrives_incrementally_rather_than_all_at_the_end(
             operation_id=uuid4(),
             shell_command="echo first; sleep 3; echo second",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=None,
             output_limit_bytes=64 * 1024,
@@ -372,7 +373,7 @@ async def test_a_finished_command_returns_immediately_not_at_the_window(
             operation_id=uuid4(),
             shell_command="printf done",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=None,
             output_limit_bytes=1024,
@@ -413,7 +414,7 @@ async def test_a_silent_running_command_still_reports_as_running(
             operation_id=uuid4(),
             shell_command="sleep 20",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=None,
             output_limit_bytes=1024,
@@ -450,7 +451,7 @@ async def test_a_killed_process_reaches_a_terminal_state(
             operation_id=uuid4(),
             shell_command="sleep 300",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=None,
             output_limit_bytes=1024,
@@ -508,7 +509,7 @@ async def test_a_workspace_on_a_different_template_keeps_serving(
     """
     sandbox_id = uuid4()
     first = await _create(provider, sandbox_id)
-    await _run(provider, first, "echo survived > /workspace/drift-marker.txt")
+    await _run(provider, first, f"echo survived > {WORKSPACE_ROOT}/drift-marker.txt")
 
     # Same account, same identity, a different configured template. Nothing
     # else changes -- which used to be the deploy that wiped the fleet.
@@ -523,7 +524,7 @@ async def test_a_workspace_on_a_different_template_keeps_serving(
     # no longer reaches a create at all, so a typo in the configured template
     # cannot cost anybody their disk.
     _, output, exit_code, _ = await _run(
-        provider, adopted, "cat /workspace/drift-marker.txt"
+        provider, adopted, f"cat {WORKSPACE_ROOT}/drift-marker.txt"
     )
     assert exit_code == 0 and b"survived" in output, output
     # Tolerating drift is not forgetting it: now that nothing is replaced, the

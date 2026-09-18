@@ -45,6 +45,7 @@ from app.modules.workspace.services.workspace_runtime_bundle import (
     install_command,
 )
 from sandbox_runtime import runtime_install
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.integration, pytest.mark.provider, pytest.mark.asyncio]
 
@@ -148,7 +149,7 @@ async def _run(provider: E2BSandboxProvider, instance, command: str) -> tuple[st
             operation_id=uuid4(),
             shell_command=command,
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(EnvironmentVariable(name="LEMMA_TEST", value="1"),),
             tty=None,
             output_limit_bytes=256 * 1024,
@@ -216,7 +217,7 @@ async def test_a_stale_sandbox_is_upgraded_without_being_replaced(
     """
     sandbox_id = uuid4()
     instance = await _create(provider, sandbox_id)
-    await _run(provider, instance, "echo mine > /workspace/user-work.txt")
+    await _run(provider, instance, f"echo mine > {WORKSPACE_ROOT}/user-work.txt")
 
     output, exit_code = await _install(provider, instance, bundle)
     assert exit_code == 0, output
@@ -237,7 +238,7 @@ async def test_a_stale_sandbox_is_upgraded_without_being_replaced(
         f"`lemma` on PATH reports {on_path.strip()!r} but the overlay's own "
         f"copy reports {from_overlay.strip()!r} -- the overlay is not in front"
     )
-    survived, _ = await _run(provider, instance, "cat /workspace/user-work.txt")
+    survived, _ = await _run(provider, instance, f"cat {WORKSPACE_ROOT}/user-work.txt")
     assert "mine" in survived, "the user's files did not survive the upgrade"
 
 
@@ -271,14 +272,14 @@ async def test_a_users_own_install_still_wins_over_the_overlay(
 ) -> None:
     """Platform code must not quietly outrank what the agent installed itself.
 
-    `PIP_PREFIX` sends `pip install` to `/workspace/.python`, and the workspace
+    `PIP_PREFIX` sends `pip install` under the user's home, and the workspace
     overlay `.pth` puts that ahead of everything. Ours sorts before it by name,
     so it is inserted first and ends up behind -- which is the order that keeps
     a pinned dependency pinned.
     """
     instance = await _create(provider, uuid4())
     await _install(provider, instance, bundle)
-    site = "/workspace/.python/lib/python3.14/site-packages"
+    site = f"{WORKSPACE_ROOT}/.python/lib/python3.14/site-packages"
     await _run(
         provider,
         instance,
@@ -293,7 +294,7 @@ async def test_a_users_own_install_still_wins_over_the_overlay(
     )
 
     assert exit_code == 0, output
-    assert "/workspace/.python" in output, (
+    assert f"{WORKSPACE_ROOT}/.python" in output, (
         f"the overlay shadowed the user's own install: {output.strip()!r}"
     )
 
@@ -304,7 +305,8 @@ async def test_the_overlay_survives_a_pause_and_resume(
     """A workspace is paused on every idle release, so this is the common case.
 
     It rests on a property of the fabric rather than of this code: E2B's
-    filesystem-only pause snapshots the whole rootfs, not just `/workspace`. If
+    filesystem-only pause snapshots the whole rootfs, not just the home the
+    user's files live in -- and the overlay is in `/opt`, outside it. If
     that were ever untrue the overlay would silently reinstall on every resume,
     which would be a cost bug rather than a correctness one -- but it would be
     invisible, so it is asserted.
