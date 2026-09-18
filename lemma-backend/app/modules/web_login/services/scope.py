@@ -46,6 +46,7 @@ agent asked for that one. That is what this exists to make impossible.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from tldextract import TLDExtract
@@ -60,6 +61,9 @@ from app.modules.workspace.contracts.browser import (
 #: Cookie and storage entries are bounded so one site cannot make a saved login
 #: into a row nothing can read back. A policy number, which is why it lives
 #: here rather than with the shape.
+#: Stands in for "never used" when ordering candidates.
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
 MAX_COOKIES = 200
 MAX_ORIGINS = 20
 
@@ -133,6 +137,52 @@ def domain_matches(cookie_domain: str, host: str) -> bool:
     if "." not in candidate:
         return False
     return subject.endswith(f".{candidate}")
+
+
+def pick_for_site(origin: str, candidates):
+    """Which of a person's saved logins authenticates `origin`.
+
+    Exact origin first, so a site that really does keep a separate login per
+    host gets its own. Otherwise the most recently used login of the same
+    registrable domain: a session captured at `mail.google.com` is one the
+    browser also sends to `calendar.google.com`, and `scope_state` keeps it
+    for that reason -- looking it back up by exact origin threw that away and
+    asked the person to sign in to an account they were already signed in to.
+
+    `None` when nothing fits, including when `origin` has no registrable
+    domain: `localhost` and bare IPs have no rest-of-the-site to borrow from,
+    and guessing would share one login between unrelated hosts.
+
+    Pure, and separate from the query that feeds it, because this is the part
+    worth being sure about -- a fake session cannot tell two queries apart and
+    a test against one would agree with whatever it was given.
+    """
+    wanted = normalized_origin_key(origin)
+    for candidate in candidates:
+        if normalized_origin_key(candidate.origin) == wanted:
+            return candidate
+
+    site = site_of(host_of(origin))
+    if not site:
+        return None
+    same_site = [c for c in candidates if site_of(host_of(c.origin)) == site]
+    if not same_site:
+        return None
+    # `last_used_at` is optional, and `None` sorts before any timestamp rather
+    # than blowing up the comparison.
+    return max(
+        same_site,
+        key=lambda c: (
+            c.last_used_at is not None,
+            c.last_used_at or _EPOCH,
+            c.origin,
+        ),
+    )
+
+
+def normalized_origin_key(origin: str) -> str:
+    """An origin reduced to what "the same origin" means here."""
+    return (origin or "").strip().rstrip("/").lower()
 
 
 def scope_state(
@@ -256,6 +306,7 @@ __all__ = [
     "same_site",
     "site_of",
     "looks_signed_in",
+    "pick_for_site",
     "scope_state",
 ]
 

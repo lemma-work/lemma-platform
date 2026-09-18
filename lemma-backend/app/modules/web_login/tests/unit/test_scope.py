@@ -8,7 +8,10 @@ make that impossible.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.modules.web_login.services.scope import (
+    pick_for_site,
     same_site,
     domain_matches,
     host_of,
@@ -162,3 +165,64 @@ def test_malformed_input_is_survived_rather_than_trusted() -> None:
 def test_the_host_is_read_without_the_port() -> None:
     assert host_of("https://app.example.com:8443") == "app.example.com"
     assert host_of("app.example.com") == "app.example.com"
+
+
+class _Saved:
+    """Just the two fields `pick_for_site` reads."""
+
+    def __init__(self, origin: str, last_used_at=None) -> None:
+        self.origin = origin
+        self.last_used_at = last_used_at
+
+
+def test_one_sign_in_reaches_the_rest_of_the_site() -> None:
+    """The complaint this answers: signing in at Gmail and then being asked to
+    sign in again for Calendar. The capture already keeps the whole site's
+    cookies; it was the *lookup* that insisted on an exact host."""
+    saved = [_Saved("https://mail.google.com")]
+
+    found = pick_for_site("https://calendar.google.com", saved)
+
+    assert found is not None and found.origin == "https://mail.google.com"
+
+
+def test_an_exact_origin_wins_over_a_sibling() -> None:
+    """A site that really does keep a login per host still gets its own."""
+    saved = [
+        _Saved("https://mail.google.com", datetime(2026, 9, 18, tzinfo=timezone.utc)),
+        _Saved("https://calendar.google.com"),
+    ]
+
+    found = pick_for_site("https://calendar.google.com", saved)
+
+    assert found is not None and found.origin == "https://calendar.google.com"
+
+
+def test_the_freshest_sibling_is_chosen() -> None:
+    """When several could serve, the most recently used is likeliest to still
+    work -- and a login never used must not beat one that was."""
+    saved = [
+        _Saved("https://mail.google.com", datetime(2026, 9, 1, tzinfo=timezone.utc)),
+        _Saved("https://drive.google.com", datetime(2026, 9, 18, tzinfo=timezone.utc)),
+        _Saved("https://photos.google.com"),
+    ]
+
+    found = pick_for_site("https://calendar.google.com", saved)
+
+    assert found is not None and found.origin == "https://drive.google.com"
+
+
+def test_no_login_is_ever_borrowed_from_another_site() -> None:
+    """The widening stops at the registrable domain."""
+    assert (
+        pick_for_site("https://example.com", [_Saved("https://mail.google.com")])
+        is None
+    )
+    # Shared hosting is not one site, which is why the suffix list's private
+    # section is switched on.
+    assert pick_for_site("https://b.github.io", [_Saved("https://a.github.io")]) is None
+    # No registrable domain means no rest-of-the-site to borrow from.
+    assert (
+        pick_for_site("http://localhost:3000", [_Saved("http://otherhost:3000")])
+        is None
+    )

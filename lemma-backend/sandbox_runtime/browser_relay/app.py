@@ -24,14 +24,10 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from dataclasses import dataclass
-import hashlib
 import hmac
-import secrets
 import logging
 import os
 from pathlib import Path
-import time
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel, Field
@@ -246,19 +242,6 @@ def _session_name(session: str | None, domain: str | None) -> str:
 
 
 def create_app() -> FastAPI:
-    # Everything this process runs the CLI for, it runs on behalf of the person
-    # at the other end of a socket -- keeping their browser alive, steering it
-    # to the site they were asked to sign in to, capturing what they signed in
-    # to when they say they are done. The `lemma-node-tool` wrapper refuses
-    # `agent-browser` while a control lease is held, which is what stops an
-    # *agent* typing over somebody; applied to the relay it would retire the
-    # browser under them mid-sign-in and throw away the capture, so the relay
-    # says once, here, that it is the other party.
-    #
-    # Process-wide rather than per-call because not every call site passes an
-    # environment: `state.py` runs the CLI with the relay's own, inherited.
-    os.environ["LEMMA_WHEEL_BYPASS"] = "1"
-
     app = FastAPI(title="Lemma browser relay", docs_url=None, redoc_url=None)
 
     @app.get("/health")
@@ -391,13 +374,10 @@ def create_app() -> FastAPI:
         is future work.
 
         `session` is not a selector either -- it cannot be, for the same
-        reason -- but it is still read, for the one thing that still needs a
-        session name even though the picture does not: the driving lease.
-        The caller resolves it beforehand (`/browser:ensure`'s reply says
-        which session a steer actually landed in) and passes that back here
-        so the agent's own script, which checks the lease for *its* session
-        before acting, is not told a login session's wheel is free while a
-        person is visibly turning it on this same screen.
+        reason -- but it is still read, because the liveness check and the
+        keepalive are both about one session's browser rather than about the
+        screen. The caller resolves it beforehand: `/browser:ensure`'s reply
+        says which session a steer actually landed in.
         """
         if not _authenticate(websocket.headers.get("x-lemma-relay-token", "")):
             await _refuse(
@@ -438,18 +418,16 @@ def create_app() -> FastAPI:
         # with it. It kept a browser nobody was watching alive at the same
         # time, in a sandbox where the memory guard kills on ~220 MB free.
         keepalive_task = create_background_task(_keepalive_loop(session_name))
-        # Taken when somebody actually clicks or types, not when the socket
-        # opens. Opening it was the old rule, and it made the panel
-        # unusable: the pane is the agent's *own* session for an ordinary
-        # watch, so a control socket held the wheel for as long as the panel
-        # was on screen and the agent could not touch its own browser. The
-        # answer was to open the pane read-only, which is worse -- now
-        # nobody could click. Holding it by use gets both: the agent works
-        # while the person reads, and yields the moment they reach in.
-        wheel = _WheelOnUse(session_name) if mode == CONTROL else None
-        wheel_task = (
-            create_background_task(wheel.release_when_idle()) if wheel else None
-        )
+        # Nothing is claimed here. There was a lease -- a file the agent's own
+        # commands read before acting, so a person driving could not be typed
+        # over -- and it was removed because it never covered the case it was
+        # written for and only ever cost the case it did reach. A sign-in runs
+        # in `login-<host>`, a session the agent never touches, so the lease
+        # was a no-op at the one moment somebody was typing a password; an
+        # ordinary watch attaches to the agent's *own* session, so the only
+        # thing it ever stopped was the agent using its own browser while
+        # somebody looked at it. Two parties acting at once costs a retry,
+        # which is cheaper than stalling the run.
         try:
             async with websockets.connect(
                 f"ws://127.0.0.1:{VNC_WS_PORT}/",
@@ -460,18 +438,11 @@ def create_app() -> FastAPI:
                     mode=mode,
                     send_bytes=websocket.send_bytes,
                     receive_bytes=_receiver_bytes(websocket),
-                    on_input=wheel.touch if wheel else None,
                 )
         except OSError, websockets.exceptions.WebSocketException:
             with suppress(RuntimeError):
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)
         finally:
-            if wheel_task is not None:
-                wheel_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    _ = await wheel_task
-            if wheel is not None:
-                wheel.let_go()
             keepalive_task.cancel()
             # Awaited, not just cancelled: a cancelled task is not finished
             # until it has been collected, and leaving it uncollected is how a
@@ -529,114 +500,3 @@ def _host_of(url: str) -> str:
     # `user:pass@host:port` -- the host is what is left after the last `@` and
     # before the first `:`.
     return authority.rpartition("@")[2].split(":")[0]
-
-
-#: Where a control session records that somebody is driving. Under the relay's
-#: own directory rather than the browser profile's, because `quiesce` deletes
-#: the profile and a lease that vanished with it would read as "nobody is
-#: driving" to the next command.
-_WHEEL_DIR = Path("/tmp/lemma-relay/wheel")
-
-
-def wheel_path(session: str) -> Path:
-    """The lease file for one session's browser."""
-    digest = hashlib.sha256(session.encode()).hexdigest()[:32]
-    return _WHEEL_DIR / digest
-
-
-@dataclass(frozen=True, slots=True)
-class _Wheel:
-    """One viewer's claim on a session, and the proof that it is theirs."""
-
-    path: Path
-    token: str
-
-
-def _take_the_wheel(session: str) -> "_Wheel | None":
-    """Mark this session as being driven by a person.
-
-    A file rather than state in this process, because the other party is not in
-    this process: the agent's commands run in a shell, and what has to see the
-    lease is the script they run. Both are in this sandbox, so the filesystem is
-    the one thing they share.
-
-    Named from a digest for the same reason the profile directory is -- a
-    session name is a caller's string and must not become a path.
-    """
-    path = wheel_path(session)
-    # A token of this holder's own, written into the file. Without one the
-    # lease was just "a file exists", so two people driving the same session
-    # meant whichever of them closed *first* released it -- and the one still
-    # holding the wheel silently lost it, with the agent free to type into the
-    # page they were using.
-    token = secrets.token_hex(16)
-    try:
-        _WHEEL_DIR.mkdir(parents=True, exist_ok=True)
-        path.write_text(token)
-        return _Wheel(path=path, token=token)
-    except OSError:
-        # Not being able to take the lease must not stop somebody watching. The
-        # cost is that an agent command may land at the same time, which is what
-        # happened before this existed at all.
-        _log.warning("could not record the control lease for session %s", session)
-        return None
-
-
-#: How long a person keeps the wheel after their last click or keystroke.
-#: Long enough to cover reading a page between actions, short enough that a
-#: panel somebody walked away from stops holding the agent. Well inside
-#: `agent-browser`'s own two-minute idle retire, so a lapsed lease never
-#: outlives the browser it is about.
-_WHEEL_IDLE_SECONDS = 60.0
-
-
-class _WheelOnUse:
-    """The driving lease, held by use rather than by connection.
-
-    `touch()` is called for every frame that carries a click, a keystroke or
-    a paste (`_carries_real_input`); the lease is taken on the first one and
-    let go once `_WHEEL_IDLE_SECONDS` pass with none. Mouse movement is not
-    use -- see `_carries_real_input` -- so reading the page with the cursor
-    over it leaves the agent alone.
-    """
-
-    def __init__(self, session: str) -> None:
-        self._session = session
-        self._held: _Wheel | None = None
-        self._last_input = 0.0
-
-    def touch(self) -> None:
-        self._last_input = time.monotonic()
-        if self._held is None:
-            self._held = _take_the_wheel(self._session)
-
-    def let_go(self) -> None:
-        _release_the_wheel(self._held)
-        self._held = None
-
-    async def release_when_idle(self) -> None:
-        """Give the wheel back once the person stops using it."""
-        while True:
-            await asyncio.sleep(1.0)
-            if self._held is None:
-                continue
-            if time.monotonic() - self._last_input >= _WHEEL_IDLE_SECONDS:
-                self.let_go()
-
-
-def _release_the_wheel(held: "_Wheel | None") -> None:
-    """Give up the lease, but only if it is still ours.
-
-    A later viewer's token in the file means they took it after us, and it is
-    theirs to release. Read-then-unlink is not atomic and does not need to be:
-    the loser of that race releases a lease that was about to be re-taken, and
-    the next command re-reads the file rather than trusting a decision made
-    earlier.
-    """
-    if held is None:
-        return
-    with suppress(OSError):
-        if held.path.read_text().strip() != held.token:
-            return
-    with suppress(OSError):
-        held.path.unlink(missing_ok=True)

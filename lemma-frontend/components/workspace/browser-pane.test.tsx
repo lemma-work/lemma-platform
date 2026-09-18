@@ -132,13 +132,14 @@ const connect = async () => {
 
 describe('opening the view', () => {
     it('can be driven whether it is watching a run or showing a sign-in', async () => {
-        // There is no watch-only pane any more. It existed because the relay
-        // took its wheel lease the moment a control socket opened, and for an
+        // There is no watch-only pane. It existed because the relay took a
+        // driving lease the moment a control socket opened, and for an
         // ordinary watch that is the agent's own session -- so an open panel
         // would have stopped the agent browsing. Opening read-only traded
-        // that for a browser nobody could click, which is not a browser. The
-        // lease is now taken when somebody actually clicks or types
-        // (`_WheelOnUse` in the relay), so the socket can always carry input.
+        // that for a browser nobody could click, which is not a browser.
+        // The lease is gone entirely: it was a no-op in the sign-in case it
+        // was written for (a different session) and only ever cost the agent
+        // its own browser, so the socket always carries input.
         render(<BrowserPane conversationId="conv-1" />);
         const watching = await connect();
         expect(watching.url).toContain('mode=control');
@@ -331,8 +332,7 @@ describe('paste', () => {
     it('works on a pane that is watching a run, not only on a sign-in', async () => {
         // This used to assert the opposite, because a watch pane was
         // read-only. Pasting into the agent's browser is now as legitimate as
-        // clicking in it -- both take the wheel off the agent for a minute,
-        // which is the point of reaching in.
+        // clicking in it, and neither holds the agent up.
         const { container } = render(<BrowserPane conversationId="conv-1" />);
         const rfb = await connect();
         const target = container.querySelector('[role="application"]');

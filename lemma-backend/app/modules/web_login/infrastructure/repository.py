@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import get_secret_cipher
 from app.core.crypto.ports import SecretCipher
-from app.modules.web_login.services.scope import BrowserState
+from app.modules.web_login.services.scope import BrowserState, pick_for_site
 from app.modules.web_login.domain.entities import (
     WebLogin,
     WebLoginSecret,
@@ -75,6 +75,16 @@ class WebLoginRepository:
     async def get_for_origin(self, user_id: UUID, origin: str) -> WebLogin | None:
         row = await self._row_for_origin(user_id, origin)
         return _to_entity(row) if row is not None else None
+
+    async def get_for_site(self, user_id: UUID, origin: str) -> WebLogin | None:
+        """The saved login that authenticates `origin`, exact or same-site.
+
+        The choice is `pick_for_site`; this is only the query that feeds it.
+        """
+        exact = await self.get_for_origin(user_id, origin)
+        if exact is not None:
+            return exact
+        return pick_for_site(origin, await self.list_for_user(user_id))
 
     async def save(
         self,

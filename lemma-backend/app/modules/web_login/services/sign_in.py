@@ -151,14 +151,20 @@ class SignInService:
         site = normalize_origin(origin)
         domain = host_of(site)
 
+        # Two origins from here on: `site` is what the agent asked for,
+        # `stored` is the origin the row was saved under, which may be a
+        # sibling host of the same site (see `pick_for_site`). The row is
+        # read, marked used and marked dead under `stored`; whether it worked
+        # is judged against `site`, because that is the page that has to open.
         async with self._uow_factory() as uow:
             repository = WebLoginRepository(uow.session)
-            saved = await repository.get_for_origin(owner, site)
+            saved = await repository.get_for_site(owner, site)
             if saved is None:
                 return False, "no saved login for this site"
             if not saved.is_usable:
                 return False, "the saved login for this site has stopped working"
-            secret = await repository.reveal_secret(owner, site)
+            stored = saved.origin
+            secret = await repository.reveal_secret(owner, stored)
 
         if secret is None or secret.is_empty():
             return False, "the saved login for this site is empty"
@@ -174,7 +180,7 @@ class SignInService:
             )
         except (_relay_unavailable(), SandboxCapabilityUnsupported) as exc:
             await self._audit(
-                owner, site, action="inject", outcome="failed", detail=str(exc)
+                owner, stored, action="inject", outcome="failed", detail=str(exc)
             )
             return False, "the saved login could not be loaded into the browser"
 
@@ -186,12 +192,12 @@ class SignInService:
         # in production ever marked a login dead -- the method for it existed
         # with no caller.
         if not await self._site_accepted(owner, site, conversation_id=conversation_id):
-            await self.mark_saved_login_dead(origin=site, auth_ctx=auth_ctx)
+            await self.mark_saved_login_dead(origin=stored, auth_ctx=auth_ctx)
             return False, "the saved login for this site has stopped working"
 
         async with self._uow_factory() as uow:
-            await WebLoginRepository(uow.session).mark_used(owner, site)
-        await self._audit(owner, site, action="inject", outcome="ok")
+            await WebLoginRepository(uow.session).mark_used(owner, stored)
+        await self._audit(owner, stored, action="inject", outcome="ok")
         return True, "signed in with a saved login"
 
     async def _site_accepted(
