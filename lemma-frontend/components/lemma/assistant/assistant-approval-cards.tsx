@@ -10,6 +10,7 @@ import { Check, CheckCircle2, ChevronDown, ChevronUp, MessageCircleQuestion, Pen
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useRemoveWebLogin } from "@/lib/hooks/use-web-logins";
 import {
   asRecord,
   asString,
@@ -836,6 +837,13 @@ export function SignInCard({
   const body = asRecord(resultData.output ?? resultData);
   const signedIn = asString(body.outcome) === "signed_in";
   const kept = body.saved === true;
+  // `source` is "saved" when a stored login was restored and nobody was asked,
+  // and "person" when somebody actually signed in. The card used to read the
+  // same either way, so a run that quietly reused a saved login was
+  // indistinguishable from one the person had just answered -- which is how
+  // three "Signed in to asur.work" cards appeared in a row that nobody had
+  // clicked, each one a dead session being restored again.
+  const fromSaved = signedIn && asString(body.source) === "saved";
 
   // `new URL` throws on anything that is not absolute, and the origin comes
   // from the agent.
@@ -845,6 +853,9 @@ export function SignInCard({
   } catch {
     host = origin;
   }
+
+  const forget = useRemoveWebLogin();
+  const forgotten = forget.isSuccess;
 
   const {
     pendingDecision,
@@ -869,7 +880,9 @@ export function SignInCard({
         <span className="text-sm text-[var(--text-primary)]">
           {isResolved
             ? signedIn
-              ? `Signed in to ${host}`
+              ? fromSaved
+                ? `Used your saved login for ${host}`
+                : `Signed in to ${host}`
               : `Not signed in to ${host}`
             : `Sign in to ${host}`}
         </span>
@@ -882,6 +895,35 @@ export function SignInCard({
 
       {reason ? (
         <p className="mt-2 max-w-prose text-sm text-[var(--text-tertiary)]">{reason}</p>
+      ) : null}
+
+      {fromSaved ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {/* The only control that unsticks a dead saved login from inside the
+              conversation. It does not re-ask on the spot -- this run has
+              already been told it is signed in -- it forgets Lemma's copy, so
+              the next `browser_sign_in` finds nothing saved and asks. That is
+              the loop the person was stuck in: a stored session the site no
+              longer accepts, restored again on every attempt, with the only
+              remedy on a settings page they had to know to go and find. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => forget.mutate(origin)}
+            disabled={forget.isPending || forgotten}
+          >
+            {forgotten
+              ? "Forgotten"
+              : forget.isPending
+                ? "Forgetting…"
+                : "That didn’t work — forget it"}
+          </Button>
+          <span className="text-xs text-[var(--text-tertiary)]">
+            {forgotten
+              ? "The next attempt will ask you to sign in."
+              : "Removes Lemma’s copy. It does not sign you out of the site."}
+          </span>
+        </div>
       ) : null}
 
       {isResolved ? null : href ? (

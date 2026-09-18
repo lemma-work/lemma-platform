@@ -22,7 +22,9 @@ repository, and nothing else the service holds.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
+from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -51,14 +53,55 @@ from app.modules.agent.services.workspace_location import resolve_workspace_loca
 logger = get_logger(__name__)
 
 
+class SignInServiceLike(Protocol):
+    """The two methods `_capture_for_resume` needs of a sign-in service."""
+
+    async def capture(
+        self,
+        *,
+        user_id: UUID,
+        origin: str,
+        conversation_id: UUID | None,
+        force: bool = False,
+    ) -> tuple[bool, str | None]: ...
+
+    async def close(self) -> None: ...
+
+
+def _build_sign_in_service() -> SignInServiceLike:
+    """The real service, with a unit-of-work factory of its own.
+
+    Short-lived units of work inside it: the capture runs while the caller's
+    unit of work is open, and a sandbox round trip must not be the thing a
+    pooled connection waits on.
+
+    Imported here rather than at module scope to keep the web_login module out
+    of the import graph of everything that resumes a run.
+    """
+    from app.core.api.dependencies import get_uow_factory
+    from app.modules.web_login.contracts import SignInService
+
+    return SignInService(get_uow_factory())
+
+
 class ResumeToolReturnBuilder:
     """Builds the synthesized tool return that unblocks a resumed run."""
 
     def __init__(
-        self, uow: SqlAlchemyUnitOfWork, agent_repository: AgentRepository
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        agent_repository: AgentRepository,
+        *,
+        sign_in_service: Callable[[], SignInServiceLike] | None = None,
     ) -> None:
         self.uow = uow
         self.agent_repository = agent_repository
+        # Injected rather than constructed inside `_capture_for_resume`, which
+        # is what it used to do. A factory seam reached only by patching the
+        # name means a test proves nothing about the object production builds,
+        # and a rename behind that name lands green -- the thing the
+        # in-subject-doubles gate exists to stop.
+        self._sign_in_service = sign_in_service or _build_sign_in_service
 
     async def build(
         self,
@@ -298,16 +341,7 @@ class ResumeToolReturnBuilder:
         not "fail loudly", it was "fail silently and take the conversation with
         it".
         """
-        from app.core.api.dependencies import get_uow_factory
-        from app.modules.web_login.contracts import SignInService
-
-        # Its own factory, and short-lived units of work inside it: this runs
-        # while the caller's unit of work is open, and a sandbox round trip
-        # must not be the thing a pooled connection waits on. What it costs is
-        # that a slow browser makes the resume slower, which is the trade the
-        # alternative -- answering through a second endpoint the client never
-        # hears about -- was paying in a worse currency.
-        service = SignInService(get_uow_factory())
+        service = self._sign_in_service()
         try:
             return await service.capture(
                 user_id=user_id,

@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
 import { isSignInToolName, isUserInteractionToolName } from 'lemma-sdk';
 import { SignInCard } from './assistant-approval-cards';
+
+// The card can forget a saved login, which is a mutation, so it needs a client.
+const withQuery = (ui: ReactElement) => (
+    <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+        {ui}
+    </QueryClientProvider>
+);
 
 afterEach(cleanup);
 
@@ -31,11 +42,11 @@ describe('a waiting sign-in', () => {
         // beside them; the card now asks for it.
         const navigations: Array<[string, string, Record<string, unknown> | undefined]> = [];
         render(
-            <SignInCard
+            withQuery(<SignInCard
                 invocation={paused}
                 conversationId="conv-1"
                 onNavigateResource={(type, id, meta) => navigations.push([type, id, meta])}
-            />,
+            />),
         );
 
         screen.getByRole('button', { name: /Open asur\.work/ }).click();
@@ -49,7 +60,7 @@ describe('a waiting sign-in', () => {
     });
 
     it('falls back to the standalone page where there is no panel to open', () => {
-        render(<SignInCard invocation={paused} conversationId="conv-1" />);
+        render(withQuery(<SignInCard invocation={paused} conversationId="conv-1" />));
 
         const link = screen.getByRole('link', { name: /Open asur\.work/ });
         // The same destination the Slack and Telegram links use, so somebody
@@ -67,13 +78,13 @@ describe('a waiting sign-in', () => {
         // approval path is what the transcript actually watches.
         const calls: Array<[string, string]> = [];
         render(
-            <SignInCard
+            withQuery(<SignInCard
                 invocation={paused}
                 conversationId="conv-1"
                 onResolveUserApproval={async (id, decision) => {
                     calls.push([id, decision]);
                 }}
-            />,
+            />),
         );
 
         screen.getByRole('button', { name: /I’m signed in/ }).click();
@@ -83,13 +94,13 @@ describe('a waiting sign-in', () => {
     it('can say the sign-in did not happen', () => {
         const calls: Array<[string, string]> = [];
         render(
-            <SignInCard
+            withQuery(<SignInCard
                 invocation={paused}
                 conversationId="conv-1"
                 onResolveUserApproval={async (id, decision) => {
                     calls.push([id, decision]);
                 }}
-            />,
+            />),
         );
 
         screen.getByRole('button', { name: /Can’t right now/ }).click();
@@ -97,7 +108,7 @@ describe('a waiting sign-in', () => {
     });
 
     it('says so rather than offering a link it cannot build', () => {
-        render(<SignInCard invocation={paused} conversationId={null} />);
+        render(withQuery(<SignInCard invocation={paused} conversationId={null} />));
 
         expect(screen.queryByRole('link')).toBeNull();
         expect(screen.getByText(/cannot be opened from here/)).toBeTruthy();
@@ -108,14 +119,14 @@ describe('a waiting sign-in', () => {
         // string, and there is no `signed_in` key and no `decision` key. Read
         // wrongly, every completed sign-in renders as "skipped".
         render(
-            <SignInCard
+            withQuery(<SignInCard
                 invocation={{
                     ...paused,
                     state: 'result',
                     result: { success: true, outcome: 'signed_in', origin: 'https://asur.work', saved: true },
                 }}
                 conversationId="conv-1"
-            />,
+            />),
         );
 
         expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
@@ -125,17 +136,66 @@ describe('a waiting sign-in', () => {
 
     it('says when the person declined rather than calling it done', () => {
         render(
-            <SignInCard
+            withQuery(<SignInCard
                 invocation={{
                     ...paused,
                     state: 'result',
                     result: { success: true, outcome: 'declined', origin: 'https://asur.work' },
                 }}
                 conversationId="conv-1"
-            />,
+            />),
         );
 
         expect(screen.getByText('Not signed in to asur.work')).toBeTruthy();
         expect(screen.getByText('skipped')).toBeTruthy();
+    });
+
+    it('says when it reused a saved login, and offers to forget it', () => {
+        // The three identical "Signed in to asur.work" cards nobody clicked.
+        // `try_saved_login` restores a stored session and returns signed_in
+        // without asking, and the card read exactly like one the person had
+        // just answered -- so a dead session being restored again, run after
+        // run, was indistinguishable from a working sign-in. The only remedy
+        // lived on a settings page they had to know to go and find.
+        render(
+            withQuery(<SignInCard
+                invocation={{
+                    ...paused,
+                    state: 'result',
+                    result: {
+                        success: true,
+                        outcome: 'signed_in',
+                        source: 'saved',
+                        origin: 'https://asur.work',
+                    },
+                }}
+                conversationId="conv-1"
+            />),
+        );
+
+        expect(screen.getByText('Used your saved login for asur.work')).toBeTruthy();
+        expect(screen.getByRole('button', { name: /forget it/i })).toBeTruthy();
+    });
+
+    it('does not offer to forget a login the person just made', () => {
+        render(
+            withQuery(<SignInCard
+                invocation={{
+                    ...paused,
+                    state: 'result',
+                    result: {
+                        success: true,
+                        outcome: 'signed_in',
+                        source: 'person',
+                        origin: 'https://asur.work',
+                        saved: true,
+                    },
+                }}
+                conversationId="conv-1"
+            />),
+        );
+
+        expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /forget it/i })).toBeNull();
     });
 });

@@ -15,7 +15,6 @@ The card has no browser of its own, so the capture happens here.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from uuid import uuid4, uuid7
 
 import pytest
@@ -53,26 +52,20 @@ class _SignInService:
         self.closed += 1
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, service: _SignInService) -> None:
-    # Patched at the source modules because `_capture_for_resume` imports both
-    # inside the function -- a module-local alias would not be the name it
-    # binds.
-    monkeypatch.setattr(
-        "app.core.api.dependencies.get_uow_factory",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr(
-        "app.modules.web_login.contracts.SignInService",
-        lambda _factory: service,
-    )
-
-
 async def _answer(
     *,
     decision: AgentRunApprovalDecision,
     response: dict[str, object],
+    service: _SignInService | None = None,
 ) -> dict[str, object]:
-    builder = ResumeToolReturnBuilder(_Uow(), None)
+    # Injected, not patched. Reaching the real construction by monkeypatching
+    # `app.modules.web_login.contracts.SignInService` doubled a name this file
+    # also imports, which proves nothing about the object production builds
+    # and survives a rename that should have failed -- the in-subject-doubles
+    # gate is what says so.
+    builder = ResumeToolReturnBuilder(
+        _Uow(), None, sign_in_service=lambda: service or _SignInService((True, None))
+    )
     return await builder._browser_sign_in_return(
         tool_args={"origin": _ORIGIN},
         decision=decision,
@@ -101,16 +94,15 @@ def test_the_stand_in_is_called_the_way_the_real_service_can_be() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_chat_answer_captures_the_login(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_the_chat_answer_captures_the_login() -> None:
     """The card carries no `saved`, so this is the surface that must read the
     browser. Without it the run resumed with the login discarded and the person
     was asked for the same site again on the next run."""
     service = _SignInService((True, None))
-    _install(monkeypatch, service)
 
-    content = await _answer(decision=AgentRunApprovalDecision.APPROVE_ONCE, response={})
+    content = await _answer(
+        decision=AgentRunApprovalDecision.APPROVE_ONCE, response={}, service=service
+    )
 
     assert content["outcome"] == "signed_in"
     assert content["saved"] is True
@@ -122,17 +114,15 @@ async def test_the_chat_answer_captures_the_login(
 
 
 @pytest.mark.asyncio
-async def test_a_page_that_already_captured_is_not_read_twice(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_a_page_that_already_captured_is_not_read_twice() -> None:
     """`saved` in the payload is the standalone page's own answer. Capturing
     again would read a browser the person has already walked away from."""
     service = _SignInService((True, None))
-    _install(monkeypatch, service)
 
     content = await _answer(
         decision=AgentRunApprovalDecision.APPROVE_ONCE,
         response={"saved": False, "saved_detail": "nothing to keep"},
+        service=service,
     )
 
     assert service.calls == []
@@ -141,16 +131,15 @@ async def test_a_page_that_already_captured_is_not_read_twice(
 
 
 @pytest.mark.asyncio
-async def test_an_unkept_login_still_resumes_the_run(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_an_unkept_login_still_resumes_the_run() -> None:
     """A browser that cannot be read answers `(False, why)` rather than
     raising, and the person has signed in either way. The run carries on and
     the agent is told what it costs."""
     service = _SignInService((False, "the relay is unreachable"))
-    _install(monkeypatch, service)
 
-    content = await _answer(decision=AgentRunApprovalDecision.APPROVE_ONCE, response={})
+    content = await _answer(
+        decision=AgentRunApprovalDecision.APPROVE_ONCE, response={}, service=service
+    )
 
     assert content["success"] is True
     assert content["outcome"] == "signed_in"
@@ -159,9 +148,7 @@ async def test_an_unkept_login_still_resumes_the_run(
 
 
 @pytest.mark.asyncio
-async def test_a_broken_capture_does_not_strand_the_conversation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_a_broken_capture_does_not_strand_the_conversation() -> None:
     """The deadlock this exists to prevent.
 
     By the time this runs the caller has already committed the execution claim,
@@ -174,9 +161,10 @@ async def test_a_broken_capture_does_not_strand_the_conversation(
     the *sign-in* succeeded; only keeping it for next time did not.
     """
     service = _SignInService(RuntimeError("the store is down"))
-    _install(monkeypatch, service)
 
-    content = await _answer(decision=AgentRunApprovalDecision.APPROVE_ONCE, response={})
+    content = await _answer(
+        decision=AgentRunApprovalDecision.APPROVE_ONCE, response={}, service=service
+    )
 
     assert content["success"] is True
     assert content["outcome"] == "signed_in"
@@ -186,15 +174,14 @@ async def test_a_broken_capture_does_not_strand_the_conversation(
 
 
 @pytest.mark.asyncio
-async def test_declining_never_touches_the_browser(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_declining_never_touches_the_browser() -> None:
     """Declining is an answer, not a failure: the run continues, and the agent
     is told not to ask for this site again."""
     service = _SignInService((True, None))
-    _install(monkeypatch, service)
 
-    content = await _answer(decision=AgentRunApprovalDecision.DENY, response={})
+    content = await _answer(
+        decision=AgentRunApprovalDecision.DENY, response={}, service=service
+    )
 
     assert service.calls == []
     assert content["outcome"] == "declined"
