@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterable, AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -16,7 +14,6 @@ from sandbox_runtime.errors import (
 )
 from sandbox_runtime.protocol import (
     EnvironmentVariable,
-    FileStat,
     TerminalSize,
     WorkloadKind,
 )
@@ -25,7 +22,9 @@ from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.contracts import PythonExecutionResult, ShellCommandResult
+from app.modules.workspace.sandbox_files import SandboxFileOperationsMixin
 from app.modules.workspace.process_output import (
+    POLL_SAFETY_MARGIN_SECONDS,
     TERMINAL_PROCESS_STATES,
     collect_process_output,
 )
@@ -47,6 +46,12 @@ logger = get_logger(__name__)
 # 35s deadline.
 _POLL_YIELD_MS = 30_000
 
+# The whole budget for one poll, yield included. A caller asking to wait longer
+# than this is asking for something this call cannot give -- see
+# `_clamped_yield_ms`, which says so in the result rather than silently
+# returning early and leaving the caller to conclude the process is quiet.
+_POLL_DEADLINE_SECONDS = 35
+
 # The whole budget for deciding whether a silent sandbox is still alive. Short
 # on purpose: this runs after a window that already spent 30 seconds telling the
 # caller nothing, and `echo` on a healthy sandbox answers in well under a
@@ -67,13 +72,36 @@ _PYTHON_SESSION_CACHE_MAX = 512
 _tracer = trace.get_tracer("app.modules.workspace.tool_phases")
 
 
+def _clamped_yield_ms(requested_ms: int) -> tuple[int, str | None]:
+    """The wait this call can actually give, and a notice when it is less.
+
+    One poll's whole budget is `_POLL_DEADLINE_SECONDS`, so a caller asking to
+    wait longer was silently returned early — and early with no output looks
+    exactly like a process that is quiet. An agent reading that concluded
+    nothing was happening and asked again, which is how nine consecutive polls
+    of one build came back empty.
+
+    A clamp the caller cannot see is a lie; a clamp reported is a contract.
+    """
+    budget_ms = int((_POLL_DEADLINE_SECONDS - POLL_SAFETY_MARGIN_SECONDS) * 1000)
+    if requested_ms <= budget_ms:
+        return requested_ms, None
+    return budget_ms, (
+        f"Waited {budget_ms // 1000}s, not the {requested_ms // 1000}s asked "
+        "for: that is the most one poll can wait. An empty result here means "
+        "no new output in that window, not that the process is finished or "
+        "stuck. To wait for it properly, use `wait_for(process_id=...)`, which "
+        "ends your turn and costs nothing while it waits."
+    )
+
+
 def forget_python_sessions(logical_id: UUID) -> None:
     """Drop remembered interpreters for a sandbox that is going away."""
     for key in [key for key in _python_sessions_observed if key[0] == logical_id]:
         _python_sessions_observed.pop(key, None)
 
 
-class SandboxWorkspaceSession:
+class SandboxWorkspaceSession(SandboxFileOperationsMixin):
     """Backend adapter over the sandbox runtime's process and Python-session protocols."""
 
     def __init__(
@@ -252,9 +280,13 @@ class SandboxWorkspaceSession:
         max_output_tokens: int | None = None,
         yield_time_ms: int | None = None,
     ) -> dict[str, Any]:
+        # `max_output_tokens` is not discarded here any more, but it is not used
+        # here either: it bounds the text handed back to the model, which the
+        # tool layer does when it renders the result. The sandbox's own buffer
+        # cap is set once, when the process starts, and a poll cannot change it.
         del max_output_tokens
         operation_id = UUID(process_id)
-        deadline = self._deadline(35)
+        deadline = self._deadline(_POLL_DEADLINE_SECONDS)
         input_accepted = False
         try:
             if chars:
@@ -273,13 +305,15 @@ class SandboxWorkspaceSession:
             # actual input keeps the short window, because someone typing wants
             # the echo back immediately.
             default_yield_ms = 5000 if chars else _POLL_YIELD_MS
-            return await self._collect_process(
+            effective_ms, notice = _clamped_yield_ms(
+                yield_time_ms if yield_time_ms is not None else default_yield_ms
+            )
+            collected = await self._collect_process(
                 operation_id,
                 deadline_at=deadline,
-                yield_time_ms=(
-                    yield_time_ms if yield_time_ms is not None else default_yield_ms
-                ),
+                yield_time_ms=effective_ms,
             )
+            return collected if notice is None else {**collected, "notice": notice}
         except SandboxError as exc:
             if input_accepted:
                 return _sandbox_command_failure(
@@ -386,121 +420,6 @@ class SandboxWorkspaceSession:
             }
             for process in processes
         ]
-
-    async def stat_file(self, path: str, *, timeout: int = 30) -> FileStat:
-        return await self.client.stat_file(
-            self.logical_id,
-            await self._resolve_path(path),
-            deadline_at=self._deadline(timeout),
-        )
-
-    async def list_files(self, path: str, *, timeout: int = 30) -> tuple[FileStat, ...]:
-        return await self.client.list_files(
-            self.logical_id,
-            await self._resolve_path(path),
-            deadline_at=self._deadline(timeout),
-        )
-
-    async def read_file(
-        self,
-        path: str,
-        *,
-        offset: int = 0,
-        length: int | None = None,
-        timeout: int = 60,
-    ) -> bytes:
-        return await self.client.read_file(
-            self.logical_id,
-            await self._resolve_path(path),
-            offset=offset,
-            length=length,
-            deadline_at=self._deadline(timeout),
-        )
-
-    @asynccontextmanager
-    async def stream_file(
-        self,
-        path: str,
-        *,
-        offset: int = 0,
-        length: int | None = None,
-        timeout: int = 60,
-    ) -> AsyncIterator[AsyncIterator[bytes]]:
-        async with self.client.stream_file(
-            self.logical_id,
-            await self._resolve_path(path),
-            offset=offset,
-            length=length,
-            deadline_at=self._deadline(timeout),
-        ) as stream:
-            yield stream
-
-    async def write_file(
-        self,
-        path: str,
-        data: bytes,
-        *,
-        expected_sha256: str | None = None,
-        timeout: int = 60,
-    ) -> FileStat:
-        return await self.client.write_file(
-            self.logical_id,
-            await self._resolve_path(path),
-            data,
-            expected_sha256=expected_sha256,
-            deadline_at=self._deadline(timeout),
-        )
-
-    async def write_file_stream(
-        self,
-        path: str,
-        data: AsyncIterable[bytes],
-        *,
-        expected_sha256: str | None = None,
-        timeout: int = 60,
-    ) -> FileStat:
-        return await self.client.write_file_stream(
-            self.logical_id,
-            await self._resolve_path(path),
-            data,
-            expected_sha256=expected_sha256,
-            deadline_at=self._deadline(timeout),
-        )
-
-    async def move_file(
-        self,
-        source: str,
-        destination: str,
-        *,
-        timeout: int = 30,
-    ) -> None:
-        await self.client.move_file(
-            self.logical_id,
-            await self._resolve_path(source),
-            await self._resolve_path(destination),
-            deadline_at=self._deadline(timeout),
-        )
-
-    async def delete_file(
-        self,
-        path: str,
-        *,
-        recursive: bool = False,
-        timeout: int = 30,
-    ) -> None:
-        await self.client.delete_file(
-            self.logical_id,
-            await self._resolve_path(path),
-            recursive=recursive,
-            deadline_at=self._deadline(timeout),
-        )
-
-    # There is deliberately no set_cwd/get_cwd here. Every command runs as a
-    # fresh process started at `self._cwd`, and this object is rebuilt on each
-    # tool call from the conversation's resolved cwd, so there is no shell
-    # whose directory could be moved or queried. `pwd` could only ever echo
-    # `self._cwd` back. A `cd` inside one command likewise does not carry to
-    # the next; the tool descriptions say so.
 
     async def _resolve_path(self, path: str) -> str:
         return _canonical_runtime_path(path, base=self._cwd)

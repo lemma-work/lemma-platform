@@ -69,7 +69,14 @@ def test_pod_toolset_is_registered_under_pod_toolset_enum():
     assert pod_adapter.pod_toolset in toolsets
 
 
-def test_pod_toolset_exposes_exactly_the_ten_tools():
+def test_pod_toolset_exposes_exactly_these_tools():
+    """A closed set, because every one of them is now visible in the prefix.
+
+    These were deferred behind `search_tools` and went almost unused while the
+    shell rebuilt them through the CLI; they are visible now, which means each
+    one costs prompt budget on every turn. Adding to this list is a real
+    decision, so it has to break a test.
+    """
     names = set(pod_adapter.pod_toolset.tools.keys())
     assert names == {
         "pod_tables",
@@ -79,6 +86,10 @@ def test_pod_toolset_exposes_exactly_the_ten_tools():
         "pod_list_files",
         "pod_read_file",
         "pod_write_file",
+        # Bytes, not text. `pod_write_file` is UTF-8 only, so a PDF or an image
+        # a command produced had to go out through `lemma files upload` — which
+        # `display_resource`'s own description used to tell the model to do.
+        "pod_upload_file",
         "pod_view_document_pages",
         "pod_get_file_url",
         "pod_search_files",

@@ -214,7 +214,7 @@ class TestViewImageRespectsTheMode:
     async def test_delegated_view_image_returns_a_description(
         self, monkeypatch
     ) -> None:
-        from app.modules.agent.tools.workspace_cli import workspace_cli
+        from app.modules.agent.tools.workspace_cli import view_image as workspace_cli
         from app.modules.agent.tools.workspace_cli.models import ViewImageRequest
 
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32

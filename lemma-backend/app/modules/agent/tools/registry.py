@@ -82,7 +82,22 @@ _CAPABILITY_ONLY_TOOLSETS: frozenset[AgentToolset] = frozenset(
 # prefix. The singleton object identities let the capability assembler split the
 # assembled toolset list into visible-core vs deferred-extra.
 EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
-    AgentToolset.POD,
+    # POD is deliberately NOT here, and it is the one entry whose absence needs
+    # a reason. It was deferred like the rest, and the pod tools were then
+    # almost never called: across a sampled 892 tool calls, `pod_get_records`
+    # twice, `browser_open` once, and `pod_query` / `pod_tables` /
+    # `pod_read_file` / `pod_write_file` / `pod_write_record` /
+    # `pod_search_files` not at all — while the shell hand-built the same
+    # operations in ~201 `lemma` CLI calls, ~1,505s of tool time and 29 CLI
+    # usage errors.
+    #
+    # Deferral was not the whole cause: the workspace prompt taught the CLI
+    # equivalent of nine of those tools in the *visible* prefix, so the bypass
+    # was cheaper than the search. Both halves changed together. Visible POD
+    # costs ~9.5k characters of schema in every pod-default prompt, which is the
+    # trade being made on purpose: the tools that touch the pod's own data are
+    # the ones that must not need finding first.
+    #
     # An org with a couple of MCP servers installed can expose thousands of
     # operations. Deferred so the model finds them via search_tools rather than
     # carrying the surface in every prompt prefix.
@@ -106,6 +121,11 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # chat to cover the minority of turns that open a browser is the trade
     # `test_pod_default_visible_toolset_is_slim` exists to refuse.
     AgentToolset.BROWSER,
+    # Speech is a minority of turns and now three tools rather than two, so it
+    # is behind the search like the browser. It went the other way to POD for
+    # the opposite reason: nobody reaches for `say` by accident, and a prompt
+    # that mentions voice is a prompt where finding it costs one call.
+    AgentToolset.SPEECH,
 )
 EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = tuple(
     _TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS

@@ -7,24 +7,23 @@ share the workspace. Keep scratch files there, not in `/tmp` or another root.
 
 ## Lemma CLI
 
-`lemma` is authenticated. Default output includes schemas; `--full` expands
-folded fields, and `--output json` is for piping or saving. Use `--data '<json>'`
-or `--file <path.json>` for payloads. `--pod <id>` targets a pod.
-`lemma orgs select` and `lemma pods select` switch context.
+You have typed tools for the pod's own data and files — `pod_tables`,
+`pod_get_records`, `pod_write_record`, `pod_query`, `pod_list_files`,
+`pod_read_file`, `pod_write_file`, `pod_search_files`. Use them. They validate
+their arguments, so a mistake comes back as a message rather than a usage error,
+and they need no shell.
+
+`lemma` is the CLI for what the tools do not cover: schedules, surfaces, apps,
+orgs, runtime profiles, workflow runs, resource authoring, and moving or
+deleting files. It is already authenticated. `--output json` is for piping,
+`--data '<json>'` or `--file <path.json>` for payloads, `--pod <id>` to target a
+pod. `lemma <group> --help` lists a group rather than guessing at flags.
 
 ```bash
-lemma pods describe                       # inventory except apps
 lemma apps list
 lemma pods members
-lemma chat <agent> "message"
-lemma tables list
-lemma tables get <table>
-lemma records list <table> --limit 20
-lemma records create <table> --data '{"title":"New"}'
-lemma query run "select status, count(*) from <table> group by status"
-lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
-lemma connectors operations search <auth-config> "send email"
+lemma schedules list
 ```
 
 For resource authoring, load `lemma-builder`: `init` scaffolds definitions,
@@ -38,29 +37,14 @@ grants. Load `lemma-user` for approvals, workflow forms, links, and access issue
 and `/memory`, are shared. There is no `/pod` prefix. Save deliverables under
 `/me/<topic>/...` and present their pod paths.
 
-```bash
-lemma files ls /me
-lemma files tree /knowledge
-lemma files write /me/reports/note.md "draft..."
-lemma files search "refund policy" --scope /knowledge
-lemma files upload ./report.pdf /me/reports/report.pdf
-```
-
 Uploaded documents are auto-converted to page-marked markdown and page images;
-`has_markdown` reports availability. Read converted documents in place:
+`has_markdown` reports availability. `pod_read_file` takes a page range and
+reads the conversion in place — no download. `pod_view_document_pages` shows a
+page as an image, which is what layout, tables, charts and scans need.
+`view_image` takes exactly one of `pod_file_path` or `workspace_file_path`.
 
-```bash
-lemma files cat /knowledge/policy.pdf --pages 3-7   # 1-based, capped near 50k chars
-lemma files children /knowledge/policy.pdf
-lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg
-```
-
-Search returns page numbers. Use `cat --pages` for text and inspect page images
-for layout, tables, charts, or scans. `view_image` takes exactly one of
-`pod_file_path` or `workspace_file_path`; pod images need no download.
-`pod_view_document_pages` displays document pages.
-
-LiteParse is a fallback for local files or missing pod conversion:
+LiteParse is a fallback for a local file, or a pod file whose conversion is
+missing:
 
 ```bash
 lit parse input.pdf --target-pages "1-5,10" --format json -o out.json

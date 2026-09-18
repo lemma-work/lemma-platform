@@ -1780,7 +1780,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `path`, `content`, or `public_url`; load the `lemma-widget`\nskill before your first widget. React, routing, or real state means an app.\n\nA WIDGET is a live view, not a picture: it reads pod data through the browser\nSDK, filters and opens records in place, and can offer the person their next\nquestion in the composer. It cannot send one \u2014 `ask_user` is for an answer\nthis run needs.\n\nGive a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`\n(`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the\nfile says, so correcting one is an edit to the file. `content` inlines the\nHTML instead and freezes it in this call.\n\nA display that succeeds is already in front of the person. Nothing here\nreplaces or edits an earlier one, so calling again adds a second resource\nbelow the first rather than correcting it \u2014 which is the other reason to\nkeep the HTML in a file.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
+    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`pod_upload_file` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `path`, `content`, or `public_url`; load the `lemma-widget`\nskill before your first widget. React, routing, or real state means an app.\n\nA WIDGET is a live view, not a picture: it reads pod data through the browser\nSDK, filters and opens records in place, and can offer the person their next\nquestion in the composer. It cannot send one \u2014 `ask_user` is for an answer\nthis run needs.\n\nGive a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`\n(`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the\nfile says, so correcting one is an edit to the file. `content` inlines the\nHTML instead and freezes it in this call.\n\nA display that succeeds is already in front of the person. Nothing here\nreplaces or edits an earlier one, so calling again adds a second resource\nbelow the first rather than correcting it \u2014 which is the other reason to\nkeep the HTML in a file.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -2170,6 +2170,18 @@
           "description": "Whether the process has finished. `false` whenever the command outlived this call's wait window \u2014 a long build or test run as much as an interactive TTY session. The command is still running; it was not cancelled.",
           "type": "boolean"
         },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something about this call that is not about the command itself \u2014 most often that a wait you asked for was longer than one call can give. Read it: it usually explains an empty result."
+        },
         "process_id": {
           "anyOf": [
             {
@@ -2211,7 +2223,9 @@
         },
         "timeout_seconds": {
           "default": 60,
-          "description": "Maximum execution time in seconds before timing out.",
+          "description": "How long to wait before giving up, up to 300s. Unlike `exec_command` there is no handle to come back to: this runs in the shared kernel and a timeout ends it. For work that may take longer, run it with `exec_command` and wait for the process.",
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -2594,6 +2608,117 @@
         }
       },
       "title": "SkillListResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "list_voices",
+    "toolset": "SPEECH",
+    "description": "What `say` can sound like: the voices this deployment can actually use.\n\nRead from the provider rather than a list kept here, so it is the whole\nrange and cannot go stale. Filter by `language` when you know it; each\nvoice carries an accent and use-case tags, which is usually what decides\nbetween two that speak the same language.\n\nA language with no voices is a real answer: say so rather than speaking it\nwith a voice that does not.",
+    "input_schema": {
+      "properties": {
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "BCP-47 code to filter by, e.g. 'es' or 'ja'. Omit to see every voice the provider has."
+        },
+        "limit": {
+          "default": 20,
+          "description": "How many to return. There are roughly eighty in total.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "VoiceSummary": {
+          "properties": {
+            "name": {
+              "description": "Pass this to `say` as `voice`.",
+              "type": "string"
+            },
+            "languages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "accent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "VoiceSummary",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "default": false,
+          "type": "boolean"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "voices": {
+          "items": {
+            "$ref": "#/$defs/VoiceSummary"
+          },
+          "type": "array"
+        },
+        "total": {
+          "default": 0,
+          "description": "How many matched before `limit` was applied.",
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesResponse",
       "type": "object"
     }
   },
@@ -3488,6 +3613,50 @@
         }
       },
       "title": "PodTablesRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "pod_upload_file",
+    "toolset": "POD",
+    "description": "Copy a file out of your sandbox into pod files, bytes intact.\n\nThis is how a deliverable a command produced \u2014 a PDF, a spreadsheet, an\nimage, a zip \u2014 becomes something a person can open. `pod_write_file` is\ntext only, so anything else had to go through the shell before this existed.\n\nSame placement rules as `pod_write_file`: a relative path lands in your\ndefault pod working directory, writes under your own `/me/...` need no\napproval, and a shared pod path may.",
+    "input_schema": {
+      "properties": {
+        "workspace_path": {
+          "description": "File in your sandbox to copy into the pod, e.g. `/workspace/report.pdf`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Where it lands in pod files. A relative path resolves against `/me/c/{date}/{slug}` \u2014 write there unless a specific shared location is needed.",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": true,
+          "description": "If false, reject the upload when the file exists.",
+          "type": "boolean"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional file description."
+        }
+      },
+      "required": [
+        "workspace_path",
+        "path"
+      ],
+      "title": "PodUploadFileRequest",
       "type": "object"
     },
     "output_schema": {
@@ -4567,7 +4736,7 @@
             }
           ],
           "default": null,
-          "description": "Optional provider-specific voice/model id. None = default."
+          "description": "A specific voice, by its full name \u2014 `aura-2-andromeda-en`, not `andromeda`. Omit it and one is chosen for `language`. Call `list_voices` to see what exists; there are far more than one per language, differing by accent, age and intended use."
         }
       },
       "required": [

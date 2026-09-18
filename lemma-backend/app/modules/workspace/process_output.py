@@ -23,7 +23,7 @@ _MAX_OUTPUT_WAIT_SECONDS = 30.0
 
 # Headroom between how long the server is asked to hold a response and how long
 # the client will wait for it, so a wait never expires in transit.
-_POLL_SAFETY_MARGIN_SECONDS = 1.0
+POLL_SAFETY_MARGIN_SECONDS = 1.0
 
 # Below this a silent window says nothing: a caller that asked to wait half a
 # second and got half a second of quiet has learned only that the command is not
@@ -98,7 +98,7 @@ def _wait_window(*, deadline_at: datetime, yield_seconds, elapsed: float) -> flo
     """
     window = (
         deadline_at - datetime.now(timezone.utc)
-    ).total_seconds() - _POLL_SAFETY_MARGIN_SECONDS
+    ).total_seconds() - POLL_SAFETY_MARGIN_SECONDS
     if yield_seconds is not None:
         window = min(window, yield_seconds - elapsed)
     return min(window, _MAX_OUTPUT_WAIT_SECONDS)

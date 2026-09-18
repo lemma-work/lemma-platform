@@ -2000,7 +2000,11 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     assert "lemma-user" in prompt
     assert "other conversations\nshare the workspace" in prompt
     assert "/me/<topic>/" in prompt
-    assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
+    # Was a `lemma files cat --pages` example. That line is deliberately gone:
+    # this fragment teaching the CLI for what a tool does is what made the
+    # bypass cheaper than the tool. Pin the replacement, so the fragment is
+    # still proven to reach the prompt.
+    assert "pod_read_file" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
     # does not exist, so guard the whole composed prompt against it coming back.
     assert "/pod/" not in prompt
