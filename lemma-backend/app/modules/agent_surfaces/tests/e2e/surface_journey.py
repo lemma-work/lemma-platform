@@ -405,6 +405,9 @@ async def stage_surface(
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    # What a link card points at. Anything the agent cannot send natively
+    # degrades to a link, so this is staging rather than one test's business.
+    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test")
     pod_id = test_pod["id"]
     config: dict[str, Any] = {"type": platform.value}
     sender_id = ""
@@ -429,6 +432,9 @@ async def stage_surface(
         )
         config["account_id"] = str(account.id)
         sender_id = slack_payloads.SENDER_ID
+        # Where a reply is expected to land, so a test asserting the
+        # destination does not restate the capture's channel id.
+        extras["_dm_channel"] = slack_payloads.DM_CHANNEL_ID
     elif platform is SurfacePlatform.TEAMS:
         from app.modules.agent_surfaces.platforms.teams.adapter import (
             TeamsSurfaceAdapter,
