@@ -19,6 +19,7 @@ uses); scratch files stay in the sandbox via ``file_manager.write_file``.
 from __future__ import annotations
 
 import mimetypes
+import posixpath
 
 from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from app.core.file_types import is_untyped_mime, sniff_media_mime
@@ -58,8 +59,15 @@ def is_datastore_path(path: str) -> bool:
     The roots are read from `RUNTIME_FILESYSTEM_ROOTS` rather than spelled here,
     because the default when a path matches nothing is to route it at the pod:
     a root this list forgot does not fail, it silently addresses the wrong disk.
+
+    The path is normalised first, so the prefix being compared is the one the
+    path actually names: `/tmp/../me/report` reads as `/me/report` and goes to
+    the pod, where a raw prefix check saw `/tmp/` and sent it to the sandbox.
+    Lexical only, deliberately -- symlinks are resolved by the containment clamp
+    on the sandbox side, which is where the filesystem to resolve them against
+    actually is.
     """
-    candidate = (path or "").strip()
+    candidate = posixpath.normpath((path or "").strip())
     if not candidate.startswith("/"):
         return False
     return not any(

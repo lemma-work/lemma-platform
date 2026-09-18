@@ -53,6 +53,40 @@ class RuntimeBundle:
         return len(self.archive)
 
 
+def _required_text(manifest: dict[str, object], key: str) -> str:
+    """One manifest field that has to be a non-empty string, or it is not one.
+
+    `str(value)` would accept anything -- a dict becomes `"{'a': 1}"` and a
+    version that reads like a Python repr is worse than no bundle, because it
+    is recorded as the version a sandbox is running.
+    """
+    value = manifest[key]
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"manifest {key!r} must be a non-empty string")
+    return value
+
+
+def _required_modules(manifest: dict[str, object]) -> tuple[str, ...]:
+    """The modules the smoke test imports, which must be a list of names.
+
+    The lenient form of this (`tuple(str(i) for i in value)`) iterates whatever
+    it is handed: a bare string becomes one "module" per character, a mapping
+    becomes its keys. Neither is rejected, and that is the trap -- the bundle
+    loads, `runtime_bundle()` prefers a configured directory over the image's,
+    and every ensure then fails its smoke test and retries, forever, while a
+    perfectly good bundle sits in the image unused.
+    """
+    value = manifest.get("requires", ())
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise ValueError("manifest 'requires' must be a list of module names")
+    modules = []
+    for item in value:
+        if not isinstance(item, str) or not item:
+            raise ValueError("manifest 'requires' must hold non-empty strings")
+        modules.append(item)
+    return tuple(modules)
+
+
 def load_bundle(directory: Path) -> RuntimeBundle | None:
     """Read one bundle directory, or None when there is not one there.
 
@@ -71,13 +105,15 @@ def load_bundle(directory: Path) -> RuntimeBundle | None:
     # over a truncated file.
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        archive = directory / str(manifest["archive"])
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be a JSON object")
+        archive = directory / _required_text(manifest, "archive")
         payload = archive.read_bytes()
         bundle = RuntimeBundle(
-            version=str(manifest["version"]),
+            version=_required_text(manifest, "version"),
             archive=payload,
-            archive_sha256=str(manifest["archive_sha256"]),
-            requires=tuple(str(item) for item in manifest.get("requires", ())),
+            archive_sha256=_required_text(manifest, "archive_sha256"),
+            requires=_required_modules(manifest),
             component_version=str(manifest.get("component_version", "unknown")),
         )
     except (OSError, ValueError, TypeError, KeyError) as exc:

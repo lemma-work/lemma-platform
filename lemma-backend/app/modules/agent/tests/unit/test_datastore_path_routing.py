@@ -46,6 +46,25 @@ def test_the_parent_of_the_workspace_root_is_not_the_sandbox() -> None:
     assert is_datastore_path(f"{WORKSPACE_ROOT}-other/notes.md")
 
 
+def test_a_path_is_routed_by_what_it_names_after_traversal() -> None:
+    """A raw prefix check routes `/tmp/../me/report` by its first segment.
+
+    That segment is a runtime root, so it went to the sandbox -- which does not
+    have the file, and the agent gets a 404 from the wrong disk rather than the
+    report. The decision has to be made against the path the traversal actually
+    names, so it is normalised first.
+    """
+    assert is_datastore_path("/tmp/../me/report")
+    assert is_datastore_path(f"{WORKSPACE_ROOT}/../../etc/passwd")
+
+
+def test_traversal_that_stays_inside_a_root_still_addresses_the_sandbox() -> None:
+    """Normalising must not send ordinary paths to the pod by accident."""
+    assert not is_datastore_path(f"{WORKSPACE_ROOT}/a/../b.txt")
+    assert not is_datastore_path(f"{WORKSPACE_ROOT}/")
+    assert not is_datastore_path("/tmp/./staged")
+
+
 def test_pod_paths_address_the_datastore() -> None:
     assert is_datastore_path("/me")
     assert is_datastore_path("/me/reports/q3.md")

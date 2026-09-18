@@ -437,13 +437,16 @@ Session IDs are DNS-safe, bounded strings. They are not authorization tokens.
 ### 5.4 Filesystem routes
 
 ```text
-GET    .../files:stat?path=/workspace/a.txt
-GET    .../files?path=/workspace
-GET    .../files:content?path=/workspace/a.txt
-PUT    .../files:content?path=/workspace/a.txt
+GET    .../files:stat?path=/home/user/a.txt
+GET    .../files?path=/home/user
+GET    .../files:content?path=/home/user/a.txt
+PUT    .../files:content?path=/home/user/a.txt
 POST   .../files:move
-DELETE .../files?path=/workspace/a.txt&recursive=false
+DELETE .../files?path=/home/user/a.txt&recursive=false
 ```
+
+`/workspace/a.txt` is still accepted on any of these, for a conversation
+recorded before the root moved. It is compatibility, not the caller path.
 
 Read/write bodies use `application/octet-stream`. Metadata is carried in response
 headers and typed JSON for `stat`/`list`. Conditional writes accept an optional

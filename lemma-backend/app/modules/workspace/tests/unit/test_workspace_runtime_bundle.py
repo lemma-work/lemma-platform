@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
+
 
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.infrastructure.runtime_bundle import (
@@ -320,6 +322,54 @@ def test_a_manifest_whose_archive_is_missing_holds_no_bundle(tmp_path: Path) -> 
     """Half a bundle must read as none, not as one that fails on delivery."""
     (tmp_path / "manifest.json").write_text(
         '{"version": "sha256:cafe", "archive": "runtime-bundle.zip", '
+        '"archive_sha256": "sha256:beef", "requires": []}',
+        encoding="utf-8",
+    )
+
+    assert load_bundle(tmp_path) is None
+
+
+def _write_manifest(directory: Path, requires: str) -> None:
+    """A complete, readable bundle whose `requires` is whatever is being tested."""
+    (directory / "runtime-bundle.zip").write_bytes(b"PK\x03\x04 payload")
+    (directory / "manifest.json").write_text(
+        '{"version": "sha256:cafe", "archive": "runtime-bundle.zip", '
+        f'"archive_sha256": "sha256:beef", "requires": {requires}}}',
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize(
+    "requires",
+    ['"lemma_sdk"', '{"lemma_sdk": "0.8.0"}', '["lemma_sdk", 7]', '["lemma_sdk", ""]'],
+)
+def test_a_manifest_whose_requires_is_not_a_list_of_names_holds_no_bundle(
+    tmp_path: Path, requires: str
+) -> None:
+    """Every one of these used to load, and that was the trap.
+
+    A bare string iterates into one "module" per character and a mapping into
+    its keys, so nothing rejected them. The bundle loaded, and because a
+    configured directory is preferred over the image's, it then failed its smoke
+    test on every single ensure -- forever, with a good bundle sitting unused in
+    the image. Refusing here is what lets the fallback happen.
+    """
+    _write_manifest(tmp_path, requires)
+
+    assert load_bundle(tmp_path) is None
+
+
+def test_a_manifest_whose_version_is_not_a_string_holds_no_bundle(
+    tmp_path: Path,
+) -> None:
+    """`str()` accepts anything, and the version is recorded as what a sandbox runs.
+
+    A version that reads like a Python repr is worse than no bundle: it is
+    logged and compared as an identity, so it would silently never match.
+    """
+    (tmp_path / "runtime-bundle.zip").write_bytes(b"PK\x03\x04 payload")
+    (tmp_path / "manifest.json").write_text(
+        '{"version": {"a": 1}, "archive": "runtime-bundle.zip", '
         '"archive_sha256": "sha256:beef", "requires": []}',
         encoding="utf-8",
     )
