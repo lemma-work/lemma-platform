@@ -84,7 +84,7 @@ NEW_AGENT_DEFAULT_TOOLSETS: tuple[AgentToolset, ...] = (
 # USER_INTERACTION universal the implication was universal too -- so it is
 # stated here rather than derived from a toolset that is now always present.
 #
-# MESSAGING and SNOOZE are one capability in practice: `message_user` does not
+# MESSAGING and WAIT are one capability in practice: `message_user` does not
 # block, so an agent given the first without the second can send and then has no
 # way to be around when the reply lands. Messaging is fenced to pod members by
 # `resolve_pod_recipient`, which joins through PodMember and returns None for
@@ -93,7 +93,7 @@ NEW_AGENT_DEFAULT_TOOLSETS: tuple[AgentToolset, ...] = (
 ALWAYS_ON_TOOLSETS: tuple[AgentToolset, ...] = (
     AgentToolset.USER_INTERACTION,
     AgentToolset.SKILLS,
-    AgentToolset.SNOOZE,
+    AgentToolset.WAIT,
     AgentToolset.MESSAGING,
     AgentToolset.TODO,
 )
@@ -124,13 +124,13 @@ _CONNECTOR_RESOURCES = frozenset(
 # Withheld from a sub-agent, each for its own reason:
 #
 # SUBAGENTS   -- the depth rule itself.
-# SNOOZE      -- a sleeping child blocks its parent's tool call while the parent
+# WAIT        -- a waiting child blocks its parent's tool call while the parent
 #                is still mid-run and subject to its own limits.
 # MESSAGING   -- a sub-agent is an implementation detail of its parent's turn,
 #                and a colleague receiving a message from one has no way to
 #                place it. Whatever needs saying, the parent should say.
 _SUB_AGENT_WITHHELD = frozenset(
-    {AgentToolset.SUBAGENTS, AgentToolset.SNOOZE, AgentToolset.MESSAGING}
+    {AgentToolset.SUBAGENTS, AgentToolset.WAIT, AgentToolset.MESSAGING}
 )
 
 
@@ -229,7 +229,7 @@ def resolve_toolsets(
     callers that did not come through it.
 
     Order matters at the end: the sub-agent subtraction runs last, so a child
-    run does not receive MESSAGING and SNOOZE back through the always-on set.
+    run does not receive MESSAGING and WAIT back through the always-on set.
     """
     is_pod_default = agent is None or agent.kind is AgentKind.POD_DEFAULT
     declared = list(POD_DEFAULT_AGENT_TOOLSETS if is_pod_default else agent.toolsets)

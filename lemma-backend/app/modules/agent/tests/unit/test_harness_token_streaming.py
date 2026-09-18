@@ -22,7 +22,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation
-from app.modules.agent.domain.value_objects import AgentEventType, HarnessOptions
+from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.value_objects import AgentEventType
 from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 

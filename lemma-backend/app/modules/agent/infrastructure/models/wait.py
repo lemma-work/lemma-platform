@@ -20,11 +20,12 @@ from app.core.infrastructure.db.base import UUIDAuditBase
 
 
 class AgentConversationWaitModel(UUIDAuditBase):
-    """What a snoozed conversation is waiting on — the single source of truth.
+    """What a waiting conversation is waiting on — the single source of truth.
 
     Mirrors ``workflow_run_waits``. The partial unique index enforces at most one
-    ACTIVE wait per conversation: a turn that paused on a snooze cannot also be
-    snoozed again until it wakes, and a duplicate wake cannot create a second row.
+    ACTIVE wait per conversation: a turn that paused on a wait cannot also be
+    made to wait again until it resolves, and a duplicate wake cannot create a
+    second row.
     """
 
     __tablename__ = "agent_conversation_waits"

@@ -12,13 +12,13 @@ from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Mes
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentToolset,
     ConnectorAccessConfig,
     ConnectorMode,
     ConversationType,
-    HarnessOptions,
     MessageKind,
     MessageRole,
 )
@@ -2443,7 +2443,7 @@ def test_a_pending_approval_is_not_reported_to_the_model_as_a_failure():
     failure would tell the model its question failed while the user is still
     being asked it."""
     conversation_id = uuid4()
-    for tool_name in ("ask_user", "request_approval", "snooze"):
+    for tool_name in ("ask_user", "request_approval", "wait_for"):
         pending = _tool_call_message(
             conversation_id=conversation_id,
             sequence=0,

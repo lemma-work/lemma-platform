@@ -244,7 +244,7 @@ class NotificationRepository:
 
         Scoped to AGENT_RUN because that is the only origin a conversation has —
         a workflow form is owed to its run, and resuming it is the workflow
-        engine's job, not a snoozed conversation's.
+        engine's job, not a waiting conversation's.
 
         EXPIRED and CANCELLED count as settled, deliberately. They are not
         answers, but they are no longer outstanding, and an asker held asleep by

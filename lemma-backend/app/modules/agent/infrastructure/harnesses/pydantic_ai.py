@@ -39,11 +39,11 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     HarnessKind,
-    HarnessOptions,
     JsonObject,
     MessageDraft,
     to_json_value,

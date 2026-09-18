@@ -2,7 +2,7 @@
 
 A notification is *not* a wait. A wait suspends an execution and resumes it with
 an answer; a notification is fire-and-forget. The sender does not block on the
-recipient — it carries on, and typically ``snooze``s until answers are plausible.
+recipient — it carries on, and typically ``wait_for``s until answers are plausible.
 
 The one thread back is deliberately thin: when the last ask an asking
 conversation made is answered, that conversation gets a fresh turn. Nothing

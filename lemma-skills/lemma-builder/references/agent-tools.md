@@ -11,7 +11,7 @@ Three toolsets carry them, and only one of them is a decision:
 | Toolset | Tools | On by default? |
 | --- | --- | --- |
 | `USER_INTERACTION` | `ask_user`, `display_resource`, `request_approval` | **always on** — withholding `request_approval` doesn't make an agent safer, it removes the seam where a human gets to say no |
-| `SNOOZE` | `snooze` | **always on**, but *deferred* — found via `search_tools`, not in the prompt prefix |
+| `WAIT` | `wait_for` | **always on**, but *deferred* — found via `search_tools`, not in the prompt prefix |
 | `SPEECH` | `say`, `listen` | **declared** — put `"SPEECH"` in the agent's `toolsets` |
 
 Every tool returns at least `{ success, message?, error? }` (errors are non-fatal — a
@@ -20,7 +20,7 @@ tool-specific fields are listed per tool below.
 
 > Grant-checked actions are still scoped to the resources the agent holds grants for,
 > and to what the invoking person could do themselves (`agents.md` → Workload grants).
-> A **sub-agent** keeps `USER_INTERACTION` but loses `SNOOZE`.
+> A **sub-agent** keeps `USER_INTERACTION` but loses `WAIT`.
 
 ---
 
@@ -38,7 +38,7 @@ delivers it per surface.
 | `display_resource` (WIDGET) | embedded iframe | link to the served widget | link | link | **not carried** — the tool says so; write the link into the reply yourself |
 | `display_resource` (TABLE/AGENT/…) | inline resource view | link/summary | link/summary | link/summary | **not carried** — same |
 | `say` | audio player | **native voice note** (MP3) | MP3 audio | **native voice note** (OGG voice bubble) | not available — don't call it |
-| `snooze` | conversation reads as snoozed until it wakes | same — nothing is asked of the user | same | same | works, but see the 24h cap below |
+| `wait_for` | conversation reads as waiting until it resolves | same — nothing is asked of the user | same | same | works, but see the 24h cap below |
 
 Native rendering is **first, with a formatted-text fallback**: a platform with no native
 support — or a native render that fails — gets a formatted prompt rather than nothing.
@@ -57,15 +57,16 @@ tool telling the model so, instead of a cheerful "ready for display" nobody sees
 
 ## The pause / resume model
 
-`ask_user`, `request_approval`, and `snooze` are **pausing** tools. When the agent calls
+`ask_user`, `request_approval`, and `wait_for` are **pausing** tools. When the agent calls
 one, the in-process run ends cleanly and the **conversation flips to `WAITING`** (the
 pending tool call is persisted). When it resolves, the backend synthesizes the tool's
 return value and starts a **fresh run** that resumes from history — the agent sees the
 result as that tool's return and continues.
 
 What differs is *who resolves it*. `ask_user` and `request_approval` wait on a person, so
-they stay `WAITING` until someone answers. `snooze` resolves itself when its timer
-elapses, and needs nobody. Both take the same path back into the run.
+they stay `WAITING` until someone answers. `wait_for` resolves itself — when its timer
+elapses, when the process it names exits, or when the child run it names finishes — and
+needs nobody. Both take the same path back into the run.
 
 A **remote harness** (an agent running on Agent Host rather than in-process) reaches
 these tools over MCP and cannot end its own turn from inside a tool call. It doesn't need
@@ -85,7 +86,7 @@ thread, under their own permissions, guided by the `background_instruction` the 
 wrote, and records it with `respond_to_notification`.
 
 So an agent that needs answers sends every message it needs, says who it is waiting on,
-and **ends the turn** — and must not poll. When the **last**
+and **ends the turn**. It must not `wait_for` them and must not poll: when the **last**
 outstanding answer is recorded, the backend starts a *fresh turn* in the asking
 conversation on its own, and the agent reads what everyone said with `check_messages`
 there. (Waiting for the last rather than the first is deliberate — an agent that
@@ -238,23 +239,35 @@ Pausing tool (conversation → `WAITING`), same resume flow as `ask_user`.
 
 ---
 
-## `snooze`
+## `wait_for`
 
-Suspends the current turn for a while and picks it up later, in the same conversation with
-the same history. Gate: the `SNOOZE` toolset.
+Suspends the current turn and picks it up when there is a reason to, in the same
+conversation with the same history. Gate: the `WAIT` toolset. It is the **only** way an
+agent waits — there is no sleep, and polling a tool in a loop is the thing it replaces.
+
+Name exactly one target:
 
 ```jsonc
 {
-  "reason": "waiting for the nightly build",      // shown to the user while asleep
-  "seconds": 900,                                 // clamped to [30, 86400]
+  "reason": "waiting for the nightly build",      // shown to the user while waiting
+  "seconds": 900,                                 // a plain gap; clamped to [30, 86400]
+  "process_id": "abc",                            // ...or an exec_command process
+  "subagent_run_id": "01f0...",                   // ...or a spawn_subagent run
+  "max_seconds": 3600,                            // ceiling for the latter two
   "note_to_self": "post the result to #eng"       // handed back verbatim on wake
 }
 ```
 
-**Time-based only.** Waking on a record change is deliberately not offered — see the
-trigger-or-snooze rule in `schedules-and-triggers.md`.
+A process wait keeps its sandbox alive, because the running process is what holds it.
+Across a plain `seconds` wait nothing is holding it, so `/workspace` may be reclaimed —
+write anything you need to the pod first.
 
-**Waking proves nothing happened.** `woke_because` is `TIMER`: the time elapsed, and
+**No record waits.** Waking on a row changing is deliberately not offered — see the
+trigger-or-wait rule in `schedules-and-triggers.md`.
+
+**Waking proves nothing succeeded.** `woke_because` says which of `TIMER`,
+`TARGET_FINISHED`, `DEADLINE`, `TARGET_GONE` or `ANSWERED` ended the wait. A process
+that finished may have failed, and a timer elapsing says nothing at all:
 that is all it means. An agent that treats a wake as confirmation will act on something
 that never occurred — prompt it to re-check.
 

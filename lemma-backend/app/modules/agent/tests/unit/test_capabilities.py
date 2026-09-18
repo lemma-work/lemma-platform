@@ -1018,10 +1018,13 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
 
     # Hidden from the prefix — an interactive assistant should not reach for
     # "message a colleague" or "go to sleep" without going looking first.
-    assert {"message_user", "check_messages", "list_pod_members", "snooze"} <= captured[
-        "deferred"
-    ]
-    assert not ({"message_user", "snooze"} & captured["visible"])
+    assert {
+        "message_user",
+        "check_messages",
+        "list_pod_members",
+        "wait_for",
+    } <= captured["deferred"]
+    assert not ({"message_user", "wait_for"} & captured["visible"])
 
     # ...but the contract still rides in the prefix.
     messaging = [
@@ -1031,7 +1034,7 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     ]
     assert len(messaging) == 1, "deferring messaging dropped its instructions"
     instructions = messaging[0].get_instructions()
-    assert "snooze" in instructions
+    assert "wait_for" in instructions
     assert "background_instruction" in instructions
 
 

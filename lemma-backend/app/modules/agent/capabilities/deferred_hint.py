@@ -19,7 +19,7 @@ from app.modules.agent.tools.registry import (
     connectors_toolset,
     messaging_toolset,
     pod_toolset,
-    snooze_toolset,
+    waiting_toolset,
     subagents_toolset,
 )
 
@@ -33,7 +33,7 @@ _GROUP_LABELS: dict[int, str] = {
     id(subagents_toolset): "Sub-agent delegation",
     id(connectors_toolset): "Connected third-party apps",
     id(messaging_toolset): "Reaching pod members",
-    id(snooze_toolset): "Pausing and resuming later",
+    id(waiting_toolset): "Pausing and resuming later",
     id(browser_toolset): "Driving a real browser",
 }
 

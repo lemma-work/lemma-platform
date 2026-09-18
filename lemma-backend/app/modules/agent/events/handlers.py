@@ -66,6 +66,9 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.events.subagent_waits import (
+    resolve_parent_wait_for_finished_child,
+)
 from app.modules.agent.events.queued_followup import (
     start_followup_run_for_queued_messages,
 )
@@ -230,6 +233,9 @@ async def _process_agent_control_event(
         # Anything the person sent while that run was busy has been sitting
         # unanswered: the run it joined had already read its history.
         await start_followup_run_for_queued_messages(parsed, uow_factory=uow_factory)
+        # And a parent suspended on this child gets its turn back now, rather
+        # than at the deadline its timer is holding as a backstop.
+        await resolve_parent_wait_for_finished_child(parsed, uow_factory=uow_factory)
         return
     if isinstance(parsed, AgentRunStopRequestedEvent):
         job_id = agent_run_job_id(parsed.agent_run_id)

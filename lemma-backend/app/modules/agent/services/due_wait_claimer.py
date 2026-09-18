@@ -1,4 +1,10 @@
-"""Claiming due agent snooze timers, from the module that owns the table."""
+"""Claiming due agent conversation waits, from the module that owns the table.
+
+Every wait type is armed with a ``scheduled_at``, whatever else may resolve it,
+so one claim serves all three. What a fired wait *means* differs by type and is
+decided downstream by ``AgentWaitService.resolve``; the claim only says whose
+turn it is to look.
+"""
 
 from __future__ import annotations
 
@@ -15,16 +21,16 @@ from app.core.domain.timers import (
 )
 from app.modules.agent.infrastructure.models import AgentConversationWaitModel
 
-SNOOZE_WAKE_SOURCE = "agent_snooze"
+WAIT_WAKE_SOURCE = "agent_wait"
 
 
-async def claim_due_snooze_waits(
+async def claim_due_waits(
     session,
     *,
     now: datetime,
     limit: int = DEFAULT_TIMER_CLAIM_LIMIT,
 ) -> list[ClaimedTimer]:
-    """Take due agent snooze timers."""
+    """Take due agent conversation waits of any type."""
     statement = (
         select(AgentConversationWaitModel)
         .where(
@@ -54,7 +60,7 @@ async def claim_due_snooze_waits(
                     "conversation_id": str(row.conversation_id),
                     "wait_ref": row.external_ref,
                     "scheduled_at": fire_at.isoformat(),
-                    "source": SNOOZE_WAKE_SOURCE,
+                    "source": WAIT_WAKE_SOURCE,
                 },
             )
         )

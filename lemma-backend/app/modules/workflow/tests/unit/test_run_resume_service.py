@@ -219,10 +219,10 @@ async def test_overdue_agent_wait_is_expired_rather_than_left_running():
     assert "did not finish within" in engine.failures[0]["error"]
 
 
-async def test_overdue_agent_wait_is_left_alone_while_the_agent_is_snoozed():
-    """A snoozed agent is healthy and wakes itself, so the ceiling must not fire.
+async def test_overdue_agent_wait_is_left_alone_while_the_agent_is_waiting():
+    """A waiting agent is healthy and wakes itself, so the ceiling must not fire.
 
-    Without this, an agent that snoozes longer than
+    Without this, an agent that waits longer than
     ``workflow_wait_max_age_seconds`` fails the *workflow* while nothing is
     actually wrong — a silent wrong outcome rather than a visible error. An agent
     blocked on a person stays subject to the ceiling; that is the hang it exists
@@ -238,7 +238,7 @@ async def test_overdue_agent_wait_is_left_alone_while_the_agent_is_snoozed():
         wait,
         datetime.now(timezone.utc) - timedelta(hours=6),
         now=datetime.now(timezone.utc),
-        agent_status={"status": "WAITING", "wait_reason": "SNOOZE"},
+        agent_status={"status": "WAITING", "wait_reason": "WAIT"},
     )
 
     assert handled is False

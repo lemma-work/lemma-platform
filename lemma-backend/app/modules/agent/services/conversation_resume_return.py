@@ -38,6 +38,7 @@ from app.modules.agent.domain.agent_host_permissions import (
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.domain.run_budget_pause import is_budget_pause
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
@@ -84,6 +85,34 @@ def _build_sign_in_service() -> SignInServiceLike:
     return SignInService(get_uow_factory())
 
 
+def _budget_decision_return(decision: AgentRunApprovalDecision) -> dict[str, object]:
+    """What the model is told after a person answered "keep going?".
+
+    Denial is not a failure and must not read as one: the person made a
+    decision, and an agent told its own work "failed" will try to repair
+    something that was never broken. It is told to stop and report, which is the
+    thing that makes the deny button worth pressing.
+    """
+    if decision is AgentRunApprovalDecision.DENY:
+        return {
+            "success": True,
+            "message": (
+                "A person decided not to continue this run. Stop here. Do not "
+                "start any more work — report what you have done so far and "
+                "what is left, so somebody can pick it up."
+            ),
+        }
+    return {
+        "success": True,
+        "message": (
+            "A person asked you to keep going, and your allowance has been "
+            "renewed. Carry on from where you stopped — but this was a long "
+            "run, so prefer the shortest route to a result over starting "
+            "anything new."
+        ),
+    }
+
+
 class ResumeToolReturnBuilder:
     """Builds the synthesized tool return that unblocks a resumed run."""
 
@@ -121,6 +150,13 @@ class ResumeToolReturnBuilder:
             AskUserResponse,
             RequestApprovalResponse,
         )
+
+        if is_budget_pause(tool_args):
+            # Before the `agent_host_permission_request` check and before
+            # `inner_tool = tool_args.get("tool_name")` below: the card names a
+            # tool (`continue_running`) that does not exist, and the executor
+            # branch would try to run it.
+            return "request_approval", _budget_decision_return(decision)
 
         if kind == "ask_user":
             if decision == AgentRunApprovalDecision.DENY:
