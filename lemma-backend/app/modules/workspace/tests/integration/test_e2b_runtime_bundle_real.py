@@ -45,7 +45,7 @@ from app.modules.workspace.services.workspace_runtime_bundle import (
     install_command,
 )
 from sandbox_runtime import runtime_install
-from sandbox_runtime.paths import WORKSPACE_ROOT
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.integration, pytest.mark.provider, pytest.mark.asyncio]
 
@@ -272,14 +272,15 @@ async def test_a_users_own_install_still_wins_over_the_overlay(
 ) -> None:
     """Platform code must not quietly outrank what the agent installed itself.
 
-    `PIP_PREFIX` sends `pip install` under the user's home, and the workspace
+    `PIP_PREFIX` sends `pip install` to `~/.python` -- the home, not the
+    project root inside it -- and the workspace
     overlay `.pth` puts that ahead of everything. Ours sorts before it by name,
     so it is inserted first and ends up behind -- which is the order that keeps
     a pinned dependency pinned.
     """
     instance = await _create(provider, uuid4())
     await _install(provider, instance, bundle)
-    site = f"{WORKSPACE_ROOT}/.python/lib/python3.14/site-packages"
+    site = f"{HOME_ROOT}/.python/lib/python3.14/site-packages"
     await _run(
         provider,
         instance,
@@ -294,7 +295,7 @@ async def test_a_users_own_install_still_wins_over_the_overlay(
     )
 
     assert exit_code == 0, output
-    assert f"{WORKSPACE_ROOT}/.python" in output, (
+    assert f"{HOME_ROOT}/.python" in output, (
         f"the overlay shadowed the user's own install: {output.strip()!r}"
     )
 

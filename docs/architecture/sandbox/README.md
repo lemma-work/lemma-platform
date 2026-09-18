@@ -306,6 +306,68 @@ format dependencies, and it would remove OCR, bounding boxes, page structure, an
 page screenshots needed by workspace document tools. Replacing LiteParse therefore
 increases this image and weakens the capability contract.
 
+### 6.4 The filesystem contract
+
+What a workspace sandbox guarantees about its own disk. Stated here because it is
+the thing agents, tools and operators all reason about, and because getting it
+wrong is silent: files land somewhere real, and simply are not there next time.
+
+#### Two roots, answering different questions
+
+| Path | What it is | Guarantee |
+|---|---|---|
+| `/home/user` | the sandbox user's home, and **the durable root** | everything under it survives for the life of the workspace |
+| `/home/user/lemma` | the **project root**, inside that home | where conversations and repositories are created |
+
+**The whole home persists, not just the project root.** That is the contract, and
+it is deliberately wider than the directory Lemma itself writes to. Tools put
+their state in `~` whether or not anyone planned for it — `~/.npm`, `~/.cargo`,
+`~/.local/share/pnpm`, `~/.cache`, `~/.python` (the `pip` prefix), `~/.gitconfig`,
+shell history — and every one of those is a cache or a setting whose whole value
+is that it is still there next time. Persisting only the project root would keep
+the work and throw away everything that made the work cheap, and would put the
+platform back to redirecting one tool at a time by hand, which is how `PNPM_HOME`
+and `UV_CACHE_DIR` came to disagree between fabrics.
+
+So: an agent installing a package, a language toolchain writing a cache, or a user
+leaving a credential helper in `~` all behave the way they would on a machine.
+
+#### `/tmp` is the opposite, and on purpose
+
+`/tmp` does **not** persist and must not be relied on. Session-scoped credentials
+are staged there precisely so they die with the sandbox — the GitHub token, the
+browser relay token, the browser profile. It is reachable from a shell, and
+deliberately **not** reachable through the HTTP files route, which is a narrower
+surface than a shell and is exposed to page script.
+
+#### How each fabric keeps the promise
+
+- **E2B** — the sandbox *is* the disk. A filesystem-only pause snapshots the whole
+  rootfs, so `/home/user` persists, and so does `/opt`.
+- **Docker and `lemma_local`** — a named volume is the only durable object, and it
+  is mounted at `/home/user`. Anything outside it is the container layer and is
+  gone when the container is replaced. This is why the mount is the home and not
+  the project root.
+
+One consequence follows from that asymmetry and is worth stating plainly: the
+runtime overlay in `/opt/lemma-runtime` is durable on E2B and is **not** durable
+on Docker, where replacing a container discards it. It is reinstalled on the next
+ensure — about 650 ms — so it is a cost, not a correctness problem. The code that
+decides whether to reinstall therefore keys on the sandbox *incarnation*, not on
+the logical sandbox, because a replaced container keeps its files and its storage
+generation while losing `/opt` entirely.
+
+#### What is not promised
+
+- **Durability across workspace deletion.** The disk belongs to the workspace, not
+  to the user's account; deleting the workspace deletes it.
+- **Backup.** Nothing snapshots this disk. Work that must outlive the sandbox
+  belongs in pod files, which is what they are for.
+- **The base image.** A workspace keeps the image it was created from until it is
+  recreated. First-party Lemma code is delivered into the running sandbox instead
+  as a content-addressed overlay, so a code change does not require a new
+  image.
+
 ## 7. Lifecycle principles
 
 ### 7.1 Workspace lifecycle
