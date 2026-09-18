@@ -33,18 +33,19 @@ class AgentSettings(BaseSettings):
     )
 
     # --- Run budget -------------------------------------------------------
-    # Ceilings for one run, after which it pauses and asks a person whether to
-    # carry on. Contract numbers, so they live here rather than in a comment:
-    # a deployment that wants longer runs raises them, and setting one to 0
-    # switches that dimension off.
+    # Backstops for a run that has stopped making progress, not a schedule for
+    # one that is working. Long work is wanted: a run that spends an hour and
+    # comes back with the thing asked for is a success, and nothing here should
+    # hurry it. So these sit far out — where only a run going round in circles
+    # arrives — rather than anywhere an ordinary long task would reach.
     #
-    # The starting values come from a trace study of real runs: the median run
-    # made far fewer than 40 model calls and finished inside a minute, while the
-    # runs that never converged ran for tens of minutes and past 150 calls. They
-    # are set to sit above ordinary work and below a runaway, and are expected to
-    # move once spans carry outcomes and a healthy run can be described.
+    # Contract numbers, so they live here rather than in a comment. A deployment
+    # whose work is longer still raises them; setting one to 0 switches that
+    # dimension off entirely. Cost control is not their job: spend is capped per
+    # organization, and these exist so a stuck run does not sit there burning
+    # that cap with nothing to show.
     agent_run_budget_model_requests: int = Field(
-        default=40,
+        default=500,
         description=(
             "Model requests one run may make before pausing to ask whether to "
             "continue. 0 disables the check. Compaction is excluded: harness "
@@ -52,7 +53,7 @@ class AgentSettings(BaseSettings):
         ),
     )
     agent_run_budget_wall_clock_seconds: float = Field(
-        default=900.0,
+        default=7200.0,
         description=(
             "Seconds one run may take before pausing to ask whether to continue. "
             "Catches the run that waits rather than loops, where every call is "
@@ -60,20 +61,34 @@ class AgentSettings(BaseSettings):
         ),
     )
     agent_run_budget_tool_failures: int = Field(
-        default=5,
+        default=15,
         description=(
             "Consecutive failing tool calls before pausing to ask. Counted "
-            "consecutively, so a success anywhere clears it: a long run doing "
-            "real work fails a tool now and then. 0 disables the check."
+            "consecutively, so a success anywhere clears it — and set well above "
+            "the friction of ordinary exploration, where a run legitimately "
+            "probes several paths that are not there before finding the one "
+            "that is. 0 disables the check."
         ),
     )
     agent_run_budget_unattended_wall_clock_seconds: float = Field(
-        default=1800.0,
+        default=7200.0,
         description=(
             "The wall-clock ceiling for a run nobody is watching — a schedule, a "
-            "surface, an automation. Longer than the interactive one because "
-            "nobody is waiting, and still bounded because nobody is watching "
-            "the spend either. 0 disables the check."
+            "surface, an automation. Its own setting because nobody is waiting "
+            "on it, so a deployment may want to let it run longer; the default "
+            "matches the interactive one rather than assuming that. 0 disables "
+            "the check."
+        ),
+    )
+    agent_run_warn_at: float = Field(
+        default=0.8,
+        description=(
+            "Fraction of a run ceiling at which the run is told it is getting "
+            "close — each budget dimension, and the history size that triggers "
+            "compaction. Warned once each. Arriving unannounced turns a "
+            "backstop into a trap: the run is cut off, or quietly loses detail, "
+            "instead of landing what it has. Outside (0, 1) switches the "
+            "warnings off."
         ),
     )
 
@@ -127,9 +142,12 @@ class AgentSettings(BaseSettings):
         default=None,
         description=(
             "Optional model used to compact conversation history. Defaults to "
-            "the run's own model, which means every compaction is a ~70k-token "
-            "request on the most expensive model in play; a small fast model is "
-            "usually the better choice."
+            "the run's own model, which makes every compaction a large request "
+            "on the most expensive model in play. A smaller model is cheaper, "
+            "but weigh it knowing what it buys: past the first compaction the "
+            "summary is the only memory the run has of its early work, a long "
+            "run rewrites it repeatedly, and whatever a weaker model drops on "
+            "one pass is gone from every pass after it."
         ),
     )
     agent_model_context_windows: str = Field(

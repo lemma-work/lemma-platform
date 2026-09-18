@@ -106,6 +106,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.realtime.publishing_agent_realtime_event.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'error_type'})),
     'agent.run.context_brief_unavailable.degraded': EventSpec('warning', frozenset({'agent_id', 'conversation_id'})),
     'agent.run.inline_reasoning_reclassified.diagnostic': EventSpec('debug', frozenset({'answer_survived', 'thought_count'})),
+    'agent.run_budget.approaching.observed': EventSpec('info', frozenset({'agent_run_id', 'dimension'})),
     'agent.run_budget.exhausted.observed': EventSpec('info', frozenset({'agent_run_id', 'dimension'})),
     'agent.run_event_pump.stream_ended_without_a_terminal_event.degraded': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.run_finalizer.usage_reservation_release.failed': EventSpec('error', frozenset({'agent_run_id'})),

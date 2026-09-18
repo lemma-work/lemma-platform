@@ -148,9 +148,15 @@ def test_a_dimension_set_to_zero_is_switched_off():
     assert spend.exhausted(elapsed_seconds=10_000.0) is None
 
 
-def test_an_unattended_run_gets_the_longer_clock():
-    """Nobody is waiting, so a slow run costs nothing anybody feels — and nobody
-    is watching the spend either, which is why it is still bounded."""
+def test_an_unattended_run_reads_its_own_clock():
+    """Nobody is waiting on an unattended run, so a deployment may want to let
+    it go longer — but nobody is watching the spend either, so it stays bounded,
+    and by default it gets the same two hours rather than an assumed extra.
+
+    What is pinned is that the two read *different settings*. Equal defaults
+    would otherwise hide a wiring mistake: pointing both at one of them looks
+    identical until somebody raises the unattended one and nothing changes.
+    """
 
     class _Run:
         metadata = {"source": "agent_wait"}
@@ -167,7 +173,9 @@ def test_an_unattended_run_gets_the_longer_clock():
     assert interactive.budget.wall_clock_seconds == (
         agent_settings.agent_run_budget_wall_clock_seconds
     )
-    assert unattended.budget.wall_clock_seconds > interactive.budget.wall_clock_seconds
+    assert unattended.budget.wall_clock_seconds >= (
+        interactive.budget.wall_clock_seconds
+    )
 
 
 async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
@@ -176,8 +184,9 @@ async def test_a_run_past_its_budget_pauses_and_asks_rather_than_stopping():
     A budget trip leaves by the path a pause already takes: it raises
     `AgentInputRequired`, which `pydantic_ai` turns into WAITING, and it queues a
     `request_approval` card first so there is something for the person to answer.
-    Hard-stopping instead would kill an 80%-done run and make the person re-ask,
-    which is where the re-work cost the study measured already lives.
+    Hard-stopping instead would kill a nearly-finished run and make the person
+    re-ask, and work redone because the first attempt was discarded is already
+    one of the larger costs here.
     """
     import asyncio
 
@@ -248,3 +257,59 @@ async def test_a_run_with_no_budget_is_never_interrupted():
         await loop._spend_a_model_request()
 
     assert queue.empty()
+
+
+def test_a_run_is_warned_before_a_ceiling_rather_than_at_it():
+    """A backstop reached without warning is a trap: the run is cut off holding
+    work it could have landed. The notice arrives with room still left."""
+    spend = _spend(model_requests=100)
+    spend.model_requests = 79
+
+    assert spend.approaching(elapsed_seconds=0.0, at=0.8) is None
+
+    spend.model_requests = 80
+    warning = spend.approaching(elapsed_seconds=0.0, at=0.8)
+
+    assert warning is not None
+    assert warning.dimension is BudgetDimension.MODEL_REQUESTS
+    assert spend.exhausted(elapsed_seconds=0.0) is None, "warned, not stopped"
+    assert "80" in warning.notice and "100" in warning.notice
+
+
+def test_each_ceiling_is_warned_about_once():
+    """Every step from the threshold on is past it, so a notice that repeated
+    would fill the context it is trying to help the run spend well."""
+    spend = _spend(model_requests=10)
+    spend.model_requests = 9
+
+    first = spend.approaching(elapsed_seconds=0.0, at=0.8)
+    second = spend.approaching(elapsed_seconds=0.0, at=0.8)
+
+    assert first is not None
+    assert second is None
+    assert len(spend.take_notices()) == 1
+    assert spend.take_notices() == [], "a notice is handed over once"
+
+
+def test_a_disabled_dimension_is_never_warned_about():
+    """Zero switches a ceiling off, and a ceiling that cannot be reached has
+    nothing to warn about -- `spent >= 0 * fraction` would otherwise fire on
+    the first step of every run."""
+    spend = _spend(
+        model_requests=0, wall_clock_seconds=0.0, consecutive_tool_failures=0
+    )
+    spend.model_requests = 5000
+
+    assert spend.approaching(elapsed_seconds=99_999.0, at=0.8) is None
+    assert spend.take_notices() == []
+
+
+def test_warning_switches_off_outside_a_fraction():
+    """The setting is a fraction of a ceiling; 0 or 1 means "do not warn",
+    not "warn always" or "warn at the ceiling I already enforce"."""
+    spend = _spend(model_requests=10)
+    spend.model_requests = 10
+
+    assert spend.approaching(elapsed_seconds=0.0, at=0.0) is None
+    assert spend.approaching(elapsed_seconds=0.0, at=1.0) is None
+    assert spend.take_notices() == []

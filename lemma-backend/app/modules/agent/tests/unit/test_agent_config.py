@@ -9,21 +9,24 @@ from app.modules.agent.config import AgentSettings
 pytestmark = pytest.mark.unit
 
 EXPECTED = [
-    # The run budget: what one run may spend before it pauses and asks whether
-    # to carry on. Pinned here like every other setting because these are
-    # contract numbers a deployment tunes, not internal constants.
-    ("agent_run_budget_model_requests", "AGENT_RUN_BUDGET_MODEL_REQUESTS", 40),
+    # The run budget: the backstop a run stops at, not a schedule it works to.
+    # Pinned here like every other setting because these are contract numbers a
+    # deployment tunes, not internal constants — and pinned especially because
+    # lowering one quietly is how a limit meant for a runaway starts cutting off
+    # ordinary long work instead.
+    ("agent_run_budget_model_requests", "AGENT_RUN_BUDGET_MODEL_REQUESTS", 500),
     (
         "agent_run_budget_wall_clock_seconds",
         "AGENT_RUN_BUDGET_WALL_CLOCK_SECONDS",
-        900.0,
+        7200.0,
     ),
-    ("agent_run_budget_tool_failures", "AGENT_RUN_BUDGET_TOOL_FAILURES", 5),
+    ("agent_run_budget_tool_failures", "AGENT_RUN_BUDGET_TOOL_FAILURES", 15),
     (
         "agent_run_budget_unattended_wall_clock_seconds",
         "AGENT_RUN_BUDGET_UNATTENDED_WALL_CLOCK_SECONDS",
-        1800.0,
+        7200.0,
     ),
+    ("agent_run_warn_at", "AGENT_RUN_WARN_AT", 0.8),
     (
         "agent_run_stop_poll_interval_seconds",
         "AGENT_RUN_STOP_POLL_INTERVAL_SECONDS",

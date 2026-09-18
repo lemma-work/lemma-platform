@@ -542,8 +542,11 @@ def test_display_resource_rejects_the_agents_own_sandbox_paths():
         path="/workspace/c/2026-08-23/93utvspz/lemma-aug-2026-shiplog.pdf",
     )
     assert "sandbox path" in error
-    # The message has to carry the fix, or the model retries the same call.
-    assert "lemma files upload" in error
+    # The message has to carry the fix, or the model retries the same call --
+    # and the fix is the tool, not the shell. Naming `lemma files upload` here
+    # was the bypass being taught at the one moment the model is looking for a
+    # way out of it.
+    assert "pod_upload_file" in error
 
     for private_root in ("/tmp/out.pdf", "/private/x", "/Users/me/x", "/workspace"):
         assert _payload_error(type=DisplayResourceType.FILE, path=private_root)
@@ -2000,11 +2003,10 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     assert "lemma-user" in prompt
     assert "other conversations\nshare the workspace" in prompt
     assert "/me/<topic>/" in prompt
-    # Was a `lemma files cat --pages` example. That line is deliberately gone:
-    # this fragment teaching the CLI for what a tool does is what made the
-    # bypass cheaper than the tool. Pin the replacement, so the fragment is
-    # still proven to reach the prompt.
-    assert "pod_read_file" in prompt
+    # Reading a converted document is a pod-tool job now; the CLI fragment used
+    # to teach `lemma files cat --pages` for it and competed with `pod_read_file`.
+    assert "`pod_read_file` takes a page range" in prompt
+    assert "not the `lemma` CLI" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
     # does not exist, so guard the whole composed prompt against it coming back.
     assert "/pod/" not in prompt

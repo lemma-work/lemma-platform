@@ -213,7 +213,12 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         framing = brief_lines.with_run_framing("BRIEF", conversation=conversation)
 
         assert framing.startswith("BRIEF")
-        assert "steps" in framing and "whichever comes first" in framing
+        assert "steps" in framing and "minutes" in framing
+        # The number never travels alone. Stated bare, a ceiling reads as a
+        # target and the run hurries to fit it; the work should take as long as
+        # it takes, and the limit is only there for a run going in circles.
+        assert "Take the time the work needs" in framing
+        assert "shortest route" not in framing
         # Nothing is claimed about who started it, or whether anybody is waiting.
         assert "schedule" not in framing.lower()
         assert "nobody is watching" not in framing.lower()

@@ -7,23 +7,22 @@ share the workspace. Keep scratch files there, not in `/tmp` or another root.
 
 ## Lemma CLI
 
-You have typed tools for the pod's own data and files — `pod_tables`,
-`pod_get_records`, `pod_write_record`, `pod_query`, `pod_list_files`,
-`pod_read_file`, `pod_write_file`, `pod_search_files`. Use them. They validate
-their arguments, so a mistake comes back as a message rather than a usage error,
-and they need no shell.
+`lemma` is authenticated. Default output includes schemas; `--full` expands
+folded fields, and `--output json` is for piping or saving. Use `--data '<json>'`
+or `--file <path.json>` for payloads. `--pod <id>` targets a pod.
+`lemma orgs select` and `lemma pods select` switch context.
 
-`lemma` is the CLI for what the tools do not cover: schedules, surfaces, apps,
-orgs, runtime profiles, workflow runs, resource authoring, and moving or
-deleting files. It is already authenticated. `--output json` is for piping,
-`--data '<json>'` or `--file <path.json>` for payloads, `--pod <id>` to target a
-pod. `lemma <group> --help` lists a group rather than guessing at flags.
+Pod tables and files are the `pod_*` tools' job, not the CLI's. Use the CLI for
+the resources those tools do not reach:
 
 ```bash
+lemma pods describe                       # inventory except apps
 lemma apps list
 lemma pods members
+lemma chat <agent> "message"
+lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
-lemma schedules list
+lemma connectors operations search <auth-config> "send email"
 ```
 
 For resource authoring, load `lemma-builder`: `init` scaffolds definitions,
@@ -37,14 +36,26 @@ grants. Load `lemma-user` for approvals, workflow forms, links, and access issue
 and `/memory`, are shared. There is no `/pod` prefix. Save deliverables under
 `/me/<topic>/...` and present their pod paths.
 
-Uploaded documents are auto-converted to page-marked markdown and page images;
-`has_markdown` reports availability. `pod_read_file` takes a page range and
-reads the conversion in place — no download. `pod_view_document_pages` shows a
-page as an image, which is what layout, tables, charts and scans need.
-`view_image` takes exactly one of `pod_file_path` or `workspace_file_path`.
+Read, write, list, and search them with the `pod_*` file tools. Build and revise
+code here first, where an edit is a diff rather than a whole-file rewrite, then
+write or import the finished result. `pod_upload_file` copies a workspace file
+into pod files with its bytes intact — what a PDF or an image a command produced
+needs, since `pod_write_file` is UTF-8 only. The CLI covers the one thing no
+tool reaches: a document's derived artifacts.
 
-LiteParse is a fallback for a local file, or a pod file whose conversion is
-missing:
+```bash
+lemma files children /knowledge/policy.pdf          # list derived artifacts
+lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg
+```
+
+Uploaded documents are auto-converted to page-marked markdown and page images;
+`has_markdown` reports availability. `pod_read_file` takes a page range on a
+converted document, and `pod_search_files` returns the page numbers to ask for.
+Inspect page images for layout, tables, charts, or scans: `view_image` takes
+exactly one of `pod_file_path` or `workspace_file_path`, and pod images need no
+download. `pod_view_document_pages` displays document pages.
+
+LiteParse is a fallback for local files or missing pod conversion:
 
 ```bash
 lit parse input.pdf --target-pages "1-5,10" --format json -o out.json

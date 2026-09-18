@@ -137,8 +137,8 @@ def result_is_failure(payload: object) -> bool:
     ``format_tool_error``'s ``success: False`` dict so one bad tool call cannot
     end a run, and the pod and workspace toolsets build the same shape by hand.
     A caller that only watches for exceptions therefore sees every one of those
-    failures as a success -- which is how a platform came to believe 4.4% of its
-    tool calls failed when the real figure was more than twice that.
+    failures as a success -- which is how a platform came to believe its tool
+    calls almost always succeeded while a large share of them did not.
 
     This is the one place that reads the uniform contract's verdict, so the two
     MCP bridges cannot drift apart on what "failed" means.

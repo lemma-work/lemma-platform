@@ -182,8 +182,8 @@ def _check_file(request: "DisplayResourceRequest") -> str | None:
         return (
             f"'{path}' is a sandbox path, which only exists inside your "
             "workspace. This takes a pod path, such as /me/c/2026-09-15/pulse.html. "
-            "Write it there with `pod_write_file` (or upload it with `lemma files "
-            "upload`) and display the pod path."
+            "Copy it there with `pod_upload_file`, which keeps the bytes intact, "
+            "or write text with `pod_write_file`, then display the pod path."
         )
     return None
 

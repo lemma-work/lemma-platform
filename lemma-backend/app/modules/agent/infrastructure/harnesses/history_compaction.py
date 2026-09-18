@@ -30,10 +30,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic_ai import RunContext
+from pydantic_ai.messages import ModelMessage
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.agent.infrastructure.harnesses.history import (
+    append_notices,
     find_safe_cutoff,
     is_pinned_message,
 )
@@ -76,6 +78,12 @@ said that is *not* being kept verbatim -- capture it, including any constraint o
 correction in it, or it is lost. A block opening with "[earlier in this
 conversation, summarized]" is your own earlier summary: fold it into this one
 rather than describing it, so the result stands alone.
+
+That earlier summary is the only surviving record of what it covers, and a long
+run is compacted more than once, so anything it states carries forward into this
+one unchanged -- same paths, same identifiers, same values -- unless the
+transcript that follows it actually contradicts it. Shortening it because it is
+old is how a run loses, one pass at a time, the thing it established first.
 
 Write a factual brief, addressed to the agent that will read it, covering:
 
@@ -171,6 +179,22 @@ def _summary_message(text: str) -> Any:
     return ModelRequest(parts=[UserPromptPart(content=text)])
 
 
+#: Said to the run as the history nears the size that triggers compaction.
+#: Names the durable places rather than saying "somewhere": the todo list is
+#: kept in conversation metadata and re-injected as instructions every turn, so
+#: it survives compaction entirely, and the toolset carrying it is always on.
+#: "Your context will be summarized" is not something a run can act on; "your
+#: plan outlives this, the transcript does not" is.
+_COMPACTION_NEAR_NOTICE = (
+    "This conversation is approaching the point where its older parts are "
+    "replaced by a summary, and detail that exists only there will be gone. "
+    "Two things outlive it: your todo list, which is kept outside this history, "
+    "and anything written to a file. If a path, an identifier, a value, or a "
+    "decision and the reason for it is currently only somewhere above, put it "
+    "in one of those now, or restate it in your next message."
+)
+
+
 @dataclass(slots=True)
 class HistoryCompactor:
     """Replaces the oldest work with a summary, keeping every user turn."""
@@ -178,6 +202,16 @@ class HistoryCompactor:
     model: object
     trigger_tokens: int
     keep_messages: int
+    #: Fraction of `trigger_tokens` at which the run is told compaction is
+    #: coming. Outside (0, 1) switches the warning off.
+    warn_at: float = 0.0
+    #: Whether the warning for *this* cycle has gone out. Every turn between
+    #: the fraction and the threshold is above the fraction, so it is said once
+    #: per cycle rather than once per turn -- and re-armed after each
+    #: compaction, because a long run compacts repeatedly and a warning that
+    #: only ever fired once would leave every later pass as silent as the
+    #: behaviour this replaced.
+    warned: bool = False
 
     async def __call__(self, ctx: RunContext, messages: list[Any]) -> list[Any]:
         working = list(messages)
@@ -185,7 +219,7 @@ class HistoryCompactor:
             return working
         size = await run_blocking(count_model_message_tokens, working)
         if size <= self.trigger_tokens:
-            return working
+            return self._warn_if_near(working, size=size)
 
         cutoff = find_safe_cutoff(working, max(0, len(working) - self.keep_messages))
         if cutoff <= 0:
@@ -218,6 +252,9 @@ class HistoryCompactor:
 
         summary = await self._summarize(ctx, _render(to_summarize), folded=folded)
         compacted = [*pinned, _summary_message(summary), *tail]
+        # Re-armed for the next cycle: the history has just shrunk, and it will
+        # climb to this threshold again in a run long enough to get here twice.
+        self.warned = False
         logger.info(
             "agent.history.compacted.observed",
             size_before=size,
@@ -228,6 +265,24 @@ class HistoryCompactor:
             kept_count=len(tail),
         )
         return compacted
+
+    def _warn_if_near(
+        self, messages: list[ModelMessage], *, size: int
+    ) -> list[ModelMessage]:
+        """Tell the run that the oldest of this conversation is about to go.
+
+        Compaction is lossy on purpose, and it arrives without warning: the run
+        finds out by no longer remembering. A run told beforehand can put what
+        it still needs somewhere that survives -- a file, a record, its own
+        next message -- which is the difference between a summary it chose and
+        one it was handed.
+        """
+        if self.warned or not 0 < self.warn_at < 1:
+            return messages
+        if size < self.trigger_tokens * self.warn_at:
+            return messages
+        self.warned = True
+        return append_notices(messages, [_COMPACTION_NEAR_NOTICE])
 
     async def _summarize(
         self, ctx: RunContext, transcript: str, *, folded: int = 0

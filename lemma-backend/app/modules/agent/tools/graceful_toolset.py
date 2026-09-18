@@ -60,9 +60,9 @@ def _mark_tool_failure(span: Span, payload: object) -> None:
     """Mark a span for a tool that reported a failure by returning one.
 
     Without this a returned failure leaves the span UNSET and indistinguishable
-    from a success, which is why the platform's own error rate read less than
-    half the real one. Only the three keys the exporter already allows are set
-    -- see ``GENERAL_SPAN_ATTRIBUTE_KEYS`` -- so this needs no allowlist change.
+    from a success, which is why the platform's own error rate read far below
+    the truth. Only the three keys the exporter already allows are set -- see
+    ``GENERAL_SPAN_ATTRIBUTE_KEYS`` -- so this needs no allowlist change.
     """
     _mark_tool_outcome(span, "error")
     description = ""
