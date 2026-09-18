@@ -42,6 +42,7 @@ from .chrome import (
     ensure_port,
     keepalive,
     default_display_size,
+    ensure_port,
     live_port,
     open_url,
     page_targets,
@@ -371,14 +372,18 @@ def create_app() -> FastAPI:
         return DisplayResizeResponse(size=size)
 
     @app.get("/profile:cookies", dependencies=[Depends(require_token)])
-    async def profile_cookies() -> dict:
-        """Which hosts the browser holds cookies for. No values, ever."""
+    async def profile_cookies(start: bool = False) -> dict:
+        """Which hosts the browser holds cookies for. No values, ever.
+
+        The cookies are read over CDP, so this needs Chrome running -- and
+        Chrome not running does *not* mean there are no logins: the profile
+        is on disk either way, and the daemon retires the browser after five
+        idle minutes. So "not running" is "cannot say", not "nothing", and
+        `start` is the caller saying it is willing to pay for an answer.
+        """
         try:
-            port = await live_port()
+            port = await ensure_port() if start else await live_port()
         except BrowserNotRunning:
-            # A browser that is not running holds nothing a person can act on,
-            # and starting one to say so would turn opening a settings page
-            # into waking a sandbox.
             return {"running": False, "cookies": []}
         return {"running": True, "cookies": await list_cookie_domains(port=port)}
 

@@ -150,8 +150,20 @@ async def list_web_logins(
     except SandboxCapabilityUnsupported:
         # A fabric with no reachable browser. Not an error to a reader: there
         # is nothing signed in because there is nowhere to be signed in.
+        logger.warning("web_login.list.no_browser_capability.degraded")
         return WebLoginListResponse(items=[])
-    except _relay_unavailable():
+    except _relay_unavailable() as exc:
+        # Logged, because "sleeping" is also what a *broken* relay looks like
+        # from here and the two are indistinguishable to the reader. Without
+        # this line the answer is the same sentence whether the computer is
+        # paused or the relay is failing to start, and only one of those is
+        # somebody's own doing.
+        logger.warning(
+            "web_login.list.relay_unavailable.degraded",
+            error_type=type(exc).__name__,
+            detail=str(exc)[:200],
+            wake=wake,
+        )
         return WebLoginListResponse(items=[], sleeping=True)
     if not answer["running"]:
         return WebLoginListResponse(items=[], sleeping=True)

@@ -130,6 +130,7 @@ class BrowserRelayClient:
         path: str,
         *,
         json_body: dict[str, object] | None = None,
+        params: dict[str, str] | None = None,
         timeout: float = _QUICK_TIMEOUT_SECONDS,
     ) -> httpx.Response:
         endpoint = await self._endpoint(deadline_seconds=timeout)
@@ -140,6 +141,7 @@ class BrowserRelayClient:
                     method,
                     f"{endpoint.url.rstrip('/')}{path}",
                     headers=headers,
+                    params=params,
                     json=json_body,
                 )
         except httpx.HTTPError as exc:
@@ -260,14 +262,21 @@ class BrowserRelayClient:
             raise BrowserRelayUnavailable(_detail(response))
         return str(response.json().get("size") or "")
 
-    async def profile_cookies(self) -> ProfileCookies:
+    async def profile_cookies(self, *, start: bool = False) -> ProfileCookies:
         """Which hosts the browser holds cookies for, with no values.
 
         Never starts a browser: a sandbox that is asleep answers
         `running: False`, which is a state a settings page can render rather
         than an error it has to explain.
         """
-        response = await self._request("GET", "/profile:cookies", timeout=30.0)
+        response = await self._request(
+            "GET",
+            "/profile:cookies",
+            params={"start": "true"} if start else None,
+            # Long enough to cover a cold Chrome, which `start` may have to
+            # wait for.
+            timeout=120.0 if start else 30.0,
+        )
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
         body = response.json()

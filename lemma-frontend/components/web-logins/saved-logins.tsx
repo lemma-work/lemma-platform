@@ -71,11 +71,12 @@ export function SavedLogins() {
             <div className="flex flex-col items-start gap-3">
                 {heading}
                 <p className="max-w-prose text-sm text-[var(--text-tertiary)]">
-                    Your computer is asleep. Its browser still holds whatever it held —
-                    waking it is the only way to read the list or change it.
+                    The browser is not running, so this cannot be read yet. Whatever it
+                    was signed in to is still there — the list is read from the browser
+                    itself, which has to be up to answer.
                 </p>
                 <Button variant="secondary" size="xs" onClick={() => setWake(true)}>
-                    Wake it and show them
+                    Start it and show me
                 </Button>
             </div>
         );

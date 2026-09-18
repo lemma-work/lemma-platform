@@ -56,12 +56,17 @@ describe('reading what the browser holds', () => {
         expect(answer.wake).toBe(false);
     });
 
-    it('offers to wake it rather than pretending there is nothing there', async () => {
+    it('offers to start it rather than pretending there is nothing there', async () => {
+        // "Not running" is "cannot say", not "nothing". The cookies are read
+        // over CDP so the browser has to be up to answer, and the profile is
+        // on disk whether it is or not -- reporting an empty list here would
+        // tell somebody their logins were gone.
         answer.data = { items: [], sleeping: true };
         render(<SavedLogins />);
 
-        expect(screen.getByText(/Your computer is asleep/)).toBeTruthy();
-        await userEvent.click(screen.getByRole('button', { name: /Wake it/ }));
+        expect(screen.getByText(/browser is not running/)).toBeTruthy();
+        expect(screen.getByText(/still there/)).toBeTruthy();
+        await userEvent.click(screen.getByRole('button', { name: /Start it/ }));
 
         expect(answer.wake).toBe(true);
     });

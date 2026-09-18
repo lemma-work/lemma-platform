@@ -768,6 +768,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'usage.pricing.invalid_system_model_usage_metadata.failed': EventSpec('error', frozenset({'error_type'})),
     'usage.pricing.usage_pricing_not_registered_recording.observed': EventSpec('debug', frozenset()),
     'usage.request_accounting_gateway.request_not_priceable.degraded': EventSpec('warning', frozenset({'model', 'provider', 'rate_card_enforceable', 'refused', 'request_shape_priceable'})),
+    'web_login.list.no_browser_capability.degraded': EventSpec('warning', frozenset()),
+    'web_login.list.relay_unavailable.degraded': EventSpec('warning', frozenset({'detail', 'error_type', 'wake'})),
     'web_login.sign_in.browser_not_ready.degraded': EventSpec('warning', frozenset()),
     'web_login.sign_in.browser_unreachable.degraded': EventSpec('warning', frozenset({'origin'})),
     'web_login.sign_in.conversation_gone.degraded': EventSpec('warning', frozenset({'conversation_id'})),

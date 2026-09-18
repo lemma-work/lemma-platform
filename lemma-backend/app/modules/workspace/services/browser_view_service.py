@@ -287,7 +287,15 @@ class BrowserViewService:
         this boundary -- see `browser_relay/cookies.py`.
         """
         relay = await self._relay(user_id, start=wake)
-        return await relay.profile_cookies()
+        if wake:
+            # Three things have to be up, and `wake` means all three: the
+            # sandbox, the relay process inside it, and Chrome. Starting only
+            # the first left this answering "asleep" about a machine that was
+            # plainly running -- `_relay` delivers the token but starts
+            # nothing, and `health(start=True)` is the only thing that runs
+            # the relay's own start script.
+            await relay.health(start=True)
+        return await relay.profile_cookies(start=wake)
 
     async def forget_sites(self, user_id: UUID, *, domains: list[str]) -> int:
         """Drop the cookies for these hosts, and say how many went.
@@ -296,6 +304,7 @@ class BrowserViewService:
         and left the browser signed in, this signs the browser out.
         """
         relay = await self._relay(user_id, start=True)
+        await relay.health(start=True)
         await _require_private(relay, doing="forget a saved login")
         return await relay.forget_cookies(domains=domains)
 
