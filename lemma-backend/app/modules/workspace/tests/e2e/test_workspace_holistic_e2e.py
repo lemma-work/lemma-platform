@@ -28,6 +28,7 @@ from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.timeout(600)]
 
@@ -928,7 +929,7 @@ async def test_an_agent_can_record_the_browser_and_get_a_playable_file(
     )
     assert started.success, started
 
-    take = "/workspace/recording-e2e/take.webm"
+    take = f"{WORKSPACE_ROOT}/recording-e2e/take.webm"
     recorded = await exec_command_internal(
         ctx,
         ExecCommandRequest(

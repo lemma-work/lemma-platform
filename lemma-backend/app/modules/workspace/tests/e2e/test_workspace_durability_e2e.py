@@ -32,6 +32,7 @@ from app.modules.agent.tools.workspace_cli.workspace_cli import exec_command_int
 from app.modules.test_support.e2e.waiters import eventually
 from app.modules.workspace.infrastructure.sandbox_repository import SandboxRepository
 from app.modules.workspace.services.sandbox_sweeper import SandboxSweeper
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace, pytest.mark.timeout(600)]
 
@@ -103,14 +104,17 @@ async def test_a_workspace_keeps_its_files_across_a_release_and_resume(
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
     user_id = UUID(fixed_test_user["id"])
 
-    await _run(ctx, "mkdir -p /workspace/keep && echo durable > /workspace/keep/file")
+    await _run(
+        ctx,
+        f"mkdir -p {WORKSPACE_ROOT}/keep && echo durable > {WORKSPACE_ROOT}/keep/file",
+    )
 
     service = _sandbox_service()
     before = await service.get(user_id)
     assert before is not None
     await service.release(user_id)
 
-    read_back = await _run(ctx, "cat /workspace/keep/file")
+    read_back = await _run(ctx, f"cat {WORKSPACE_ROOT}/keep/file")
     assert "durable" in (read_back.stdout or ""), read_back
 
     after = await service.get(user_id)
@@ -143,7 +147,7 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
     ctx = await _context(authenticated_client, fixed_test_org, fixed_test_user)
     user_id = UUID(fixed_test_user["id"])
 
-    await _run(ctx, "echo swept-but-alive > /workspace/sentinel")
+    await _run(ctx, f"echo swept-but-alive > {WORKSPACE_ROOT}/sentinel")
 
     service = _sandbox_service()
     uow_factory = SessionUnitOfWorkFactory(db_manager.session_factory)
@@ -154,7 +158,7 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
 
     assert await sweeper.reclaim_orphans() == ()
 
-    survived = await _run(ctx, "cat /workspace/sentinel")
+    survived = await _run(ctx, f"cat {WORKSPACE_ROOT}/sentinel")
     assert "swept-but-alive" in (survived.stdout or ""), survived
     after = await service.get(user_id)
     assert after is not None
@@ -177,7 +181,7 @@ async def test_the_orphan_sweep_leaves_a_live_workspace_and_its_files_alone(
     finally:
         sweeper_module.SandboxRepository = original  # type: ignore[assignment]
 
-    still_there = await _run(ctx, "cat /workspace/sentinel")
+    still_there = await _run(ctx, f"cat {WORKSPACE_ROOT}/sentinel")
     assert "swept-but-alive" in (still_there.stdout or ""), still_there
 
 

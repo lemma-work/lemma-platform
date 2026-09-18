@@ -35,6 +35,7 @@ from app.modules.workspace.providers.docker import (
 from app.modules.workspace.providers.docker_engine import DockerEngineClient
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.sandbox_service import SandboxService
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = [
     pytest.mark.e2e,
@@ -90,7 +91,7 @@ def _session(client: LocalSandboxClient, sandbox_id) -> SandboxWorkspaceSession:
         client=client,  # type: ignore[arg-type]
         sandbox_id=str(sandbox_id),
         session_id="e2e",
-        initial_cwd="/workspace",
+        initial_cwd=WORKSPACE_ROOT,
         auto_close=False,
         owns_client=False,
     )
@@ -114,8 +115,12 @@ async def test_files_written_by_one_command_are_visible_to_the_next(
     service, _, sandbox = sandbox_stack
     session = _session(LocalSandboxClient(service), sandbox.id)
 
-    await session.exec_command(cmd="echo persisted > /workspace/note.txt", timeout=120)
-    result = await session.exec_command(cmd="cat /workspace/note.txt", timeout=120)
+    await session.exec_command(
+        cmd=f"echo persisted > {WORKSPACE_ROOT}/note.txt", timeout=120
+    )
+    result = await session.exec_command(
+        cmd=f"cat {WORKSPACE_ROOT}/note.txt", timeout=120
+    )
 
     assert "persisted" in (result["stdout"] or ""), result
 
@@ -129,14 +134,14 @@ async def test_a_users_files_survive_the_sandbox_being_stopped_and_resumed(
     client = LocalSandboxClient(service)
 
     await _session(client, sandbox.id).exec_command(
-        cmd="echo survives > /workspace/keep.txt", timeout=120
+        cmd=f"echo survives > {WORKSPACE_ROOT}/keep.txt", timeout=120
     )
 
     await service.release(sandbox.id)
     resumed = await service.ensure(sandbox.id)
 
     result = await _session(client, sandbox.id).exec_command(
-        cmd="cat /workspace/keep.txt", timeout=120
+        cmd=f"cat {WORKSPACE_ROOT}/keep.txt", timeout=120
     )
     assert "survives" in (result["stdout"] or ""), result
     # Resuming is not a recreation, so the agent must not be told its files
@@ -151,11 +156,15 @@ async def test_the_file_api_reaches_the_same_disk_as_the_shell(
     client = LocalSandboxClient(service)
     session = _session(client, sandbox.id)
 
-    await session.write_file("/workspace/via-api.txt", b"written-by-api", timeout=60)
-    read_back = await session.read_file("/workspace/via-api.txt", timeout=60)
+    await session.write_file(
+        f"{WORKSPACE_ROOT}/via-api.txt", b"written-by-api", timeout=60
+    )
+    read_back = await session.read_file(f"{WORKSPACE_ROOT}/via-api.txt", timeout=60)
     assert read_back == b"written-by-api"
 
-    shell = await session.exec_command(cmd="cat /workspace/via-api.txt", timeout=120)
+    shell = await session.exec_command(
+        cmd=f"cat {WORKSPACE_ROOT}/via-api.txt", timeout=120
+    )
     assert "written-by-api" in (shell["stdout"] or ""), shell
 
 
@@ -248,7 +257,7 @@ async def test_a_package_installed_from_the_shell_imports_in_execute_python(
     # to expose a module directory cannot pass this.
     assert "1.2 million" in output, output
     # Both installers reached the shared environment, not two different ones.
-    assert output.count("/workspace/.python/lib/") == 2, output
+    assert output.count(f"{WORKSPACE_ROOT}/.python/lib/") == 2, output
 
 
 async def test_a_project_venv_keeps_its_own_dependencies(sandbox_stack) -> None:
@@ -264,18 +273,19 @@ async def test_a_project_venv_keeps_its_own_dependencies(sandbox_stack) -> None:
     session = _session(LocalSandboxClient(service), sandbox.id)
 
     created = await session.exec_command(
-        cmd="mkdir -p /workspace/proj && cd /workspace/proj && uv venv", timeout=300
+        cmd=f"mkdir -p {WORKSPACE_ROOT}/proj && cd {WORKSPACE_ROOT}/proj && uv venv",
+        timeout=300,
     )
     assert created["exit_code"] == 0, created
 
     installed = await session.exec_command(
-        cmd="cd /workspace/proj && uv pip install humanize", timeout=300
+        cmd=f"cd {WORKSPACE_ROOT}/proj && uv pip install humanize", timeout=300
     )
     assert installed["exit_code"] == 0, installed
 
     located = await session.exec_command(
         cmd=(
-            "test -d /workspace/proj/.venv/lib/python3.14/site-packages/humanize "
+            f"test -d {WORKSPACE_ROOT}/proj/.venv/lib/python3.14/site-packages/humanize "
             "&& echo IN_VENV"
         ),
         timeout=120,
