@@ -311,3 +311,29 @@ def test_warning_switches_off_outside_a_fraction():
 
     assert spend.approaching(elapsed_seconds=0.0, at=0.0) is None
     assert spend.approaching(elapsed_seconds=0.0, at=1.0) is None
+
+
+def test_both_approvals_renew_and_neither_retires_the_guard():
+    """ "Approve for session" means "this call again, without me" everywhere
+    else, and is recorded per permission against the tool being approved. There
+    is no tool on a budget card, and what it would switch off is the only thing
+    standing between a run that has stopped converging and the rest of the
+    conversation. So it renews like a single approval rather than retiring the
+    guard, and this pins that: the docstring says so, and a docstring is not
+    enforcement."""
+    from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
+    from app.modules.agent.services.conversation_resume_return import (
+        _budget_decision_return,
+    )
+
+    once = _budget_decision_return(AgentRunApprovalDecision.APPROVE_ONCE)
+    session = _budget_decision_return(AgentRunApprovalDecision.APPROVE_FOR_SESSION)
+    denied = _budget_decision_return(AgentRunApprovalDecision.DENY)
+
+    assert once == session, "a session approval is not a licence to stop asking"
+    assert "renewed" in str(once["message"])
+    assert denied != once
+    # Denial is a decision, not a failure: an agent told its work failed tries
+    # to repair something that was never broken.
+    assert denied["success"] is True
+    assert "Stop here" in str(denied["message"])

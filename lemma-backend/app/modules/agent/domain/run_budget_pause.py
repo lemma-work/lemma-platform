@@ -13,11 +13,23 @@ outright — human pauses resolve through the approval-decision row, which recor
 budget pause has no time at which it should resolve itself. ``PS-AGENT-020``
 already promises an approval pause is held indefinitely rather than timing out.
 
-The three decisions map onto what a person actually means:
+Two outcomes, from three decisions:
 
 * approve once     — one more budget, then ask again
-* approve always   — stop asking in this conversation
+* approve always   — the same; see below
 * deny             — stop here and report what you have
+
+``APPROVE_FOR_SESSION`` deliberately does *not* stop the asking. Everywhere else
+it means "this exact call, again, without me" and is recorded per permission
+against the tool being approved; there is no tool here, and the thing it would
+switch off is the only guard against a run that has stopped converging. Held to
+its usual meaning it would retire that guard for the rest of the conversation on
+one click, which is a much larger decision than the button appears to offer.
+
+Renewing instead is the safe reading of "yes, keep going", and it costs little
+now that a budget is a backstop rather than a schedule: the next ask is another
+full allowance away. If "stop asking" is ever wanted it needs to be its own
+choice, worded as what it does.
 """
 
 from __future__ import annotations
