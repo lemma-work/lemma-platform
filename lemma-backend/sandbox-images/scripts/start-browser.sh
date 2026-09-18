@@ -8,14 +8,22 @@ DISPLAY_VALUE="${DISPLAY:-:99}"
 # matches their pane (`/display:resize`) is bounded by this. 1920x1200x24 is
 # ~9 MB.
 #
-# Started at the ceiling on purpose, rather than started small and immediately
-# resized down. That resize was a race: the same image, the same command, and
-# the display landed on the new size sometimes and kept the old one otherwise,
-# with nothing in between to tell the two runs apart. A viewer resizes the
-# display to its own shape as soon as it attaches, so the startup size only has
-# to be *a* sane one -- and the one size that is always available without
-# asking anything of RandR is the one Xvfb was given.
+# The ceiling and the size actually shown are two different things, and both
+# matter. Allocating 1920x1200 is what lets a wide pane be matched later;
+# *running* at it costs every frame x11vnc encodes and every frame `record`
+# grabs ~1.67x what 1440x960 does, for a picture nobody asked to be that big.
+# Left at the ceiling, that was enough to kill a screen recording mid-take on
+# a 2 GB sandbox on a loaded CI runner -- the recording started, died, and
+# `record stop` reported "No recording in progress".
+#
+# So: allocate the ceiling, then size the mode down to the default before any
+# X client is started. The earlier attempt at this *was* a race -- the same
+# command landed sometimes and not others -- because x11vnc was already up and
+# grabbing its first frame while the mode changed underneath it. Done here it
+# cannot be: x11vnc and the window manager are started further down, and the
+# branch that restarts Xvfb kills both first.
 SCREEN="${WORKSPACE_XVFB_MAX_SCREEN:-${WORKSPACE_XVFB_SCREEN:-1920x1200x24}}"
+START_SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
 PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/tmp/lemma-browser/profile}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}"
 CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/lemma-browser/config.json}"
@@ -241,6 +249,47 @@ fi
 if ! pgrep -f "websockify .*${VNC_WS_PORT}" >/dev/null 2>&1; then
   setsid nohup websockify --heartbeat 30 127.0.0.1:"$VNC_WS_PORT" 127.0.0.1:"$VNC_PORT" \
     >/tmp/lemma-websockify.log 2>&1 < /dev/null &
+fi
+
+# Down to the size we actually mean to run at.
+#
+# Here, and not earlier, because `set-display-size` documents why: against an
+# Xvfb that x11vnc has not attached to, `xrandr --newmode` exits 0 and creates
+# nothing, so a size-down before this point silently does not happen -- which
+# is exactly what it did when it was placed above, and why an earlier attempt
+# at this was abandoned as "racy".
+#
+# Worth doing rather than living at the ceiling: the framebuffer is allocated
+# at `SCREEN` so a wide pane can still be matched later, but *running* at
+# 1920x1200 makes every frame x11vnc encodes and every frame `agent-browser
+# record` grabs ~1.67x the work of 1440x960. On a 2 GB sandbox that was enough
+# to lose a screen recording part-way through, with `record stop` reporting
+# "No recording in progress" and nothing saying why.
+#
+# Non-fatal: a display left at the ceiling is a bigger picture than intended,
+# which is worth a line in the log and not a failed browser.
+#
+# One more ordering constraint, learned the hard way twice: x11vnc must be
+# *settled*, not merely started. A mode change that lands while it is taking
+# its first frame kills it outright -- `X_GetImage`, and the pane then has
+# nothing to connect to. Once it is serving, it follows a resize happily
+# (`-xrandr resize`), which is why every later `/display:resize` is safe.
+# So: wait for the port to answer, then a breath, then change the mode.
+if [ "$START_SCREEN" != "$SCREEN" ] && command -v set-display-size >/dev/null 2>&1; then
+  waited=0
+  while [ "$waited" -lt 100 ] \
+    && ! (exec 3<>"/dev/tcp/127.0.0.1/${VNC_PORT}") 2>/dev/null; do
+    sleep 0.05
+    waited=$((waited + 1))
+  done
+  sleep 0.5
+  start_w="${START_SCREEN%%x*}"
+  start_rest="${START_SCREEN#*x}"
+  start_h="${start_rest%%x*}"
+  if ! DISPLAY="$DISPLAY_VALUE" set-display-size "$start_w" "$start_h" \
+    >/tmp/lemma-initial-size.log 2>&1; then
+    echo "[start-browser] could not size the display to ${start_w}x${start_h}" >&2
+  fi
 fi
 
 
