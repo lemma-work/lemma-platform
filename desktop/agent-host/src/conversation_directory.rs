@@ -28,9 +28,9 @@ pub fn workspace_root() -> anyhow::Result<PathBuf> {
 const SANDBOX_ROOT: &str = "/home/user/lemma/";
 
 fn suffix(cwd: &str) -> anyhow::Result<&str> {
-    let suffix = cwd.strip_prefix(SANDBOX_ROOT).ok_or_else(|| {
-        anyhow::anyhow!("conversation cwd must be beneath {SANDBOX_ROOT}")
-    })?;
+    let suffix = cwd
+        .strip_prefix(SANDBOX_ROOT)
+        .ok_or_else(|| anyhow::anyhow!("conversation cwd must be beneath {SANDBOX_ROOT}"))?;
     anyhow::ensure!(
         suffix.len() <= 4096
             && suffix.split('/').all(|part| {
@@ -316,7 +316,12 @@ mod tests {
         let root = temp.path().join("lemma");
         let mine = Uuid::new_v4();
         for index in 0..64 {
-            prepare(&root, Uuid::new_v4(), &format!("/home/user/lemma/other-{index}")).unwrap();
+            prepare(
+                &root,
+                Uuid::new_v4(),
+                &format!("/home/user/lemma/other-{index}"),
+            )
+            .unwrap();
         }
         prepare(&root, mine, "/home/user/lemma/a/b/c").unwrap();
 
