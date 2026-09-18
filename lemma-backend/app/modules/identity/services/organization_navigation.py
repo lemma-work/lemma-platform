@@ -38,6 +38,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from app.core.authorization.listing_contexts import build_listing_contexts_for_pods
 from app.modules.agent.contracts import (
     PodAgentSummary,
     list_agent_summaries_by_pod,
@@ -49,6 +50,13 @@ from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
 from app.modules.pod.contracts import VisiblePod, list_visible_pods
+
+#: How many of a pod's agents the landing page carries. A cap per pod, not one
+#: across the page: this endpoint lists every pod the caller can see, so a
+#: single crowded pod must not push the others' agents out of the response.
+#: Generous enough that no ordinary pod is truncated, and low enough that one
+#: pod cannot make this read grow without bound.
+HOME_AGENTS_PER_POD = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,8 +197,11 @@ async def load_organization_home(
 ) -> OrganizationHome | None:
     """One organization in full. None when the caller is not a member.
 
-    Four queries: the membership, the pods with the caller's roles, the apps,
-    and the agents. Fixed, not per pod.
+    Five queries: the membership, the pods with the caller's roles, the apps,
+    the roles behind the caller's per-pod authorization, and the agents. Fixed,
+    not per pod -- the property `test_home_query_count_does_not_grow_with_pods`
+    pins, and the reason the contexts below are built in one go rather than one
+    call at a time.
     """
     memberships = await _memberships(
         session=session, user_id=user_id, organization_id=organization_id
@@ -209,7 +220,22 @@ async def load_organization_home(
     )
     pod_ids = [pod.id for pod in pods]
     apps = await list_app_summaries_by_pod(session=session, pod_ids=pod_ids)
-    agents = await list_agent_summaries_by_pod(session=session, pod_ids=pod_ids)
+    # One per pod: an agent's visibility is decided against the caller's
+    # permissions *in the pod that owns it*, and those differ from pod to pod.
+    # Built in bulk -- a loop over `build_user_context` is a per-pod fan-out on
+    # a cold snapshot, which is the shape this endpoint exists to remove.
+    contexts = await build_listing_contexts_for_pods(
+        session,
+        user_id=user_id,
+        organization_id=organization_id,
+        organization_member_id=membership.organization_member_id,
+        # The membership rows the pod listing already resolved. Looking them up
+        # again here is what would make this per pod.
+        pod_member_ids_by_pod={pod.id: pod.pod_member_id for pod in pods},
+    )
+    agents = await list_agent_summaries_by_pod(
+        session=session, contexts=contexts, limit=HOME_AGENTS_PER_POD
+    )
 
     return OrganizationHome(
         organization_id=organization_id,

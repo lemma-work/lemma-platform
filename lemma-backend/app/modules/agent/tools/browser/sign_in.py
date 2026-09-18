@@ -38,6 +38,32 @@ from app.modules.web_login.contracts import InvalidOrigin, normalize_origin
 SIGN_IN_TOOL_NAME = "browser_sign_in"
 
 
+def _pod_app_slug(origin: str) -> str | None:
+    """The app slug, when `origin` is one of this install's own pod apps.
+
+    `None` for everything else, including the app base domain on its own --
+    that is not an app, and a slug of `""` would be worse advice than no
+    advice.
+    """
+    from app.core.config import settings
+    from app.modules.workspace.contracts.browser import host_of
+
+    base = (settings.app_base_domain or "").strip().lower()
+    if not base:
+        return None
+    # The setting carries a port in local development
+    # (`apps.lemma.localhost:8710`) and `host_of` does not -- it reads
+    # `hostname`. Comparing them whole never matched, so every local app went
+    # unrecognised and got asked for a login it cannot have.
+    base = base.rsplit(":", 1)[0] if ":" in base else base
+    host = host_of(origin).lower()
+    suffix = f".{base}"
+    if not host.endswith(suffix):
+        return None
+    slug = host[: -len(suffix)]
+    return slug or None
+
+
 async def sign_in_internal(
     deps: BaseAgentContext,
     request: BrowserSignInRequest,
@@ -56,6 +82,37 @@ async def sign_in_internal(
             outcome="error",
             origin=request.origin,
             message=str(exc),
+        )
+
+    pod_app = _pod_app_slug(site)
+    if pod_app is not None:
+        # A Lemma app is not cookie-authenticated, so no amount of signing in
+        # will satisfy it and asking a person to try is a loop with no exit.
+        #
+        # Apps are served at `<slug>.<app_base_domain>`, a different host from
+        # the one the session cookies are set on -- they are host-only on the
+        # website and API hosts, so the browser sends none of them to an app.
+        # The app's SDK falls back to a cookie check, finds nothing, bounces to
+        # "Login with Lemma", comes back no better off, and offers to log in
+        # again. What it actually reads is a token in its own `localStorage`
+        # (`detectInjectedToken`), which is exactly what `lemma apps open`
+        # seeds.
+        return BrowserSignInResponse(
+            success=False,
+            outcome="error",
+            origin=site,
+            message=(
+                f"{site} is a Lemma app, and Lemma apps do not use a login "
+                "you can sign in to -- their session is a token seeded into "
+                "the page, so a person signing in here would loop between the "
+                "app and the login screen for ever. Do not ask. Open it "
+                f"authenticated instead, from the workspace shell:\n\n"
+                f"    lemma apps open {pod_app}\n\n"
+                "That resolves the app's URL, seeds the current access token "
+                "and opens it already signed in. For an app you are running "
+                "yourself with `npm run dev`, use "
+                "`lemma apps open --url <dev-url> --no-auth`."
+            ),
         )
 
     auth_ctx = await _delegated_context(deps)

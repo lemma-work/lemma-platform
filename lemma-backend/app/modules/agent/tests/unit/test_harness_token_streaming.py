@@ -98,14 +98,44 @@ async def test_tokens_are_emitted_across_the_run_not_in_one_burst(
 
     total = timeline[-1][0]
     spread = token_times[-1] - token_times[0]
-    # Most of the run should be spent streaming. Buffering would collapse the
-    # spread toward zero while leaving `total` unchanged.
-    assert spread > total / 2, (
-        f"tokens spanned only {spread:.3f}s of a {total:.3f}s run -- they were "
-        "released in a burst rather than streamed"
+
+    # Measured against the model's own production window, not against the run.
+    #
+    # This used to assert `spread > total / 2`, where `total` is the timestamp
+    # of the run's *last* event. Everything after the final token -- run
+    # finalization, the durable MESSAGE write -- counts toward `total` and can
+    # never count toward `spread`, so the assertion really said "finalization
+    # must be quicker than the model", which is a claim about how fast the
+    # machine is. It failed on an idle developer laptop and intermittently on
+    # CI with a perfectly healthy stream: 0.268s of tokens, 0.43s of tail.
+    #
+    # `_slow_stream` sleeps `_DELTA_GAP_SECONDS` before each chunk, so the
+    # window the model takes to produce the answer is sleep-dominated and does
+    # not shrink on a slow machine. Tokens released as they arrive span it;
+    # tokens buffered and flushed at the end collapse to nearly zero, which is
+    # the regression this test exists to catch.
+    chunks = -(-len(_ANSWER) // _DELTA_CHARS)
+    produced_over = (chunks - 1) * _DELTA_GAP_SECONDS
+    assert spread > produced_over / 2, (
+        f"tokens spanned only {spread:.3f}s of a model that took at least "
+        f"{produced_over:.3f}s to produce them -- they were released in a "
+        f"burst rather than streamed (run total {total:.3f}s)"
     )
     # And the first one is early, which is what stops the UI looking hung.
-    assert token_times[0] < total / 2, timeline
+    #
+    # "Early" measured against the durable write rather than against the run,
+    # for the same reason: `token_times[0] < total / 2` counted harness
+    # startup, which happens before any token can exist, and so failed
+    # whenever setup cost more than the stream -- 0.347s of startup against a
+    # 0.615s run, with the tokens themselves perfectly spaced. What matters is
+    # that the first token beats the finished answer by a real margin; a
+    # harness that buffered would emit them all alongside it.
+    message_at = next(at for at, kind in timeline if kind is AgentEventType.MESSAGE)
+    assert message_at - token_times[0] > produced_over / 2, (
+        f"the first token landed {message_at - token_times[0]:.3f}s before the "
+        f"finished answer, out of a {produced_over:.3f}s stream -- the UI would "
+        "have sat empty until the run was nearly done"
+    )
 
 
 @pytest.mark.asyncio

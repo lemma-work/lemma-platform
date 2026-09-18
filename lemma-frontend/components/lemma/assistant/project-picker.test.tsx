@@ -7,6 +7,14 @@ import { ProjectPicker } from "./project-picker";
 // The popover measures itself, and jsdom has no ResizeObserver. A stub is
 // enough: nothing here asserts on geometry.
 class NoopResizeObserver {
+  // Takes -- and keeps -- the callback the real constructor takes, even though
+  // nothing here fires it: a stub with a narrower signature than the thing it
+  // stands in for is a trap, and static analysis reads every
+  // `new ResizeObserver(fn)` in the app against this declaration.
+  readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+  }
   observe() {}
   unobserve() {}
   disconnect() {}

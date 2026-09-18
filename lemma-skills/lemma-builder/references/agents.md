@@ -116,7 +116,7 @@ colleague hearing from an implementation detail of somebody's turn cannot place 
 | `WORKSPACE_CLI` | **Declared.**  a sandbox shell with the `lemma` CLI — the most powerful and broadest toolset. Includes `view_image` (vision-gated: silently withheld if the active model has no vision capability) |
 | `SKILLS` | **Always on.**  loading skills available in the workspace; also added automatically at runtime when `USER_INTERACTION` is configured so widget-capable agents can load `lemma-widget` |
 | `WEB_SEARCH` | **Declared.**  web search |
-| `BROWSER` | **Declared.**  a real Chrome in the agent's sandbox: open a page, read it, act on it by element ref, screenshot it, and — the one that changes what is reachable — `browser_sign_in`, which gets past a login wall by loading a login the person saved earlier, or by pausing the run and asking them to sign in themselves in that browser. The agent never sees or asks for a password. **Deferred**: the tools are not in the prompt prefix, so an agent that never meets a page never carries them. Pair with `WORKSPACE_CLI` only if the job also needs a shell — the typed tools do not need one |
+| `BROWSER` | **Declared.** One tool, `browser_sign_in`: it gets past a login wall by loading a login the person saved earlier, or by pausing the run and asking them to sign in themselves in the agent's browser. The agent never sees or asks for a password. **Deferred**: not in the prompt prefix, so an agent that never meets a login wall never carries it. **Pair it with `WORKSPACE_CLI`** — the browsing itself is the `agent-browser` command line in the sandbox, so `BROWSER` on its own can ask for a login and then do nothing with it. Add `view_image` to let the agent look at what it captures |
 | `USER_INTERACTION` | **Always on.**  ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | **Declared.**  speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
 | `SUBAGENTS` | **Declared.**  async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
@@ -133,9 +133,9 @@ broader than anything a grant describes. There is no separate file-system
 toolset: file access is part of `POD`, scoped by the folder grants that produced
 it.
 
-**Five toolsets are *deferred*, whether declared, derived or always-on.** `POD`,
-`CONNECTORS`, `SUBAGENTS`, `MESSAGING` and `WAIT` are not in the model's prompt
-prefix — it has to find them with `search_tools` first. That keeps a chat agent from
+**Six toolsets are *deferred*, whether declared, derived or always-on.** `POD`,
+`CONNECTORS`, `SUBAGENTS`, `MESSAGING`, `WAIT` and `BROWSER` are not in the model's
+prompt prefix — it has to find them with `search_tools` first. That keeps a chat agent from
 reaching for "message a colleague" unprompted, and it is also why **an agent that
 should chase people has to be told so in its instruction**. "You have a tool for it" is
 not enough when the tool is behind a search.
@@ -374,13 +374,13 @@ Or directly: `lemma agents permissions add coordinator agent:researcher:execute`
 agent's `toolsets` to give it control tools for running child conversations
 concurrently:
 
+There are **three** tools, not one per verb — the actions are parameters:
+
 | Tool | Does |
 | --- | --- |
-| `spawn_subagent` | Start a child conversation and return its `conversation_id`/`run_id` immediately (non-blocking). Omit `agent_name` to spawn **another instance of yourself**; pass a name (requires `agent.execute` on it) to spawn a different agent. |
-| `await_subagent` | Block (bounded) on a spawned child until it finishes; returns its output. |
-| `get_subagent_messages` / `send_subagent_message` | Read a child's transcript / send it a follow-up. |
-| `list_subagents` | List the children this conversation spawned, with status. |
-| `stop_subagent` | Cancel a running child. |
+| `spawn_subagent` | Start a child conversation and return `{conversation_id, run_id, status}` immediately (non-blocking). Omit `agent_name` to spawn **another instance of yourself**; pass a name (requires `agent.execute` on it) to spawn a different agent. |
+| `interact_subagent` | Drive one you spawned. `action='send'` posts a follow-up (needs `content`); `action='await'` blocks until a run finishes (needs `run_id`, bounded by `timeout_seconds`); `action='stop'` asks it to stop gracefully. |
+| `query_subagents` | Inspect them. `mode='list'` gives child conversations with latest run status (`status='ACTIVE'` filters to running); `mode='messages'` gives the latest messages from one child (needs `conversation_id`). |
 
 - **Self-spawn** needs no grant (running another copy of yourself is no privilege
   escalation); spawning a *named other* agent is grant-gated exactly like

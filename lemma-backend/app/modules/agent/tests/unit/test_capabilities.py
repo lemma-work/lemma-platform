@@ -859,14 +859,10 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     # The pod tools are not. See `_EXPECTED_VISIBLE_POD_DEFAULT_TOOLS`.
     assert not any(name.startswith("pod_") for name in captured["deferred"])
     # The browser is deferred for the same reason: `web_fetch` covers ordinary
-    # research in the prefix, and driving a page is the deliberate step past it.
-    assert {
-        "browser_open",
-        "browser_snapshot",
-        "browser_act",
-        "browser_read",
-        "browser_screenshot",
-    } <= captured["deferred"]
+    # research in the prefix, and driving a page is the deliberate step past
+    # it. One tool, not six -- the browsing itself is `agent-browser` through
+    # `exec_command`, so what is deferred here is only the ask for a login.
+    assert "browser_sign_in" in captured["deferred"]
     # A static awareness hint tells the model the deferred tools exist + how to
     # reach them — names listed, schemas not (so the model can search for them).
     from app.modules.agent.capabilities.deferred_hint import (

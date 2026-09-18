@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **176** |
 
-Scenario tests declaring a promise: 396.
+Scenario tests declaring a promise: 397.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 248 | 261 |
+| OpenAPI operations | 248 | 262 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -219,7 +219,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_reading_a_bundle_grants_nothing_else`, `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous`, `test_a_stranger_is_sent_nothing` |
+| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_reading_a_bundle_grants_nothing_else`, `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous`, `test_a_personal_resource_is_not_named_in_a_listing`, `test_a_stranger_is_sent_nothing` |
 | `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `covered` | `test_revoking_closes_it_again` |
 | `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `covered` | `test_narrowing_reach_keeps_workload_grants` |
 | `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_approving_cannot_confer_unheld_pod_permissions`, `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
