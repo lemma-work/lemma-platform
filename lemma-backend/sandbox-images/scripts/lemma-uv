@@ -5,8 +5,8 @@
 #   failed to create directory `/opt/lemma-python/.../humanize-4.16.0.dist-info`:
 #   Permission denied (os error 13)
 #
-# `pip` never hit that, because `PIP_PREFIX` sends it to `/workspace/.python`
-# instead -- writable, on the volume that survives a sandbox being recreated,
+# `pip` never hit that, because `PIP_PREFIX` sends it to `~/.python` instead --
+# writable, under the home that survives a sandbox being recreated,
 # and already on the shared interpreter's `sys.path` via
 # `lemma-workspace-paths.pth`. So the two installers on the PATH disagreed about
 # where a package goes, and the faster, more modern one was the broken one.
