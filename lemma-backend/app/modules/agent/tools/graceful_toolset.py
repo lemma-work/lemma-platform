@@ -18,6 +18,7 @@ import asyncio
 import re
 import time
 
+from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import ToolsetTool, WrapperToolset
@@ -56,6 +57,28 @@ def _mark_tool_outcome(span: Span, outcome: str) -> None:
     span.set_attribute("lemma.outcome", outcome)
 
 
+def _mark_control_flow_not_an_error(span: Span) -> None:
+    """Keep a pause off the error rate, on whichever span is passed.
+
+    A pause, a retry or a usage limit leaves by raising, and a span context
+    manager stamps ERROR on anything that leaves that way. `StatusCode.OK` is
+    final in the SDK -- a later ERROR is ignored -- so setting it here is what
+    survives the unwind.
+
+    Applied to two spans, because there are two of them and two pipelines. The
+    run-phase span is ours and goes to the infrastructure backend; the span
+    pydantic-ai opened around the call is the one carrying an OpenInference
+    kind, and therefore the only one the LLM backend is sent. Marking one and
+    not the other is why `ask_user`, `request_approval` and `browser_sign_in`
+    -- the three tools whose whole purpose is to stop and ask a person -- were
+    the bulk of the recorded tool errors there.
+
+    The exception event is left alone. That a pause happened is true and worth
+    keeping; that it was a failure is what is not.
+    """
+    span.set_status(Status(StatusCode.OK))
+
+
 def _mark_tool_failure(span: Span, payload: object) -> None:
     """Mark a span for a tool that reported a failure by returning one.
 
@@ -88,6 +111,12 @@ class GracefulToolset[DepsT](WrapperToolset[DepsT]):
         tool: ToolsetTool[DepsT],
     ) -> object:
         started = time.monotonic()
+        # Captured before ours becomes current: this is the span pydantic-ai
+        # opened for the tool call, and it is the one the LLM backend receives.
+        # Ours goes to the infrastructure pipeline, which that backend is not
+        # sent, so marking only ours leaves every pause looking like a failure
+        # in the place the error rate is actually read.
+        caller_span = trace.get_current_span()
         # The span now wraps the handlers rather than sitting inside them, so a
         # call that fails by *returning* can still be marked. It is the only way
         # to see the common failure: almost nothing here raises.
@@ -124,7 +153,8 @@ class GracefulToolset[DepsT](WrapperToolset[DepsT]):
                     # the opposite of what this workstream is for. The exception
                     # event is still recorded either way.
                     _mark_tool_outcome(span, "control_flow")
-                    span.set_status(Status(StatusCode.OK))
+                    _mark_control_flow_not_an_error(span)
+                    _mark_control_flow_not_an_error(caller_span)
                     raise
                 logger.warning(
                     "agent.graceful_toolset.tool_r_returning_model_instead.degraded",

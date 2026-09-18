@@ -22,7 +22,10 @@ from app.core.observability.telemetry import (
     record_span_output,
 )
 from app.modules.agent.config import agent_settings
-from app.modules.agent.services.context_budget import context_budget_for
+from app.modules.agent.services.context_budget import (
+    ContextBudget,
+    context_budget_for,
+)
 from app.modules.agent.services.conversation_access import (
     resolve_agent,
     validate_conversation_access,
@@ -133,6 +136,34 @@ def _profile_model_settings(
     return (
         model_settings if isinstance(model_settings, dict) and model_settings else None
     )
+
+
+def _with_reply_budget(
+    model_settings: JsonObject | None, budget: ContextBudget
+) -> JsonObject | None:
+    """Tell the model how much room it has to answer in.
+
+    Nothing set `max_tokens`, so every request used whatever the provider
+    defaults to. That is survivable on a model that answers in prose and fatal
+    on one that thinks first: thinking tokens are output tokens, a small
+    default is spent on them before any content exists, and the provider stops
+    the response at the cap. pydantic-ai treats a length-stopped response with
+    no actionable part as `UnexpectedModelBehavior` and ends the run, so the
+    work is lost rather than shortened.
+
+    The number is the window minus the ceiling everything else is held under,
+    which is the room the budget had already set aside for exactly this and
+    never spent.
+
+    An operator who set `max_tokens` on the runtime profile outranks this: they
+    know something about their model that a fraction of a window does not.
+    """
+    if model_settings and model_settings.get("max_tokens"):
+        return model_settings
+    reply = budget.reply_token_budget
+    if reply <= 0:
+        return model_settings
+    return {**(model_settings or {}), "max_tokens": reply}
 
 
 class AgentRunObserver(Protocol):
@@ -297,7 +328,9 @@ class AgentRunnerService:
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
                 capabilities=harness_capabilities,
-                model_settings=harness_model_settings,
+                model_settings=_with_reply_budget(
+                    harness_model_settings, context_budget
+                ),
                 usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=make_stop_checker(
