@@ -451,7 +451,13 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
     the identical second one must be allowed to wait.
     """
     monkeypatch.setattr(agent_host_controller, "_IDLE_REPOLL_SECONDS", 0.2)
-    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.8)
+    # A window in place of the 25s production one, sized for separation rather
+    # than speed. These assertions read the difference between a poll that sat
+    # in the idle wait and one that skipped it, measured from the client, so
+    # scheduling noise on a loaded runner lands in the same reading. At 0.8s the
+    # window was smaller than the noise: an early answer once timed 0.89s and
+    # read as held.
+    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 3.0)
     await scenario.create_org_with_pod(name_prefix="Heartbeat")
     machine = await paired_machine(scenario)
     _, run_id = await conversation_with_a_leased_run(
@@ -479,10 +485,27 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
         scenario.async_client, machine, capacity=_capacity(1), **heartbeat
     )
 
+    # `poll_after_ms` is the server's own account of which branch it took: it is
+    # non-zero only when a control update changed something, and that is the same
+    # condition that answers without entering the idle wait. So this pair alone
+    # settles the advance; what it cannot settle is the repeat, because the early
+    # branch also answers 0 when it merely has commands to hand back.
     assert advanced["poll_after_ms"] > 0
-    assert advanced_elapsed < 0.7, "a real state advance should answer promptly"
     assert repeated["poll_after_ms"] == 0
-    assert repeated_elapsed >= 0.7, "a repeated heartbeat kept cutting the poll short"
+
+    # Which leaves the clock to show that each decision reached the connection.
+    # Both bounds are read back off the window the server is actually using, so
+    # retuning it above cannot leave them behind, and both sit well inside it
+    # rather than at its edge: a slow round trip spends margin, not the test.
+    window = agent_host_controller._LONG_POLL_SECONDS
+    assert advanced_elapsed < window / 2, (
+        f"a real state advance took {advanced_elapsed:.2f}s of a {window:.1f}s "
+        "window -- news is being held behind the idle wait"
+    )
+    assert repeated_elapsed >= window * 0.8, (
+        f"a repeated heartbeat came back in {repeated_elapsed:.2f}s, cutting the "
+        "poll short -- a busy host would round-trip for the life of the run"
+    )
 
 
 @pytest.mark.asyncio
