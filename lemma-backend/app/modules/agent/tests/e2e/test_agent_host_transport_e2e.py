@@ -472,6 +472,18 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
         ]
     }
 
+    # One throwaway poll first, with the hold turned right down so it costs
+    # only what it warms. The first host-authenticated call of a test pays for
+    # everything behind it once -- the pool's first connection, the first
+    # verification of this host's secret -- and that cost lands on whichever
+    # call happens to be first. Here that was the poll whose whole point is to
+    # return without holding, so the measurement below was really reading cold
+    # start: 14ms on a warm laptop, 790ms on a cold CI runner, against a
+    # ceiling of 700.
+    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.05)
+    await _elapsed_poll(scenario.async_client, machine, capacity=_capacity(1))
+    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.8)
+
     advanced, advanced_elapsed = await _elapsed_poll(
         scenario.async_client, machine, capacity=_capacity(1), **heartbeat
     )
@@ -482,19 +494,9 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
     assert advanced["poll_after_ms"] > 0
     assert repeated["poll_after_ms"] == 0
     assert repeated_elapsed >= 0.7, "a repeated heartbeat kept cutting the poll short"
-    # The *gap* between the two, not a budget for either. What is claimed is
-    # that the advance skips the 0.8s hold the repeat takes, and the gap is the
-    # only thing that measures exactly that: both calls pay whatever the runner
-    # costs, so the shared overhead cancels and what is left is the hold.
-    #
-    # A ceiling on `advanced_elapsed` alone does not survive a loaded runner --
-    # it failed at 0.92s on a poll that held nothing, which is longer than the
-    # hold it was meant to prove absent. Comparing the two directly would be
-    # sound but weak: if the advance were wrongly held too, both land near the
-    # same value and `<` becomes a coin flip.
-    assert repeated_elapsed - advanced_elapsed >= 0.5, (
-        "a real state advance should skip the hold a repeated heartbeat takes: "
-        f"advance {advanced_elapsed:.3f}s, repeat {repeated_elapsed:.3f}s"
+    assert advanced_elapsed < 0.7, (
+        "a real state advance should answer promptly rather than hold: "
+        f"{advanced_elapsed:.3f}s"
     )
 
 
