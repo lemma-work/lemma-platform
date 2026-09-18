@@ -14,13 +14,8 @@ per file; replace outdated facts instead of appending contradictions. Preserve
 change history when it matters. Write silently unless the user asked about
 memory or needs to know you changed a previously stated fact.
 
-Use pod file tools or the CLI:
-
-```bash
-lemma files search "billing cycle" --scope /memory
-lemma files write /memory/pricing.md "..."
-lemma files write /me/preferences.md "..."
-```
+Memory lives in pod files, so it is `pod_search_files` to find a note,
+`pod_read_file` to read one, and `pod_write_file` to save it.
 
 Each `AGENTS.md` is an automatically loaded, size-limited index. Keep it to short
 topic pointers and update it when files move, merge, appear, or disappear.
