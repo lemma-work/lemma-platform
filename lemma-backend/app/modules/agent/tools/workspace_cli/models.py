@@ -160,7 +160,14 @@ class ExecutePythonRequest(BaseModel):
     )
     timeout_seconds: int = Field(
         default=60,
-        description="Maximum execution time in seconds before timing out.",
+        ge=1,
+        le=300,
+        description=(
+            "How long to wait before giving up, up to 300s. Unlike "
+            "`exec_command` there is no handle to come back to: this runs in "
+            "the shared kernel and a timeout ends it. For work that may take "
+            "longer, run it with `exec_command` and wait for the process."
+        ),
     )
 
 
@@ -217,6 +224,14 @@ class ExecCommandResult(BaseToolResponse):
             "it was not cancelled."
         ),
     )
+    notice: Optional[str] = Field(
+        default=None,
+        description=(
+            "Something about this call that is not about the command itself — "
+            "most often that a wait you asked for was longer than one call can "
+            "give. Read it: it usually explains an empty result."
+        ),
+    )
     process_id: Optional[str] = Field(
         default=None,
         description=(
@@ -254,10 +269,11 @@ class ProcessInfo(BaseModel):
     # going. Everything below is descriptive.
     completed: bool = False
     exit_code: Optional[int] = None
-    # Blank because the sandbox runtime is the only thing that knows what is
-    # running, and it does not report a process's command line or working
-    # directory. Inventing them would tell an agent a process is somewhere it
-    # is not.
+    # Populated when the provider's own process index has them (it records the
+    # command and cwd at start), and blank when the in-sandbox runtime is the
+    # source, because that tracks what is running rather than how it was asked
+    # for. Blank means "not recorded", never "no command" -- inventing one
+    # would tell an agent a process is somewhere it is not.
     cmd: str = ""
     cwd: str = ""
     tty: bool = False
@@ -267,7 +283,15 @@ class ProcessInfo(BaseModel):
 class ListProcessesResult(BaseToolResponse):
     processes: List[ProcessInfo] = Field(
         default_factory=list,
-        description="Tracked shell processes in the conversation workspace.",
+        description=(
+            "Processes this conversation started, plus any unowned one running "
+            "under its working directory. A sandbox belongs to a person, not a "
+            "conversation, so this is deliberately not every process in it."
+        ),
+    )
+    note: Optional[str] = Field(
+        default=None,
+        description="Present when processes were filtered out of this listing.",
     )
 
 

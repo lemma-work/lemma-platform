@@ -140,10 +140,6 @@ class RunSpend:
     budget: RunBudget
     model_requests: int = 0
     consecutive_tool_failures: int = 0
-    #: Notices waiting to be handed to the model, oldest first. Filled here and
-    #: drained by whoever is next to build a request, so the decision that a
-    #: warning is due stays with the thing that counts the spending.
-    notices: list[str] = field(default_factory=list)
     #: Dimensions already warned about. A warning repeated every step would be
     #: nagging rather than news, and the run cannot act on it twice.
     warned: set[BudgetDimension] = field(default_factory=set)
@@ -166,10 +162,9 @@ class RunSpend:
     def approaching(self, *, elapsed_seconds: float, at: float) -> BudgetWarning | None:
         """The first ceiling this run is within `at` of, warned about once.
 
-        Queues the notice as a side effect, because "has been warned" and "the
-        warning still needs delivering" are the same fact and splitting them
-        across two objects is how one of them goes stale. `at` outside (0, 1)
-        switches warning off without touching the ceilings themselves.
+        Records that it warned, and leaves delivering to the caller: this
+        object knows what has been spent, not how a run is spoken to. `at`
+        outside (0, 1) switches warning off without touching the ceilings.
         """
         if not 0 < at < 1:
             return None
@@ -205,15 +200,8 @@ class RunSpend:
             if spent < limit * at:
                 continue
             self.warned.add(dimension)
-            warning = BudgetWarning(dimension, spent=shown_spent, limit=shown_limit)
-            self.notices.append(warning.notice)
-            return warning
+            return BudgetWarning(dimension, spent=shown_spent, limit=shown_limit)
         return None
-
-    def take_notices(self) -> list[str]:
-        """Hand over the queued notices and forget them."""
-        pending, self.notices = self.notices, []
-        return pending
 
     def exhausted(self, *, elapsed_seconds: float) -> BudgetExhausted | None:
         """The first ceiling reached, or None while there is room left."""

@@ -273,11 +273,13 @@ def test_a_run_is_warned_before_a_ceiling_rather_than_at_it():
     assert warning is not None
     assert warning.dimension is BudgetDimension.MODEL_REQUESTS
     assert spend.exhausted(elapsed_seconds=0.0) is None, "warned, not stopped"
-    assert "80" in warning.notice and "100" in warning.notice
+    assert "80" in warning.notice and "100" in warning.notice, (
+        "the run is told how much room is left, not just that it is running out"
+    )
 
 
 def test_each_ceiling_is_warned_about_once():
-    """Every step from the threshold on is past it, so a notice that repeated
+    """Every step from the threshold on is past it, so a warning that repeated
     would fill the context it is trying to help the run spend well."""
     spend = _spend(model_requests=10)
     spend.model_requests = 9
@@ -286,9 +288,7 @@ def test_each_ceiling_is_warned_about_once():
     second = spend.approaching(elapsed_seconds=0.0, at=0.8)
 
     assert first is not None
-    assert second is None
-    assert len(spend.take_notices()) == 1
-    assert spend.take_notices() == [], "a notice is handed over once"
+    assert second is None, "said once per dimension"
 
 
 def test_a_disabled_dimension_is_never_warned_about():
@@ -301,7 +301,6 @@ def test_a_disabled_dimension_is_never_warned_about():
     spend.model_requests = 5000
 
     assert spend.approaching(elapsed_seconds=99_999.0, at=0.8) is None
-    assert spend.take_notices() == []
 
 
 def test_warning_switches_off_outside_a_fraction():
@@ -312,4 +311,29 @@ def test_warning_switches_off_outside_a_fraction():
 
     assert spend.approaching(elapsed_seconds=0.0, at=0.0) is None
     assert spend.approaching(elapsed_seconds=0.0, at=1.0) is None
-    assert spend.take_notices() == []
+
+
+def test_both_approvals_renew_and_neither_retires_the_guard():
+    """ "Approve for session" means "this call again, without me" everywhere
+    else, and is recorded per permission against the tool being approved. There
+    is no tool on a budget card, and what it would switch off is the only thing
+    standing between a run that has stopped converging and the rest of the
+    conversation. So it renews like a single approval rather than retiring the
+    guard, and this pins that: the docstring says so, and a docstring is not
+    enforcement."""
+    from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
+    from app.modules.agent.services.conversation_resume_return import (
+        _budget_decision_return,
+    )
+
+    once = _budget_decision_return(AgentRunApprovalDecision.APPROVE_ONCE)
+    session = _budget_decision_return(AgentRunApprovalDecision.APPROVE_FOR_SESSION)
+    denied = _budget_decision_return(AgentRunApprovalDecision.DENY)
+
+    assert once == session, "a session approval is not a licence to stop asking"
+    assert "renewed" in str(once["message"])
+    assert denied != once
+    # Denial is a decision, not a failure: an agent told its work failed tries
+    # to repair something that was never broken.
+    assert denied["success"] is True
+    assert "Stop here" in str(denied["message"])

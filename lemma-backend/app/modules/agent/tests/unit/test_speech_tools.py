@@ -289,14 +289,31 @@ def test_opus_bitrate_is_raised_off_deepgrams_12k_default(monkeypatch):
 
 
 def test_voice_follows_the_language_being_spoken():
-    from app.modules.agent.tools.speech.deepgram_provider import voice_for_language
+    """A reply in Spanish read by an English voice is a wrong answer.
 
-    assert voice_for_language("es") == "aura-2-celeste-es"
-    assert voice_for_language("ja-JP") == "aura-2-uzume-ja"
-    assert voice_for_language("en-US") == "aura-2-thalia-en"
-    # Deepgram has no Hindi voice — the caller falls back to the default.
-    assert voice_for_language("hi") is None
-    assert voice_for_language(None) is None
+    Resolved against the live catalogue now, and this exercises the offline
+    fallback — the same one-per-language map that used to be the whole story —
+    because a unit test must not depend on a provider being reachable.
+    """
+    from app.modules.agent.tools.speech.voice_catalogue import default_voice_for
+
+    assert default_voice_for("es", ()) == "aura-2-celeste-es"
+    assert default_voice_for("ja-JP", ()) == "aura-2-uzume-ja"
+    assert default_voice_for("en-US", ()) == "aura-2-thalia-en"
+    # Deepgram has no Hindi voice, and saying so is the honest answer.
+    assert default_voice_for("hi", ()) is None
+    assert default_voice_for(None, ()) is None
+
+
+def test_the_catalogue_beats_the_fallback_when_it_is_available():
+    """The map exists for when the provider cannot be read, and only then."""
+    from app.modules.agent.tools.speech.voice_catalogue import Voice, default_voice_for
+
+    catalogue = (Voice(name="aura-2-someone-es", languages=("es-419",)),)
+
+    assert default_voice_for("es", catalogue) == "aura-2-someone-es"
+    # And a language the catalogue does not cover still falls back.
+    assert default_voice_for("ja", catalogue) == "aura-2-uzume-ja"
 
 
 async def test_say_passes_language_to_the_provider(monkeypatch):
