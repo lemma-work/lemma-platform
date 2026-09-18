@@ -213,6 +213,7 @@ class WorkspaceRuntimeBundleMixin:
             "workspace.runtime_bundle.installed",
             user_id=str(user_id),
             version=bundle.version,
+            component_version=bundle.component_version,
         )
         return True
 

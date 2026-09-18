@@ -192,3 +192,54 @@ def test_the_bundle_ships_no_second_copy_of_the_pod_bundle(site_packages: Path) 
 
     assert not any(name.startswith("lemma_pod_bundle-") for name in dist_infos)
     assert (site_packages / "lemma_pod_bundle").is_dir()
+
+
+def test_the_manifest_names_the_release_it_was_built_from(
+    built: tuple[dict, Path],
+) -> None:
+    """So a log line can say which release a sandbox is running.
+
+    The digest is the identity and is the stronger claim -- two builds of one
+    version can differ, two builds of one digest cannot -- but "0.8.0" is what a
+    person reads, and needing to resolve a hash to answer "is this sandbox on the
+    current release" is how the fleet's staleness stayed invisible before.
+    """
+    manifest, _ = built
+    declared = (_BACKEND.parent / "lemma-python" / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    expected = next(
+        line.split("=", 1)[1].strip().strip('"')
+        for line in declared.splitlines()
+        if line.startswith("version")
+    )
+
+    assert manifest["component_version"] == expected
+
+
+def test_the_backend_image_builds_the_bundle_from_its_own_sources(
+    built: tuple[dict, Path],
+) -> None:
+    """The coupling this whole design rests on, asserted statically.
+
+    A sandbox cannot be replaced to give it newer code, so it is *sent* the
+    code -- and what it is sent has to be what the server expects to talk to.
+    Building the bundle inside the backend image makes that a property of the
+    build rather than something an operator remembers: one deploy moves both,
+    one rollback rolls both back. Publishing it separately would reintroduce the
+    two-artifact promotion this exists to remove.
+    """
+    del built
+    dockerfile = (_BACKEND / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "scripts/build_runtime_bundle.py" in dockerfile, (
+        "the backend image does not build the bundle, so every deployment "
+        "loads none and no sandbox is ever updated"
+    )
+    assert "/app/runtime-bundle" in dockerfile
+    # lemma-cli's setup.py vendors ../lemma-skills and ../lemma-pod-bundle at
+    # build time, so the first-party projects have to sit beside each other.
+    for project in ("lemma-python", "lemma-cli", "lemma-skills"):
+        assert f"COPY {project} /{project}" in dockerfile, (
+            f"{project} is not beside the others in the builder stage"
+        )

@@ -42,6 +42,11 @@ class RuntimeBundle:
     archive: bytes
     archive_sha256: str
     requires: tuple[str, ...]
+    #: The release the first-party projects agree on, e.g. "0.8.0". Carried for
+    #: people rather than for the code: `version` is the identity and is
+    #: stronger, but a log line saying which release a sandbox is running should
+    #: not require resolving a hash to read.
+    component_version: str = "unknown"
 
     @property
     def size_bytes(self) -> int:
@@ -73,6 +78,7 @@ def load_bundle(directory: Path) -> RuntimeBundle | None:
         archive=archive.read_bytes(),
         archive_sha256=str(manifest["archive_sha256"]),
         requires=tuple(str(item) for item in manifest.get("requires", ())),
+        component_version=str(manifest.get("component_version", "unknown")),
     )
 
 
@@ -98,6 +104,7 @@ def runtime_bundle() -> RuntimeBundle | None:
             logger.info(
                 "workspace.runtime_bundle.loaded",
                 version=bundle.version,
+                component_version=bundle.component_version,
                 size_bytes=bundle.size_bytes,
                 source=str(candidate),
             )

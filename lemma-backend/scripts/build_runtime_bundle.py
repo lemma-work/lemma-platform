@@ -44,7 +44,14 @@ import zipfile
 from pathlib import Path
 
 
+#: Defaults for a checkout. Both are overridable because the backend image does
+#: not reproduce the repository's shape: the first-party projects land at `/`
+#: beside each other (which is what `lemma-cli/setup.py` needs, since it vendors
+#: `../lemma-skills`), while the backend itself lives at `/app`. Deriving them
+#: from `__file__` works in a checkout and silently points at nothing in a
+#: container, which is the kind of difference that only shows up in production.
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 #: The projects whose wheels carry every first-party package a sandbox imports.
 #: Order is not significant -- nothing here may shadow anything else there.
@@ -112,10 +119,10 @@ def _run(command: list[str], *, cwd: Path | None = None) -> None:
         )
 
 
-def _build_wheels(destination: Path) -> list[Path]:
+def _build_wheels(destination: Path, repo_root: Path) -> list[Path]:
     """One wheel per first-party project, built from the monorepo sources."""
     for project in WHEEL_PROJECTS:
-        source = REPOSITORY_ROOT / project
+        source = repo_root / project
         if not source.is_dir():
             raise SystemExit(f"first-party source is missing: {source}")
         _run(
@@ -159,9 +166,9 @@ def _unpack(wheels: list[Path], site_packages: Path) -> None:
     )
 
 
-def _copy_runtime_sources(site_packages: Path) -> None:
+def _copy_runtime_sources(site_packages: Path, backend_root: Path) -> None:
     for relative in RUNTIME_SOURCES:
-        source = REPOSITORY_ROOT / "lemma-backend" / relative
+        source = backend_root / relative
         target = site_packages / relative
         if not source.exists():
             raise SystemExit(f"runtime source is missing: {source}")
@@ -327,14 +334,34 @@ def _write_archive(root: Path, destination: Path) -> str:
     return hashlib.sha256(destination.read_bytes()).hexdigest()
 
 
-def build(out_dir: Path) -> dict[str, object]:
+def _component_version(repo_root: Path) -> str:
+    """The version the first-party projects agree on, for a human reading a log.
+
+    Not the bundle's identity -- the digest is, and it is stronger, because two
+    builds of one version can differ while two builds of one digest cannot. This
+    is here so that "which release is this sandbox running" has an answer that
+    does not require resolving a hash.
+    """
+    text = (repo_root / "lemma-python" / "pyproject.toml").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if line.startswith("version"):
+            return line.split("=", 1)[1].strip().strip("\"'")
+    return "unknown"
+
+
+def build(
+    out_dir: Path,
+    *,
+    repo_root: Path = REPOSITORY_ROOT,
+    backend_root: Path = BACKEND_ROOT,
+) -> dict[str, object]:
     """Build the bundle into ``out_dir``; return its manifest."""
     with tempfile.TemporaryDirectory() as raw:
         scratch = Path(raw)
-        wheels = _build_wheels(scratch / "wheels")
+        wheels = _build_wheels(scratch / "wheels", repo_root)
         site_packages = scratch / "payload" / "site-packages"
         _unpack(wheels, site_packages)
-        _copy_runtime_sources(site_packages)
+        _copy_runtime_sources(site_packages, backend_root)
         _relocate_scripts(site_packages, scratch / "payload")
         _retarget_console_scripts(scratch / "payload")
         _normalise_dist_info(site_packages)
@@ -347,6 +374,7 @@ def build(out_dir: Path) -> dict[str, object]:
         archive_sha256 = _write_archive(payload, archive_path)
         manifest = {
             "version": version,
+            "component_version": _component_version(repo_root),
             "archive_sha256": f"sha256:{archive_sha256}",
             "archive": archive_path.name,
             "requires": list(REQUIRED_IMPORTS),
@@ -368,9 +396,23 @@ def main() -> None:
         required=True,
         help="Directory to write runtime-bundle.zip and manifest.json into",
     )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=REPOSITORY_ROOT,
+        help="Where lemma-python, lemma-cli and lemma-skills sit beside each other",
+    )
+    parser.add_argument(
+        "--backend-root",
+        type=Path,
+        default=BACKEND_ROOT,
+        help="Where sandbox_runtime lives",
+    )
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    manifest = build(args.out_dir)
+    manifest = build(
+        args.out_dir, repo_root=args.repo_root, backend_root=args.backend_root
+    )
     print(json.dumps({k: v for k, v in manifest.items() if k != "contents"}, indent=2))
 
 
