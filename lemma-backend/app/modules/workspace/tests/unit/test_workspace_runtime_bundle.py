@@ -288,10 +288,15 @@ async def test_a_deployment_with_no_bundle_does_nothing() -> None:
     assert client.writes == []
 
 
-async def test_the_archive_is_delivered_with_its_digest_for_the_provider_to_check() -> (
-    None
-):
-    """A truncated upload must be refused before anything unpacks it."""
+async def test_the_delivery_does_not_claim_a_precondition_it_cannot_mean() -> None:
+    """`expected_sha256` is not portable, so the delivery does not use it.
+
+    The workspace runtime reads that argument as a precondition on the file
+    already at the path and answers 409 when nothing is there; E2B reads it as
+    a checksum of the outgoing bytes. Passing the digest satisfied E2B and made
+    the very first install on Docker and `lemma_local` impossible. The archive
+    is verified in the sandbox by the installer instead.
+    """
     seen: dict[str, Any] = {}
 
     class _Checking(_Client):
@@ -306,7 +311,7 @@ async def test_the_archive_is_delivered_with_its_digest_for_the_provider_to_chec
     await service._ensure_runtime_bundle(uuid4(), _info())
 
     archive = next(path for path in seen if path.endswith(".zip"))
-    assert seen[archive] == "b" * 64
+    assert seen[archive] is None
 
 
 def test_a_directory_without_a_manifest_holds_no_bundle(tmp_path: Path) -> None:

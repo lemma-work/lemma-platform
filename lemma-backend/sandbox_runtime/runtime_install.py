@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import json
 import os
 import shutil
@@ -229,6 +230,30 @@ def _prune(root: Path, keep: Path) -> None:
             continue
 
 
+def _verify(archive: Path, version: str) -> None:
+    """The version *is* the archive's digest, so this is checkable here.
+
+    Checked in the sandbox, against the bytes that actually landed, rather than
+    trusted from the delivery: `expected_sha256` means different things to
+    different providers -- the workspace runtime reads it as a precondition on
+    the file already at that path, E2B as a checksum of the outgoing bytes --
+    so no single value passed there verifies this on every fabric. Hashing the
+    staged file does, and it is the only check that sees transport corruption.
+    """
+    algorithm, _, expected = version.partition(":")
+    if algorithm != "sha256" or not expected:
+        raise SystemExit(f"unusable version: {version}")
+    digest = hashlib.sha256()
+    with archive.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    actual = digest.hexdigest()
+    if actual != expected:
+        raise SystemExit(
+            f"archive digest {actual} does not match the version {expected}"
+        )
+
+
 def install(
     *,
     root: Path,
@@ -241,6 +266,7 @@ def install(
     if already["version"] == version:
         return {"version": version, "installed": False, "reason": "already current"}
 
+    _verify(archive, version)
     root.mkdir(parents=True, exist_ok=True)
     target = _version_directory(root, version)
     if not (target / STAMP_NAME).is_file():

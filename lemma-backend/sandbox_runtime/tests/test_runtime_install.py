@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import time
+import hashlib
 import zipfile
 from pathlib import Path
 
@@ -25,14 +26,22 @@ import pytest
 from sandbox_runtime import runtime_install
 
 
-def _bundle(tmp_path: Path, *, name: str, body: str, marker: str = "") -> Path:
-    """A minimal archive shaped like a real one: a package under site-packages."""
+def _bundle(
+    tmp_path: Path, *, name: str, body: str, marker: str = ""
+) -> tuple[Path, str]:
+    """A minimal archive shaped like a real one, and the version naming it.
+
+    The version is returned rather than chosen by the caller because it *is* the
+    digest of these bytes -- the installer verifies that now, so a fixture free
+    to declare any version would be exercising a system nobody ships. It is
+    returned at build time because a successful install consumes the archive.
+    """
     archive = tmp_path / f"{name}.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr(f"site-packages/{name}/__init__.py", body)
         if marker:
             bundle.writestr(f"site-packages/{marker}", "")
-    return archive
+    return archive, "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
 @pytest.fixture
@@ -45,10 +54,6 @@ def site(tmp_path: Path) -> Path:
     directory = tmp_path / "site-packages"
     directory.mkdir()
     return directory
-
-
-_V1 = "sha256:" + "1" * 64
-_V2 = "sha256:" + "2" * 64
 
 
 def test_an_empty_root_reports_nothing_installed(root: Path, site: Path) -> None:
@@ -73,27 +78,35 @@ def test_probe_reports_whether_a_baked_copy_is_behind_the_overlay(
 def test_installing_makes_the_bundle_importable_and_recorded(
     tmp_path: Path, root: Path, site: Path
 ) -> None:
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'first'"
+    )
 
     outcome = runtime_install.install(
         root=root,
         archive=archive,
-        version=_V1,
+        version=archive_version,
         requires=["probe_pkg"],
         site_packages=site,
     )
 
-    assert outcome == {"version": _V1, "installed": True}
-    assert runtime_install.probe(root, site_packages=site)["version"] == _V1
+    assert outcome == {"version": archive_version, "installed": True}
+    assert runtime_install.probe(root, site_packages=site)["version"] == archive_version
     assert (root / "current" / "site-packages" / "probe_pkg").is_dir()
 
 
 def test_installing_the_same_version_again_does_no_work(
     tmp_path: Path, root: Path, site: Path
 ) -> None:
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'first'"
+    )
     runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
     # A successful install consumes the archive. Left behind, a superseded copy
     # of every bundle the sandbox was ever sent rides into every later snapshot
@@ -101,7 +114,11 @@ def test_installing_the_same_version_again_does_no_work(
     assert not archive.exists()
 
     outcome = runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
 
     assert outcome["installed"] is False, "a no-op install must not need the archive"
@@ -111,19 +128,27 @@ def test_an_upgrade_moves_current_and_keeps_the_previous_version(
     tmp_path: Path, root: Path, site: Path
 ) -> None:
     """Rollback should be a symlink flip, not another upload."""
-    first = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
-    second = _bundle(tmp_path, name="probe_pkg2", body="VALUE = 'second'")
+    first, first_version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    second, second_version = _bundle(
+        tmp_path, name="probe_pkg2", body="VALUE = 'second'"
+    )
     runtime_install.install(
-        root=root, archive=first, version=_V1, requires=[], site_packages=site
+        root=root, archive=first, version=first_version, requires=[], site_packages=site
     )
 
     runtime_install.install(
-        root=root, archive=second, version=_V2, requires=[], site_packages=site
+        root=root,
+        archive=second,
+        version=second_version,
+        requires=[],
+        site_packages=site,
     )
 
-    assert runtime_install.probe(root, site_packages=site)["version"] == _V2
-    assert (root / f"sha256-{'1' * 64}").is_dir(), "the previous version was pruned"
-    assert (root / f"sha256-{'2' * 64}").is_dir()
+    assert runtime_install.probe(root, site_packages=site)["version"] == second_version
+    assert (root / first_version.replace(":", "-")).is_dir(), (
+        "the previous version was pruned"
+    )
+    assert (root / second_version.replace(":", "-")).is_dir()
 
 
 def test_a_bundle_that_cannot_import_never_becomes_current(
@@ -134,22 +159,28 @@ def test_a_bundle_that_cannot_import_never_becomes_current(
     A tree that unpacked fine but cannot import is the one failure that would
     otherwise be invisible until an agent's first tool call.
     """
-    good = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    good, good_version = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
     runtime_install.install(
-        root=root, archive=good, version=_V1, requires=["probe_pkg"], site_packages=site
+        root=root,
+        archive=good,
+        version=good_version,
+        requires=["probe_pkg"],
+        site_packages=site,
     )
-    broken = _bundle(tmp_path, name="probe_pkg2", body="raise ImportError('nope')")
+    broken, broken_version = _bundle(
+        tmp_path, name="probe_pkg2", body="raise ImportError('nope')"
+    )
 
     with pytest.raises(SystemExit):
         runtime_install.install(
             root=root,
             archive=broken,
-            version=_V2,
+            version=broken_version,
             requires=["probe_pkg2"],
             site_packages=site,
         )
 
-    assert runtime_install.probe(root, site_packages=site)["version"] == _V1
+    assert runtime_install.probe(root, site_packages=site)["version"] == good_version
 
 
 def test_a_second_installer_of_the_same_version_succeeds(
@@ -160,18 +191,24 @@ def test_a_second_installer_of_the_same_version_succeeds(
     That is what makes a lock unnecessary, so it has to hold: the loser of the
     rename adopts the winner's directory instead of failing.
     """
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
-    target = runtime_install._version_directory(root, _V1)
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'first'"
+    )
+    target = runtime_install._version_directory(root, archive_version)
     target.mkdir(parents=True)
-    (target / runtime_install.STAMP_NAME).write_text(_V1, encoding="utf-8")
+    (target / runtime_install.STAMP_NAME).write_text(archive_version, encoding="utf-8")
     (target / "site-packages").mkdir()
 
     outcome = runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
 
     assert outcome["installed"] is True
-    assert runtime_install.probe(root, site_packages=site)["version"] == _V1
+    assert runtime_install.probe(root, site_packages=site)["version"] == archive_version
 
 
 def test_a_bundle_entry_cannot_escape_the_directory_it_unpacks_into(
@@ -181,10 +218,15 @@ def test_a_bundle_entry_cannot_escape_the_directory_it_unpacks_into(
     archive = tmp_path / "evil.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr("../../escaped.txt", "pwned")
+    version = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
 
     with pytest.raises(SystemExit):
         runtime_install.install(
-            root=root, archive=archive, version=_V1, requires=[], site_packages=site
+            root=root,
+            archive=archive,
+            version=version,
+            requires=[],
+            site_packages=site,
         )
 
     assert not (tmp_path / "escaped.txt").exists()
@@ -194,7 +236,9 @@ def test_a_staging_directory_left_behind_long_ago_is_swept(
     tmp_path: Path, root: Path, site: Path
 ) -> None:
     """An install killed mid-unpack leaves one behind, and it is pure waste."""
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'first'"
+    )
     root.mkdir(parents=True)
     abandoned = root / ".incoming-99999"
     abandoned.mkdir()
@@ -203,7 +247,11 @@ def test_a_staging_directory_left_behind_long_ago_is_swept(
     os.utime(abandoned, (stale, stale))
 
     runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
 
     assert not abandoned.exists()
@@ -219,14 +267,20 @@ def test_a_staging_directory_another_installer_is_using_is_left_alone(
     mid-extract -- turning the lock-free design into a way for two installs to
     break each other.
     """
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'first'"
+    )
     root.mkdir(parents=True)
     live = root / ".incoming-12345"
     live.mkdir()
     (live / "partial").write_text("still being written", encoding="utf-8")
 
     runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
 
     assert live.exists(), "another installer's staging directory was deleted"
@@ -243,9 +297,15 @@ def test_the_overlay_is_placed_ahead_of_the_baked_environment(
     of the image's. A subprocess is used because that ordering is produced by
     ``site``, not by anything this module can assert directly.
     """
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'overlay'"
+    )
     runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
     # The baked copy of the same package, as the image would carry it.
     (site / "probe_pkg").mkdir()
@@ -282,9 +342,15 @@ def test_the_overlay_is_placed_ahead_of_the_baked_environment(
 def test_the_overlay_wins_when_the_user_has_installed_nothing(
     tmp_path: Path, root: Path, site: Path
 ) -> None:
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'overlay'"
+    )
     runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
     (site / "probe_pkg").mkdir()
     (site / "probe_pkg" / "__init__.py").write_text("VALUE = 'baked'", encoding="utf-8")
@@ -310,10 +376,16 @@ def test_the_pth_names_the_symlink_not_the_version(
     tmp_path: Path, root: Path, site: Path
 ) -> None:
     """So an upgrade never has to rewrite it, and can never half-rewrite it."""
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'first'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'first'"
+    )
 
     runtime_install.install(
-        root=root, archive=archive, version=_V1, requires=[], site_packages=site
+        root=root,
+        archive=archive,
+        version=archive_version,
+        requires=[],
+        site_packages=site,
     )
 
     written = (site / runtime_install.PTH_NAME).read_text(encoding="utf-8")
@@ -341,13 +413,15 @@ def test_a_module_that_imports_from_outside_the_overlay_is_not_accepted(
     `json` stands in for the baked copy: it imports anywhere and comes from
     nowhere near the overlay, which is exactly the shape of the problem.
     """
-    archive = _bundle(tmp_path, name="probe_pkg", body="VALUE = 'overlay'")
+    archive, archive_version = _bundle(
+        tmp_path, name="probe_pkg", body="VALUE = 'overlay'"
+    )
 
     with pytest.raises(SystemExit, match="not from the overlay"):
         runtime_install.install(
             root=root,
             archive=archive,
-            version=_V1,
+            version=archive_version,
             requires=["probe_pkg", "json"],
             site_packages=site,
         )

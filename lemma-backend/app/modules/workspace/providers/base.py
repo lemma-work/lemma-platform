@@ -433,7 +433,14 @@ class SandboxOpsProvider(Protocol):
         expected_sha256: str | None,
         deadline_at: datetime,
     ) -> FileStat:
-        """Write a stream to a path, verifying the digest when one is given."""
+        """Write a stream to a path, verifying the digest when one is given.
+
+        ``expected_sha256`` is the prefixed form, ``sha256:<64 hex>`` -- the same
+        spelling `FileStat.sha256` carries. The workspace runtime validates that
+        pattern on the wire and answers 422 to a bare digest, while E2B strips
+        the prefix itself and accepts either, so a caller passing the bare form
+        works on one fabric and not the others.
+        """
 
     async def move_file(
         self,
