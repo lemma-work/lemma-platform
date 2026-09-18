@@ -51,7 +51,13 @@ def is_datastore_path(path: str) -> bool:
     """True when ``path`` addresses the pod datastore rather than the sandbox.
 
     Absolute paths (``/me/...`` and other pod-visible roots) are datastore
-    paths; ``/workspace/...`` and relative paths belong to the sandbox.
+    paths; anything under a runtime filesystem root -- the sandbox user's home,
+    the legacy ``/workspace``, ``/tmp`` -- and every relative path belong to the
+    sandbox.
+
+    The roots are read from `RUNTIME_FILESYSTEM_ROOTS` rather than spelled here,
+    because the default when a path matches nothing is to route it at the pod:
+    a root this list forgot does not fail, it silently addresses the wrong disk.
     """
     candidate = (path or "").strip()
     if not candidate.startswith("/"):
