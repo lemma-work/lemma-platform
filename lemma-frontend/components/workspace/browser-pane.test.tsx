@@ -118,8 +118,27 @@ class FakeRfb {
 
 vi.mock('@novnc/novnc', () => ({ default: FakeRfb }));
 
+// Where the fake browser says it is. `vi.hoisted` because `vi.mock` is
+// hoisted above the imports and would otherwise close over an undefined name.
+const page = vi.hoisted(() => ({ url: 'about:blank' }));
+vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
+    // Spread the real module: `vncSocketUrl` reaches for `getLemmaApiBaseUrl`
+    // from here, and a mock that answers only what this file names breaks
+    // every test in it rather than the one it meant to steer.
+    ...(await importOriginal<typeof import('@/lib/sdk/lemma-client')>()),
+    getLemmaClient: () => ({
+        workspace: {
+            browserCurrentPageUrl: async () => ({ url: page.url }),
+            // Exercised by the pane's ResizeObserver; the display fitting is
+            // not what these tests are about.
+            browserResizeDisplay: async () => ({ size: null }),
+        },
+    }),
+}));
+
 afterEach(() => {
     rfbInstances.length = 0;
+    page.url = 'about:blank';
     cleanup();
 });
 
@@ -341,5 +360,47 @@ describe('paste', () => {
         fireEvent.paste(target!, { clipboardData: { getData: () => 'hunter2' } });
 
         expect(rfb.clipboardWrites).toEqual(['hunter2']);
+    });
+});
+
+describe('a sign-in answered late', () => {
+    it('says it is still opening the site, rather than showing a blank browser', async () => {
+        // The case somebody hits after stepping away: the pause is hours old,
+        // the browser it was aimed at has been retired, and clicking "Open
+        // asur.work" reconnects to a display showing about:blank. The pane
+        // used to paint that and stop -- indistinguishable from "done".
+        page.url = 'about:blank';
+        render(<BrowserPane origin="https://asur.work" />);
+        await connect();
+
+        expect(await screen.findByText('Opening asur.work…')).toBeTruthy();
+    });
+
+    it('clears once the browser reports it got there', async () => {
+        page.url = 'https://asur.work/auth';
+        render(<BrowserPane origin="https://asur.work" />);
+        await connect();
+
+        await waitFor(() => expect(rfbInstances[0].url).toContain('origin='));
+        await waitFor(() =>
+            expect(screen.queryByText('Opening asur.work…')).toBeNull(),
+        );
+    });
+
+    it('offers a way to re-steer a browser that never arrived', async () => {
+        // Reconnecting is the re-steer: `ensure_browser` points the browser at
+        // the origin again on every connect. Without this the only recovery
+        // was reloading the page, because clicking "Open" a second time
+        // resolves the same origin and changes nothing the pane watches.
+        page.url = 'about:blank';
+        render(<BrowserPane origin="https://asur.work" />);
+        await connect();
+
+        await screen.findByText('Opening asur.work…');
+        expect(rfbInstances).toHaveLength(1);
+
+        screen.getByRole('button', { name: 'Try again' }).click();
+
+        await waitFor(() => expect(rfbInstances.length).toBe(2));
     });
 });

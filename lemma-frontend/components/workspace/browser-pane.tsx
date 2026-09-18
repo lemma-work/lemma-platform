@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/shared/empty-state';
 import { Monitor } from '@/components/ui/icons';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
@@ -76,11 +77,23 @@ function sendCtrlV(rfb: NoVncClient): void {
     rfb.sendKey(XK_CONTROL_L, 'ControlLeft', false);
 }
 
+//: A URL's host, or `null` for anything that is not one -- `about:blank`,
+//: the empty string, whatever a cold browser reports before it has gone
+//: anywhere. `new URL` throws on all of those, and a pane must not.
+function hostOf(url: string): string | null {
+    try {
+        return new URL(url).host || null;
+    } catch {
+        return null;
+    }
+}
+
 //: How often the sign-in page's anti-phishing host display is refreshed.
 //: VNC carries no navigation signal of its own -- it is pixels, not events --
 //: so this is what stands in for the JSON stream's old `onNavigated` message.
-//: Only polled when `onNavigated` is actually passed, which today is only the
-//: sign-in page: an ordinary watch/drive pane has nothing that reads it.
+//: Polled whenever a site was asked for, because the pane itself needs the
+//: answer now -- it is how "still opening" is told apart from "arrived", and
+//: a blank page is the honest state of a browser that has not got there yet.
 const NAVIGATION_POLL_MS = 1500;
 
 //: How long the pane has to stop changing size before its display is asked to
@@ -141,6 +154,27 @@ export function BrowserPane({
     //: Whether this pane has ever shown a frame. What decides between
     //: explaining itself and keeping the picture through a reconnect.
     const [hasPainted, setHasPainted] = useState(false);
+    //: Where the browser actually is, polled while a site was asked for.
+    const [pageUrl, setPageUrl] = useState<string | null>(null);
+    //: Bumped to tear the socket down and open a new one. Reconnecting is
+    //: what re-steers: `ensure_browser` points the browser at `origin` again
+    //: on every connect ("arrival repeats"), and that is the only handle a
+    //: person has when the answer comes an hour late and the browser it was
+    //: aimed at has long since been retired.
+    const [reconnectNonce, setReconnectNonce] = useState(0);
+
+    // Steering is not instant, and until now it was not visible either.
+    //
+    // Opening a sign-in points a *second* Chrome -- the site's own session,
+    // its own profile -- at the site, and that browser may be cold. The pane
+    // meanwhile connects and paints whatever the display holds, which is a
+    // blank page with a New Tab beside it. Somebody who came back to the
+    // conversation an hour later clicked "Open asur.work", got exactly that,
+    // and had nothing to tell them whether it was working, finished, or
+    // broken. Answering late is the normal case for a question that pauses a
+    // run, so it has to read as progress rather than as an empty browser.
+    const steeringTo = origin ? hostOf(origin) : null;
+    const arrived = !steeringTo || (!!pageUrl && hostOf(pageUrl) === steeringTo);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -238,19 +272,27 @@ export function BrowserPane({
             rfbRef.current?.disconnect();
             rfbRef.current = null;
         };
-    }, [origin, conversationId, accessToken]);
+    }, [origin, conversationId, accessToken, reconnectNonce]);
 
     // Polled rather than pushed: VNC is pixels, not events, so there is no
     // message on the wire to react to the way the JSON stream's `url`
     // message let this be. Only runs when somebody asked for it and only
     // while there is a site to ask the relay about.
     useEffect(() => {
-        if (!onNavigated || !origin) return;
+        if (!origin) return;
         let cancelled = false;
+        // Cleared here rather than on `connect`: a fresh socket may be a
+        // fresh browser, so the last known page says nothing about where it
+        // is now -- but clearing it anywhere else leaves the pane claiming
+        // "still opening" until the next tick, which is the whole interval.
+        // Cleared and re-asked in the same breath.
+        setPageUrl(null);
         const poll = async () => {
             try {
                 const found = await getLemmaClient().workspace.browserCurrentPageUrl(origin);
-                if (!cancelled && found.url) onNavigated(found.url);
+                if (cancelled || !found.url) return;
+                setPageUrl(found.url);
+                onNavigated?.(found.url);
             } catch {
                 // Best effort: a missed poll is a stale host label for
                 // another `NAVIGATION_POLL_MS`, not a reason to stop.
@@ -262,7 +304,7 @@ export function BrowserPane({
             cancelled = true;
             clearInterval(interval);
         };
-    }, [onNavigated, origin]);
+    }, [onNavigated, origin, reconnectNonce]);
 
     // Ask the display to be the shape of this pane, rather than scaling a
     // fixed screen into it.
@@ -354,6 +396,30 @@ export function BrowserPane({
                             title={TITLES[state]}
                             description={DESCRIPTIONS[state]}
                         />
+                    </div>
+                ) : null}
+                {/* Steering in flight. Drawn over a live picture on purpose:
+                    the display genuinely is showing a blank page, and saying
+                    so beats letting somebody conclude the feature is broken.
+                    It clears the moment the browser reports the right host,
+                    so it cannot outlive the thing it describes. */}
+                {state === 'live' && !arrived ? (
+                    <div className="absolute inset-0 flex items-center justify-center bg-[var(--bg-canvas)]/80 p-6">
+                        <div className="flex flex-col items-center gap-3">
+                            <EmptyState
+                                variant="region"
+                                icon={<Monitor />}
+                                title={`Opening ${steeringTo}…`}
+                                description="Pointing the browser at the site. A browser that has been idle takes a moment to start."
+                            />
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setReconnectNonce((n) => n + 1)}
+                            >
+                                Try again
+                            </Button>
+                        </div>
                     </div>
                 ) : null}
                 {/* Terminal states are the exception: "you are not signed in"
