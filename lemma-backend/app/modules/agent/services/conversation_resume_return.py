@@ -26,6 +26,7 @@ from functools import partial
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.services.vision_service import vision_delegate_available
@@ -46,6 +47,8 @@ from app.modules.agent.services.pod_runtime_defaults import (
     default_agent_runtime_for_pod,
 )
 from app.modules.agent.services.workspace_location import resolve_workspace_location
+
+logger = get_logger(__name__)
 
 
 class ResumeToolReturnBuilder:
@@ -278,10 +281,22 @@ class ResumeToolReturnBuilder:
     ) -> tuple[bool, str | None]:
         """Read the browser and keep the login, for an answer given in the chat.
 
-        Best effort, and deliberately not fatal: the person has signed in
-        either way, and a run that carries on with an unkept login is worth
-        more than a resume that fails. What it costs is being asked again next
-        time, which the agent is told in as many words.
+        Best effort, and never fatal, because of where it runs. The caller has
+        already committed the execution claim by the time this is reached
+        (`_claim_execution`, committed on its own so a killed worker leaves
+        evidence). Raising from here therefore writes no tool return at all --
+        and a paused call with no return is a conversation nobody can get out
+        of: the composer is locked on the pause, `supersede_stale_pending_
+        interactions` only runs when a message is sent, and sending a message
+        is what the lock prevents. The card is not even retryable until the
+        claim ages out.
+
+        So the failure is absorbed and reported to the agent instead. That is
+        not the same as hiding it: `saved=False` travels back with the reason
+        in the message, the run carries on with a browser that *is* signed in,
+        and what it costs is being asked again next time. The alternative was
+        not "fail loudly", it was "fail silently and take the conversation with
+        it".
         """
         from app.core.api.dependencies import get_uow_factory
         from app.modules.web_login.contracts import SignInService
@@ -292,13 +307,6 @@ class ResumeToolReturnBuilder:
         # that a slow browser makes the resume slower, which is the trade the
         # alternative -- answering through a second endpoint the client never
         # hears about -- was paying in a worse currency.
-        #
-        # Nothing is caught here on purpose. `capture` already answers the
-        # failures that are *expected* of a browser -- an unreachable relay, a
-        # fabric that cannot do this -- as `(False, why)`, and the agent is
-        # told. What is left is a bug or a database that is down, and
-        # swallowing either would resume the run with a login silently
-        # discarded.
         service = SignInService(get_uow_factory())
         try:
             return await service.capture(
@@ -309,6 +317,18 @@ class ResumeToolReturnBuilder:
                 # came from the conversation, not from the page that can ask.
                 force=True,
             )
+        except Exception:
+            # Logged whole, at error, with the traceback: `capture` already
+            # answers a browser's *expected* failures as `(False, why)`, so
+            # anything arriving here is a bug or a store that is down, and it
+            # must be visible even though the run is allowed to continue.
+            logger.error(
+                "agent.sign_in.capture_on_resume_failed",
+                conversation_id=str(conversation_id),
+                origin=origin,
+                exc_info=True,
+            )
+            return False, "the login could not be read back"
         finally:
             await service.close()
 

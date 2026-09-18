@@ -7,7 +7,7 @@ description: "Operate a real browser in a Lemma workspace for web pages or local
 
 Drive a real, full desktop Chrome with the `agent-browser` CLI. Use it for anything a page renders: local dev apps, JS-heavy sites, logins, scraping, screenshots, console/network debugging.
 
-**Prefer the typed browser tools** — `browser_open`, `browser_snapshot`, `browser_act`, `browser_read`, `browser_screenshot`, `browser_sign_in` — over raw shell commands. They run the same CLI, and they also yield when a person has taken control of the browser (below). Reach for the shell only for what they do not cover.
+The CLI is the whole surface. There is one browser tool, `browser_sign_in`, and it exists because a login is the one thing the command line must not do (below). Everything else is `agent-browser` through `exec_command`, and `view_image` to look at what it captures.
 
 ## The Core Loop (this is law)
 
@@ -21,13 +21,21 @@ agent-browser snapshot -i        # ALWAYS re-snapshot after the page changes
 
 **Refs go stale the moment the page changes** (navigation, submit, dialog, re-render). Acting on a stale ref is the #1 failure — re-snapshot first. Always use `-i` (interactive-only) to keep output small; add `-u` to include link URLs.
 
+**Chain with `&&` and end on a snapshot.** Each `exec_command` is a round trip, and the steps between two snapshots are usually not decisions — you already know you will click, wait and re-read. One command is one round trip:
+
+```bash
+agent-browser click @e3 && agent-browser wait --url "**/dashboard" && agent-browser snapshot -i
+```
+
+Split them only where you genuinely need to see the output before choosing the next step. `&&` also stops at the first failure, so a click that missed does not go on to report a snapshot of the page it failed to leave.
+
 Environment facts:
 
 - Nothing is running at startup, and you do not have to start it. Any `agent-browser` command brings the browser up first if it is down. `start-browser [url]` still exists and is harmless, but it is no longer a step you must remember.
 - The browser is **this conversation's own**, not the sandbox's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself unless you genuinely need a second browser (see *Parallel isolated sessions*). Naming one by hand puts you in a different browser from the one a saved login was loaded into — and from the one the panel checks when deciding whether a browser is running for this conversation at all.
 - **The profile is scratch, not storage.** Cookies and logins survive across commands *inside a live workspace*, and nothing more: the browser daemon closes Chrome after 2 minutes with no command (`AGENT_BROWSER_IDLE_TIMEOUT_MS=120000`), and suspending the workspace deletes `/tmp/lemma-browser` outright. Never leave the only copy of anything there.
 - **Do not save session state into `/workspace`.** `agent-browser state save ./auth.json` writes cookies in plain text onto the durable volume, where it outlives the run that made it and is readable by whatever runs next. Use `browser_sign_in` instead: it asks the person, keeps what they signed in to encrypted and scoped to that one site, and loads it back on the next run without asking again.
-- **A person may be watching this browser, and may take it over.** It is streamed live into the workspace app's *Your computer → Browser* panel, where they can press *Take control* and type into the page themselves. While they hold it, the typed browser tools refuse rather than act (exit code 91, with advice); a raw `agent-browser` shell command has no such guard and would type over them. So when you are told somebody is driving, stop and wait — and prefer the typed tools, which know the difference.
+- **A person may be watching this browser, and may take it over.** It is streamed live into the workspace app's *Your computer → Browser* panel, where they can type into the page themselves. While they hold it, `agent-browser` refuses rather than acts: **exit code 91**, with advice on the error stream. That check is in the command wrapper, so it holds for every command however you got there. When you see 91, somebody is signing in or fixing something — wait and try again, do not work around it.
 - Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
 - Never install Playwright or browser binaries — everything is preinstalled.
 
@@ -71,7 +79,7 @@ Raw CSS selectors (`agent-browser click "#submit"`) are the last resort.
 agent-browser get text @e5 ; agent-browser get attr @e10 href
 agent-browser get url ; agent-browser get title
 agent-browser --max-output 500000 get html html > page.html   # big output needs --max-output
-agent-browser screenshot shot.png ; agent-browser screenshot --full full.png
+agent-browser screenshot shot.jpeg ; agent-browser screenshot --full full.jpeg
 agent-browser screenshot --annotate map.png                   # numbered labels keyed to @eN refs
 
 # Arbitrary JS — heredoc avoids quote-escaping hell
@@ -81,6 +89,10 @@ Array.from(document.querySelectorAll("table tbody tr")).map(r => ({
 }))
 EOF
 ```
+
+**A screenshot is a file until you look at it.** `screenshot` writes to the sandbox and tells you nothing about what it captured; `view_image` with `workspace_file_path` is what puts the picture in front of you. If this agent's model cannot see images, `view_image` asks one that can and hands you back the description — so set `instructions` to the question you actually have ("is the chart's y-axis labelled?"), not "describe this".
+
+Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg` — a full-page `.png` is several times the bytes for a photograph of a web page.
 
 Save pages for later reading/citation (markdown via Readability+Turndown; pdf/jpeg/png direct):
 
@@ -132,17 +144,16 @@ the API origin, so cross-origin API calls authenticate too. Then it opens the ap
 `--url <dev-url> --no-auth`. From there it's the normal core loop: `snapshot -i` →
 `click`/`fill` → re-`snapshot`, plus `screenshot` to capture the rendered UI.
 
-**See it with your own eyes.** Take a `screenshot`, then use the **view-image**
-capability on that PNG to actually *view* the rendered app (layout, charts, broken
-styles, error overlays). view-image reads from **either store** — pass exactly one
-of `workspace_file_path` (the sandbox) or `pod_file_path` (the datastore); it
-never guesses from the path shape, and giving both or neither is an error. So a
-local screenshot, an uploaded image, or a rendered page from a pod document
-(`lemma files child …/pages/page_0001.jpg`) all work, and you can confirm a chart
-or document looks right without a browser at all. It handles **images only**: a
-PDF comes back with a pointer to `pod_view_document_pages`, which renders that
-document's pages for you and is the shorter route anyway. (App design, deploy,
-and test details: `lemma-builder/references/apps.md`.)
+Then `screenshot` + `view_image` as above, to see the rendered app rather than
+infer it. `view_image` reads from **either store** — pass exactly one of
+`workspace_file_path` (the sandbox) or `pod_file_path` (the datastore); it never
+guesses from the path shape, and giving both or neither is an error. So an
+uploaded image or a rendered page from a pod document (`lemma files child
+…/pages/page_0001.jpg`) works too, and you can confirm a chart or document looks
+right without a browser at all. It handles **images only**: a PDF comes back with
+a pointer to `pod_view_document_pages`, which renders that document's pages for
+you and is the shorter route anyway. (App design, deploy, and test details:
+`lemma-builder/references/apps.md`.)
 
 ## Troubleshooting
 

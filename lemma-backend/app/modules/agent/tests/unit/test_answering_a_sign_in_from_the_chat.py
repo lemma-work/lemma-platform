@@ -159,18 +159,29 @@ async def test_an_unkept_login_still_resumes_the_run(
 
 
 @pytest.mark.asyncio
-async def test_a_broken_capture_is_not_swallowed(
+async def test_a_broken_capture_does_not_strand_the_conversation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """What `capture` does not answer itself is a bug or a database that is
-    down. Resuming past either would hand the agent a login that was silently
-    discarded, so it is left to raise -- and the service is still closed."""
+    """The deadlock this exists to prevent.
+
+    By the time this runs the caller has already committed the execution claim,
+    so raising writes no tool return at all -- and a paused call with no return
+    is a conversation nobody can leave: the composer is locked on the pause,
+    the only thing that supersedes a stale pause runs when a message is sent,
+    and sending a message is what the lock prevents.
+
+    So the run continues and the agent is told. `success` is still true because
+    the *sign-in* succeeded; only keeping it for next time did not.
+    """
     service = _SignInService(RuntimeError("the store is down"))
     _install(monkeypatch, service)
 
-    with pytest.raises(RuntimeError):
-        await _answer(decision=AgentRunApprovalDecision.APPROVE_ONCE, response={})
+    content = await _answer(decision=AgentRunApprovalDecision.APPROVE_ONCE, response={})
 
+    assert content["success"] is True
+    assert content["outcome"] == "signed_in"
+    assert content["saved"] is False
+    assert "could not be read back" in str(content["message"])
     assert service.closed == 1
 
 

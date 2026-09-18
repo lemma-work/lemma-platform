@@ -101,10 +101,12 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # tool is the worst of both.
     AgentToolset.MESSAGING,
     AgentToolset.SNOOZE,
-    # Driving a page is a deliberate step past `web_fetch`, which already covers
-    # ordinary research in the visible prefix. Five schemas in front of every
-    # chat to cover the minority of turns that open a browser is the trade
-    # `test_pod_default_visible_toolset_is_slim` exists to refuse.
+    # Asking a person to sign in is a deliberate step past `web_fetch`, which
+    # already covers ordinary research in the visible prefix. This used to be
+    # five schemas for driving a page as well, which is what
+    # `test_pod_default_visible_toolset_is_slim` exists to refuse; the driving
+    # is now `agent-browser` through `exec_command`, so what is left behind
+    # ToolSearch is the one tool that pauses the run.
     AgentToolset.BROWSER,
 )
 EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = tuple(

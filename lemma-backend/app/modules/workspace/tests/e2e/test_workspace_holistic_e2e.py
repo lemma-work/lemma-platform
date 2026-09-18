@@ -666,11 +666,11 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     running on, and a click sent down that same socket lands where that
     browser can see it.
 
-    Opened with `agent-browser` directly, over a shell command, rather than
-    through the agent's own `browser_open` tool: that tool scopes every
-    conversation to its own named session and profile on purpose (`app/
-    modules/workspace/domain/browser_context.py`'s `agent_session` -- so one
-    conversation's agent never inherits another's cookies), and `/vnc` has no
+    Opened with a bare `AGENT_BROWSER_SESSION=workspace`, rather than the way
+    an agent's own shell is set up: that shell is put in a session and profile
+    of its conversation's own on purpose (`_browser_session_env`, over
+    `app/modules/workspace/domain/browser_context.py`'s `agent_session` -- so
+    one conversation's agent never inherits another's cookies), and `/vnc` has no
     way to name a session at all -- it shows the shared *default* session's
     display, which is what a plain "watch this computer's browser" panel is
     for. A conversation's own agent browsing is a different, not-yet-viewable
