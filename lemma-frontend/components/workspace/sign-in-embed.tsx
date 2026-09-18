@@ -167,7 +167,7 @@ export function SignInEmbed({
             </header>
 
             <div className="min-h-0 flex-1">
-                <BrowserPane origin={data.origin} autoControl onNavigated={setLiveUrl} />
+                <BrowserPane origin={data.origin} onNavigated={setLiveUrl} />
             </div>
 
             {answer.isError ? (

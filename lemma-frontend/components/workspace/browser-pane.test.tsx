@@ -131,17 +131,18 @@ const connect = async () => {
 };
 
 describe('opening the view', () => {
-    it('watches a conversation and drives a sign-in', async () => {
-        // Which one it is decides who holds the relay's wheel lease, and the
-        // agent yields to that lease. A sign-in's lease is on `login-<host>`,
-        // a session the agent never touches, so the person can type while the
-        // run carries on. A plain watch is the agent's *own* session, so
-        // holding the wheel there would stop it browsing for as long as
-        // somebody had the panel open.
+    it('can be driven whether it is watching a run or showing a sign-in', async () => {
+        // There is no watch-only pane any more. It existed because the relay
+        // took its wheel lease the moment a control socket opened, and for an
+        // ordinary watch that is the agent's own session -- so an open panel
+        // would have stopped the agent browsing. Opening read-only traded
+        // that for a browser nobody could click, which is not a browser. The
+        // lease is now taken when somebody actually clicks or types
+        // (`_WheelOnUse` in the relay), so the socket can always carry input.
         render(<BrowserPane conversationId="conv-1" />);
         const watching = await connect();
-        expect(watching.url).toContain('mode=view');
-        expect(watching.viewOnly).toBe(true);
+        expect(watching.url).toContain('mode=control');
+        expect(watching.viewOnly).toBe(false);
 
         cleanup();
         rfbInstances.length = 0;
@@ -309,7 +310,7 @@ describe('paste', () => {
 
     it('writes the clipboard and then sends a real Ctrl+V, in that order', async () => {
         const { container } = render(
-            <BrowserPane origin="https://example.com" autoControl />,
+            <BrowserPane origin="https://example.com" />,
         );
         const rfb = await connect();
         const target = container.querySelector('[role="application"]');
@@ -327,14 +328,18 @@ describe('paste', () => {
         expect(rfb.sentKeys[3]).toEqual([XK_CONTROL_L, 'ControlLeft', false]);
     });
 
-    it('does nothing while only watching', async () => {
+    it('works on a pane that is watching a run, not only on a sign-in', async () => {
+        // This used to assert the opposite, because a watch pane was
+        // read-only. Pasting into the agent's browser is now as legitimate as
+        // clicking in it -- both take the wheel off the agent for a minute,
+        // which is the point of reaching in.
         const { container } = render(<BrowserPane conversationId="conv-1" />);
         const rfb = await connect();
-        const target = container.querySelector('[role="img"]');
+        const target = container.querySelector('[role="application"]');
+        expect(target).toBeTruthy();
 
         fireEvent.paste(target!, { clipboardData: { getData: () => 'hunter2' } });
 
-        expect(rfb.clipboardWrites).toEqual([]);
-        expect(rfb.sentKeys).toEqual([]);
+        expect(rfb.clipboardWrites).toEqual(['hunter2']);
     });
 });

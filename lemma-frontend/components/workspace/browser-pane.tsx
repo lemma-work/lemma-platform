@@ -99,15 +99,15 @@ const RESIZE_SETTLE_MS = 250;
  * translation for every input event and still mis-clicked. Paste is a real
  * synced clipboard rather than a synthesized keystroke, for the same reason.
  *
- * Watching by default. Driving is a deliberate act — the toggle exists so that
- * a person reading a page cannot type into it by accident, and so that the
- * thing they are about to do is named before they do it.
+ * Always drivable, with nothing around it. There is no watch/drive toggle:
+ * the relay takes its driving lease when somebody actually clicks or types
+ * and releases it a minute after they stop, so an open pane costs the agent
+ * nothing and a person never has to arm the thing before using it.
  */
 export function BrowserPane({
     origin,
     conversationId,
     accessToken,
-    autoControl = false,
     onNavigated,
 }: {
     /** A site to steer the browser to before attaching, and the session that
@@ -122,7 +122,6 @@ export function BrowserPane({
      *  actually used -- see `vncSocketUrl`. */
     conversationId?: string;
     accessToken?: string;
-    autoControl?: boolean;
     /** Called with the page the browser is actually showing, polled rather
      *  than pushed -- see `NAVIGATION_POLL_MS`. Only meaningful alongside
      *  `origin`: nothing here knows the current page without one to ask the
@@ -132,18 +131,6 @@ export function BrowserPane({
     const containerRef = useRef<HTMLDivElement>(null);
     const rfbRef = useRef<NoVncClient | null>(null);
     const [state, setState] = useState<PaneState>('connecting');
-    // Driving when there is a sign-in to do, watching otherwise -- and no
-    // control to toggle either way, because the pane is the browser and
-    // nothing else now.
-    //
-    // Not "always driving", tempting as that is. A control socket takes the
-    // relay's wheel lease for the session it is watching, and the agent's
-    // own commands yield to that lease. For a sign-in the lease is on
-    // `login-<host>`, a session the agent never touches, so the person drives
-    // and the run is unaffected. For a plain watch the session *is* the
-    // agent's, so holding the wheel for as long as the panel happened to be
-    // open would stop the agent browsing while somebody looked at it.
-    const controlling = !!origin || autoControl;
     // Whether keystrokes are actually going to the page. RFB moves focus to
     // the remote session on click by default, but "driving" being on is not
     // the same claim as "this element currently has the keyboard" -- a person
@@ -188,7 +175,7 @@ export function BrowserPane({
             // would silently replace a same-named assignment made here.
             const socket = new WebSocket(
                 vncSocketUrl({
-                    mode: controlling ? 'control' : 'view',
+                    mode: 'control',
                     origin,
                     conversationId,
                     accessToken,
@@ -200,7 +187,7 @@ export function BrowserPane({
             });
 
             const rfb = new RFB(container, socket);
-            rfb.viewOnly = !controlling;
+            rfb.viewOnly = false;
             rfb.scaleViewport = true;
             rfb.background = 'var(--bg-canvas)';
             rfb.addEventListener('connect', () => {
@@ -209,8 +196,8 @@ export function BrowserPane({
                 setHasPainted(true);
             });
             rfb.addEventListener('disconnect', () => {
-                // Guarded on identity: toggling `controlling` tears this
-                // instance down and starts a new one in the same tick, and
+                // Guarded on identity: a reconnect tears this instance down
+                // and starts a new one in the same tick, and
                 // the socket closing does not happen synchronously with
                 // that -- the resulting event arrives after the new instance
                 // is already the one in `rfbRef`. Without this check, that
@@ -251,11 +238,7 @@ export function BrowserPane({
             rfbRef.current?.disconnect();
             rfbRef.current = null;
         };
-        // `controlling` belongs here even though it is derived from `origin`:
-        // `autoControl` can flip on its own, and view-vs-control is baked into
-        // the socket URL, so a stale value would leave a read-only socket in
-        // place under a pane the person is now expected to type into.
-    }, [origin, conversationId, accessToken, controlling]);
+    }, [origin, conversationId, accessToken]);
 
     // Polled rather than pushed: VNC is pixels, not events, so there is no
     // message on the wire to react to the way the JSON stream's `url`
@@ -343,21 +326,17 @@ export function BrowserPane({
             <div
                 className={cn(
                     'relative min-h-0 flex-1 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-canvas)] [&_canvas]:h-full [&_canvas]:w-full [&_canvas]:object-contain [&_canvas]:outline-none',
-                    controlling && 'cursor-crosshair',
+                    'cursor-crosshair',
                     // A visible edge while the keyboard is pointed here.
-                    controlling && keyboardIsHere && 'ring-2 ring-[var(--action-primary)] ring-inset',
+                    keyboardIsHere && 'ring-2 ring-[var(--action-primary)] ring-inset',
                 )}
             >
                 <div
                     ref={containerRef}
                     className="h-full w-full"
                     onPaste={onPaste}
-                    role={controlling ? 'application' : 'img'}
-                    aria-label={
-                        controlling
-                            ? 'The agent’s browser. Click and type to drive it.'
-                            : 'The agent’s browser, live'
-                    }
+                    role="application"
+                    aria-label="The agent’s browser. Click and type to drive it."
                 />
 
                 {/* Only ever drawn *over* nothing. Once a frame has arrived

@@ -31,6 +31,7 @@ import secrets
 import logging
 import os
 from pathlib import Path
+import time
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 from pydantic import BaseModel, Field
@@ -437,7 +438,18 @@ def create_app() -> FastAPI:
         # with it. It kept a browser nobody was watching alive at the same
         # time, in a sandbox where the memory guard kills on ~220 MB free.
         keepalive_task = create_background_task(_keepalive_loop(session_name))
-        driving = _take_the_wheel(session_name) if mode == CONTROL else None
+        # Taken when somebody actually clicks or types, not when the socket
+        # opens. Opening it was the old rule, and it made the panel
+        # unusable: the pane is the agent's *own* session for an ordinary
+        # watch, so a control socket held the wheel for as long as the panel
+        # was on screen and the agent could not touch its own browser. The
+        # answer was to open the pane read-only, which is worse -- now
+        # nobody could click. Holding it by use gets both: the agent works
+        # while the person reads, and yields the moment they reach in.
+        wheel = _WheelOnUse(session_name) if mode == CONTROL else None
+        wheel_task = (
+            create_background_task(wheel.release_when_idle()) if wheel else None
+        )
         try:
             async with websockets.connect(
                 f"ws://127.0.0.1:{VNC_WS_PORT}/",
@@ -448,12 +460,18 @@ def create_app() -> FastAPI:
                     mode=mode,
                     send_bytes=websocket.send_bytes,
                     receive_bytes=_receiver_bytes(websocket),
+                    on_input=wheel.touch if wheel else None,
                 )
         except OSError, websockets.exceptions.WebSocketException:
             with suppress(RuntimeError):
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)
         finally:
-            _release_the_wheel(driving)
+            if wheel_task is not None:
+                wheel_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    _ = await wheel_task
+            if wheel is not None:
+                wheel.let_go()
             keepalive_task.cancel()
             # Awaited, not just cancelled: a cancelled task is not finished
             # until it has been collected, and leaving it uncollected is how a
@@ -562,6 +580,48 @@ def _take_the_wheel(session: str) -> "_Wheel | None":
         # happened before this existed at all.
         _log.warning("could not record the control lease for session %s", session)
         return None
+
+
+#: How long a person keeps the wheel after their last click or keystroke.
+#: Long enough to cover reading a page between actions, short enough that a
+#: panel somebody walked away from stops holding the agent. Well inside
+#: `agent-browser`'s own two-minute idle retire, so a lapsed lease never
+#: outlives the browser it is about.
+_WHEEL_IDLE_SECONDS = 60.0
+
+
+class _WheelOnUse:
+    """The driving lease, held by use rather than by connection.
+
+    `touch()` is called for every frame that carries a click, a keystroke or
+    a paste (`_carries_real_input`); the lease is taken on the first one and
+    let go once `_WHEEL_IDLE_SECONDS` pass with none. Mouse movement is not
+    use -- see `_carries_real_input` -- so reading the page with the cursor
+    over it leaves the agent alone.
+    """
+
+    def __init__(self, session: str) -> None:
+        self._session = session
+        self._held: _Wheel | None = None
+        self._last_input = 0.0
+
+    def touch(self) -> None:
+        self._last_input = time.monotonic()
+        if self._held is None:
+            self._held = _take_the_wheel(self._session)
+
+    def let_go(self) -> None:
+        _release_the_wheel(self._held)
+        self._held = None
+
+    async def release_when_idle(self) -> None:
+        """Give the wheel back once the person stops using it."""
+        while True:
+            await asyncio.sleep(1.0)
+            if self._held is None:
+                continue
+            if time.monotonic() - self._last_input >= _WHEEL_IDLE_SECONDS:
+                self.let_go()
 
 
 def _release_the_wheel(held: "_Wheel | None") -> None:

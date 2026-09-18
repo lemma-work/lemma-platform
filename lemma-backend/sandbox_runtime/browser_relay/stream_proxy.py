@@ -114,6 +114,49 @@ def _view_safe_message_length(buf: bytes) -> int | None:
     return None
 
 
+#: The client-to-server messages that are a person doing something, as
+#: opposed to a person looking. Separate from `_VIEW_SAFE_TYPES` because the
+#: question is different: that set decides what a watcher may *send*, this one
+#: decides when a driver has actually taken the wheel.
+_KEY_EVENT = 4
+_POINTER_EVENT = 5
+_CLIENT_CUT_TEXT = 6
+
+
+def _carries_real_input(frame: bytes) -> bool:
+    """Whether this frame is somebody acting, rather than the viewer idling.
+
+    Bare pointer *motion* deliberately does not count. noVNC sends a
+    `PointerEvent` for every mouse move across the canvas, so counting those
+    would mean reading the page with the cursor over it took the wheel off the
+    agent -- which is the whole failure this distinction exists to avoid. A
+    button-mask of zero is the cursor passing through; anything else is a
+    click or a drag.
+
+    Unrecognised bytes count as input. This decides whether to *hold back* the
+    agent, so the safe answer when the frame cannot be read is that somebody
+    may be typing.
+    """
+    offset = 0
+    while offset < len(frame):
+        kind = frame[offset]
+        if kind == _KEY_EVENT or kind == _CLIENT_CUT_TEXT:
+            return True
+        if kind == _POINTER_EVENT:
+            # type(1) + button-mask(1) + x(2) + y(2)
+            if len(frame) - offset < 6:
+                return True
+            if frame[offset + 1] != 0:
+                return True
+            offset += 6
+            continue
+        length = _view_safe_message_length(frame[offset:])
+        if length is None:
+            return True
+        offset += length
+    return False
+
+
 def _view_mode_messages(frame: bytes) -> bytes | None:
     """`frame`, if it is exactly a whole number of view-safe RFB messages.
 
@@ -135,7 +178,9 @@ def _view_mode_messages(frame: bytes) -> bytes | None:
     return frame
 
 
-async def pump_binary(upstream, *, mode: str, send_bytes, receive_bytes) -> None:
+async def pump_binary(
+    upstream, *, mode: str, send_bytes, receive_bytes, on_input=None
+) -> None:
     """Copy frames out and filtered input in, until either side stops.
 
     Two tasks rather than one loop: the display pushes updates continuously
@@ -145,6 +190,11 @@ async def pump_binary(upstream, *, mode: str, send_bytes, receive_bytes) -> None
     The client's first three messages -- its RFB handshake -- are passed by
     length rather than through `_view_mode_messages`, in both modes: see
     `_HANDSHAKE_STEP_LENGTHS`.
+
+    `on_input` is called, in control mode only, each time a frame carries a
+    person actually doing something -- see `_carries_real_input`. It is how
+    the driving lease is taken by *use* rather than by connection: a panel
+    somebody has open but is not touching must not stop the agent working.
     """
 
     async def to_viewer() -> None:
@@ -165,6 +215,8 @@ async def pump_binary(upstream, *, mode: str, send_bytes, receive_bytes) -> None
                 continue
             if mode != CONTROL and _view_mode_messages(raw) is None:
                 continue
+            if on_input is not None and mode == CONTROL and _carries_real_input(raw):
+                on_input()
             await upstream.send(raw)
 
     tasks = [create_inherited_task(to_viewer()), create_inherited_task(to_upstream())]
