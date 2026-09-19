@@ -250,3 +250,36 @@ async def test_a_pause_is_not_an_error():
     (span,) = spans
     assert span.status.status_code is not StatusCode.ERROR
     assert span.attributes["lemma.outcome"] == "control_flow"
+
+
+@pytest.mark.anyio
+async def test_a_pause_is_not_an_error_on_the_span_the_llm_backend_sees():
+    """Marking our own span was not enough, and the traces showed it.
+
+    There are two spans per tool call and they go to different places. The
+    run-phase span is ours and is exported to the infrastructure pipeline; the
+    span the harness opens around the call is the one carrying an OpenInference
+    kind, and only spans with one of those are forwarded to the LLM backend.
+    So the OK went to the pipeline nobody reads error rates in, and in the one
+    they do, `ask_user`, `request_approval` and `browser_sign_in` -- the three
+    tools that exist to stop and ask a person -- made up almost every recorded
+    tool error.
+
+    The enclosing span here stands in for the harness's. `StatusCode.OK` is
+    final in the SDK, so what this really pins is that the mark survives the
+    exception unwinding back out through it.
+    """
+    tracer = trace.get_tracer("app.tests.caller")
+    with _captured_spans() as spans:
+        with pytest.raises(ModelRetry):
+            with tracer.start_as_current_span("running tool"):
+                await GracefulToolset(
+                    _RaisingToolset(ModelRetry("try again"))
+                ).call_tool("ask_user", {}, None, None)
+
+    by_name = {span.name: span for span in spans}
+    assert set(by_name) == {"lemma.agent.tool.ask_user", "running tool"}
+    for name, span in by_name.items():
+        assert span.status.status_code is not StatusCode.ERROR, (
+            f"{name} still exports as a failed tool call"
+        )
