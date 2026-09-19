@@ -24,6 +24,14 @@
  * `view`, `path` and `file` live in the URL so a view survives a reload and
  * can be sent to yourself. They are a position, not a permission: the same
  * session check answers either way.
+ *
+ * All the chrome goes through `ResourceHeader` rather than a header of this
+ * page's own. The first version drew its own title band under the shell's,
+ * which put the word "Computer" on screen three times -- workspace tab,
+ * context bar, page heading -- and spent two rows plus a sentence of
+ * explanation before the thing the page exists to show. `titleOwner="tab"`
+ * is the shell's own answer to that, and the switch belongs in the bar
+ * beside the title, where a mode switch goes.
  */
 
 import { Suspense, use, useCallback } from 'react';
@@ -32,6 +40,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { BrowserPane } from '@/components/workspace/browser-pane';
 import { Button } from '@/components/ui/button';
 import { FileExplorer } from '@/components/workspace/file-explorer';
+import { ResourceHeader } from '@/components/pod/resource-layout';
 import { WORKSPACE_ROOT } from '@/lib/hooks/use-workspace-files';
 import { cn } from '@/lib/utils';
 
@@ -57,33 +66,36 @@ function Computer() {
     );
 
     return (
-        <div className="flex h-full min-h-0 flex-col">
-            <header className="flex items-center gap-2 border-b border-[var(--row-border)] px-4 py-2.5">
-                <h1 className="text-sm text-[var(--text-primary)]">Your computer</h1>
-                <div className="ml-2 flex items-center gap-1">
-                    {(['files', 'browser'] as const).map((name) => (
-                        <Button
-                            key={name}
-                            variant="quiet"
-                            size="xs"
-                            onClick={() => setParam('view', name)}
-                            aria-pressed={view === name}
-                            className={cn(
-                                view === name
-                                    ? 'text-[var(--text-primary)]'
-                                    : 'text-[var(--text-tertiary)]',
-                            )}
-                        >
-                            {name === 'files' ? 'Files' : 'Browser'}
-                        </Button>
-                    ))}
-                </div>
-                <p className="text-xs text-[var(--text-tertiary)]">
-                    {view === 'files'
-                        ? 'The files your agents work in.'
-                        : 'The browser your agents drive. You can take over at any time.'}
-                </p>
-            </header>
+        <>
+            <ResourceHeader
+                title="Computer"
+                // The workspace tab directly above already says it. `tab`
+                // rather than dropping the title outright because it
+                // self-corrects: on a compact viewport, where the strip is
+                // hidden, the bar takes the name back instead of leaving
+                // nothing on screen naming the thing.
+                titleOwner="tab"
+                switcher={
+                    <span className="flex items-center gap-1">
+                        {(['files', 'browser'] as const).map((name) => (
+                            <Button
+                                key={name}
+                                variant="quiet"
+                                size="xs"
+                                onClick={() => setParam('view', name)}
+                                aria-pressed={view === name}
+                                className={cn(
+                                    view === name
+                                        ? 'text-[var(--text-primary)]'
+                                        : 'text-[var(--text-tertiary)]',
+                                )}
+                            >
+                                {name === 'files' ? 'Files' : 'Browser'}
+                            </Button>
+                        ))}
+                    </span>
+                }
+            />
             <div className="min-h-0 flex-1">
                 {view === 'files' ? (
                     <FileExplorer
@@ -99,7 +111,7 @@ function Computer() {
                     <BrowserPane conversationId={conversationId} />
                 )}
             </div>
-        </div>
+        </>
     );
 }
 
