@@ -76,6 +76,18 @@ class WorkspaceSettings(BaseSettings):
         # Bumped when the workspace image changes, so a sandbox built from the
         # previous one is replaced rather than reused. Last moved when the
         # GitHub CLI was added to the image.
+        #
+        # Deliberately *not* moved for the browser work, though that work
+        # changes the image. On E2B the sandbox is the disk, so forcing a
+        # replacement destroys the person's workspace and their browser
+        # profile -- which is the act #744 made template drift tolerated to
+        # avoid. It is not needed here either: `sandbox_runtime/browser_relay`
+        # ships in the runtime bundle and is installed on every session, so
+        # the relay half of these fixes reaches existing sandboxes without an
+        # image roll, and every backend caller of a new script is guarded by
+        # `command -v`. What is left -- the shell scripts -- arrives when a
+        # sandbox is next recreated, which costs those sandboxes nothing they
+        # are not already living with.
         default=f"sha256:{'3' * 64}",
         pattern=r"^sha256:[0-9a-f]{64}$",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_DIGEST"),
@@ -183,11 +195,17 @@ class WorkspaceSettings(BaseSettings):
         description=(
             "Comma-separated pool of proxy URLs, credentials inline where the "
             "proxy needs them (e.g. http://user:pass@residential-proxy.example:8080). "
-            "`_provision` assigns one at random to each new workspace sandbox "
-            "as `AGENT_BROWSER_PROXY`, which agent-browser reads directly -- it "
-            "parses out the credentials before putting the server on Chrome's "
-            "command line and answers Chrome's CDP `Fetch.authRequired` with "
-            "them itself, so a credentialed proxy needs nothing further here. "
+            "One entry is chosen per sandbox by rendezvous hashing on its id, "
+            "so the same sandbox keeps the same proxy across restarts, resumes "
+            "and replacement -- session cookies bound to an address log a "
+            "person out when it hops, and this feature exists for login walls. "
+            "The choice is delivered as a file the sandbox reads at every "
+            "browser start, not baked into its environment at create: emptying "
+            "this pool withdraws the proxy from sandboxes that already have "
+            "one, with no restart and nothing to replace. agent-browser parses "
+            "out the credentials before putting the server on Chrome's command "
+            "line and answers Chrome's CDP `Fetch.authRequired` with them "
+            "itself, so a credentialed proxy needs nothing further here. "
             "`SecretStr`, not `str`: a proxy URL names infrastructure an "
             "operator may not want in a log line, same as any other credential "
             "in this file."

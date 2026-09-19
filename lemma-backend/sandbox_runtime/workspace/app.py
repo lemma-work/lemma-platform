@@ -142,12 +142,20 @@ def create_app(
             outcome = await shed_browser_if_starved()
             if outcome is None:
                 return
-            available_mb, closed = outcome
+            # Which signal, not just that it happened: "oom_kill" and
+            # "headroom" call for different responses from whoever reads
+            # this, and the old line could not tell them apart because
+            # there was only one signal to report.
             logging.getLogger(__name__).warning(
-                "workspace runtime shed the browser: %s MB available, "
-                "closed=%s. It will start again on the next capture.",
-                available_mb,
-                closed,
+                "workspace runtime shed the browser: signal=%s closed=%s "
+                "headroom=%sMB anon=%sMB oom_kill=%s host_available=%sMB. "
+                "It will start again on the next capture.",
+                outcome.signal,
+                outcome.closed,
+                outcome.headroom_mb,
+                outcome.anon_mb,
+                outcome.oom_kill,
+                outcome.available_mb,
             )
 
         reaper = create_inherited_task(_reap_forever(), name="process-deadline-reaper")

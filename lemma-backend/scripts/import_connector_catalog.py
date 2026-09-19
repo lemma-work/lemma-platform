@@ -156,6 +156,19 @@ NATIVE_AUTH_METHOD_OVERRIDES: dict[str, AuthMethod] = {
     "airtable": AuthMethod.API_KEY,
     "clickup": AuthMethod.API_KEY,
 }
+#: Composio toolkits whose inferred scheme is wrong for the product, keyed by
+#: toolkit slug. `_infer_composio_auth_method` optimises for the cheapest way in
+#: that can work, which is usually right; these are the toolkits where the cheap
+#: way does not actually work.
+#:
+#: `shopify`: its API_KEY mode takes an Admin API access token, and the token a
+#: person most easily obtains is a short-lived one. Nothing in API_KEY mode can
+#: refresh -- Composio replays the string as `X-Shopify-Access-Token` -- so a
+#: connection made that way dies and cannot recover. OAuth2 costs the org a
+#: Shopify app, and is the only mode that stays connected.
+COMPOSIO_AUTH_METHOD_OVERRIDES: dict[str, AuthMethod] = {
+    "shopify": AuthMethod.OAUTH2,
+}
 COMPOSIO_EXCLUDED_CONNECTOR_IDS = {
     "microsoft_teams",
     "splitwise",
@@ -459,6 +472,12 @@ def _infer_composio_auth_method(toolkit_item, toolkit_detail) -> AuthMethod:
     non-OAuth mode is preferred; and org-supplied OAuth is the last resort,
     taken only when the toolkit offers no other way in.
     """
+    override = COMPOSIO_AUTH_METHOD_OVERRIDES.get(
+        str(getattr(toolkit_item, "slug", "") or "").lower()
+    )
+    if override is not None:
+        return override
+
     if getattr(toolkit_item, "no_auth", False):
         return AuthMethod.NOAUTH
 
@@ -629,11 +648,15 @@ def _composio_credential_schema(toolkit_detail, auth_method: AuthMethod) -> dict
     """The credentials an end user submits to connect a non-OAuth Composio app.
 
     Derived from the toolkit's ``connected_account_initiation`` fields so the
-    connect dialog can render the form. An OAuth toolkit has none -- the person
-    signs in instead.
+    connect dialog can render the form.
+
+    Most OAuth toolkits declare none -- the person signs in instead -- and this
+    returns ``None`` for them exactly as before, because the field list is
+    empty. It is no longer skipped on the *scheme*, though: Shopify's OAuth2
+    mode requires ``subdomain``, since signing in says who you are but not which
+    store you mean. Returning ``None`` there left the connect dialog with no
+    field to ask for it and no way to start the flow.
     """
-    if auth_method == AuthMethod.OAUTH2:
-        return None
     selected = _composio_auth_detail(toolkit_detail, auth_method)
     if selected is None:
         return None

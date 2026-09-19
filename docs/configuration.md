@@ -320,6 +320,46 @@ These five are the whole backend-side E2B surface. In particular:
   name changes what a *new* sandbox is made from. It does not touch workspace
   sandboxes that already exist, and no setting makes it — see above.
 
+### The sandbox browser's proxy
+
+```dotenv
+# Comma-separated pool of proxy URLs the sandbox browser routes through.
+# Credentials inline where the proxy needs them. Empty (the default) means a
+# direct connection. SecretStr: never logged.
+WORKSPACE_BROWSER_PROXY_URLS=http://user:pass@residential.example:8080,http://user:pass@residential-2.example:8080
+```
+
+**Asserted at every browser start, not at sandbox creation.** Emptying the
+pool withdraws the proxy from existing sandboxes the next time their browser
+starts — no restart, no recreation. This was not true before: the value was
+baked into the sandbox's creation environment, so it could be given and never
+taken back, and workspace sandboxes are not replaced on template drift.
+
+**One sandbox keeps one entry.** Chosen by hashing the sandbox id, so it
+survives restarts, resumes and container replacement. Adding an entry moves
+roughly a 1/n share of sandboxes; removing one moves only the sandboxes that
+held it. A sandbox's exit IP changes when you change the pool, and not
+otherwise. That matters because the feature exists for sign-in pages: a
+session cookie bound to an IP logs the person out when the IP hops.
+
+**A person watching right now keeps the browser they have.** A change of
+decision closes the browser at the next start so the new setting takes
+effect; it does not interrupt a viewer mid-session.
+
+**Every fabric.** The previous mechanism reached only Docker and E2B —
+`lemma_local` never read the provisioning environment at all, so the desktop
+fabric was never proxied and nothing said so.
+
+**The agent can read the proxy URL.** It is delivered `0600` into a sandbox
+with one unprivileged user, which is the agent's own user, and it lands in
+`config.json` in the same mode. That keeps it out of a file listing and out
+of `/proc/*/cmdline`; it does not hide it from the agent. Put nothing here
+that is not scoped to this use.
+
+This setting is deliberately *not* one of the things needing an image roll
+(see [Making a new sandbox image take effect](#making-a-new-sandbox-image-take-effect)),
+because the decision travels as data rather than as part of the image.
+
 ### Reaching a sandbox
 
 Sandboxes call back into Lemma — the CLI inside a workspace, a function

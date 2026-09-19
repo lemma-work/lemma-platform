@@ -364,14 +364,16 @@ async def _poll_runtime(url: str, budget_seconds: float) -> int | None:
 
 
 async def close_browser(sandbox, provider_id: str, **api) -> None:
-    """Ask the browser to shut down, so its cookie store is committed.
+    """Ask the browser to shut down, so the profile is written back.
 
     Called before a pause, because an E2B workspace pause is
-    `keep_memory=False` -- power loss, as far as Chrome is concerned -- and
-    Chrome's cookie store batches to disk on a 30 second timer. Measured on a
-    real sandbox: sign in, pause immediately, resume, and the session is gone;
-    close first and it is there. That did not matter while the profile was
-    scratch in `/tmp`; it is the durable store a person's logins live in now.
+    `keep_memory=False` -- power loss, as far as Chrome is concerned -- and a
+    browser that loses power has saved nothing: `agent-browser` runs Chrome on
+    a throwaway `--user-data-dir` under `/tmp` and copies it to the configured
+    profile only on a clean close. Measured on a real sandbox: sign in, pause
+    immediately, resume, and the session is gone; close first and it is there.
+    That did not matter while the profile was scratch in `/tmp`; it is the
+    durable store a person's logins live in now.
 
     `agent-browser close --all` rather than a signal, because the daemon owns
     the process and closing through it is what the image supports -- and

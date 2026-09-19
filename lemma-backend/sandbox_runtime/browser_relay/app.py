@@ -23,7 +23,6 @@ handed a fresh one without restarting anything.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from contextlib import suppress
 import hmac
 import logging
@@ -37,6 +36,7 @@ import websockets
 from sandbox_runtime.tasks import create_background_task
 
 from .chrome import (
+    answers_on,
     BrowserNotRunning,
     DEFAULT_SESSION,
     is_safe_session,
@@ -46,6 +46,8 @@ from .chrome import (
     live_port,
     open_url,
     page_targets,
+    RecordingInProgress,
+    ensure_vnc_bridge,
     set_display_size,
 )
 from .stream_proxy import CONTROL, VIEW, pump_binary
@@ -265,19 +267,16 @@ def create_app() -> FastAPI:
 
         The picture is `x11vnc` in front of Xvfb with `websockify` in front
         of that, and none of it is this process -- so "the relay answered"
-        has never meant "a viewer will get a picture". Probing the socket is
-        the only thing that does.
+        has never meant "a viewer will get a picture", and neither does "the
+        bridge script exited 0". Probing the socket is the only thing that
+        does.
+
+        `chrome.answers_on` rather than a second copy of the same six
+        lines: this was one, they drifted on the timeout, and it is the
+        seam the tests already reach for when they need a port to be up or
+        down.
         """
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection("127.0.0.1", VNC_WS_PORT), timeout=2.0
-            )
-        except OSError, asyncio.TimeoutError:
-            return False
-        writer.close()
-        with contextlib.suppress(OSError):
-            await writer.wait_closed()
-        return True
+        return await answers_on(VNC_WS_PORT)
 
     @app.get("/health")
     async def health() -> dict:
@@ -389,9 +388,17 @@ def create_app() -> FastAPI:
         opening a panel should not be able to do it by accident.
         """
         cap_width, cap_height = default_display_size()
-        size = await set_display_size(
-            min(request.width, cap_width), min(request.height, cap_height)
-        )
+        try:
+            size = await set_display_size(
+                min(request.width, cap_width), min(request.height, cap_height)
+            )
+        except RecordingInProgress as exc:
+            # 409 rather than a silent no-op, and a reason the pane can show.
+            # A person opening the panel while an agent is recording used to
+            # move the framebuffer under the recorder; the picture is
+            # letterboxed until the take ends instead, which is the
+            # recoverable half of the trade.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if size is None:
             raise HTTPException(
                 status_code=409, detail="the display could not be resized"
@@ -414,7 +421,16 @@ def create_app() -> FastAPI:
         can plan against.
         """
         width, height = default_display_size()
-        size = await set_display_size(width, height)
+        try:
+            size = await set_display_size(width, height)
+        except RecordingInProgress as exc:
+            # The last viewer leaving must not resize either. This is the
+            # more dangerous of the two paths, because nobody is watching
+            # when it fires: the agent is alone with its recording and the
+            # reset would land in the middle of it. The display keeps the
+            # viewer's shape until the take ends, and the next reset -- or
+            # the next viewer -- puts it back.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if size is None:
             raise HTTPException(status_code=409, detail="the display did not reset")
         return DisplayResizeResponse(size=size)
@@ -462,11 +478,29 @@ def create_app() -> FastAPI:
             port = await live_port()
         except BrowserNotRunning:
             raise HTTPException(status_code=409, detail="the browser is not running")
-        dropped = await forget_domains(request.domains, port=port)
+        outcome = await forget_domains(request.domains, port=port)
+        if outcome.refused:
+            # The mark stays, and so does the failure. `clearDataForOrigin`
+            # is the only thing on this path that deletes anything, so a
+            # refusal means the session is still live -- and a person told
+            # "signed out" over a live session stops looking, which is the
+            # worst of the outcomes available here. Raising also reaches
+            # them: `forget_cookies` turns a non-200 into
+            # `BrowserRelayUnavailable` rather than a silent zero.
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"the browser refused to clear {outcome.refused} of "
+                    f"{outcome.origins} origins; still signed in"
+                ),
+            )
         # The mark goes even when no cookie did. A site whose session had
         # already lapsed would otherwise keep reading "signed in" for as
         # long as the profile lived, with nothing left to sign out of.
-        return {"dropped": dropped, "signed_in": forget_marks(request.sites)}
+        return {
+            "dropped": outcome.dropped,
+            "signed_in": forget_marks(request.sites),
+        }
 
     @app.websocket("/vnc")
     async def vnc_socket(
@@ -514,6 +548,34 @@ def create_app() -> FastAPI:
             await live_port(session_name)
         except BrowserNotRunning as exc:
             await _refuse(websocket, CLOSE_NO_BROWSER, f"no browser running: {exc}")
+            return
+
+        # The viewing chain is not started with the display -- x11vnc and
+        # websockify serve a person watching, and most sessions have nobody
+        # watching at all. So it is started here, by the route that is about
+        # to need it, before the socket is accepted: `_refuse` before accept
+        # is a clean refusal the pane can read, and a failure after accept is
+        # a dropped picture with no reason attached.
+        started = await ensure_vnc_bridge()
+        # Probed rather than trusted, and probed even when the script said
+        # yes. `ensure_vnc_bridge` reports what a shell script exited with;
+        # this asks the question the viewer actually cares about. They came
+        # apart in CI: the bridge exited 0, the relay accepted, and the
+        # socket then died mid-RFB with no close frame and no reason -- the
+        # one failure shape a person cannot act on, because `accept()` has
+        # already happened and there is nowhere left to put a reason.
+        #
+        # One loopback connect, on a path that is about to proxy every
+        # frame of a screen through that same port.
+        if not await _vnc_is_listening():
+            await _refuse(
+                websocket,
+                CLOSE_UPSTREAM_GONE,
+                (
+                    f"nothing is serving VNC on {VNC_WS_PORT}"
+                    + ("" if started else "; the bridge did not come up")
+                ),
+            )
             return
 
         await websocket.accept()

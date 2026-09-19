@@ -16,7 +16,7 @@ const status = (overrides: Partial<ThisComputerStatus> = {}): ThisComputerStatus
         ...overrides,
     }) as ThisComputerStatus;
 
-const WORKSPACE = 'https://asur.work';
+const WORKSPACE = 'https://lemma.work';
 
 const target = (overrides: Record<string, unknown> = {}) =>
     ({
@@ -152,7 +152,7 @@ describe('selectWorkspaceTarget', () => {
     });
 
     it('matches on origin, so a path or trailing slash still pairs up', () => {
-        expect(selectWorkspaceTarget([target({ url: 'https://asur.work/' })], WORKSPACE)).not.toBeNull();
+        expect(selectWorkspaceTarget([target({ url: 'https://lemma.work/' })], WORKSPACE)).not.toBeNull();
     });
 
     it('never matches a target with no url, rather than guessing it is ours', () => {

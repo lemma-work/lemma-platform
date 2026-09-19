@@ -118,11 +118,13 @@ async def test_an_isolated_namespace_still_closes_the_browser(monkeypatch) -> No
 
     This test used to assert the opposite -- "the sweep already covers it,
     doing both would double count" -- and that premise is what made Docker
-    the one fabric where a suspend lost the login. The sweep signals; a
-    signal does not flush Chrome's cookie store. Measured on this image, one
-    second after a login: a graceful close keeps the session, SIGTERM to all
-    eleven Chrome processes does not, and nor does SIGTERM to the browser
-    process alone even when it exits cleanly in half a second.
+    the one fabric where a suspend lost the login. The sweep signals, and a
+    signal is exactly what loses the session: `agent-browser` runs Chrome on
+    a throwaway profile under `/tmp` and copies it back to the durable one
+    only on a clean close. Measured on this image, one second after a login:
+    a graceful close keeps the session, SIGTERM to all eleven Chrome
+    processes does not, and nor does SIGTERM to the browser process alone
+    even when it exits cleanly in half a second.
 
     So the close runs first on every fabric and the sweep still follows. The
     real sweep signals every pid it can see, so it is stubbed rather than

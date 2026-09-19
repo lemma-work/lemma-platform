@@ -6,10 +6,21 @@ patterns and send SIGTERM then SIGKILL -- and the patterns had gone stale, so
 on a real sandbox it matched 1 of 14 Chromium processes and had been shedding
 the display and the daemon while leaving everything that held the memory.
 
-It asks the daemon to close the browser now. That is measured to be the only
-stop which also commits Chrome's cookie store, so the simpler version is the
-correct one; and it names no process, so it cannot go quietly out of date the
-way the pattern list did.
+It asks the daemon to close the browser now: measured to be the only stop
+that also writes the profile back, and it names no process, so it cannot go
+quietly out of date the way the pattern list did.
+
+**And it reads the cgroup, because `/proc/meminfo` is not namespaced.**
+Measured inside a container limited to 2 GiB: `MemTotal` 8.8 GiB, `nproc` 8,
+`memory.max` 2147483648. The threshold it used to apply was comparing a
+host-wide number against a per-sandbox one -- unfireable on a roomy host,
+and liable to fire for somebody else's reasons on a busy one.
+
+Two negatives here are worth as much as the positives, and both come from
+measurement rather than reasoning: a cgroup whose `memory.current` has
+reached `memory.max` purely on page cache must not shed, and the
+twelve-heavy-tab state that the research recorded as healthy must not shed
+either.
 """
 
 from __future__ import annotations
@@ -22,149 +33,241 @@ pytestmark = pytest.mark.asyncio
 
 from sandbox_runtime.workspace import browser_guard
 from sandbox_runtime.workspace.browser_guard import (
+    HEADROOM_FLOOR_MB,
     LOW_MEMORY_MB,
-    available_memory_mb,
     shed_browser_if_starved,
 )
 
+_MB = 1024 * 1024
 
-def _meminfo(available_kb: int) -> str:
-    return (
-        "MemTotal:        2030612 kB\n"
-        "MemFree:           64280 kB\n"
-        f"MemAvailable:    {available_kb} kB\n"
+
+def _write_cgroup(
+    root: Path,
+    *,
+    limit_mb: int | None = 2048,
+    anon_mb: int = 400,
+    shmem_mb: int = 0,
+    current_mb: int | None = None,
+    oom_kill: int = 0,
+    pressure: float | None = None,
+) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "memory.max").write_text("max" if limit_mb is None else str(limit_mb * _MB))
+    (root / "memory.current").write_text(
+        str((current_mb if current_mb is not None else anon_mb + 100) * _MB)
     )
+    # A real `memory.stat` is ~40 lines in no particular order, with keys
+    # this parser has never heard of. Shaped like one on purpose.
+    (root / "memory.stat").write_text(
+        "\n".join(
+            [
+                f"anon {anon_mb * _MB}",
+                "file 524288000",
+                "kernel_stack 1048576",
+                f"slab_unreclaimable {2 * _MB}",
+                f"shmem {shmem_mb * _MB}",
+                "unevictable 0",
+                "inactive_file 419430400",
+                "some_key_from_a_newer_kernel 1",
+            ]
+        )
+    )
+    (root / "memory.events").write_text(
+        f"low 0\nhigh 0\nmax 614\noom 0\noom_kill {oom_kill}\n"
+    )
+    (root / "memory.swap.current").write_text("0")
+    (root / "memory.swap.max").write_text(str(2048 * _MB))
+    if pressure is not None:
+        (root / "memory.pressure").write_text(
+            "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"
+            f"full avg10={pressure:.2f} avg60=0.00 avg300=0.00 total=0\n"
+        )
 
 
 @pytest.fixture
 def sandbox(monkeypatch, tmp_path: Path):
-    """A fake `/proc/meminfo`, and a close that is counted, never run."""
-
-    state = {"available_kb": 1_520_000, "closes": 0, "closed": True}
+    """A cgroup on disk, a `/proc/meminfo`, and a close that is only counted."""
+    root = tmp_path / "cgroup"
     meminfo = tmp_path / "meminfo"
+    meminfo.write_text(
+        "MemTotal:        9214732 kB\nMemFree: 64280 kB\nMemAvailable:    6570496 kB\n"
+    )
+    state = {"closes": 0, "closed": True, "root": root, "meminfo": meminfo}
+    _write_cgroup(root)
 
-    def _read() -> int | None:
-        meminfo.write_text(_meminfo(state["available_kb"]))
-        for line in meminfo.read_text().splitlines():
-            if line.startswith("MemAvailable:"):
-                return int(line.split()[1]) // 1024
-        return None
+    from sandbox_runtime import sandbox_memory
+
+    def _read():
+        return sandbox_memory.read_memory(root=root, meminfo=meminfo)
 
     async def _close() -> bool:
         state["closes"] += 1
         return bool(state["closed"])
 
-    monkeypatch.setattr(browser_guard, "available_memory_mb", _read)
+    monkeypatch.setattr(browser_guard, "read_memory", _read)
     monkeypatch.setattr(browser_guard, "shed_browser", _close)
+    monkeypatch.setattr(browser_guard, "_last", browser_guard._Last())
     return state
 
 
-async def test_a_healthy_sandbox_is_left_alone(sandbox) -> None:
-    """A workspace at rest sits near 1485 MB available, and a browser holding
-    three rendered pages still leaves about 1155 MB. Neither may trip this."""
-    for available_mb in (1485, 1155, LOW_MEMORY_MB + 1):
-        sandbox["available_kb"] = available_mb * 1024
+class TestTheStatesThatMustNotShed:
+    async def test_page_cache_at_the_limit_is_not_pressure(self, sandbox) -> None:
+        """The negative the research bought. Reading 3 GB of file data through
+        the cgroup drove `memory.current` to exactly `memory.max` with 614
+        successful reclaims, `oom_kill 0`, and `anon` going *down*. Shedding
+        a browser because somebody read a file is the failure this replaces.
+        """
+        _write_cgroup(sandbox["root"], anon_mb=300, current_mb=2048, oom_kill=0)
 
-        assert await shed_browser_if_starved() is None, available_mb
+        assert await shed_browser_if_starved() is None
+        assert sandbox["closes"] == 0
 
-    assert sandbox["closes"] == 0
+    async def test_twelve_heavy_tabs_are_a_working_sandbox(self, sandbox) -> None:
+        """Measured healthy: `anon` 1188 MB, `memory.events` all zero,
+        nothing wrong. This is exactly why the suggested 1.2 GB ceiling on
+        `anon + shmem` was not adopted -- it fires here."""
+        _write_cgroup(sandbox["root"], anon_mb=1188, current_mb=1671)
 
+        assert await shed_browser_if_starved() is None
+        assert sandbox["closes"] == 0
 
-async def test_a_starved_sandbox_has_its_browser_closed(sandbox) -> None:
-    """The states this was built from: 14 MB, 19 MB and 21 MB available, with
-    every unrelated tool call in the sandbox degrading alongside."""
-    sandbox["available_kb"] = 14 * 1024
+    async def test_a_sandbox_at_rest_is_left_alone(self, sandbox) -> None:
+        _write_cgroup(sandbox["root"], anon_mb=400)
 
-    outcome = await shed_browser_if_starved()
-
-    assert outcome == (14, True)
-    assert sandbox["closes"] == 1
-
-
-async def test_a_close_that_could_not_run_is_reported_rather_than_retried(
-    sandbox,
-) -> None:
-    """A sandbox with nothing left may not manage to spawn a Node CLI, and
-    there is deliberately no escalation to a signal behind it: signals are
-    what this did before, and they neither matched the browser nor flushed
-    its cookies. The caller says what happened, and the daemon's own idle
-    timeout is what remains."""
-    sandbox["available_kb"] = 14 * 1024
-    sandbox["closed"] = False
-
-    assert await shed_browser_if_starved() == (14, False)
+        assert await shed_browser_if_starved() is None
 
 
-async def test_memory_that_cannot_be_read_is_not_treated_as_pressure(
-    monkeypatch,
-) -> None:
-    """No `/proc/meminfo` is a fabric this does not understand, not a sandbox
-    in trouble -- and closing somebody's browser on a guess is worse than not
-    closing it."""
-    monkeypatch.setattr(browser_guard, "available_memory_mb", lambda: None)
-    closes: list[int] = []
+class TestTheSignals:
+    async def test_a_fresh_oom_kill_sheds(self, sandbox) -> None:
+        """A cgroup OOM kill takes the largest resident task, which is
+        essentially always a renderer -- so the first is the bulkhead
+        working and this is the browser refusing to fit."""
+        await shed_browser_if_starved()  # seeds the counter at 0
+        _write_cgroup(sandbox["root"], oom_kill=1)
 
-    async def _close() -> bool:
-        closes.append(1)
-        return True
+        outcome = await shed_browser_if_starved()
 
-    monkeypatch.setattr(browser_guard, "shed_browser", _close)
+        assert outcome is not None and outcome.signal == "oom_kill"
+        assert outcome.closed is True
 
-    assert await shed_browser_if_starved() is None
-    assert closes == []
+    async def test_an_old_oom_kill_does_not(self, sandbox) -> None:
+        """A resumed sandbox can wake with a non-zero counter from before it
+        slept. Only the delta means anything."""
+        _write_cgroup(sandbox["root"], oom_kill=3)
 
+        assert await shed_browser_if_starved() is None
+        assert await shed_browser_if_starved() is None
 
-def test_available_memory_is_what_the_kernel_says_is_available(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """`MemAvailable`, not `MemFree`: reclaimable page cache is not pressure,
-    and reading it as pressure would shed the browser of a sandbox that had
-    merely read a large file."""
-    meminfo = tmp_path / "meminfo"
-    meminfo.write_text(_meminfo(1_520_000))
-    monkeypatch.setattr(
-        browser_guard,
-        "Path",
-        lambda argument: (
-            meminfo if str(argument) == "/proc/meminfo" else Path(argument)
-        ),
-    )
+    async def test_a_sustained_stall_sheds_and_a_single_sample_does_not(
+        self, sandbox
+    ) -> None:
+        """`python -c pass` taking 61 seconds *is* a memory stall, so this is
+        the only signal that measures the harm rather than predicting it.
+        Two ticks, because one sample of a ten-second average is not a
+        trend."""
+        _write_cgroup(sandbox["root"], pressure=40.0)
+        assert await shed_browser_if_starved() is None, "one sample is not a trend"
 
-    assert available_memory_mb() == 1484
+        _write_cgroup(sandbox["root"], pressure=40.0)
+        outcome = await shed_browser_if_starved()
 
+        assert outcome is not None and outcome.signal == "memory_stall"
 
-async def test_the_close_goes_through_the_cli_that_owns_the_browser(
-    monkeypatch,
-) -> None:
-    """`agent-browser close --all`, and nothing else. The argv is worth
-    pinning because the last version of this named processes instead, and
-    those names went stale without anything noticing."""
-    seen: dict[str, object] = {}
+    async def test_a_calm_stall_reading_never_sheds(self, sandbox) -> None:
+        for _ in range(3):
+            _write_cgroup(sandbox["root"], pressure=9.9)
+            assert await shed_browser_if_starved() is None
 
-    class _Done:
-        returncode = 0
+    async def test_the_headroom_floor_is_the_backstop(self, sandbox) -> None:
+        _write_cgroup(sandbox["root"], anon_mb=2048 - HEADROOM_FLOOR_MB)
 
-    def _run(argv, **kwargs):
-        seen["argv"] = argv
-        seen["timeout"] = kwargs.get("timeout")
-        return _Done()
+        outcome = await shed_browser_if_starved()
 
-    monkeypatch.setattr(browser_guard.subprocess, "run", _run)
+        assert outcome is not None and outcome.signal == "headroom"
 
-    assert await browser_guard.shed_browser() is True
-    assert seen["argv"] == [browser_guard.AGENT_BROWSER, "close", "--all"]
-    assert seen["timeout"] == browser_guard.CLOSE_TIMEOUT_SECONDS
+    async def test_one_megabyte_of_room_above_the_floor_is_enough(
+        self, sandbox
+    ) -> None:
+        _write_cgroup(sandbox["root"], anon_mb=2048 - HEADROOM_FLOOR_MB - 3)
+
+        assert await shed_browser_if_starved() is None
 
 
-async def test_a_cli_that_is_not_there_is_a_false_rather_than_a_crash(
-    monkeypatch,
-) -> None:
-    """This runs from the reaper loop of a sandbox that is already in
-    trouble. Whatever happens, it must not be the thing that ends that loop."""
+class TestWhereThereIsNoCgroup:
+    async def test_it_falls_back_to_the_host_reading(self, sandbox) -> None:
+        """A fabric with no `memory.max` to read. On a Firecracker guest --
+        which is what E2B runs -- the guest kernel reports the VM's own
+        memory, so `MemAvailable` is honest there."""
+        _write_cgroup(sandbox["root"], limit_mb=None)
+        sandbox["meminfo"].write_text(f"MemAvailable:    {14 * 1024} kB\n")
 
-    def _run(*_args, **_kwargs):
-        raise OSError("no such file")
+        outcome = await shed_browser_if_starved()
 
-    monkeypatch.setattr(browser_guard.subprocess, "run", _run)
+        assert outcome is not None and outcome.signal == "available"
+        assert outcome.available_mb == 14
 
-    assert await browser_guard.shed_browser() is False
+    async def test_a_healthy_host_reading_does_not_shed(self, sandbox) -> None:
+        _write_cgroup(sandbox["root"], limit_mb=None)
+        sandbox["meminfo"].write_text(
+            f"MemAvailable:    {LOW_MEMORY_MB * 1024 + 1} kB\n"
+        )
+
+        assert await shed_browser_if_starved() is None
+
+    async def test_memory_that_cannot_be_read_at_all_is_not_pressure(
+        self, sandbox, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Unknown is not "empty". A guard that shed on an unreadable file
+        would shed on every sandbox whose kernel names things differently."""
+        from sandbox_runtime import sandbox_memory
+
+        empty = tmp_path / "nothing"
+        absent = tmp_path / "no-meminfo"
+        # `monkeypatch`, not a bare assignment: the fixture's own patch is
+        # undone at teardown and a raw one here would outlive this test and
+        # silently disarm every case after it.
+        monkeypatch.setattr(
+            browser_guard,
+            "read_memory",
+            lambda: sandbox_memory.read_memory(root=empty, meminfo=absent),
+        )
+
+        assert await shed_browser_if_starved() is None
+
+
+class TestClosing:
+    async def test_a_close_that_could_not_run_is_reported_not_retried(
+        self, sandbox
+    ) -> None:
+        """A sandbox with nothing left may not manage to spawn a Node CLI,
+        and there is deliberately no escalation to a signal behind it:
+        signals are what this did before, and they neither matched the
+        browser nor wrote its profile back."""
+        sandbox["closed"] = False
+        _write_cgroup(sandbox["root"], anon_mb=2048 - HEADROOM_FLOOR_MB)
+
+        outcome = await shed_browser_if_starved()
+
+        assert outcome is not None and outcome.closed is False
+
+    async def test_the_argv_is_the_one_the_image_ships(self) -> None:
+        """Pinned because the last version of this went stale without anyone
+        noticing -- it matched one Chromium process in fourteen."""
+        import subprocess
+
+        seen: dict[str, object] = {}
+
+        def _run(argv, **kwargs):
+            seen["argv"] = argv
+            seen["timeout"] = kwargs.get("timeout")
+            return subprocess.CompletedProcess(argv, 0)
+
+        original = subprocess.run
+        subprocess.run = _run  # type: ignore[assignment]
+        try:
+            assert await browser_guard.shed_browser() is True
+        finally:
+            subprocess.run = original  # type: ignore[assignment]
+
+        assert seen["argv"] == [browser_guard.AGENT_BROWSER, "close", "--all"]
+        assert seen["timeout"] == browser_guard.CLOSE_TIMEOUT_SECONDS

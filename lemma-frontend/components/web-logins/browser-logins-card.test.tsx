@@ -115,29 +115,36 @@ describe('clearing a site', () => {
         await open();
 
         await userEvent.click(
-            screen.getByRole('button', { name: 'Clear cookies for app.example.com' }),
+            screen.getByRole('button', { name: 'Sign out of app.example.com' }),
         );
         expect(removed.calls).toEqual([]);
 
-        await userEvent.click(screen.getByRole('button', { name: 'Clear cookies' }));
+        await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
         expect(removed.calls).toEqual(['app.example.com']);
     });
 
     it('promises only what it does', async () => {
-        // The old copy had to say "forgetting removes Lemma's copy, it does
-        // not sign you out at the site", because that was true of it. What is
-        // true now is narrower than "sign out": cookies are removed, and a
-        // site keeping its token in local storage may survive that.
+        // Twice narrowed, now widened, and each move followed a measurement.
+        // The first copy had to say "forgetting removes Lemma's copy, it does
+        // not sign you out at the site", because that was true of it. The
+        // second hedged about local storage -- but that was true of a bug,
+        // not of the design: the relay sent bare hosts to
+        // `clearDataForOrigin` and local storage is keyed by full origin.
+        // With the origins the browser actually has open now included,
+        // cookie and localStorage both go, so the hedge has to go with them.
         answer.data = { items: [site()], sleeping: false };
         render(<BrowserLoginsCard />);
         await open();
         await userEvent.click(
-            screen.getByRole('button', { name: 'Clear cookies for app.example.com' }),
+            screen.getByRole('button', { name: 'Sign out of app.example.com' }),
         );
 
-        const note = screen.getByText(/cookies from the agent/i);
-        expect(note.textContent).toContain('may stay signed in');
-        expect(note.textContent).not.toContain("does not sign you out at");
+        const note = screen.getByText(/stored data from the agent/i);
+        expect(note.textContent).toContain('signs it out');
+        expect(note.textContent).not.toContain('may stay signed in');
+        expect(note.textContent).not.toContain('does not sign you out at');
+        // The one promise that has never changed.
+        expect(note.textContent).toContain('signed in yourself');
     });
 });
 
@@ -145,7 +152,7 @@ describe('clearing a site', () => {
 describe('separating a login from a cookie', () => {
     /**
      * The reason `signed_in` exists at all, and it was measured rather than
-     * assumed. On a real profile `api.asur.work` held two HttpOnly session
+     * assumed. On a real profile `api.lemma.work` held two HttpOnly session
      * cookies belonging to somebody signed in, and `youtube.com` held six
      * HttpOnly cookies belonging to nobody -- identical on every flag CDP
      * reports. So the split comes from what a person answered to a sign-in
@@ -155,7 +162,7 @@ describe('separating a login from a cookie', () => {
         answer.data = {
             items: [
                 site({ site: 'doubleclick.net' }),
-                site({ site: 'asur.work', signed_in: true }),
+                site({ site: 'lemma.work', signed_in: true }),
                 site({ site: 'youtube.com' }),
             ],
             sleeping: false,
@@ -167,7 +174,7 @@ describe('separating a login from a cookie', () => {
         expect(screen.getByText('Other sites with cookies')).toBeTruthy();
 
         const rows = screen.getAllByRole('listitem').map((li) => li.textContent);
-        expect(rows[0]).toContain('asur.work');
+        expect(rows[0]).toContain('lemma.work');
         // Still listed, and still signable-out-of: an ad network's cookie is
         // worth being able to clear, just not worth reading first.
         expect(rows.join(' ')).toContain('doubleclick.net');
@@ -178,7 +185,7 @@ describe('separating a login from a cookie', () => {
         // dialog that hid all four sites behind a collapsed "other" because
         // nobody had answered a sign-in yet would be worse than a flat list.
         answer.data = {
-            items: [site({ site: 'asur.work' }), site({ site: 'youtube.com' })],
+            items: [site({ site: 'lemma.work' }), site({ site: 'youtube.com' })],
             sleeping: false,
         };
         render(<BrowserLoginsCard />);
@@ -192,7 +199,7 @@ describe('separating a login from a cookie', () => {
     it('does not split when every site was signed in to', async () => {
         answer.data = {
             items: [
-                site({ site: 'asur.work', signed_in: true }),
+                site({ site: 'lemma.work', signed_in: true }),
                 site({ site: 'other.test', signed_in: true }),
             ],
             sleeping: false,

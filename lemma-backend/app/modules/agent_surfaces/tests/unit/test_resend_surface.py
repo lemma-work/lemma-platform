@@ -45,7 +45,7 @@ def test_resend_inbound_parser_threads_and_builds_reply_target():
     event = parser.parse(
         {
             "from": "alice@example.com",
-            "to": "pod-abc@ops.asur.work",
+            "to": "pod-abc@ops.lemma.work",
             "subject": "Re: Question",
             "text": "Here is my answer",
             "message_id": "<m2@example.com>",
@@ -61,7 +61,7 @@ def test_resend_inbound_parser_threads_and_builds_reply_target():
     assert event.reply_target["recipient_email"] == "alice@example.com"
     # Outbound references chain = inbound references + this message id.
     assert event.reply_target["references"][-1] == "<m2@example.com>"
-    assert event.metadata["surface_address"] == "pod-abc@ops.asur.work"
+    assert event.metadata["surface_address"] == "pod-abc@ops.lemma.work"
 
 
 @pytest.mark.asyncio
@@ -69,7 +69,7 @@ async def test_resend_send_email_builds_resend_api_payload():
     service = ResendPlatformService(
         {
             "api_key": "re_test",
-            "from_address": "pod-1@ops.asur.work",
+            "from_address": "pod-1@ops.lemma.work",
             "from_name": "Lemma",
         }
     )
@@ -106,7 +106,7 @@ async def test_resend_send_email_builds_resend_api_payload():
     assert captured["url"].endswith("/emails")
     assert captured["headers"]["Authorization"] == "Bearer re_test"
     body = captured["json"]
-    assert body["from"] == "Lemma <pod-1@ops.asur.work>"
+    assert body["from"] == "Lemma <pod-1@ops.lemma.work>"
     assert body["to"] == ["bob@example.com"]
     # Bold survives; the tag now carries inline styling, because a mail client
     # cannot be relied on for a stylesheet. See email_styles.
@@ -152,7 +152,7 @@ async def test_a_resend_surface_without_an_address_is_refused(monkeypatch):
 async def test_minting_without_a_domain_says_so_instead_of_inventing_one(monkeypatch):
     """A default domain is worse than an error.
 
-    ``ops.asur.work`` used to be the fallback, so an unconfigured deployment
+    ``ops.lemma.work`` used to be the fallback, so an unconfigured deployment
     silently minted addresses on a domain it does not own: outbound bounced and
     replies matched no surface, with nothing anywhere saying why.
     """
@@ -189,7 +189,7 @@ async def test_a_connected_account_does_not_need_the_deployment_s_key(monkeypatc
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(core_settings, "resend_api_key", None)
     monkeypatch.setattr(
         email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
@@ -214,7 +214,7 @@ async def test_a_connected_account_does_not_need_the_deployment_s_key(monkeypatc
     )
 
     address = service.create_surface.await_args.kwargs["surface_identity_email"]
-    assert address == "ops.acme@ops.asur.work"
+    assert address == "ops.acme@ops.lemma.work"
 
 
 def _minting_service(existing=None):
@@ -239,7 +239,7 @@ async def test_an_unnamed_mailbox_is_named_for_its_agent(monkeypatch):
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(
         email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
     )
@@ -273,7 +273,7 @@ async def test_the_pod_assistant_does_not_take_the_platform_s_own_name(monkeypat
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(
         email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
     )
@@ -310,7 +310,7 @@ async def test_connecting_email_adopts_the_mailbox_that_already_exists(monkeypat
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     existing = SimpleNamespace(id=uuid4(), surface_identity_email="ops.acme@x.test")
     service = _minting_service(existing)
     service.update_surface = AsyncMock(return_value=existing)
@@ -348,7 +348,7 @@ async def test_a_named_request_mints_rather_than_adopting(monkeypatch):
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(
         email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
     )
@@ -445,7 +445,7 @@ def test_normalize_resend_inbound_handles_envelope_and_shapes():
             "type": "email.received",
             "data": {
                 "from": {"address": "alice@example.com", "name": "Alice"},
-                "to": [{"address": "pod-1@ops.asur.work"}],
+                "to": [{"address": "pod-1@ops.lemma.work"}],
                 "subject": "Hi",
                 "text": "body",
                 "headers": [
@@ -460,7 +460,7 @@ def test_normalize_resend_inbound_handles_envelope_and_shapes():
     )
     assert normalized["from"] == "alice@example.com"
     assert normalized["from_name"] == "Alice"
-    assert normalized["to"] == "pod-1@ops.asur.work"
+    assert normalized["to"] == "pod-1@ops.lemma.work"
     assert normalized["message_id"] == "<m9@example.com>"
     assert normalized["references"] == ["<r1@example.com>", "<r2@example.com>"]
 
@@ -479,7 +479,7 @@ async def test_a_cold_email_seeds_the_thread_and_is_not_a_reply():
     service = ResendPlatformService(
         {
             "api_key": "re_test",
-            "from_address": "pod-1@ops.asur.work",
+            "from_address": "pod-1@ops.lemma.work",
             "from_name": "Lemma",
         }
     )
@@ -499,7 +499,7 @@ async def test_a_cold_email_seeds_the_thread_and_is_not_a_reply():
 
         return _Resp()
 
-    seed = "<lemma-notification-abc@ops.asur.work>"
+    seed = "<lemma-notification-abc@ops.lemma.work>"
     with patch("httpx.AsyncClient.post", new=_fake_post):
         sent = await service.send_cold_email(
             recipient_email="bob@example.com",
@@ -524,11 +524,11 @@ def test_the_parser_reads_our_seed_back_as_the_thread_root():
     parser must derive that exact string as ``external_thread_id`` — otherwise
     the reply opens a new conversation and the asker waits forever.
     """
-    seed = "<lemma-notification-abc@ops.asur.work>"
+    seed = "<lemma-notification-abc@ops.lemma.work>"
     event = ResendInboundParser().parse(
         {
             "from": "Bob@Example.com",
-            "to": "pod-1@ops.asur.work",
+            "to": "pod-1@ops.lemma.work",
             "subject": "Re: Standup",
             "text": "Shipped the importer.",
             "message_id": "<reply-1@example.com>",
@@ -552,7 +552,7 @@ def test_the_parser_reads_our_seed_back_as_the_thread_root():
 # rest.
 # --------------------------------------------------------------------------
 
-SEED = "<lemma-notification-7f3a@ops.asur.work>"
+SEED = "<lemma-notification-7f3a@ops.lemma.work>"
 
 
 def _real_webhook(**overrides) -> dict:
@@ -561,7 +561,7 @@ def _real_webhook(**overrides) -> dict:
         "email_id": "56761188-7520-42d8-8898-ff6fc54ce618",
         "created_at": "2026-02-22T23:41:11.894Z",
         "from": "Bob Jones <bob@example.com>",
-        "to": ["agent.pod@ops.asur.work"],
+        "to": ["agent.pod@ops.lemma.work"],
         "cc": [],
         "bcc": [],
         "received_for": [],
@@ -579,7 +579,7 @@ def _received_email(**overrides) -> dict:
         "object": "email",
         "id": "56761188-7520-42d8-8898-ff6fc54ce618",
         "from": "Bob Jones <bob@example.com>",
-        "to": ["agent.pod@ops.asur.work"],
+        "to": ["agent.pod@ops.lemma.work"],
         "subject": "Re: Standup",
         "text": "Shipped the importer.",
         "html": None,
@@ -686,11 +686,11 @@ def test_a_forwarded_email_is_routed_by_who_it_was_delivered_for():
     normalized = _normalize_resend_inbound(
         _real_webhook(
             to=["someone-else@example.com"],
-            received_for=["agent.pod@ops.asur.work"],
+            received_for=["agent.pod@ops.lemma.work"],
         )
     )
 
-    assert "agent.pod@ops.asur.work" in normalized["recipients"]
+    assert "agent.pod@ops.lemma.work" in normalized["recipients"]
 
 
 def test_a_multi_valued_references_header_is_not_stringified_as_a_list():
@@ -711,7 +711,7 @@ def test_a_multi_valued_references_header_is_not_stringified_as_a_list():
     headers = header_map(
         {
             "References": [
-                "<lemma-notification-abc@ops.asur.work>",
+                "<lemma-notification-abc@ops.lemma.work>",
                 "<0106-generated@ap-northeast-1.amazonses.com>",
             ],
             "In-Reply-To": "<0106-generated@ap-northeast-1.amazonses.com>",
@@ -721,7 +721,7 @@ def test_a_multi_valued_references_header_is_not_stringified_as_a_list():
     refs = references_of({}, headers)
 
     assert refs == [
-        "<lemma-notification-abc@ops.asur.work>",
+        "<lemma-notification-abc@ops.lemma.work>",
         "<0106-generated@ap-northeast-1.amazonses.com>",
     ]
     assert not refs[0].startswith("["), "the array was stringified, not joined"
@@ -729,7 +729,7 @@ def test_a_multi_valued_references_header_is_not_stringified_as_a_list():
 
 def test_a_real_reply_threads_back_onto_our_seed():
     """End-to-end of the contract, using the exact shapes Resend sent us live."""
-    seed = "<lemma-notification-019fef11@ops.asur.work>"
+    seed = "<lemma-notification-019fef11@ops.lemma.work>"
     event = ResendInboundParser().parse(_normalize_resend_inbound(_real_webhook()))
 
     merged = merge_received_email(
@@ -764,7 +764,7 @@ def test_a_json_array_smuggled_inside_a_header_string_is_unwrapped():
         references_of,
     )
 
-    seed = "<lemma-notification-019fef17@ops.asur.work>"
+    seed = "<lemma-notification-019fef17@ops.lemma.work>"
     headers = header_map(
         {
             "References": [
@@ -823,7 +823,7 @@ async def test_an_email_reply_resolves_credentials_from_its_surface():
         name="resend-mailtest",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
-        surface_identity_email="mailtest.acme@ops.asur.work",
+        surface_identity_email="mailtest.acme@ops.lemma.work",
     )
 
     service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
@@ -843,7 +843,7 @@ async def test_an_email_reply_resolves_credentials_from_its_surface():
 
     credentials = await service._resolve_credentials_from_context(context)
 
-    assert credentials["from_address"] == "mailtest.acme@ops.asur.work"
+    assert credentials["from_address"] == "mailtest.acme@ops.lemma.work"
     service.credential_resolver.for_surface.assert_awaited_once_with(surface)
 
 
@@ -886,9 +886,9 @@ def test_references_unwrap_applies_to_the_data_field_too():
     """
     from app.modules.agent_surfaces.platforms.resend.inbound import references_of
 
-    refs = references_of({"references": '["<seed@ops.asur.work>","<gen@ses>"]'}, {})
+    refs = references_of({"references": '["<seed@ops.lemma.work>","<gen@ses>"]'}, {})
 
-    assert refs == ["<seed@ops.asur.work>", "<gen@ses>"]
+    assert refs == ["<seed@ops.lemma.work>", "<gen@ses>"]
 
 
 @pytest.mark.asyncio
@@ -1071,7 +1071,7 @@ def _webhook_carrying_a_body() -> dict:
         html="<div>Let's do it today?</div>",
         headers={
             "message-id": "<reply-1@example.com>",
-            "references": '["<lemma-notification-abc@ops.asur.work>"]',
+            "references": '["<lemma-notification-abc@ops.lemma.work>"]',
             "subject": "Re: Standup",
         },
     )
@@ -1122,7 +1122,7 @@ async def test_a_restricted_api_key_does_not_lose_a_reply_we_can_already_read():
     assert "Let's do it today?" in enriched.message_text
     # The seed the reply threads on came from the webhook's own headers, so the
     # conversation is still found without the fetch.
-    assert enriched.external_thread_id == "<lemma-notification-abc@ops.asur.work>"
+    assert enriched.external_thread_id == "<lemma-notification-abc@ops.lemma.work>"
 
 
 @pytest.mark.asyncio
@@ -1199,7 +1199,7 @@ async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
     service = ResendPlatformService(
         {
             "api_key": "re_test",
-            "from_address": "priya.acme@ops.asur.work",
+            "from_address": "priya.acme@ops.lemma.work",
             "from_name": "Lemma",
         }
     )
@@ -1224,7 +1224,7 @@ async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
             recipient_email="bob@example.com",
             subject="Standup",
             message="What did you ship?",
-            thread_seed_id="<seed@ops.asur.work>",
+            thread_seed_id="<seed@ops.lemma.work>",
             metadata={
                 "agent_display_name": "Priya",
                 "actor_display_name": "Deepak Jha",
@@ -1238,7 +1238,7 @@ async def test_the_from_header_names_the_agent_and_the_person_it_acts_for():
     # had to move off an f-string, independent of the injection one below.
     assert (
         captured["json"]["from"]
-        == '"Priya (Deepak Jha) via Lemma" <priya.acme@ops.asur.work>'
+        == '"Priya (Deepak Jha) via Lemma" <priya.acme@ops.lemma.work>'
     )
 
 
@@ -1256,7 +1256,7 @@ async def test_an_agent_name_cannot_inject_a_second_address_into_from():
     service = ResendPlatformService(
         {
             "api_key": "re_test",
-            "from_address": "priya.acme@ops.asur.work",
+            "from_address": "priya.acme@ops.lemma.work",
             "from_name": "Lemma",
         }
     )
@@ -1281,13 +1281,13 @@ async def test_an_agent_name_cannot_inject_a_second_address_into_from():
             recipient_email="bob@example.com",
             subject="Standup",
             message="hello",
-            thread_seed_id="<seed@ops.asur.work>",
+            thread_seed_id="<seed@ops.lemma.work>",
             metadata={"agent_display_name": "Ops <evil@example.com>, Priya"},
         )
 
     parsed = getaddresses([captured["json"]["from"]])
     assert len(parsed) == 1
-    assert parsed[0][1] == "priya.acme@ops.asur.work"
+    assert parsed[0][1] == "priya.acme@ops.lemma.work"
 
 
 @pytest.mark.asyncio
@@ -1296,7 +1296,7 @@ async def test_a_send_that_knows_no_agent_keeps_the_deployment_default():
     service = ResendPlatformService(
         {
             "api_key": "re_test",
-            "from_address": "acme@ops.asur.work",
+            "from_address": "acme@ops.lemma.work",
             "from_name": "Lemma",
         }
     )
@@ -1321,11 +1321,11 @@ async def test_a_send_that_knows_no_agent_keeps_the_deployment_default():
             recipient_email="bob@example.com",
             subject="Standup",
             message="hello",
-            thread_seed_id="<seed@ops.asur.work>",
+            thread_seed_id="<seed@ops.lemma.work>",
             metadata=None,
         )
 
-    assert captured["json"]["from"] == "Lemma <acme@ops.asur.work>"
+    assert captured["json"]["from"] == "Lemma <acme@ops.lemma.work>"
 
 
 async def test_a_taken_name_advances_to_the_next_candidate(monkeypatch):
@@ -1342,7 +1342,7 @@ async def test_a_taken_name_advances_to_the_next_candidate(monkeypatch):
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(
         email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
     )
@@ -1382,7 +1382,7 @@ async def test_the_name_borrows_the_suffix_its_address_already_carries(monkeypat
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(
         email_surface_provisioning, "pod_name_for", AsyncMock(return_value="Acme")
     )
@@ -1435,7 +1435,7 @@ async def test_a_database_failure_degrades_rather_than_killing_the_creation(
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
 
     service = AsyncMock()

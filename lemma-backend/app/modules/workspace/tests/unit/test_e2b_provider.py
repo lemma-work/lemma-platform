@@ -951,9 +951,10 @@ async def test_a_pause_discards_memory(
 async def test_a_workspace_release_closes_the_browser_before_pausing(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """A filesystem-only pause is power loss, and Chrome writes cookies late.
+    """A filesystem-only pause is power loss, and the profile is written on close.
 
-    Its store batches to disk on a 30 second timer, so somebody who signed in
+    `agent-browser` runs Chrome on a throwaway profile and copies it to the
+    configured one only when it is closed cleanly, so somebody who signed in
     to a site and had their sandbox released a moment later came back signed
     out. Measured on a real E2B sandbox: sign in, pause immediately, resume,
     and the cookie is gone; close the browser first and it is there.

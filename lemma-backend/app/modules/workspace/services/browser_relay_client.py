@@ -20,12 +20,14 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderCapability,
     ProviderInstance,
@@ -33,6 +35,11 @@ from app.modules.workspace.providers.base import (
     require_capability,
 )
 from app.modules.workspace.providers.profiles import WORKSPACE_BROWSER_RELAY_PORT
+from app.modules.workspace.services.browser_proxy import (
+    BROWSER_PROXY_DECISION_PATH,
+    browser_proxy_for,
+    decision_bytes,
+)
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 logger = get_logger(__name__)
@@ -111,11 +118,59 @@ class ProfileCookies(TypedDict):
 #: Falling back costs one `command -v`. It comes out when the images are
 #: rolled, and until then this is the difference between a deploy that is
 #: safe in either order and one that is not.
+#:
+#: `start-vnc-bridge` is the viewing half -- x11vnc and websockify, 66 MiB
+#: measured -- which `lemma-ensure-display` no longer starts, because an
+#: agent doing research pays for it and nobody is watching. This is the
+#: viewer's own path, so this is where it is asked for. Guarded by
+#: `command -v` for the same rollout reason as the line above: on an image
+#: that predates the split, the two are already running and there is
+#: nothing to start.
+#: The proxy decision, applied here as well as in the script, and this is
+#: the half that reaches the fleet that exists today.
+#:
+#: The script reads the decision file itself -- but the script lives in the
+#: *image*, and the profile digest is deliberately not bumped in this branch,
+#: because bumping it refuses reuse of every existing sandbox and on E2B that
+#: means a new disk and a person's files gone. So on every sandbox already
+#: running, `lemma-ensure-display` is still the old one, which knows only
+#: `AGENT_BROWSER_PROXY`. Without these lines the server could not withdraw a
+#: proxy from a single sandbox currently proxied -- which is the entire
+#: feature, aimed exactly at the fleet that cannot get the new script.
+#:
+#: Harmless on a new image, and deliberately so: that script begins by
+#: `unset`ting `AGENT_BROWSER_PROXY` and reading the file itself, so the
+#: export below is overwritten by the same answer it came from. The two
+#: cannot disagree, because both read one file.
+#:
+#: Deletable when the image has rolled everywhere, like the `command -v`
+#: fallbacks around it.
+_APPLY_PROXY_DECISION = (
+    f'if [ -r "{BROWSER_PROXY_DECISION_PATH}" ]; then '
+    # `|| true`, never `|| VALUE=`: `read` returns non-zero at end-of-file
+    # without a trailing newline and has already assigned the line by then,
+    # and the server writes the URL unterminated. Clearing it there is the
+    # bug that made the whole mechanism inert in the script.
+    f'  IFS= read -r LEMMA_PROXY < "{BROWSER_PROXY_DECISION_PATH}" || true; '
+    '  if [ -n "${LEMMA_PROXY:-}" ]; then '
+    '    export AGENT_BROWSER_PROXY="$LEMMA_PROXY"; '
+    "  else "
+    # An empty decision is the server saying "no proxy", which has to be able
+    # to undo a value baked into an older sandbox's environment at create.
+    "    unset AGENT_BROWSER_PROXY; "
+    "  fi; "
+    "  unset LEMMA_PROXY; "
+    "fi; "
+)
+
 _ENSURE_DISPLAY = (
-    "if command -v lemma-ensure-display >/dev/null 2>&1; then "
+    _APPLY_PROXY_DECISION + "if command -v lemma-ensure-display >/dev/null 2>&1; then "
     "  lemma-ensure-display; "
     "else "
     "  start-browser; "
+    "fi; "
+    "if command -v start-vnc-bridge >/dev/null 2>&1; then "
+    "  start-vnc-bridge; "
     "fi"
 )
 
@@ -133,6 +188,35 @@ class BrowserRelayClient:
         deadline = datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)
         return await self._provider.reach_port(
             self._instance, port=WORKSPACE_BROWSER_RELAY_PORT, deadline_at=deadline
+        )
+
+    async def deliver_browser_proxy(self, sandbox_id: UUID, kind: SandboxKind) -> None:
+        """Tell the sandbox whether to proxy its browser, and through what.
+
+        Written on every use, like the token above and for the same reason:
+        asking is more expensive than writing, and a resumed sandbox's
+        filesystem may or may not still carry it.
+
+        Always written, including when the answer is "no proxy" -- an empty
+        file is how a withdrawal reaches a sandbox that already has one. A
+        decision that is merely absent means the server has not spoken, and
+        an older sandbox with a baked environment variable would go on using
+        it.
+
+        Delivered as a secret, so the URL never appears in a command line.
+        It is readable by the agent's own shell, which runs as the same
+        user; that is the same exposure the environment variable already
+        had, and it is why a credential put here should be scoped to this.
+        """
+        require_capability(self._provider, ProviderCapability.SECRET_DELIVERY)
+        deadline = datetime.now(timezone.utc) + timedelta(
+            seconds=_QUICK_TIMEOUT_SECONDS
+        )
+        await self._provider.deliver_secret(
+            self._instance,
+            path=BROWSER_PROXY_DECISION_PATH,
+            value=decision_bytes(browser_proxy_for(sandbox_id, kind)),
+            deadline_at=deadline,
         )
 
     async def deliver_token(self) -> None:

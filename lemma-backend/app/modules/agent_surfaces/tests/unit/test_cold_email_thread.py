@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.services.cold_email_thread import (
 )
 
 
-def _surface(address: str | None = "pod-1@ops.asur.work") -> AgentSurfaceEntity:
+def _surface(address: str | None = "pod-1@ops.lemma.work") -> AgentSurfaceEntity:
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
@@ -44,7 +44,7 @@ def test_the_seed_is_a_message_id_that_fits_the_column():
     seed = cold_thread_seed_id(notification_id=uuid4(), surface=_surface())
 
     assert seed.startswith("<lemma-notification-")
-    assert seed.endswith("@ops.asur.work>")
+    assert seed.endswith("@ops.lemma.work>")
     assert len(seed) <= MAX_THREAD_ID_LENGTH
 
 
@@ -78,15 +78,15 @@ def test_the_stored_event_parses_back_as_an_inbound_event():
         surface=surface,
         recipient_email="Bob@Example.com",
         sent=ColdEmailSendResult(
-            external_thread_id="<seed@ops.asur.work>",
+            external_thread_id="<seed@ops.lemma.work>",
             external_message_id="email-9",
             reply_target={"recipient_email": "Bob@Example.com", "subject": "Standup"},
         ),
     )
 
     event = ParsedInboundSurfaceEvent.model_validate(thread.last_event)
-    assert event.external_thread_id == "<seed@ops.asur.work>"
+    assert event.external_thread_id == "<seed@ops.lemma.work>"
     # Both sides lowercased: the parser records the sender that way, and the
     # match is exact.
     assert event.sender_external_user_id == "bob@example.com"
-    assert thread.external_channel_id == "pod-1@ops.asur.work"
+    assert thread.external_channel_id == "pod-1@ops.lemma.work"

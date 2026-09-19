@@ -90,16 +90,50 @@ CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--n
 # present in the config. What fills the display is the window manager started
 # further down, which maximises whatever Chrome opens; that is measured, and it
 # keeps working when a viewer resizes the display underneath it.
-if [ -n "${AGENT_BROWSER_PROXY:-}" ]; then
-  # `AGENT_BROWSER_PROXY` (comma-separated below is Chrome's own args syntax,
-  # not this one -- agent-browser reads that env var itself) can carry inline
-  # `user:pass@host:port`: agent-browser parses the credentials out before
-  # ever putting the server on Chrome's command line and answers Chrome's CDP
-  # `Fetch.authRequired` event with them, so a credentialed proxy works with
-  # no special handling here. The WebRTC flag still needs adding ourselves --
-  # without it, the sandbox's real IP is visible to any page in ICE
-  # candidates gathered outside the proxy, which defeats the point of having
-  # one.
+# Whether this browser goes through a proxy is the API server's decision,
+# re-asserted at every browser start.
+#
+# It used to be baked into the sandbox's creation environment, which meant
+# it could be given and never withdrawn: clearing the pool server-side left
+# every existing sandbox proxied until it was replaced, and workspace
+# sandboxes are not replaced on drift. The server writes its decision to a
+# file instead -- one line, the URL or empty -- and this reads it on every
+# run. Empty is a decision, not an absence: it is how "stop using a proxy"
+# reaches a sandbox that already has one.
+#
+# `AGENT_BROWSER_PROXY` is then unset, and that is load-bearing rather than
+# tidy. Measured: with both set, the env var wins --
+#
+#     env + config -> --proxy-server=http://ENVWINS.invalid:8080
+#     config only  -> --proxy-server=http://CONFIGONLY.invalid:9091
+#
+# -- so a value baked into an older sandbox would silently override the
+# server's current answer, which is the bug this replaces.
+PROXY_DECISION_FILE="${LEMMA_BROWSER_PROXY_FILE:-/tmp/lemma-browser-policy/proxy}"
+BROWSER_PROXY=""
+if [ -r "$PROXY_DECISION_FILE" ]; then
+  # `|| true`, and never `|| BROWSER_PROXY=""`. `read` returns non-zero when
+  # it reaches end-of-file without a trailing newline -- and it has already
+  # assigned the line by then. The server writes the bare URL with no
+  # newline (`decision_bytes`), so that branch was taken on *every* delivered
+  # proxy and cleared it again: measured on the image, a decision file
+  # holding a real URL produced a `config.json` with no `proxy` key and a
+  # stamp of the empty string. The whole mechanism was inert.
+  #
+  # A genuinely empty file still reads as empty, which is the "the server
+  # says no proxy" case and has to stay distinguishable from the file being
+  # absent.
+  IFS= read -r BROWSER_PROXY < "$PROXY_DECISION_FILE" || true
+fi
+unset AGENT_BROWSER_PROXY
+if [ -n "$BROWSER_PROXY" ]; then
+  # The proxy URL can carry inline `user:pass@host:port`: agent-browser
+  # parses the credentials out before ever putting the server on Chrome's
+  # command line and answers Chrome's CDP `Fetch.authRequired` event with
+  # them, so a credentialed proxy works with no special handling here. The
+  # WebRTC flag still needs adding ourselves -- without it, the sandbox's
+  # real IP is visible to any page in ICE candidates gathered outside the
+  # proxy, which defeats the point of having one.
   CHROME_ARGS="${CHROME_ARGS},--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
 fi
 # The per-sandbox extension point this file's comment has always promised and
@@ -110,7 +144,32 @@ if [ -n "${AGENT_BROWSER_ARGS:-}" ]; then
   CHROME_ARGS="${CHROME_ARGS},${AGENT_BROWSER_ARGS}"
 fi
 mkdir -p "$(dirname "$CONFIG_PATH")"
-cat > "$CONFIG_PATH" <<EOF
+# 0600: this file can now carry `user:pass@host` in its `proxy` key, so it
+# is a credential file. Keeping it out of a stray `cat` is worth one umask;
+# it does not hide it from the agent, whose shell runs as this same user.
+#
+# Both halves are needed. `umask` narrows the file only when this creates
+# it, and `cat >` over an existing path keeps the mode that path already
+# had -- and this path does survive: a resumed sandbox brings back whatever
+# `$CONFIG_PATH` was there before, including one written by an older image
+# under a wider umask. So the mode is also set explicitly, on an empty file,
+# before any proxy string is written into it.
+(
+  umask 077
+  : > "$CONFIG_PATH"
+  chmod 600 "$CONFIG_PATH"
+  if [ -n "$BROWSER_PROXY" ]; then
+    cat > "$CONFIG_PATH" <<EOF
+{
+  "headed": true,
+  "profile": "$PROFILE_DIR",
+  "executablePath": "$EXECUTABLE_PATH",
+  "proxy": "$BROWSER_PROXY",
+  "args": "$CHROME_ARGS"
+}
+EOF
+  else
+    cat > "$CONFIG_PATH" <<EOF
 {
   "headed": true,
   "profile": "$PROFILE_DIR",
@@ -118,6 +177,26 @@ cat > "$CONFIG_PATH" <<EOF
   "args": "$CHROME_ARGS"
 }
 EOF
+  fi
+)
+
+# A browser already running under a different decision has to be restarted,
+# or the change does not reach it until the idle timeout retires it. The
+# digest is of what the running browser was actually launched with, and it
+# lives in the ephemeral directory on purpose: it names a running process,
+# so a resumed sandbox must not believe it.
+#
+# `close --all` rather than a signal: it is the only stop that writes the
+# profile back, so changing the proxy does not cost the person their logins.
+PROXY_STAMP="/tmp/lemma-browser/proxy.active"
+PROXY_WANTED="$(printf '%s' "$BROWSER_PROXY" | sha256sum | cut -d" " -f1)"
+PROXY_ACTIVE=""
+if [ -r "$PROXY_STAMP" ]; then
+  IFS= read -r PROXY_ACTIVE < "$PROXY_STAMP" || PROXY_ACTIVE=""
+fi
+if [ -n "$PROXY_ACTIVE" ] && [ "$PROXY_ACTIVE" != "$PROXY_WANTED" ]; then
+  agent-browser close --all >/dev/null 2>&1 || true
+fi
 if ! mkdir -p "$RUNTIME_DIR" 2>/dev/null || [ ! -w "$RUNTIME_DIR" ]; then
   RUNTIME_DIR="/tmp/agent-browser-runtime-${UID:-10001}"
   mkdir -p "$RUNTIME_DIR"
@@ -240,24 +319,16 @@ fi
 # either port. Idempotent by pgrep for the same reason as Xvfb above: this
 # script runs from every `exec_command` that wants a browser, not once per
 # sandbox.
-VNC_PORT="${LEMMA_BROWSER_VNC_PORT:-5900}"
-VNC_WS_PORT="${LEMMA_BROWSER_VNC_WS_PORT:-5901}"
-if ! pgrep -f "x11vnc .*-rfbport ${VNC_PORT}" >/dev/null 2>&1; then
-  # `-noshm`: MIT-SHM attach fails under this container's X server and takes
-  # x11vnc down with it moments after a clean-looking start -- proven by
-  # running it without the flag, not assumed. `setsid`, same reason as Xvfb.
-  # `-xrandr resize`: follow the display when it changes size instead of
-  # serving the geometry it saw at startup. Without it a `/display:resize`
-  # leaves x11vnc describing a screen that no longer exists, and the viewer
-  # gets a picture that does not match the framebuffer behind it.
-  setsid nohup x11vnc -display "$DISPLAY_VALUE" -noshm -forever -shared -nopw \
-    -rfbport "$VNC_PORT" -listen 127.0.0.1 -noxdamage -quiet -xrandr resize \
-    >/tmp/lemma-x11vnc.log 2>&1 < /dev/null &
-fi
-if ! pgrep -f "websockify .*${VNC_WS_PORT}" >/dev/null 2>&1; then
-  setsid nohup websockify --heartbeat 30 127.0.0.1:"$VNC_WS_PORT" 127.0.0.1:"$VNC_PORT" \
-    >/tmp/lemma-websockify.log 2>&1 < /dev/null &
-fi
+# x11vnc and websockify are NOT started here. They serve a person watching,
+# and nobody is watching most of the time: an agent doing research holds the
+# display, the browser and the relay, and pays for the viewing half of the
+# stack for nothing. Measured by starting one process at a time in a 2 GB
+# sandbox -- Xvfb 21 MiB, matchbox 9, x11vnc 27, websockify 40. That is
+# 66 MiB, or the whole viewing chain, for a picture no socket is attached to.
+#
+# `start-vnc-bridge` brings both up, and the viewer path runs it: the relay
+# client's ensure string, and `/vnc` itself before it accepts a socket. The
+# agent's own paths -- `lemma-node-tool`, `save-webpage` -- do not.
 
 # Down to the size we actually mean to run at.
 #
@@ -277,20 +348,22 @@ fi
 # Non-fatal: a display left at the ceiling is a bigger picture than intended,
 # which is worth a line in the log and not a failed browser.
 #
-# One more ordering constraint, learned the hard way twice: x11vnc must be
-# *settled*, not merely started. A mode change that lands while it is taking
-# its first frame kills it outright -- `X_GetImage`, and the pane then has
-# nothing to connect to. Once it is serving, it follows a resize happily
-# (`-xrandr resize`), which is why every later `/display:resize` is safe.
-# So: wait for the port to answer, then a breath, then change the mode.
+# The precondition is an X client, and matchbox is one.
+#
+# This used to wait for x11vnc's port before resizing, on the recorded
+# grounds that "against an Xvfb that x11vnc has not attached to,
+# `xrandr --newmode` exits 0 and creates nothing". The first half of that is
+# true and the attribution was wrong. Measured three times each, on this
+# image:
+#
+#     nothing attached   -> stays 1920x1200 (and says so on stderr)
+#     matchbox only      -> 1440x960
+#     matchbox + x11vnc  -> 1440x960
+#
+# So any X client satisfies it, matchbox is already running by this point,
+# and the size-down no longer needs the viewing half of the stack to exist.
+# That is what makes x11vnc deferrable at all.
 if [ "$START_SCREEN" != "$SCREEN" ] && command -v set-display-size >/dev/null 2>&1; then
-  waited=0
-  while [ "$waited" -lt 100 ] \
-    && ! (exec 3<>"/dev/tcp/127.0.0.1/${VNC_PORT}") 2>/dev/null; do
-    sleep 0.05
-    waited=$((waited + 1))
-  done
-  sleep 0.5
   start_w="${START_SCREEN%%x*}"
   start_rest="${START_SCREEN#*x}"
   start_h="${start_rest%%x*}"
@@ -312,22 +385,88 @@ fi
 # that fix, and it gives a 2 GB sandbox two processes back.
 start-browser-relay || true
 
-if [ "$#" -gt 0 ]; then
-  open_log="/tmp/agent-browser-open.log"
-  if agent-browser open "$@" >"$open_log" 2>&1; then
-    open_status=0
-  else
-    open_status=$?
-  fi
-  cat "$open_log"
-  exit "$open_status"
-fi
+# Never `agent-browser open` with no URL. Measured, on this image with
+# agent-browser 0.37.1: a bare `open` relaunches Chrome onto a throwaway
+# `--user-data-dir=/tmp/agent-browser-chrome-<uuid>`, while `open <url>`
+# keeps it on the profile this script configured. That matters far beyond
+# tidiness, because Chrome writes `DevToolsActivePort` into whichever
+# directory it is actually using -- so after a bare open, the port file in
+# the durable profile names the *previous* launch and answers nothing.
+#
+# Everything that asks "is the browser running" without starting one reads
+# that file: `browser_relay.chrome.live_port`, and through it `/health`'s
+# `chrome` field, `/vnc`'s "the browser is not running" refusal, `/targets`,
+# and both cookie routes; plus `browser-is-live` here and in `save-webpage`.
+# Measured end to end: after `lemma-ensure-display about:blank`, `live_port()`
+# returns the live port; after a bare `lemma-ensure-display` on top of that
+# same healthy browser, it raises -- so a viewer attaching was breaking the
+# thing that tells the backend a browser is there.
+#
+# And when a browser is already live, open nothing at all. `open` is not a
+# cheap no-op: it relaunches, which would throw away the page somebody is
+# watching every time the pane reconnects.
+# Chrome opens its new-tab page in the first window whatever we ask for, and
+# we have no use for it. Measured on a cold sandbox: closing it takes the
+# target list from four to three and Chrome from eleven processes to nine.
+#
+# The memory is not the argument -- that was within noise, 938 MB against
+# 935. The argument is what the page is: `chrome://newtab/` pulls in a
+# `chrome-untrusted://new-tab-page/one-google-bar` frame, which is Google's
+# content, in a browser a person signs into their own accounts through. An
+# agent's sandbox has no reason to load it.
+#
+# Closed rather than suppressed because there is no flag for it: the startup
+# page is Chrome's, `--no-first-run` does not govern it, and seeding
+# `Preferences` means owning a file Chrome rewrites. `agent-browser tab
+# list` does not show the page either -- it filters WebUI targets -- so this
+# goes through CDP directly.
+#
+# Never fatal, and never run when we did not just open the browser: a tab
+# somebody is looking at is not ours to close.
+close_new_tab_page() {
+  local port_file="${PROFILE_DIR}/DevToolsActivePort"
+  [ -r "$port_file" ] || return 0
+  local port
+  port="$(head -1 "$port_file" 2>/dev/null)" || return 0
+  [ -n "$port" ] || return 0
+  local target
+  target="$(curl -fsS -m 3 "http://127.0.0.1:${port}/json/list" 2>/dev/null \
+    | python3 -c 'import json, sys
+try:
+    targets = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+for target in targets:
+    if str(target.get("url", "")).startswith("chrome://newtab"):
+        print(target.get("id", ""))
+        break' 2>/dev/null)" || return 0
+  [ -n "$target" ] || return 0
+  curl -fsS -m 3 -o /dev/null "http://127.0.0.1:${port}/json/close/${target}" \
+    2>/dev/null || true
+  return 0
+}
 
 open_log="/tmp/agent-browser-open.log"
-if agent-browser open >"$open_log" 2>&1; then
+opened_cold=0
+if [ "$#" -gt 0 ]; then
+  set -- "$@"
+elif browser-is-live; then
+  exit 0
+else
+  set -- about:blank
+  opened_cold=1
+fi
+if agent-browser open "$@" >"$open_log" 2>&1; then
   open_status=0
 else
   open_status=$?
+fi
+if [ "$open_status" = "0" ]; then
+  mkdir -p "$(dirname "$PROXY_STAMP")"
+  printf '%s\n' "$PROXY_WANTED" > "$PROXY_STAMP"
+fi
+if [ "$opened_cold" = "1" ] && [ "$open_status" = "0" ]; then
+  close_new_tab_page
 fi
 cat "$open_log"
 exit "$open_status"
