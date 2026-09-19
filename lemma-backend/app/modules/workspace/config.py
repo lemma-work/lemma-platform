@@ -74,9 +74,13 @@ class WorkspaceSettings(BaseSettings):
     )
     workspace_profile_digest: str = Field(
         # Bumped when the workspace image changes, so a sandbox built from the
-        # previous one is replaced rather than reused. Last moved when the
-        # GitHub CLI was added to the image.
-        default=f"sha256:{'3' * 64}",
+        # previous one is replaced rather than reused. Last moved for the
+        # browser work: the durable profile, the renamed `lemma-ensure-display`
+        # and the shared `browser-is-live` all ship in the image, and a sandbox
+        # still running the previous one silently keeps the old scripts --
+        # which is what happened to the change before this, where the image
+        # moved and this constant did not.
+        default=f"sha256:{'4' * 64}",
         pattern=r"^sha256:[0-9a-f]{64}$",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_DIGEST"),
         description="Immutable workspace profile digest",
