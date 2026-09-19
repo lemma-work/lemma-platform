@@ -29,16 +29,27 @@ agent-browser click @e3 && agent-browser wait --url "**/dashboard" && agent-brow
 
 Split them only where you genuinely need to see the output before choosing the next step. `&&` also stops at the first failure, so a click that missed does not go on to report a snapshot of the page it failed to leave.
 
-Environment facts:
+What is different about this browser:
 
-- Nothing is running at startup, and there is no step to remember. Any `agent-browser` command brings up whatever it needs first -- the display, the window manager, the VNC stack and the browser -- if they are down. There is no separate command to call, and nothing to check beforehand.
-- There is **one browser per sandbox**, and it is the person's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself unless you genuinely need a second browser at the same time (see *Parallel isolated sessions*). Naming one by hand opens a different, empty Chrome — not the one that is signed in and not the one the panel shows.
-- **The profile is durable, and it is the person's.** It lives in their home (`~/.lemma/browser/profile`), so a site they have signed in to stays signed in — across your run, across a suspend, and across conversations, exactly as the browser on their own desk does. Chrome itself still comes and goes: the daemon closes it after five idle minutes and the memory guard may kill it under pressure. That costs you a cold start, not the login.
-- **Do not write session state to disk yourself.** `agent-browser state save ./auth.json` puts cookies in plain text on the durable root, where they outlive the run that made them and are readable by whatever runs next. There is also no reason to: the profile already persists. If a site is not signed in, `browser_sign_in` asks the person.
-- **A person may be watching this browser, and may take it over.** It is streamed live into the workspace app's *Your computer → Browser* panel, where they can click and type in the page themselves. Nothing stops you acting at the same time and you do not need to wait: this is your browser and they are looking over your shoulder. If a step lands somewhere you did not expect — a page you did not navigate to, a field already filled — assume they did it, re-snapshot, and carry on from what is on screen rather than from what you last saw.
-- **The window size is shared, and it moves.** One display serves the sandbox. While somebody has the *Your computer → Browser* panel open it is sized to match their pane; when the last of them closes it, it returns to 1440x960. So the viewport you measured at the start of a run may not be the one you have now, and the usual casualty is a recording or a set of screenshots that turn out to be the wrong shape afterwards. If the size matters, set it yourself and say so: `set-display-size <width> <height>` (bounded by `WORKSPACE_XVFB_MAX_SCREEN`), then take the recording. Re-read it with `xrandr --current` if you need to be sure rather than hopeful.
-- Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
-- Never install Playwright or browser binaries — everything is preinstalled.
+- **It is the person's, and there is one of it.** Its session and profile are
+  set for you: do not pass `--session` or `--profile` unless you genuinely
+  need a second browser at the same time (see *Parallel isolated sessions*).
+  Naming one by hand opens a different, empty Chrome — not the one that is
+  signed in, and not the one the person is watching.
+- **Sites stay signed in**, across your run and across conversations, the way
+  they do in the browser on their desk. If one is not, `browser_sign_in` asks
+  them; you never type a password. Never save session state to a file
+  (`agent-browser state save`) — it writes cookies in plaintext that outlive
+  your run, and the browser already remembers.
+- **Somebody may be watching, and may take over.** If a step lands somewhere
+  you did not expect — a page you did not navigate to, a field already
+  filled — assume they did it, re-snapshot, and carry on from what is on
+  screen. You do not need to wait for them.
+- **The window size can change under you**, because it follows whoever is
+  watching. If the size matters for a screenshot or a recording, set it
+  first: `set-display-size <width> <height>`.
+- Local apps: browse `http://127.0.0.1:<port>`, never the public preview URL.
+- Everything is preinstalled. Never install Playwright or a browser.
 
 ## Acting On Pages
 
@@ -80,7 +91,8 @@ Raw CSS selectors (`agent-browser click "#submit"`) are the last resort.
 agent-browser get text @e5 ; agent-browser get attr @e10 href
 agent-browser get url ; agent-browser get title
 agent-browser --max-output 500000 get html html > page.html   # big output needs --max-output
-agent-browser screenshot shot.jpeg ; agent-browser screenshot --full full.jpeg
+agent-browser screenshot shot.jpeg      # the viewport — what you usually want
+agent-browser screenshot --full full.jpeg   # whole scroll: slow, and megabytes
 agent-browser screenshot --annotate map.png                   # numbered labels keyed to @eN refs
 
 # Arbitrary JS — heredoc avoids quote-escaping hell
@@ -93,12 +105,13 @@ EOF
 
 **A screenshot is a file until you look at it.** `screenshot` writes to the sandbox and tells you nothing about what it captured; `view_image` with `workspace_file_path` is what puts the picture in front of you. If this agent's model cannot see images, `view_image` asks one that can and hands you back the description — so set `instructions` to the question you actually have ("is the chart's y-axis labelled?"), not "describe this".
 
-Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg` — a full-page `.png` is several times the bytes for a photograph of a web page.
+Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg`, and to the viewport. A full-page `.png` is several times the bytes for a photograph of a web page, and a full-page capture of a long article measured 12.4s and 7.0 MB against 2.5s and 76 KB for the viewport. Ask for `--full` only when the part you need is below the fold.
 
 Save pages for later reading/citation (markdown via Readability+Turndown; pdf/jpeg/png direct):
 
 ```bash
 save-webpage https://example.com/article --formats markdown,pdf --out research
+save-webpage https://example.com/article --formats jpeg --full-page   # whole scroll, when you need it
 ```
 
 ## Recipes
