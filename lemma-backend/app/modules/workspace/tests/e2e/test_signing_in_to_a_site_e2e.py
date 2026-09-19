@@ -237,7 +237,9 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
     # or an earlier run of this one against a resumed sandbox -- leaves this
     # site signed in. That is the feature working; it just means a test whose
     # first assertion is "nobody is signed in" has to make that true.
-    await _run(ctx, "agent-browser open about:blank && agent-browser cookies clear || true")
+    await _run(
+        ctx, "agent-browser open about:blank && agent-browser cookies clear || true"
+    )
 
     try:
         # 1. Nothing signed in, so the person has to be asked.
