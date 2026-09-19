@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.events import (
@@ -239,9 +240,25 @@ class ConversationRepository(
                 .order_by(AgentRunModel.created_at.desc(), AgentRunModel.id.desc())
                 .limit(1)
             )
-            # Seeded into __dict__ rather than assigned, so SQLAlchemy does not
-            # treat this as a mutation of the relationship and try to flush it.
-            model.__dict__["agent_runs"] = [latest] if latest is not None else []
+            # `set_committed_value`, not a plain assignment (which the ORM
+            # reads as a mutation and tries to flush) and not a `__dict__`
+            # write, which is what this used to do. A bare list in `__dict__`
+            # is not an instrumented collection -- no `_sa_adapter` -- and
+            # nothing notices until a later flush in the same unit of work asks
+            # this relationship for its history, which then raises
+            # `AttributeError` from SQLAlchemy's dependency processor,
+            # attributed to whatever was being written at the time.
+            #
+            # No test here holds this: whether the flush consults the
+            # relationship depends on what else is in it, and the case that
+            # raised every time locally passed in CI. The argument is that an
+            # uninstrumented collection is wrong whether or not today's flush
+            # plan looks at it. `set_committed_value` is the documented way to
+            # attach separately-queried rows as loaded state, and raises no
+            # history events -- all the `__dict__` write was reaching for.
+            set_committed_value(
+                model, "agent_runs", [latest] if latest is not None else []
+            )
         return model.to_entity()
 
     async def list_conversations(
@@ -362,7 +379,10 @@ class ConversationRepository(
             )
             for model in models:
                 latest = latest_by_conversation.get(model.id)
-                model.__dict__["agent_runs"] = [latest] if latest is not None else []
+                # See `get_conversation` above for why this is not `__dict__`.
+                set_committed_value(
+                    model, "agent_runs", [latest] if latest is not None else []
+                )
         return [model.to_entity() for model in models]
 
     async def create_agent_run(

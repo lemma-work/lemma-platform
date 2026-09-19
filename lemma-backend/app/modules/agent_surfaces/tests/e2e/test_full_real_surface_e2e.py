@@ -77,19 +77,6 @@ def _is_teams_text_message(item: dict) -> bool:
     return body.get("type") == "message" and bool(str(body.get("text") or "").strip())
 
 
-class _FakeScheduleManager:
-    async def create_schedule(self, *, account, app_trigger, config) -> str:
-        del account, config
-        return f"surface-e2e-{app_trigger.id}"
-
-    async def delete_schedule(self, account, provider_id: str) -> None:
-        del account, provider_id
-
-    async def get_schedule(self, account, provider_id: str):
-        del account, provider_id
-        return
-
-
 async def _wait_for_composio_execution(
     server,
     *,

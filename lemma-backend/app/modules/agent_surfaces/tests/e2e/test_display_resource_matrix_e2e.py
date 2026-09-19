@@ -1,34 +1,36 @@
-"""display_resource(type=FILE) tool-coverage matrix: native attachment vs
-link-card fallback by size, across Slack/Teams/Telegram/WhatsApp, plus
-attachment_paths-on-reply-tool for Gmail/Outlook/Resend.
+"""``display_resource(type=FILE)``: attached natively, or degraded to a link.
 
-Supersedes ``test_surface_file_egress_e2e.py``, which called the surface
-handler's delivery method directly — bypassing the real ``display_resource``
-tool entirely. These tests script the tool as a genuine LLM tool call so the
-tool's own size check and the surface's native-vs-link decision both run for
-real.
+The tool checks the size and the surface decides whether it can send the bytes
+at all. Those two together are the matrix, and they read as a table: Slack and
+Telegram attach a small file and fall back to a link card for a large one;
+WhatsApp attaches; Teams has no native file send whatever the size, so every
+Teams file is a link.
+
+This supersedes ``test_surface_file_egress_e2e.py``, which called the surface
+handler's delivery method directly and so exercised neither the tool's size
+check nor the native-vs-link decision. Here `display_resource` is a genuine
+scripted LLM tool call and both run for real.
 
 The oversize cases lower ``SURFACE_INLINE_SOFT_BYTE_CAP`` rather than seeding a
-file past the real 20 MB cap — see ``_oversize_bytes``.
+file past the real 20 MB cap: twenty megabytes through the datastore to prove a
+branch that reads one integer is memory and wall clock for nothing.
 
-N/A cells:
-- **Teams has no native file-send implementation at all**
-  (``TeamsSurfaceAdapter`` doesn't override ``_render_file``, so the
-  base adapter's stub always returns ``False``) — every Teams file, regardless
-  of size, falls back to a link card. Only one Teams case is needed since
-  there is no size-threshold behavior to prove.
-- **WhatsApp's per-media-kind thresholds are unit-tested, not covered here** —
-  ``fits_inline`` is no longer uniform across platforms: WhatsApp caps an image
-  at 5 MB and a document at 100 MB, so its threshold is the one that does *not*
-  follow from the Slack and Telegram cases. That branch is proven in
+Two cells are deliberately absent:
+
+- **WhatsApp's per-media-kind thresholds** are unit-tested, not covered here.
+  ``fits_inline`` is not uniform -- WhatsApp caps an image at 5 MB and a
+  document at 100 MB -- so its threshold is the one that does *not* follow from
+  the Slack and Telegram cases. That branch is proven in
   ``tests/unit/test_attachment_limits.py``; an e2e case driving an oversize
   WhatsApp image through a real upload rejection is a genuine gap.
-- **Composio-connected Gmail/Outlook attach exactly one file, by URL** —
-  Composio's action takes a public/signed URL and fetches it server-side, so a
-  datastore path becomes a signed URL and any file after the first is appended
-  to the body as a link (see ``GmailPlatformService._resolve_reply_attachments``).
-  Both cases here assert ``attachment_count == 1``. Workspace paths cannot be
-  signed and come back as an "unresolved" note instead — also uncovered.
+- **Composio-connected Gmail/Outlook attach exactly one file, by URL.**
+  Composio's action takes a signed URL and fetches it server-side, so any file
+  after the first is appended to the body as a link (see
+  ``GmailPlatformService._resolve_reply_attachments``). Workspace paths cannot
+  be signed and come back as an "unresolved" note instead -- also uncovered.
+
+The pod-resource catalog and the email attachment keep their own tests below:
+neither is about size.
 """
 
 from __future__ import annotations
@@ -38,38 +40,34 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
+from httpx import AsyncClient
 from sandbox_runtime.protocol import (
     PortAccessGrant,
     PortProtocol,
     SandboxKey,
     WorkloadKind,
 )
-from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent.tools.user_interaction import (
     pydantic_adapter as user_interaction_adapter,
 )
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.platforms import attachment_limits
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    REAL_TEAMS_CHANNEL_ID,
-    REAL_TEAMS_TENANT_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _load_slack_dm_fixture,
-    _load_teams_channel_mention_fixture,
     _messages_for_conversation,
     _resend_payload,
-    _seed_external_user,
     _seed_pod_file,
-    _set_user_mobile_number,
-    _telegram_payload,
-    _whatsapp_payload,
+)
+from app.modules.agent_surfaces.tests.e2e.platform_payloads import (
+    slack as slack_payloads,
 )
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     wait_for_messages,
@@ -80,169 +78,136 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_display_resource,
     script_text,
 )
+from app.modules.agent_surfaces.tests.e2e.surface_journey import stage_surface
 from app.modules.connectors.domain.connector import AuthProvider
 
 pytestmark = pytest.mark.e2e
 
-
 _TOOL_CALL_ID = "tool-display-1"
 
-# Threshold the oversize cases are driven at. The real soft cap is 20 MB, and a
-# 20 MB payload seeded through the datastore only to prove a branch that reads one
-# integer is memory and wall-clock for nothing — so lower the cap instead of
-# inflating the file. `inline_cap` reads the module global per call, which is what
-# makes this work.
+#: Threshold the oversize cases are driven at. `inline_cap` reads the module
+#: global per call, which is what makes lowering it work.
 _TINY_INLINE_CAP_BYTES = 2048
 
-
-def _oversize_bytes(monkeypatch) -> bytes:
-    """Bytes guaranteed to exceed the inline cap, with the cap lowered to match."""
-    monkeypatch.setattr(
-        attachment_limits, "SURFACE_INLINE_SOFT_BYTE_CAP", _TINY_INLINE_CAP_BYTES
-    )
-    return b"x" * (_TINY_INLINE_CAP_BYTES + 1024)
+#: Where a link card points. Any file the surface cannot send natively becomes
+#: one of these.
+LINK_HOST = "app.example.test"
 
 
-class _FakeScheduleManager:
-    async def create_schedule(self, *, account, app_trigger, config) -> str:
-        return f"e2e-{app_trigger.id}"
+#: platform -> (bucket a native attachment lands in, bucket a reply lands in).
+#: Teams has no native file send at all -- `TeamsSurfaceAdapter` does not
+#: override `_render_file`, so the base stub always returns False -- which is
+#: why its native bucket is None and it has no size-threshold case to prove.
+DELIVERY = {
+    SurfacePlatform.SLACK: ("SLACK_FILE_UPLOAD_URL", "SLACK"),
+    SurfacePlatform.TELEGRAM: ("TELEGRAM_FILE", "TELEGRAM"),
+    SurfacePlatform.WHATSAPP: ("WHATSAPP_MEDIA_UPLOAD", "WHATSAPP"),
+    SurfacePlatform.TEAMS: (None, "TEAMS"),
+}
 
-    async def delete_schedule(self, account, provider_id: str) -> None:
-        return None
+#: The cases, as (platform, oversize). Teams appears once: there is no
+#: threshold behaviour to prove when the answer is always a link.
+SIZE_CASES = [
+    (SurfacePlatform.SLACK, False),
+    (SurfacePlatform.SLACK, True),
+    (SurfacePlatform.TELEGRAM, False),
+    (SurfacePlatform.TELEGRAM, True),
+    (SurfacePlatform.WHATSAPP, False),
+    (SurfacePlatform.TEAMS, True),
+]
 
-    async def get_schedule(self, account, provider_id: str):
-        return None
+
+@pytest.fixture
+def platform_fake(fake_slack, fake_teams, fake_telegram, fake_whatsapp):
+    return {
+        SurfacePlatform.SLACK: fake_slack,
+        SurfacePlatform.TEAMS: fake_teams,
+        SurfacePlatform.TELEGRAM: fake_telegram,
+        SurfacePlatform.WHATSAPP: fake_whatsapp,
+    }
 
 
-async def test_display_resource_slack_small_file_attaches_natively(
+@pytest.mark.parametrize(
+    ("platform", "oversize"),
+    SIZE_CASES,
+    ids=lambda value: (
+        value.value
+        if isinstance(value, SurfacePlatform)
+        else ("oversize" if value else "small")
+    ),
+)
+async def test_a_file_is_attached_natively_or_degrades_to_a_link(
+    platform: SurfacePlatform,
+    oversize: bool,
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
-    fake_slack,
+    fixed_test_org,
     message_store,
     monkeypatch,
-):
-    from app.core.config import settings as app_settings
+    platform_fake,
+) -> None:
+    native_bucket, reply_bucket = DELIVERY[platform]
+    expect_native = native_bucket is not None and not oversize
+    if oversize:
+        monkeypatch.setattr(
+            attachment_limits, "SURFACE_INLINE_SOFT_BYTE_CAP", _TINY_INLINE_CAP_BYTES
+        )
+    content = b"x" * (_TINY_INLINE_CAP_BYTES + 1024) if oversize else b"%PDF-1.4 tiny"
+    name = "large.pdf" if oversize else "small.pdf"
 
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="slack",
-        credentials={
-            "access_token": "xoxb-file-matrix",
-            "scope": "chat:write",
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "bot_user_id": "U0AGSSTQZLH",
-                "team_id": "T0123456",
-                "api_base_url": fake_slack.base_url,
-            },
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "SLACK", "account_id": str(account.id)},
+    stage = await stage_surface(
+        platform,
+        fake=platform_fake[platform],
         toolsets=["USER_INTERACTION"],
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
     )
     path = await _seed_pod_file(
         db_session,
         user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="small.pdf",
-        content=b"%PDF-small",
+        pod_id=stage.pod_id,
+        name=name,
+        content=content,
     )
 
-    dm_payload = _load_slack_dm_fixture(text="show the report", ts="1700002100.600600")
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
+    await stage.say(
+        "show the report",
         script=[
             script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
             script_text("Here you go."),
         ],
     )
 
-    upload_urls = await wait_for_messages(
-        message_store, "SLACK_FILE_UPLOAD_URL", min_count=1
+    if expect_native:
+        uploaded = await wait_for_messages(message_store, native_bucket, min_count=1)
+        assert uploaded[-1]["filename"] == name
+        # And no link: the bytes went, so nothing had to stand in for them.
+        replies = message_store.get_all(reply_bucket)
+        assert not any(name in (message.get("text") or "") for message in replies), (
+            f"{platform.value}: attached the file and still sent a link for it"
+        )
+        return
+
+    if native_bucket is not None:
+        assert message_store.get_all(native_bucket) == [], (
+            f"{platform.value}: attempted a native upload it should have skipped"
+        )
+    replies = await wait_for_messages(message_store, reply_bucket, min_count=1)
+    # The URL rides in the card's button rather than the notification-fallback
+    # text, so this looks at the whole message.
+    assert LINK_HOST in json.dumps(replies, default=str), (
+        f"{platform.value}: no link card stood in for the file: {replies}"
     )
-    assert upload_urls[-1]["filename"] == "small.pdf"
-    completions = message_store.get_all("SLACK_FILE_COMPLETE")
-    assert completions
-    # No plain-text link fallback message was needed for the file itself.
-    slack_messages = message_store.get_all("SLACK")
-    assert not any("small.pdf" in m.get("text", "") for m in slack_messages)
 
 
-async def test_display_resource_slack_large_file_falls_back_to_link(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test")
-    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="slack",
-        credentials={
-            "access_token": "xoxb-file-matrix-large",
-            "scope": "chat:write",
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "bot_user_id": "U0AGSSTQZLH",
-                "team_id": "T0123456",
-                "api_base_url": fake_slack.base_url,
-            },
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "SLACK", "account_id": str(account.id)},
-        toolsets=["USER_INTERACTION"],
-    )
-    big = _oversize_bytes(monkeypatch)
-    path = await _seed_pod_file(
-        db_session,
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="big.bin",
-        content=big,
-    )
-
-    dm_payload = _load_slack_dm_fixture(
-        text="show the big file", ts="1700002200.600600"
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
-        script=[
-            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
-            script_text("Here's a link instead."),
-        ],
-    )
-
-    # Never attempted a native upload — straight to the link card.
-    assert message_store.get_all("SLACK_FILE_UPLOAD_URL") == []
-    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=1)
-    # The deep-link URL rides in the card's Block Kit button (accessory), not the
-    # notification-fallback ``text`` — serialize the whole message to find it,
-    # like the Teams case below.
-    rendered = json.dumps(slack_messages)
-    assert "app.example.test" in rendered
+# -- Not about size: a catalog of pod resources, and email's one reply -----
 
 
 async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
@@ -408,7 +373,7 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
         db_session,
         SurfacePlatformWebhookIngress(
             source="slack",
-            payload=_load_slack_dm_fixture(
+            payload=slack_payloads.dm(
                 text="Show me the incident resources and current report views",
                 ts="1700002250.600600",
             ),
@@ -486,259 +451,6 @@ async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
     assert sum("The incident catalog is ready." in text for text in delivered) == 1, (
         f"the final answer must land exactly once, got {delivered}"
     )
-
-
-async def test_display_resource_teams_file_always_falls_back_to_link(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_teams,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-
-    async def _fake_bot_token(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return "teams-bot-token"
-
-    async def _disable_graph(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return None
-
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_bot_token", _fake_bot_token)
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_graph_token", _disable_graph)
-    monkeypatch.setattr(
-        surface_settings,
-        "microsoft_bot_openid_config_url",
-        fake_teams.openid_config_url,
-    )
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test")
-    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="microsoft_teams",
-        credentials={
-            "access_token": "teams-token",
-            "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={
-            "type": "TEAMS",
-            "account_id": str(account.id),
-            "allowed_channel_ids": [REAL_TEAMS_CHANNEL_ID],
-        },
-        toolsets=["USER_INTERACTION"],
-    )
-    path = await _seed_pod_file(
-        db_session,
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="small.pdf",
-        content=b"%PDF-small",
-    )
-
-    payload = _load_teams_channel_mention_fixture(fake_teams)
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="teams", payload=payload, headers={}),
-        script=[
-            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
-            script_text("Here's a link instead."),
-        ],
-    )
-
-    teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    rendered = json.dumps(teams_messages)
-    assert "app.example.test" in rendered
-
-
-async def test_display_resource_telegram_small_file_attaches_natively(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    message_store,
-    monkeypatch,
-):
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
-        f"{fake_telegram.api_base}/bot",
-    )
-    pod_id = test_pod["id"]
-    sender_id = 555030405
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "TELEGRAM"},
-        toolsets=["USER_INTERACTION"],
-    )
-    await _seed_external_user(
-        db_session,
-        platform="TELEGRAM",
-        external_user_id=str(sender_id),
-        resolved_user_id=UUID(fixed_test_user["id"]),
-    )
-    path = await _seed_pod_file(
-        db_session,
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="small.pdf",
-        content=b"%PDF-small",
-    )
-
-    payload = _telegram_payload(
-        text="show the report", message_id=921, sender_id=sender_id
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        script=[
-            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
-            script_text("Here you go."),
-        ],
-    )
-
-    files = await wait_for_messages(message_store, "TELEGRAM_FILE", min_count=1)
-    assert files[-1]["filename"] == "small.pdf"
-
-
-async def test_display_resource_telegram_large_file_falls_back_to_link(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_telegram,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test")
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
-        f"{fake_telegram.api_base}/bot",
-    )
-    pod_id = test_pod["id"]
-    sender_id = 555040506
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "TELEGRAM"},
-        toolsets=["USER_INTERACTION"],
-    )
-    await _seed_external_user(
-        db_session,
-        platform="TELEGRAM",
-        external_user_id=str(sender_id),
-        resolved_user_id=UUID(fixed_test_user["id"]),
-    )
-    big = _oversize_bytes(monkeypatch)
-    path = await _seed_pod_file(
-        db_session,
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="big.bin",
-        content=big,
-    )
-
-    payload = _telegram_payload(
-        text="show the big file", message_id=922, sender_id=sender_id
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
-        script=[
-            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
-            script_text("Here's a link instead."),
-        ],
-    )
-
-    assert message_store.get_all("TELEGRAM_FILE") == []
-    telegram_messages = await wait_for_messages(message_store, "TELEGRAM", min_count=1)
-    rendered = " ".join(m.get("text", "") for m in telegram_messages)
-    assert "app.example.test" in rendered
-
-
-async def test_display_resource_whatsapp_small_file_attaches_natively(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_whatsapp,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
-        f"{fake_whatsapp.api_base}/v21.0",
-    )
-    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
-    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-001")
-    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "wa-secret")
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    pod_id = test_pod["id"]
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "WHATSAPP"},
-        toolsets=["USER_INTERACTION"],
-    )
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="15550888888",
-    )
-    path = await _seed_pod_file(
-        db_session,
-        user_id=fixed_test_user["id"],
-        pod_id=pod_id,
-        name="small.pdf",
-        content=b"%PDF-small",
-    )
-
-    payload = _whatsapp_payload(
-        text="show the report",
-        message_id="wamid-e2e-file-001",
-        phone_number_id="1234567890",
-        waba_id="waba-001",
-        sender_phone="15550888888",
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="whatsapp", payload=payload, headers={}),
-        script=[
-            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
-            script_text("Here you go."),
-        ],
-    )
-
-    uploads = await wait_for_messages(
-        message_store, "WHATSAPP_MEDIA_UPLOAD", min_count=1
-    )
-    assert uploads[-1]["filename"] == "small.pdf"
-    whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=1)
-    documents = [m for m in whatsapp_messages if m.get("type") == "document"]
-    assert documents
-    assert documents[-1]["document"]["filename"] == "small.pdf"
 
 
 async def test_a_file_shown_on_email_is_attached_to_the_one_reply(
