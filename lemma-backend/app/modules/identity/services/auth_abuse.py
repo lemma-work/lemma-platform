@@ -6,7 +6,6 @@ import hmac
 import json
 import secrets
 import time
-from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Any
 
@@ -27,9 +26,20 @@ return {current, redis.call('TTL', KEYS[1])}
 """
 
 
-@dataclass(frozen=True)
 class RateLimitExceeded(Exception):
-    retry_after_seconds: int
+    """Too many attempts; the caller is told how long to wait.
+
+    A plain ``__init__`` rather than a frozen dataclass, matching
+    ``DesktopAuthRateLimitExceeded``. Freezing an exception looks harmless and
+    is not: the generated ``__setattr__`` refuses ``__traceback__``, so the
+    moment one of these propagates out of an async generator -- which is what
+    ``identity_lease`` is -- Python raises ``FrozenInstanceError`` instead, and
+    every ``except RateLimitExceeded`` downstream is bypassed.
+    """
+
+    def __init__(self, retry_after_seconds: int):
+        super().__init__("Rate limit exceeded")
+        self.retry_after_seconds = retry_after_seconds
 
 
 class AltchaRejected(ValueError):

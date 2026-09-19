@@ -49,16 +49,28 @@ async def _auth_users(email: str) -> list[AuthUser]:
 
 
 async def _secure_recovered_account(user: AuthUser, email: str) -> None:
+    """Take the account back from whoever registered it first.
+
+    Order is the whole point. Revoking sessions does not prevent a *login*, so
+    revoking before the password is replaced leaves a window: someone who
+    preregistered this address can sign in during it and walk away with a
+    session the revoke has already swept past, which is account takeover of a
+    mailbox its real owner just proved. Replacing the password first closes the
+    door, and revoking afterwards clears anything issued before or during the
+    rotation.
+    """
+    for method in user.login_methods:
+        if method.recipe_id != "emailpassword":
+            continue
+        updated = await update_email_or_password(
+            method.recipe_user_id,
+            password=secrets.token_urlsafe(48),
+            apply_password_policy=False,
+        )
+        if not isinstance(updated, UpdateEmailOrPasswordOkResult):
+            raise ChallengeRejected("Password recovery could not finish; retry")
     await revoke_all_sessions_for_user(user.id)
     for method in user.login_methods:
-        if method.recipe_id == "emailpassword":
-            updated = await update_email_or_password(
-                method.recipe_user_id,
-                password=secrets.token_urlsafe(48),
-                apply_password_policy=False,
-            )
-            if not isinstance(updated, UpdateEmailOrPasswordOkResult):
-                raise ChallengeRejected("Password recovery could not finish; retry")
         if method.has_same_email_as(email) and not method.verified:
             token = await create_email_verification_token(
                 "public", method.recipe_user_id, email

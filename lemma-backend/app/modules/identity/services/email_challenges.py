@@ -162,7 +162,7 @@ class EmailChallengeService:
         digest = _binding_hash(binding, purpose)
         async with self._sessions() as session:
             row = await session.get(EmailChallenge, challenge_id)
-            self._require_bound(row, digest, purpose)
+            self._require_bound(row, digest, purpose, allow_revoked=True)
             assert row is not None
             if row.verified_at is not None:
                 raise ChallengeRejected("Verification is already complete")
@@ -249,8 +249,13 @@ class EmailChallengeService:
         digest = _binding_hash(binding, purpose)
         async with self._sessions() as session:
             row = await session.get(EmailChallenge, challenge_id, with_for_update=True)
-            self._require_bound(row, digest, purpose)
+            self._require_bound(row, digest, purpose, allow_revoked=True)
             assert row is not None
+            if row.revoked_at is not None:
+                # Already gone. Cancelling is idempotent on purpose: the caller
+                # asked for this row to be dead and it is, and refusing here is
+                # what made "cancel" fail for anyone whose code never sent.
+                return
             row.revoked_at = datetime.now(timezone.utc)
             code_id = row.code_id
             await session.commit()
@@ -258,12 +263,26 @@ class EmailChallengeService:
 
     @staticmethod
     def _require_bound(
-        row: EmailChallenge | None, digest: str, purpose: ChallengePurpose
+        row: EmailChallenge | None,
+        digest: str,
+        purpose: ChallengePurpose,
+        *,
+        allow_revoked: bool = False,
     ) -> None:
+        """Prove this caller owns the challenge before acting on it.
+
+        `allow_revoked` is for the two callers that are getting *out* of a
+        challenge rather than acting on a live one. A send that fails after the
+        previous codes were retired leaves signup pointing at a revoked row,
+        and treating that row as unownable is what strands the person: they can
+        no longer verify (rightly, the code is dead), but nor can they resend or
+        even type "cancel". Ownership is still proven the same way -- only the
+        liveness clause is relaxed, so this reveals nothing a live row would not.
+        """
         if (
             row is None
             or row.purpose != purpose
             or not hmac.compare_digest(row.binding_hash, digest)
-            or row.revoked_at is not None
+            or (row.revoked_at is not None and not allow_revoked)
         ):
             raise ChallengeRejected("Verification is no longer available; start again")

@@ -92,7 +92,19 @@ class ChatOnboardingCoordinator:
     async def _advance(self, transport: OnboardingTransport) -> OnboardingIngressResult:
         event = transport.event
         state = await self._state(transport.binding_key)
-        if state is None or state.handed_off_at is not None:
+        if (
+            state is None
+            or state.handed_off_at is not None
+            or state.step == OnboardingStep.READY
+        ):
+            # READY joins the handed-off case because by then the workspace,
+            # the verified identity and the route all exist -- everything the
+            # recognised-sender path needs. Only the replay of the *original*
+            # request is still outstanding, and it runs on its own event. What
+            # used to happen here instead was that a message arriving in that
+            # window re-ran provisioning and returned handled-with-no-context:
+            # neither an answer nor a queue, so the message was simply dropped,
+            # and the window widens whenever the worker is slow or retrying.
             started = await recognize_sender(
                 self._uows,
                 transport,

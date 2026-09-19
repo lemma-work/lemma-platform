@@ -39,6 +39,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     resolve_whatsapp_send_type,
     whatsapp_cta_url_payload,
     whatsapp_display_resource_text,
+    flow_with_message,
     whatsapp_message_bodies,
     whatsapp_text_payload,
     truncate_whatsapp_text,
@@ -119,7 +120,9 @@ class WhatsAppPlatformService:
         flow = (metadata or {}).get("onboarding_flow")
         if event.is_dm and flow:
             await self._client.send_interactive(
-                phone_number_id=phone_number_id, to=sender_wa_id, interactive=flow
+                phone_number_id=phone_number_id,
+                to=sender_wa_id,
+                interactive=flow_with_message(flow, message),
             )
             return
         for body in whatsapp_message_bodies(message):
