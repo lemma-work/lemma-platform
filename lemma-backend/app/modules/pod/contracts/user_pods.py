@@ -18,6 +18,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.authorization.models import RoleAssignmentModel, RoleModel
 from app.modules.pod.domain.visibility import normalize_role_list
@@ -151,3 +152,43 @@ async def _attach_roles(*, session, pods: list[VisiblePod]) -> None:
         if pod.pod_member_id is None:
             continue
         pod.roles.extend(normalize_role_list(by_member.get(pod.pod_member_id, [])))
+
+
+@dataclass(frozen=True, slots=True)
+class AttachablePod:
+    """A pod a chat conversation could be wired to, as it will be offered."""
+
+    id: UUID
+    name: str
+
+
+async def list_attachable_pods(
+    *,
+    session: AsyncSession,
+    organization_member_ids: list[UUID],
+    limit: int | None = None,
+) -> list[AttachablePod]:
+    """The pods these memberships belong to, newest first.
+
+    Narrower than `list_visible_pods` on purpose: that one answers the sidebar
+    and works out organizations and roles. This one answers "which of your
+    workspaces should this chat use", where membership is the whole question.
+
+    Takes membership ids rather than a user id for the same reason
+    `ensure_personal_workspace` does -- resolving a user to their memberships
+    is identity's to answer, and a pod query that joined identity's tables to
+    find out would put this module on the wrong side of that line.
+    """
+    if not organization_member_ids:
+        return []
+    rows = await session.execute(
+        select(Pod.id, Pod.name)
+        .join(PodMember, PodMember.pod_id == Pod.id)
+        .where(
+            PodMember.organization_member_id.in_(organization_member_ids),
+            Pod.is_deleted.is_(False),
+        )
+        .order_by(Pod.created_at.desc(), Pod.id)
+        .limit(limit)
+    )
+    return [AttachablePod(id=pod_id, name=name) for pod_id, name in rows]

@@ -178,7 +178,7 @@ async def test_system_claim_available_when_org_has_not_claimed_it(monkeypatch):
     assert claim.claimed_by_pod_id is None
 
 
-async def test_system_claim_names_the_pod_holding_it(monkeypatch):
+async def test_shared_bot_remains_available_with_an_existing_personal_pod(monkeypatch):
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
     holder_pod_id = uuid4()
     conflict = SimpleNamespace(pod_id=holder_pod_id, name="whatsapp")
@@ -190,9 +190,9 @@ async def test_system_claim_names_the_pod_holding_it(monkeypatch):
     )
     claim = _by_platform(resp)[SurfacePlatform.WHATSAPP].system_claim
     assert claim is not None
-    assert claim.available is False
-    assert claim.claimed_by_pod_id == holder_pod_id
-    assert claim.claimed_by_surface_name == "whatsapp"
+    assert claim.available is True
+    assert claim.claimed_by_pod_id is None
+    assert claim.claimed_by_surface_name is None
 
 
 async def test_system_claim_degrades_to_available_when_lookup_fails(monkeypatch):
@@ -287,8 +287,8 @@ async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeyp
     assert email_claim is not None
     assert email_claim.available is True
     assert email_claim.claimed_by_pod_id is None
-    # The identity platforms are unchanged — this exempts email, not the rule.
-    assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is False
+    assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is True
+    assert by_platform[SurfacePlatform.TELEGRAM].system_claim.available is True
 
 
 async def test_email_domain_is_published_so_the_builder_can_name_an_address(

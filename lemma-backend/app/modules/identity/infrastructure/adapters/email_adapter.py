@@ -31,6 +31,25 @@ def _humanize_pod_name(value: str) -> str:
 class SmtpIdentityEmailAdapter(IdentityEmailPort):
     """SMTP adapter for identity notification emails."""
 
+    async def send_phone_changed_email(
+        self, *, to_email: str, mobile_number: str
+    ) -> bool:
+        rendered = render_transactional_email(
+            preheader="Your Lemma phone number changed.",
+            eyebrow="Account update",
+            heading="Your phone number changed",
+            body=(
+                f"Your verified phone number is now {mobile_number}.",
+                "If you did not make this change, contact Lemma support.",
+            ),
+        )
+        return await self._send(
+            to_email=to_email,
+            subject="Your Lemma phone number changed",
+            html_content=rendered.html,
+            text_content=rendered.text,
+        )
+
     def _display_name_from_email(self, email: str) -> str:
         local_part = email.split("@", 1)[0].split("+", 1)[0]
         name = " ".join(
@@ -174,6 +193,49 @@ class SmtpIdentityEmailAdapter(IdentityEmailPort):
         return await self._send(
             to_email=to_email,
             subject="Welcome to Lemma",
+            html_content=rendered.html,
+            text_content=rendered.text,
+        )
+
+    async def send_chat_signup_code_email(
+        self,
+        *,
+        to_email: str,
+        code: str,
+        surface_label: str,
+    ) -> bool:
+        """The code that proves somebody chatting to an agent owns this address.
+
+        Names the surface they are chatting on, because that is the one detail
+        that tells an innocent recipient what this is: an unexplained code is
+        indistinguishable from an attempt on their account, and somebody *can*
+        cause this mail by typing a stranger's address into WhatsApp. Saying
+        where it came from lets them ignore it with confidence.
+
+        No action button. The code has to be carried back to the conversation
+        that asked for it, and a link would invite the wrong move.
+        """
+        rendered = render_transactional_email(
+            preheader=f"Your Lemma code is {code}.",
+            eyebrow="Confirm your email",
+            heading=f"Your code is {code}",
+            body=(
+                (
+                    f"Use this code to continue with Lemma on {surface_label}. "
+                    "Enter it only where you requested it."
+                ),
+                (
+                    "If you did not request this code, you can ignore this email. "
+                    "The code expires in ten minutes."
+                ),
+            ),
+            footer=(
+                "You are receiving this because this address was entered in Lemma.",
+            ),
+        )
+        return await self._send(
+            to_email=to_email,
+            subject="Your Lemma verification code",
             html_content=rendered.html,
             text_content=rendered.text,
         )

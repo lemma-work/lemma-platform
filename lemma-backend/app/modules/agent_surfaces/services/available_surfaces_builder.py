@@ -115,6 +115,8 @@ async def _system_claim(
     something that then fails, or hides something that would have worked."""
     if SurfaceCredentialMode.SYSTEM not in modes:
         return None
+    if platform in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM):
+        return SurfaceSystemClaim(available=True)
     capabilities = get_platform_capabilities(platform.value)
     if capabilities is not None and not capabilities.system_credential_is_identity:
         return SurfaceSystemClaim(available=True)

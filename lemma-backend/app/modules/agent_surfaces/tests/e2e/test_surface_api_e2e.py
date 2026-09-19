@@ -510,7 +510,7 @@ async def test_platform_webhook_verification_endpoints_and_signature_rejection(
     assert missing_signature.status_code == 401
 
 
-async def test_surface_credentials_are_unique_within_org_until_deleted(
+async def test_shared_bots_allow_personal_pods_but_customer_accounts_remain_unique(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -548,20 +548,10 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
-    assert duplicate_system.status_code == 409, duplicate_system.text
-    assert "System WHATSAPP credentials are already used" in duplicate_system.text
-    # The setup UI names the pod holding the claim and links to it, so the
-    # conflict has to be structured — not just a message.
-    conflict_body = duplicate_system.json()
-    assert conflict_body["code"] == "AGENT_SURFACE_CREDENTIAL_CONFLICT"
-    assert conflict_body["details"]["kind"] == "SYSTEM"
-    assert conflict_body["details"]["conflicting_surface"] == {
-        "pod_id": primary_pod_id,
-        "name": "whatsapp",
-    }
+    assert duplicate_system.status_code == 200, duplicate_system.text
+    assert duplicate_system.json()["pod_id"] == sibling_pod_id
+    assert duplicate_system.json()["id"] != system_created.json()["id"]
 
-    # And the catalog publishes the same claim up front, so the option can be
-    # disabled before the user commits.
     catalog = await authenticated_client.get(
         f"/pods/{sibling_pod_id}/available-surfaces"
     )
@@ -570,9 +560,9 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         row for row in catalog.json()["surfaces"] if row["platform"] == "WHATSAPP"
     )
     assert whatsapp_row["system_claim"] == {
-        "available": False,
-        "claimed_by_pod_id": primary_pod_id,
-        "claimed_by_surface_name": "whatsapp",
+        "available": True,
+        "claimed_by_pod_id": None,
+        "claimed_by_surface_name": None,
     }
 
     deleted_system = await authenticated_client.delete(
@@ -581,7 +571,7 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     assert deleted_system.status_code == 204, deleted_system.text
 
     reused_system = await authenticated_client.post(
-        f"/pods/{sibling_pod_id}/surfaces",
+        f"/pods/{primary_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
     assert reused_system.status_code == 200, reused_system.text
@@ -611,8 +601,7 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "SLACK", "account_id": str(account.id)},
     )
-    # Same AgentSurfaceCredentialConflict as the SYSTEM case above, so the same
-    # 409 - a conflict, not an unprocessable body.
+    # Customer-owned installations still have one credential owner.
     assert duplicate_account.status_code == 409, duplicate_account.text
     assert "connected account is already used" in duplicate_account.text
 

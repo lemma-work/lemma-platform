@@ -32,6 +32,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
+    _create_agent,
     _create_surface,
     _ensure_connector_account,
     _seed_external_user,
@@ -595,6 +596,11 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
         connector_id=connector_id,
         credentials=credentials,
     )
+    # Its own agent: an agent reaches a platform in one place, so the system bot
+    # and the custom bot cannot both hang off the pod's default agent. What this
+    # test is about -- that the two bots' threads never cross -- is unchanged by
+    # whose they are, and arguably clearer when they are visibly different.
+    custom_agent = await _create_agent(authenticated_client, pod_id)
     custom_surface = await _create_surface(
         authenticated_client,
         pod_id,
@@ -604,6 +610,7 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
             "credential_mode": "CUSTOM",
         },
         name=f"{platform.lower()}-custom",
+        agent_name=custom_agent["name"],
     )
     custom_surface_id = UUID(custom_surface["id"])
 
@@ -694,14 +701,13 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
         receiver_surface_ids=[custom_surface_id],
     )
     assert isinstance(unresolved_ctx, SurfaceReplyContext)
-    unresolved_message = (unresolved_ctx.reply_message or "").lower()
-    # However each platform words it, the reply has to say how to become known:
-    # Telegram asks for the contact, WhatsApp names the number it did not
-    # recognise and points at the profile that would claim it.
-    assert (
-        "sign up" in unresolved_message
-        or "contact" in unresolved_message
-        or "share your phone" in unresolved_message
-        or "profile" in unresolved_message
-    )
-    assert "/pods/" not in (unresolved_ctx.reply_message or "")
+    # What matters is the kind, not the wording. This assertion used to list the
+    # phrases each platform happened to use, and every change to any of them
+    # widened the list -- which tests the copy, not the behaviour. The rule is
+    # that a sender we cannot place is offered a way to become known, whether
+    # that is Telegram's contact share, WhatsApp naming the number, or the
+    # onboarding exchange asking for an address.
+    assert unresolved_ctx.reply_kind in {"identity_link", "signup"}
+    assert unresolved_ctx.reply_message
+    # And never a pod path: this is the shared number, reachable by anyone.
+    assert "/pods/" not in unresolved_ctx.reply_message

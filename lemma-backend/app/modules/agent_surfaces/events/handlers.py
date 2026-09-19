@@ -1,4 +1,8 @@
 from __future__ import annotations
+from collections.abc import Awaitable, Callable
+
+from datetime import datetime, timezone
+from sqlalchemy import false, update
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
@@ -29,12 +33,21 @@ from app.modules.agent_surfaces.api.dependencies import (
     get_surface_service,
     surface_repository_factory,
 )
-from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.events import (
+    SurfaceWebhookReceivedEvent,
+    SurfaceOnboardingReadyEvent,
+    SurfaceEvents,
+)
+from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+    VerifiedSurfaceIdentity,
+)
 from app.modules.agent_surfaces.domain.ingress_request import (
+    SurfaceIngressRequest,
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.domain.ingress_context import AgentSurfaceContext
+from app.modules.agent_surfaces.domain.onboarding_state import OnboardingIngressResult
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
@@ -73,6 +86,34 @@ def provide_job_queue() -> SharedStreaqJobQueue:
     return get_streaq_job_queue()
 
 
+@reliable_redis_stream_subscriber(
+    router,
+    SurfaceEvents.STREAM,
+    group="agent-surfaces.onboarding",
+    consumer="agent-surfaces.onboarding-consumer",
+)
+async def handle_onboarding_ready(
+    event: dict[str, object],
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+    job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    if event.get("event_type") != SurfaceOnboardingReadyEvent.get_event_type():
+        return
+
+    async def process() -> None:
+        from app.modules.agent_surfaces.services.onboarding_replay import (
+            replay_onboarding,
+        )
+
+        ready = SurfaceOnboardingReadyEvent.model_validate(event)
+        await replay_onboarding(
+            ready.pending_id, uow_factory=uow_factory, job_queue=job_queue
+        )
+
+    await inbox.process("agent-surfaces.onboarding", event, process)
+
+
 def build_surface_event_handler(uow):
     return AgentSurfaceIngressService(
         uow=uow,
@@ -80,6 +121,16 @@ def build_surface_event_handler(uow):
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
     )
+
+
+def provide_onboarding_handler(
+    uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+) -> Callable[[SurfaceIngressRequest], Awaitable[OnboardingIngressResult]]:
+    from app.modules.agent_surfaces.services.chat_onboarding import (
+        ChatOnboardingCoordinator,
+    )
+
+    return ChatOnboardingCoordinator(uow_factory).handle
 
 
 @reliable_redis_stream_subscriber(
@@ -94,6 +145,9 @@ async def handle_surface_webhook(
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ] = Depends(provide_onboarding_handler),
 ) -> None:
     # ``surface_events`` also carries ``surface.connected`` and
     # ``surface.message.answered``, which exist for the analytics projections.
@@ -114,7 +168,11 @@ async def handle_surface_webhook(
 
     async def process() -> None:
         await _process_surface_webhook(
-            received, fs_logger, uow_factory=uow_factory, job_queue=job_queue
+            received,
+            fs_logger,
+            uow_factory=uow_factory,
+            job_queue=job_queue,
+            onboarding_handler=onboarding_handler,
         )
 
     await inbox.process("agent-surfaces.webhook", received, process)
@@ -158,6 +216,10 @@ async def _process_surface_webhook(
     *,
     uow_factory: UnitOfWorkFactory,
     job_queue: SharedStreaqJobQueue,
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ]
+    | None = None,
 ) -> None:
 
     if event.surface_id:
@@ -187,17 +249,32 @@ async def _process_surface_webhook(
         if await handler.try_handle_lifecycle(ingress_request):
             return
 
-        if await handler.try_handle_interaction(ingress_request):
+        from app.modules.agent_surfaces.services.onboarding_inputs import (
+            is_onboarding_input,
+        )
+
+        if not is_onboarding_input(
+            ingress_request.payload
+        ) and await handler.try_handle_interaction(ingress_request):
             return
 
-        # One delivery can carry more than one message on a platform that
-        # batches; every other platform hands back the request unchanged.
-        contexts = [
-            (index, await handler.prepare_ingress(part))
-            for index, part in enumerate(
-                handler.split_webhook_deliveries(ingress_request)
-            )
-        ]
+        deliveries = handler.split_webhook_deliveries(ingress_request)
+
+    if onboarding_handler is None:
+        from app.modules.agent_surfaces.services.chat_onboarding import (
+            ChatOnboardingCoordinator,
+        )
+
+        onboarding_handler = ChatOnboardingCoordinator(uow_factory).handle
+    contexts: list[tuple[int, AgentSurfaceContext | None]] = []
+    for index, part in enumerate(deliveries):
+        onboarding = await onboarding_handler(part)
+        if onboarding.handled:
+            context = onboarding.context
+        else:
+            async with uow_factory() as uow:
+                context = await build_surface_event_handler(uow).prepare_ingress(part)
+        contexts.append((index, context))
 
     for index, context in contexts:
         if not context:
@@ -271,9 +348,30 @@ async def on_identity_event(
         return
 
     async def process() -> None:
+        from app.modules.identity.contracts.onboarding import current_verified_phone
+
         parsed = UserMobileChangedEvent.model_validate(event)
+        phone = await current_verified_phone(uow_factory, parsed.user_id)
         async with uow_factory() as uow:
             await ExternalSurfaceUserRepository(uow).clear_resolved_user(parsed.user_id)
+            # Every phone-bound identity goes when the account no longer has a
+            # verified number; otherwise only the ones bound to the old one. The
+            # `phone is None` arm has to be written as a SQL literal -- a plain
+            # Python bool inside `or_` reads as SQL and is not.
+            still_bound = (
+                VerifiedSurfaceIdentity.verified_phone == phone
+                if phone is not None
+                else false()
+            )
+            await uow.session.execute(
+                update(VerifiedSurfaceIdentity)
+                .where(
+                    VerifiedSurfaceIdentity.user_id == parsed.user_id,
+                    VerifiedSurfaceIdentity.verified_phone.isnot(None),
+                    ~still_bound,
+                )
+                .values(revoked_at=datetime.now(timezone.utc))
+            )
 
     await inbox.process("agent-surfaces.identity", event, process)
 

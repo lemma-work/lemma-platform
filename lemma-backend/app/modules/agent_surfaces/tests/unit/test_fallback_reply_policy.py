@@ -171,6 +171,46 @@ async def test_a_stranger_is_told_once_per_window_not_once_per_message() -> None
     assert adapter.send_message.await_count == 1
 
 
+async def test_an_onboarding_conversation_is_not_cut_off_by_the_stranger_window() -> (
+    None
+):
+    """The window stops repetition, not a conversation somebody is having.
+
+    Onboarding needs three replies in a row -- ask, code sent, you're in -- and
+    each one answers a message the person just sent. Capping them the way an
+    unprompted nudge is capped would leave everybody stranded after the first,
+    having been asked a question that could never be answered.
+    """
+    adapter = SimpleNamespace(send_message=AsyncMock(return_value=None))
+    event = ParsedInboundSurfaceEvent(
+        platform="WHATSAPP",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="14155550001",
+        sender_external_user_id="14155550001",
+        message_text="hello",
+        is_dm=True,
+    )
+    store = SimpleNamespace(claim_stranger_reply=AsyncMock(return_value=False))
+
+    for message in ("What's your email?", "Sent a code.", "You're set up."):
+        await deliver_fallback_reply(
+            adapter=adapter,
+            context=SurfaceReplyContext(
+                platform=SurfacePlatform.WHATSAPP,
+                surface_id=uuid4(),
+                reply_kind="identity_link",
+                reply_message=message,
+                event=event,
+            ),
+            credentials={"access_token": "token"},
+            event_dedup_store=store,
+        )
+
+    assert adapter.send_message.await_count == 3
+    # And the window was never consulted: a turn in a conversation is not a nudge.
+    assert store.claim_stranger_reply.await_count == 0
+
+
 def _slack_channel_event() -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
         platform="SLACK",

@@ -20,9 +20,6 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.domain.errors import (
-    AgentSurfaceCredentialConflictError,
-)
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_org_credential_binding,
 )
@@ -61,21 +58,15 @@ class _Repository:
         return None
 
 
-async def test_a_second_pod_may_not_take_the_whatsapp_number():
-    """The rule the exemption must not weaken.
-
-    Inbound WhatsApp arrives keyed on the number and nothing else, so two pods
-    holding it would receive each other's messages.
-    """
-    # A real entity, because the guard checks isinstance before refusing — a
-    # stand-in would make this pass by not being recognised as a conflict.
-    holder = _surface(SurfacePlatform.WHATSAPP)
-
-    with pytest.raises(AgentSurfaceCredentialConflictError):
-        await ensure_unique_org_credential_binding(
-            _surface(SurfacePlatform.WHATSAPP),
-            surface_repository=_Repository(holder),
-        )
+@pytest.mark.parametrize(
+    "platform", [SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM]
+)
+async def test_shared_bot_allows_personal_pods_with_independent_sender_routes(platform):
+    repository = _Repository(_surface(platform))
+    await ensure_unique_org_credential_binding(
+        _surface(platform), surface_repository=repository
+    )
+    assert repository.system_lookups == 0
 
 
 async def test_email_is_exempt_because_its_credential_is_not_an_identity():
