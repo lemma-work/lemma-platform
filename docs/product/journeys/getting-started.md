@@ -307,6 +307,5 @@ are shown with a retry action rather than an indefinite loading message.
 - Only a verified email domain may select or claim an email-domain organization.
 - Organization-only setup for an importer shall create no spare personal pod;
   a later first-chat request shall still ensure a pod and assistant.
-- A saved workspace selection shall be scoped to the person and organization.
 
 **Contracts:** `users.ensure_first_workspace`

@@ -40,7 +40,10 @@ async def test_calling_it_twice_does_not_make_a_second_workspace(
     assert first.json()["organization_id"] == second.json()["organization_id"], (
         "a repeat call must return the same organization"
     )
-    assert second.json()["entry"] == "saved"
+    # "existing", not the "saved" this used to say: there was never a saved
+    # selection to honour. The only thing that ever wrote one was this call
+    # storing back the workspace it had just picked.
+    assert second.json()["entry"] == "existing"
     assert first.json()["pod_id"] == second.json()["pod_id"]
     assert second.json()["assistant_id"]
     assert not second.json()["pod_created"]

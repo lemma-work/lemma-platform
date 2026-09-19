@@ -7142,7 +7142,6 @@
           },
           "entry": {
             "enum": [
-              "saved",
               "existing",
               "surface_join",
               "domain_join",

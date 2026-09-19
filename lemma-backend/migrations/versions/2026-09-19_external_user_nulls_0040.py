@@ -21,15 +21,15 @@ answer differently depending on which one is read.
 changes no data, and it says the thing that was meant -- one cache row per
 sender per platform, whether or not that platform has a tenant.
 
-Revision ID: 0041_external_user_nulls
-Revises: 0040_one_surface_per_agent
+Revision ID: 0040_external_user_nulls
+Revises: 0039_one_surface_per_agent
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0041_external_user_nulls"
-down_revision = "0040_one_surface_per_agent"
+revision = "0040_external_user_nulls"
+down_revision = "0039_one_surface_per_agent"
 branch_labels = None
 depends_on = None
 

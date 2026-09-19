@@ -70,15 +70,6 @@ class OrganizationMember(UUIDAuditBase):
         ForeignKey("organizations.id", ondelete="CASCADE")
     )
     role: Mapped[OrganizationRole] = mapped_column(String(50))
-    #: The personal workspace this person last used in this organization, so a
-    #: later visit lands where the last one left off. It belongs here rather
-    #: than in a table of its own: a selection is keyed by exactly (user,
-    #: organization), which is this row, and a table keyed the same way needed
-    #: a join back to this one on every read just to ask whether the membership
-    #: still existed. As a column it cannot outlive the membership at all.
-    selected_pod_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("pods.id", ondelete="SET NULL"), nullable=True
-    )
 
     organization: Mapped[Organization] = relationship(
         "Organization", back_populates="members"

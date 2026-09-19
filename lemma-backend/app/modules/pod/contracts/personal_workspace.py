@@ -25,7 +25,6 @@ async def ensure_personal_workspace(
     organization_id: UUID,
     owner_user_id: UUID,
     owner_membership_id: UUID,
-    saved_pod_id: UUID | None,
     name: str,
 ) -> PersonalWorkspace:
     member_count = (
@@ -54,17 +53,13 @@ async def ensure_personal_workspace(
         )
         .exists(),
     )
-    chosen_id = (
-        await uow.session.scalar(
-            select(Pod.id).where(*eligible, Pod.id == saved_pod_id)
-        )
-        if saved_pod_id is not None
-        else None
+    # The oldest eligible pod, and nothing cleverer. A saved-selection hint used
+    # to sit in front of this, but nothing ever recorded a selection -- the only
+    # writer was this function storing back what it had just picked -- so the
+    # hint could only ever agree with the fallback it was shadowing.
+    chosen_id = await uow.session.scalar(
+        select(Pod.id).where(*eligible).order_by(Pod.created_at, Pod.id).limit(1)
     )
-    if chosen_id is None:
-        chosen_id = await uow.session.scalar(
-            select(Pod.id).where(*eligible).order_by(Pod.created_at, Pod.id).limit(1)
-        )
     if chosen_id is not None:
         assistant_id = await ensure_pod_default_agent(
             uow, pod_id=chosen_id, user_id=owner_user_id

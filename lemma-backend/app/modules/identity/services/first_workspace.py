@@ -27,7 +27,7 @@ from app.modules.identity.infrastructure.workspace_locks import lock_workspace_s
 from app.modules.identity.services.organization_service import OrganizationService
 from app.modules.pod.contracts.personal_workspace import ensure_personal_workspace
 
-WorkspaceEntry = Literal["saved", "existing", "surface_join", "domain_join", "new_org"]
+WorkspaceEntry = Literal["existing", "surface_join", "domain_join", "new_org"]
 WorkspaceStatus = Literal["ready", "organization_access_required"]
 
 
@@ -74,26 +74,12 @@ async def ensure_first_workspace(
             )
         entry = "surface_join"
     else:
-        # No join to check the membership is still there: the selection lives on
-        # the membership, so one cannot outlast the other.
         organization_id = await uow.session.scalar(
             select(OrganizationMember.organization_id)
-            .where(
-                OrganizationMember.user_id == user_id,
-                OrganizationMember.selected_pod_id.is_not(None),
-            )
+            .where(OrganizationMember.user_id == user_id)
             .order_by(OrganizationMember.organization_id)
             .limit(1)
         )
-        if organization_id is not None:
-            entry = "saved"
-        else:
-            organization_id = await uow.session.scalar(
-                select(OrganizationMember.organization_id)
-                .where(OrganizationMember.user_id == user_id)
-                .order_by(OrganizationMember.organization_id)
-                .limit(1)
-            )
         if organization_id is None:
             work_domain = work_domain_from_email(email) if user.is_verified else None
             if work_domain:
@@ -127,15 +113,14 @@ async def ensure_first_workspace(
             organization_id = organization.id
 
     await lock_workspace_selection(uow.session, f"organization:{organization_id}")
-    membership = await uow.session.scalar(
-        select(OrganizationMember).where(
+    membership_id = await uow.session.scalar(
+        select(OrganizationMember.id).where(
             OrganizationMember.user_id == user_id,
             OrganizationMember.organization_id == organization_id,
         )
     )
-    if membership is None:
+    if membership_id is None:
         raise IdentityAccessDeniedError("Organization membership is required")
-    membership_id = membership.id
     pod_id = assistant_id = None
     pod_created = False
     if with_pod:
@@ -144,10 +129,8 @@ async def ensure_first_workspace(
             organization_id=organization_id,
             owner_user_id=user_id,
             owner_membership_id=membership_id,
-            saved_pod_id=membership.selected_pod_id,
             name=first_pod_name(full_name),
         )
-        membership.selected_pod_id = personal.pod_id
         pod_id, assistant_id, pod_created = (
             personal.pod_id,
             personal.assistant_id,

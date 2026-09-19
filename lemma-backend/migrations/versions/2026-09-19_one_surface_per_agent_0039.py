@@ -17,15 +17,15 @@ it rather than exempted: surfaces for several Slack workspaces, and a system bot
 running beside a customer's own bot. Both stay possible across *different*
 agents, which is where they belong.
 
-Revision ID: 0040_one_surface_per_agent
-Revises: 0039_chat_onboarding
+Revision ID: 0039_one_surface_per_agent
+Revises: 0038_chat_onboarding
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0040_one_surface_per_agent"
-down_revision = "0039_chat_onboarding"
+revision = "0039_one_surface_per_agent"
+down_revision = "0038_chat_onboarding"
 branch_labels = None
 depends_on = None
 
