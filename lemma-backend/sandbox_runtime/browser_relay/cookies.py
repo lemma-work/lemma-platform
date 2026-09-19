@@ -26,6 +26,7 @@ import itertools
 import json
 import logging
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -184,8 +185,24 @@ def origins_to_clear(hosts: set[str], targets: Iterable[Mapping[str, Any]]) -> s
     return found
 
 
-async def forget_domains(domains: list[str], *, port: int) -> int:
-    """Sign the browser out of these hosts. Returns how many cookies went.
+@dataclass(frozen=True, slots=True)
+class ForgetOutcome:
+    """What a sign-out actually managed, as opposed to what it attempted.
+
+    `dropped` is counted *before* the clear runs -- it is how many cookies
+    matched, not how many went -- so on its own it says nothing about
+    whether anything happened. `refused` is what makes it readable: zero
+    means the count is also the outcome, non-zero means some of that data
+    is still there and nobody may be told they are signed out.
+    """
+
+    dropped: int
+    refused: int
+    origins: int
+
+
+async def forget_domains(domains: list[str], *, port: int) -> ForgetOutcome:
+    """Sign the browser out of these hosts.
 
     `Storage.clearDataForOrigin` per host, which is a targeted delete and
     takes everything a site can hold a session in -- cookies, local storage,
@@ -227,7 +244,7 @@ async def forget_domains(domains: list[str], *, port: int) -> int:
     """
     wanted = {d.lstrip(".").lower() for d in domains if d}
     if not wanted:
-        return 0
+        return ForgetOutcome(dropped=0, refused=0, origins=0)
     async with websockets.connect(
         await _browser_socket(port), open_timeout=_CDP_TIMEOUT_SECONDS
     ) as browser:
@@ -273,7 +290,17 @@ async def forget_domains(domains: list[str], *, port: int) -> int:
             len(origins),
             ",".join(sorted(set(refused))),
         )
-    return dropped
+    # Reported, not swallowed. `clearDataForOrigin` is the only thing here
+    # that deletes anything -- the read above merely counts -- so a run in
+    # which every origin refused has removed nothing at all, and returning
+    # the pre-clear count let the route drop the "signed in" mark and show
+    # a finished sign-out over a session that was still live.
+    return ForgetOutcome(dropped=dropped, refused=len(refused), origins=len(origins))
 
 
-__all__ = ["forget_domains", "list_cookie_domains", "origins_to_clear"]
+__all__ = [
+    "ForgetOutcome",
+    "forget_domains",
+    "list_cookie_domains",
+    "origins_to_clear",
+]

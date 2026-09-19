@@ -44,6 +44,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import tempfile
 
 import httpx
 
@@ -245,8 +246,13 @@ def recorded_port(session: str | None = None) -> int:
         raise BrowserNotRunning(f"no port recorded at {path} ({exc!r})") from exc
 
 
-async def _answers_on(port: int) -> bool:
-    """Whether anything is actually listening, as opposed to recorded."""
+async def answers_on(port: int) -> bool:
+    """Whether anything is actually listening, as opposed to recorded.
+
+    Public because the relay asks it of websockify's port as well: "the
+    bridge script exited 0" and "a viewer will get a picture" are different
+    claims, and this is the one that answers the second.
+    """
     try:
         _, writer = await asyncio.wait_for(
             asyncio.open_connection("127.0.0.1", port),
@@ -287,7 +293,7 @@ async def live_port(session: str | None = None) -> int:
     next.
     """
     for port in _candidate_ports(session):
-        if await _answers_on(port):
+        if await answers_on(port):
             return port
     raise BrowserNotRunning("nothing answers on any recorded port")
 
@@ -532,6 +538,99 @@ def default_display_size() -> tuple[int, int]:
     return _FALLBACK_SCREEN
 
 
+#: Brings up x11vnc and websockify. Not started with the display: they serve
+#: a person watching, and measured at 67 MiB together in a sandbox where
+#: most sessions have nobody watching at all.
+_START_VNC_BRIDGE = "/usr/local/bin/start-vnc-bridge"
+
+#: Bounded well under the ten seconds a `websockets.connect` will wait for
+#: a handshake, because this runs *before* `accept()`: a viewer whose relay
+#: sits here longer than that gives up mid-handshake and sees a dropped
+#: TCP connection with no close frame and no reason attached, which is
+#: strictly worse than a refusal it can read.
+#:
+#: Shorter than the script's own worst case, and safe. The old worry was
+#: killing the script between starting x11vnc and starting websockify, but
+#: both launches happen in the first few hundred milliseconds and the rest
+#: of the script is only waiting for ports; the children are `setsid`
+#: detached, so killing the waiter never kills them, it only gives up
+#: watching. `/vnc`'s own probe decides the answer either way, so giving up
+#: early costs one refusal the viewer can read and retry, not a wrong yes.
+#:
+#: A backstop rather than a budget: measured cold, a whole first viewer --
+#: bridge, handshake and first RFB frame -- takes 0.68 s, and a warm one
+#: 0.33 s. Nothing reaches this number unless something is actually wrong.
+_VNC_BRIDGE_TIMEOUT_SECONDS = 8.0
+
+
+async def ensure_vnc_bridge() -> bool:
+    """Start the viewing chain if it is not up. True when a viewer can be served.
+
+    Called by `/vnc` before it accepts, because the relay is what serves the
+    socket and so the relay is what must guarantee its own upstream. The
+    backend's ensure string asks for this too, but not every caller comes
+    through the backend -- the workspace e2e drives this route directly, and
+    found exactly the gap this closes.
+
+    Missing script means an older image, where both processes are already
+    running because the display brought them up. Nothing to start, and not
+    an error.
+
+    **Stderr goes to a file and this waits on the process, rather than
+    `communicate()`.** Measured, and the difference is not small: the same
+    script takes 0.22s from a standalone `asyncio.run` and hits an
+    eight-second timeout from inside the relay, every time, while its work
+    has actually finished in the first fraction of a second. `communicate()`
+    returns when the process exits *and* the pipe reaches EOF, and the write
+    end of that pipe is inherited by the `setsid` grandchildren this script
+    exists to leave running -- x11vnc and websockify outlive it deliberately,
+    so the pipe never closes and the wait always runs to the timeout.
+
+    In CI that timeout was the whole failure: the route sat here for longer
+    than a `websockets.connect` will wait for a handshake, and the viewer saw
+    a dropped TCP connection with no close frame and no reason. A file has no
+    EOF to wait for, and it cannot fill and deadlock either.
+    """
+    if not Path(_START_VNC_BRIDGE).exists():
+        return True
+    log = logging.getLogger(__name__)
+    with tempfile.TemporaryDirectory(prefix="lemma-vnc-bridge-") as directory:
+        errors = Path(directory) / "stderr"
+        try:
+            with errors.open("wb") as sink:
+                process = await asyncio.create_subprocess_exec(
+                    _START_VNC_BRIDGE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=sink,
+                )
+        except OSError as exc:
+            log.warning("could not start the VNC bridge: %r", exc)
+            return False
+        try:
+            await asyncio.wait_for(process.wait(), timeout=_VNC_BRIDGE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            with suppress(ProcessLookupError):
+                process.kill()
+            with suppress(ProcessLookupError):
+                await process.wait()
+            log.warning(
+                "the VNC bridge did not finish within %.0fs; anything it "
+                "started is detached and left running",
+                _VNC_BRIDGE_TIMEOUT_SECONDS,
+            )
+            return False
+        if process.returncode != 0:
+            # The whole of the script's stderr, not a 200-character prefix
+            # of it: the script deliberately tails the failing process's
+            # log into that stream, and truncating it throws away the only
+            # evidence of why -- which is exactly what happened the last
+            # time this failed.
+            said = errors.read_bytes().decode("utf-8", "replace").strip()
+            log.warning("the VNC bridge did not come up:\n%s", said)
+            return False
+    return True
+
+
 class RecordingInProgress(RuntimeError):
     """A recording is running, so the display may not change size."""
 
@@ -564,9 +663,20 @@ async def recording_in_progress() -> bool:
     try:
         return await asyncio.wait_for(process.wait(), timeout=5) == 0
     except asyncio.TimeoutError:
+        # Fail *closed*, unlike the missing-`pgrep` branch above. A probe
+        # that hung is not evidence of no recording, and the two mistakes
+        # do not cost the same: a wrong "yes" is a 409 the viewer can retry
+        # a moment later, a wrong "no" resizes the framebuffer mid-take and
+        # the recording is already spoiled by the time anyone sees it. The
+        # missing-tool branch is the other way round because there the
+        # answer never changes -- failing closed there refuses every resize
+        # forever.
         with suppress(ProcessLookupError):
             process.kill()
-        return False
+        # Reaped, or the killed probe stays a zombie on a long-lived relay.
+        with suppress(ProcessLookupError):
+            await process.wait()
+        return True
 
 
 async def set_display_size(width: int, height: int) -> str | None:

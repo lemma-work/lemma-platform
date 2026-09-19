@@ -109,7 +109,7 @@ async def test_a_recorded_port_nothing_answers_on_is_not_believed(
     async def nothing_listening(_port: int) -> bool:
         return False
 
-    monkeypatch.setattr(chrome, "_answers_on", nothing_listening)
+    monkeypatch.setattr(chrome, "answers_on", nothing_listening)
 
     assert chrome.recorded_port() == 45999
     with pytest.raises(chrome.BrowserNotRunning):
@@ -126,7 +126,7 @@ async def test_a_recorded_port_that_answers_is_used(
     async def listening(_port: int) -> bool:
         return True
 
-    monkeypatch.setattr(chrome, "_answers_on", listening)
+    monkeypatch.setattr(chrome, "answers_on", listening)
     assert await chrome.live_port() == 45998
 
 
@@ -349,6 +349,83 @@ def test_every_profile_route_is_behind_the_token(monkeypatch, tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# A sign-out that did not sign anyone out
+# ---------------------------------------------------------------------------
+
+
+def _forget(monkeypatch, tmp_path, outcome):
+    """`/profile:forget` over a clear whose result is dictated by the test."""
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    client = _client(monkeypatch, tmp_path)
+    forgotten: list[list[str]] = []
+
+    async def _live_port(session: str = "") -> int:
+        return 9222
+
+    async def _forget_domains(domains, *, port):
+        return outcome
+
+    monkeypatch.setattr(relay_app, "live_port", _live_port)
+    monkeypatch.setattr(relay_app, "forget_domains", _forget_domains)
+    monkeypatch.setattr(
+        relay_app, "forget_marks", lambda sites: forgotten.append(sites)
+    )
+    response = client.post(
+        "/profile:forget",
+        json={"domains": ["example.com"], "sites": ["example.com"]},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+    return response, forgotten
+
+
+def test_a_refused_clear_is_not_reported_as_a_sign_out(monkeypatch, tmp_path) -> None:
+    """`clearDataForOrigin` is the only thing on this path that deletes
+    anything -- the cookie read above it merely counts. So a run in which
+    every origin refused has removed nothing, and returning the pre-clear
+    count let the route drop the "signed in" mark and show a person a
+    finished sign-out over a session that was still live.
+
+    The mark is the part that matters: a wrong count is a wrong number, a
+    wrong mark is somebody who stops looking.
+    """
+    from sandbox_runtime.browser_relay.cookies import ForgetOutcome
+
+    response, forgotten = _forget(
+        monkeypatch, tmp_path, ForgetOutcome(dropped=3, refused=2, origins=2)
+    )
+
+    assert response.status_code == 502
+    assert forgotten == [], "the mark must survive a clear that did not happen"
+
+
+def test_a_partial_refusal_is_a_refusal(monkeypatch, tmp_path) -> None:
+    """One origin cleared and one refused still leaves a live session."""
+    from sandbox_runtime.browser_relay.cookies import ForgetOutcome
+
+    response, forgotten = _forget(
+        monkeypatch, tmp_path, ForgetOutcome(dropped=3, refused=1, origins=4)
+    )
+
+    assert response.status_code == 502
+    assert forgotten == []
+
+
+def test_a_clean_clear_still_drops_the_mark(monkeypatch, tmp_path) -> None:
+    """The negative: none of the above may cost the ordinary case, including
+    the one where a site's session had already lapsed and no cookie went."""
+    from sandbox_runtime.browser_relay.cookies import ForgetOutcome
+
+    response, forgotten = _forget(
+        monkeypatch, tmp_path, ForgetOutcome(dropped=0, refused=0, origins=2)
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dropped"] == 0
+    assert forgotten == [["example.com"]]
+
+
+# ---------------------------------------------------------------------------
 # A session name is a path segment
 # ---------------------------------------------------------------------------
 
@@ -452,6 +529,52 @@ def test_a_refused_vnc_viewer_is_told_which_refusal_it_was(
         with pytest.raises(WebSocketDisconnect) as refused:
             socket.receive_text()
     assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_bridge_that_lied_is_still_a_readable_refusal(monkeypatch, tmp_path) -> None:
+    """The CI failure this closes, and the reason the probe is not optional.
+
+    `ensure_vnc_bridge` reports what a shell script exited with. In CI the
+    script exited 0 while nothing was serving 5901, the route trusted it and
+    called `accept()`, and the socket then died mid-RFB -- "no close frame
+    received or sent", the one failure shape with nowhere to put a reason,
+    because the handshake has already succeeded by the time anything goes
+    wrong.
+
+    So the route asks the port directly, and asks it even when the script
+    said yes. Here the bridge claims success over a port nothing is on, and
+    the viewer gets a close code it can act on instead of a dropped socket.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+
+    async def fake_live_port(session=None):
+        return 12345
+
+    async def bridge_claims_success() -> bool:
+        return True
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app, "ensure_vnc_bridge", bridge_claims_success)
+    # A port bound and immediately closed: a number nothing can be listening
+    # on, without guessing one and racing whatever really holds it.
+    import socket as socketlib
+
+    probe = socketlib.socket()
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+    monkeypatch.setattr(relay_app, "VNC_WS_PORT", dead_port)
+
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_UPSTREAM_GONE
 
 
 def test_a_vnc_viewer_without_the_token_is_refused_the_same_way(
@@ -574,10 +697,24 @@ def test_the_vnc_keepalive_touches_the_session_being_watched(
     it. It also kept a browser nobody was watching alive, in a sandbox whose
     memory guard kills on ~220 MB free.
     """
+    import socket as socketlib
+
     from starlette.websockets import WebSocketDisconnect
 
     from sandbox_runtime.browser_relay import app as relay_app
     from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+
+    # A real listening socket on a real port, rather than a stubbed probe.
+    # The route now refuses before `accept()` unless something is actually
+    # serving VNC -- it used to trust the bridge script's exit code, and in
+    # CI the two came apart: exit 0, accept, then a socket that died
+    # mid-RFB with no close frame. This test needs to get past that check
+    # to reach the keepalive, and the honest way to satisfy a "is anything
+    # listening" probe is for something to be listening.
+    upstream = socketlib.socket()
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(1)
+    monkeypatch.setattr(relay_app, "VNC_WS_PORT", upstream.getsockname()[1])
 
     async def fake_live_port(session=None):
         return 12345
