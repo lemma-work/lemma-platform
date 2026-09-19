@@ -9,10 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Callable
 from uuid import UUID
 
 from app.core.request_context import create_inherited_task
 from app.modules.workspace.services.browser_view_service import BrowserViewService
+
+#: How a reset gets a view service.
+#:
+#: A named parameter rather than something a test patches on this module:
+#: patching the constructor a subject reaches for from inside it is a double
+#: in front of half of what is under test, which `check_test_doubles` is
+#: there to stop. Every caller in the product takes the default.
+ServiceFactory = Callable[[], BrowserViewService]
 
 #: How many sockets are currently watching each person's display.
 #:
@@ -37,19 +46,24 @@ _watchers: dict[UUID, int] = {}
 _SETTLE_SECONDS = 5.0
 
 
-async def _reset_after_settling(user_id: UUID) -> None:
+async def _reset_after_settling(
+    user_id: UUID,
+    *,
+    build_service: ServiceFactory,
+    settle_seconds: float,
+) -> None:
     """Put the display back, once nobody has been watching for a moment.
 
-    Its own service, because this outlives the socket that scheduled it and
-    the one that socket held is closed on the way out.
+    Builds its own service, because this outlives the socket that scheduled
+    it and the one that socket held is closed on the way out.
 
     Best effort throughout. Failing to tidy up a display is not worth a log
     line on every network blip, let alone an error.
     """
-    await asyncio.sleep(_SETTLE_SECONDS)
+    await asyncio.sleep(settle_seconds)
     if _watchers.get(user_id):
         return
-    service = BrowserViewService()
+    service = build_service()
     try:
         with contextlib.suppress(Exception):
             await service.reset_display(user_id)
@@ -58,7 +72,12 @@ async def _reset_after_settling(user_id: UUID) -> None:
             await service.close()
 
 
-def watch_ended(user_id: UUID) -> None:
+def watch_ended(
+    user_id: UUID,
+    *,
+    build_service: ServiceFactory = BrowserViewService,
+    settle_seconds: float = _SETTLE_SECONDS,
+) -> None:
     """Drop this viewer, and schedule a reset if they were the last.
 
     Server-side, not in the pane's cleanup, because the pane often does not
@@ -76,7 +95,10 @@ def watch_ended(user_id: UUID) -> None:
         return
     _watchers.pop(user_id, None)
     create_inherited_task(
-        _reset_after_settling(user_id), name="workspace.browser_view.reset_display"
+        _reset_after_settling(
+            user_id, build_service=build_service, settle_seconds=settle_seconds
+        ),
+        name="workspace.browser_view.reset_display",
     )
 
 
