@@ -257,7 +257,7 @@ async def test_browser_process_and_signed_access_reach_the_sandbox(
     browser_started = await exec_command_internal(
         ctx,
         ExecCommandRequest(
-            cmd="start-browser https://example.com/",
+            cmd="agent-browser open https://example.com/",
             timeout_seconds=60,
             comment="Start the sandbox browser and open a page",
         ),
@@ -311,7 +311,7 @@ async def test_the_browser_starts_again_after_its_x_server_dies_uncleanly(
     fabric is E2B, which pauses a sandbox without running quiesce at all and
     keeps `/tmp` across the pause.
 
-    `start-browser` used to test for that socket and take it as proof of a
+    `lemma-ensure-display` used to test for that socket and take it as proof of a
     running X server, so in any of those cases it skipped starting Xvfb and
     every browser command in the sandbox died with
 
@@ -331,7 +331,7 @@ async def test_the_browser_starts_again_after_its_x_server_dies_uncleanly(
     first = await exec_command_internal(
         ctx,
         ExecCommandRequest(
-            cmd="start-browser https://example.com/ 2>&1 | tail -5",
+            cmd="agent-browser open https://example.com/ 2>&1 | tail -5",
             timeout_seconds=120,
             comment="Start the sandbox browser",
         ),
@@ -361,7 +361,7 @@ async def test_the_browser_starts_again_after_its_x_server_dies_uncleanly(
         ctx,
         ExecCommandRequest(
             cmd=(
-                "start-browser https://example.com/ 2>&1 | tail -5; "
+                "agent-browser open https://example.com/ 2>&1 | tail -5; "
                 "pgrep -x Xvfb >/dev/null && echo xvfb-up || echo xvfb-down"
             ),
             timeout_seconds=120,
@@ -454,7 +454,7 @@ class _RfbInfo:
 async def _rfb_handshake(reader: _RfbReader, socket) -> _RfbInfo:
     """RFB 3.8's handshake, down to the one security type this relay offers.
 
-    `x11vnc` is started with `-nopw` (see `start-browser.sh`), so the only
+    `x11vnc` is started with `-nopw` (see `lemma-ensure-display.sh`), so the only
     security type on offer is 1 (None) -- there is no password this test
     could supply even if it wanted to skip this.
     """
@@ -738,7 +738,7 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     # open to something else entirely, X11 window stacking under this image's
     # no-window-manager display being what it is -- so a fresh, single window
     # is worth the cost of forcing one rather than trusting whatever was
-    # already on screen. `start-browser` starting with a URL is exactly this
+    # already on screen. Opening a URL is exactly this
     # module's own `test_the_browser_starts_again_after_its_x_server_dies_
     # uncleanly` pattern, and it re-idempotently starts x11vnc/websockify too.
     await exec_command_internal(
@@ -758,7 +758,7 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
             # view socket, finding no browser on the profile it *does* use,
             # started a second Chrome whose blank window covered the page
             # this test then failed to find on screen.
-            cmd=f"start-browser {VIEW_SITE}/",
+            cmd=f"agent-browser open {VIEW_SITE}/",
             timeout_seconds=60,
             comment="Open a page in the shared default session VNC watches",
         ),
@@ -924,7 +924,7 @@ async def test_an_agent_can_record_the_browser_and_get_a_playable_file(
     started = await exec_command_internal(
         ctx,
         ExecCommandRequest(
-            cmd="start-browser about:blank",
+            cmd="agent-browser open about:blank",
             timeout_seconds=120,
             comment="Start the sandbox browser",
         ),

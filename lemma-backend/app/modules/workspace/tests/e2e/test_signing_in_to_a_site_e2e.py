@@ -232,6 +232,13 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
 
     await _serve_the_site(ctx)
 
+    # Start signed out, and arrange it rather than assume it. The profile is
+    # durable and one sandbox serves the whole module, so a sibling test --
+    # or an earlier run of this one against a resumed sandbox -- leaves this
+    # site signed in. That is the feature working; it just means a test whose
+    # first assertion is "nobody is signed in" has to make that true.
+    await _run(ctx, "agent-browser open about:blank && agent-browser cookies clear || true")
+
     try:
         # 1. Nothing signed in, so the person has to be asked.
         assert not await service.already_signed_in(origin=SITE, auth_ctx=auth)
@@ -300,7 +307,7 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         #
         #    Then Xvfb, to prove the display is rebuilt too: `agent-browser`
         #    brings its own back, which is why nothing here runs
-        #    `start-browser` to recover.
+        #    `lemma-ensure-display` to recover.
         closed = await _run(ctx, "agent-browser close --all ; pkill -x Xvfb || true")
         assert "Closed" in (closed.stdout or ""), closed.stdout
 
