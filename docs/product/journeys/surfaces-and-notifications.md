@@ -3,9 +3,16 @@
 **Journey:** A person reaches their pod from wherever they already work, and the
 pod reaches them back.
 
-A surface connects a pod's agent to an outside platform — Slack, Microsoft
-Teams, Telegram, WhatsApp, or email. A person messages the agent there and gets
-an answer there, in the same thread, without opening Lemma.
+A surface belongs to an agent. It connects that agent to an outside platform —
+Slack, Microsoft Teams, Telegram, WhatsApp, or email — and a person messages the
+agent there and gets an answer there, in the same thread, without opening Lemma.
+
+The agent is the owner, not the pod. Surfaces have their own APIs and their own
+screen, which can make them look like a pod-level resource; they are not. Every
+surface names exactly one agent, that agent answers on it, and a pod reaches
+someone only through the agents inside it. Where this document says a pod is
+reachable somewhere, that is shorthand for one of its agents being reachable
+there.
 
 Two rules run through everything here. **A surface is a door, not a hole**: who
 someone is on Slack has to resolve to who they are in Lemma before they get
@@ -19,9 +26,9 @@ it is asked, not skipped.
 
 ---
 
-## Capability: Connect a pod to a platform
+## Capability: Connect an agent to a platform
 
-### PS-SURF-001 — A person connects a pod's agent to a further platform
+### PS-SURF-001 — A person connects an agent to a further platform
 **Status:** covered
 
 > "A person connects a surface" describes the second and subsequent ones, not
@@ -76,7 +83,8 @@ it is asked, not skipped.
   under the name that answered them at the time.
 - When a person deletes a surface, the system shall stop accepting messages on
   it.
-- When a pod is deleted, the system shall stop every surface belonging to it.
+- When a pod is deleted, the system shall stop every surface belonging to the
+  agents inside it.
 
 **Contracts:** `agent.surface.update`, `agent.surface.delete`, `pod.delete`
 

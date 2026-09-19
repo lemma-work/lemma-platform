@@ -249,7 +249,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SURF-001` A person connects a pod's agent to a further platform | `covered` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
+| `PS-SURF-001` A person connects an agent to a further platform | `covered` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_slack_manifest_is_named_for_its_agent`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_deleting_a_surface_stops_it` |
 | `PS-SURF-004` A stranger on a shared bot proves who they are before getting a workspace | `manual` | — |

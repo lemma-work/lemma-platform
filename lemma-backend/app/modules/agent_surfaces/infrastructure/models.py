@@ -47,11 +47,32 @@ logger = get_logger(__name__)
 
 
 class AgentSurface(UUIDAuditBase):
-    """External platform surface connected to a default agent or pod agent."""
+    """One agent's connection to one outside platform.
+
+    The owner is the agent, not the pod: `agent_id` is not nullable, and the
+    surface answers as that agent and no other. `pod_id` is carried too because
+    a surface is reachable only while its pod is, and routing checks that in one
+    join rather than per lookup -- so the column is a scope, not the owner.
+    """
 
     __tablename__ = "agent_surfaces"
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_agent_surface_pod_name"),
+        # One pooled WhatsApp number per agent. Mirrors migration 0040; declared
+        # here too so a schema built from metadata carries the same guarantee,
+        # and so autogenerate does not emit a DROP for an index it cannot see.
+        # Partial rather than a plain unique on (agent_id, surface_type): one
+        # agent may legitimately hold several SYSTEM Slack surfaces in different
+        # workspaces, and a system bot alongside a customer's own bot. Neither
+        # spends a pooled number twice, which is the only thing at stake here.
+        Index(
+            "uq_agent_pooled_whatsapp_number",
+            "agent_id",
+            unique=True,
+            postgresql_where=text(
+                "surface_type = 'WHATSAPP' AND credential_mode = 'SYSTEM'"
+            ),
+        ),
         # Mirrors migration 0016. Declared here too so a schema built from
         # metadata (tests, a fresh non-Alembic environment) carries the same
         # guarantee — address allocation inserts and retries on conflict, which

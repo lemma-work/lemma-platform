@@ -27,8 +27,8 @@ from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.pod.contracts.orm import Pod
 
 
-#: A surface belongs to a pod, and a deleted pod has no business answering on
-#: it. `PS-OPS-020` says deleting a pod stops the work it was doing and keeps it
+#: A surface belongs to an agent, that agent lives in a pod, and a deleted pod
+#: has no business answering on either. `PS-OPS-020` says deleting a pod stops the work it was doing and keeps it
 #: stopped -- and a surface is the one piece of standing work that keeps running
 #: without anybody in Lemma asking it to, because the trigger comes from
 #: outside. The surface row itself stays ACTIVE on purpose: deletion is soft, so
