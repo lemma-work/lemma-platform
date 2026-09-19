@@ -56,7 +56,7 @@ export interface WebLogin {
   /**
    * The site, as a person would name it.
    *
-   * Grouped by registrable domain, so `asur.work` and `api.asur.work` are one
+   * Grouped by registrable domain, so `lemma.work` and `api.lemma.work` are one
    * login rather than two — the second being the half nobody visited on
    * purpose.
    */

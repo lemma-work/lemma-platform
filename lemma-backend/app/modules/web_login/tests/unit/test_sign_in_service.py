@@ -407,20 +407,19 @@ async def test_without_a_page_it_still_falls_back_to_the_origin() -> None:
 
 
 class TestTheAddressIsReadToo:
-    """The production failure this check was rebuilt to prevent, and did not.
+    """The shape this check is rebuilt to catch, and used to pass.
 
-    On 19 September an agent asked whether the browser was signed in to
-    `asur.work`, passing the page it was blocked on: `https://asur.work/auth`.
-    That page serves `<title>Lemma</title>` and does not redirect, so the
-    text this function saw was `"https://asur.work/auth Lemma"` -- none of
-    "sign in", "signin", "log in", "login" or "password". It answered "not a
-    login wall", `already_signed_in` returned True, and the agent was told
-    "the browser is already signed in to this site" while a login form was
-    on screen. Five minutes later it called back with `force`.
+    A login wall that serves its form at a neutral address under a neutral
+    title, without redirecting, defeats a title-and-substring test: the
+    text carries none of "sign in", "signin", "log in", "login" or
+    "password", so the page reads as not-a-wall, `already_signed_in`
+    answers True, and the caller is told the browser is signed in while a
+    login form is on screen. An app whose sign-in page is titled after the
+    product is the ordinary way to arrive here.
     """
 
-    def test_our_own_login_route_is_a_wall(self) -> None:
-        assert page_looks_like_a_login_wall("https://asur.work/auth Lemma")
+    def test_a_product_titled_login_route_is_a_wall(self) -> None:
+        assert page_looks_like_a_login_wall("https://lemma.work/auth Lemma")
 
     def test_a_neutral_title_does_not_rescue_an_auth_address(self) -> None:
         assert page_looks_like_a_login_wall("https://x.test/authenticate Welcome")

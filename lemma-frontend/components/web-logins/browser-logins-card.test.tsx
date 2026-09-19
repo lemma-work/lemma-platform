@@ -152,7 +152,7 @@ describe('clearing a site', () => {
 describe('separating a login from a cookie', () => {
     /**
      * The reason `signed_in` exists at all, and it was measured rather than
-     * assumed. On a real profile `api.asur.work` held two HttpOnly session
+     * assumed. On a real profile `api.lemma.work` held two HttpOnly session
      * cookies belonging to somebody signed in, and `youtube.com` held six
      * HttpOnly cookies belonging to nobody -- identical on every flag CDP
      * reports. So the split comes from what a person answered to a sign-in
@@ -162,7 +162,7 @@ describe('separating a login from a cookie', () => {
         answer.data = {
             items: [
                 site({ site: 'doubleclick.net' }),
-                site({ site: 'asur.work', signed_in: true }),
+                site({ site: 'lemma.work', signed_in: true }),
                 site({ site: 'youtube.com' }),
             ],
             sleeping: false,
@@ -174,7 +174,7 @@ describe('separating a login from a cookie', () => {
         expect(screen.getByText('Other sites with cookies')).toBeTruthy();
 
         const rows = screen.getAllByRole('listitem').map((li) => li.textContent);
-        expect(rows[0]).toContain('asur.work');
+        expect(rows[0]).toContain('lemma.work');
         // Still listed, and still signable-out-of: an ad network's cookie is
         // worth being able to clear, just not worth reading first.
         expect(rows.join(' ')).toContain('doubleclick.net');
@@ -185,7 +185,7 @@ describe('separating a login from a cookie', () => {
         // dialog that hid all four sites behind a collapsed "other" because
         // nobody had answered a sign-in yet would be worse than a flat list.
         answer.data = {
-            items: [site({ site: 'asur.work' }), site({ site: 'youtube.com' })],
+            items: [site({ site: 'lemma.work' }), site({ site: 'youtube.com' })],
             sleeping: false,
         };
         render(<BrowserLoginsCard />);
@@ -199,7 +199,7 @@ describe('separating a login from a cookie', () => {
     it('does not split when every site was signed in to', async () => {
         answer.data = {
             items: [
-                site({ site: 'asur.work', signed_in: true }),
+                site({ site: 'lemma.work', signed_in: true }),
                 site({ site: 'other.test', signed_in: true }),
             ],
             sleeping: false,

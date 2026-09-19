@@ -160,7 +160,7 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
         name="resend-ops",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
-        surface_identity_email="ops.acme@ops.asur.work",
+        surface_identity_email="ops.acme@ops.lemma.work",
     )
 
     monkeypatch.setattr("app.core.config.settings.resend_api_key", "re_test")
@@ -170,7 +170,7 @@ async def test_the_resend_reply_tool_is_given_the_surfaces_from_address(monkeypa
     )
 
     assert credentials["api_key"] == "re_test"
-    assert credentials["from_address"] == "ops.acme@ops.asur.work"
+    assert credentials["from_address"] == "ops.acme@ops.lemma.work"
 
 
 @pytest.mark.parametrize("platform", ["RESEND"])

@@ -1,7 +1,7 @@
 """Asking a person to sign in to a Lemma app is a loop with no exit.
 
-Observed on a live stack: the agent got a saved login for `asur.work`, which
-worked, then opened `factory-ledger.apps.asur.work` and hit "Login with
+Observed on a live stack: the agent got a saved login for `lemma.work`, which
+worked, then opened `factory-ledger.apps.lemma.work` and hit "Login with
 Lemma". That button redirects to the website, which *is* signed in, and comes
 back no better off, because the session cookies are host-only on the website
 and API hosts and the browser sends none of them to an app host. The app's SDK
@@ -24,17 +24,17 @@ pytestmark = pytest.mark.unit
 def test_an_app_host_is_recognised(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "app_base_domain", "apps.asur.work")
+    monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
 
-    assert _pod_app_slug("https://factory-ledger.apps.asur.work") == "factory-ledger"
+    assert _pod_app_slug("https://factory-ledger.apps.lemma.work") == "factory-ledger"
     # The website and the API are not apps, and must still be askable.
-    assert _pod_app_slug("https://asur.work") is None
-    assert _pod_app_slug("https://api.asur.work") is None
+    assert _pod_app_slug("https://lemma.work") is None
+    assert _pod_app_slug("https://api.lemma.work") is None
     # The base domain on its own is not an app either -- a slug of "" would be
     # worse advice than none.
-    assert _pod_app_slug("https://apps.asur.work") is None
+    assert _pod_app_slug("https://apps.lemma.work") is None
     # A site that merely ends in a similar string is not ours.
-    assert _pod_app_slug("https://evil-apps.asur.work.attacker.test") is None
+    assert _pod_app_slug("https://evil-apps.lemma.work.attacker.test") is None
 
 
 def test_the_port_travels_with_a_local_base_domain(
@@ -59,4 +59,4 @@ def test_nothing_is_an_app_when_no_base_domain_is_set(
 
     monkeypatch.setattr(settings, "app_base_domain", "")
 
-    assert _pod_app_slug("https://factory-ledger.apps.asur.work") is None
+    assert _pod_app_slug("https://factory-ledger.apps.lemma.work") is None

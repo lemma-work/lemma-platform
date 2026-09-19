@@ -41,7 +41,7 @@ def site_of(host: str) -> str:
     its own -- none of which have a "rest of the site" to speak of.
 
     This is what groups a browser's cookies into the sites a person recognises.
-    `asur.work` and `api.asur.work` are one login to them, and listing those
+    `lemma.work` and `api.lemma.work` are one login to them, and listing those
     as two entries -- one of which is the half they never visited -- is not a
     list anybody can act on.
     """
@@ -119,22 +119,19 @@ def page_looks_like_a_login_wall(text: str) -> bool:
     consent banner came to be read as a session.
 
     **The address is read as well as the title, and that is not a
-    refinement.** This was title-and-substring only, and it reported a
-    working session on our own product. Measured on `asur.work`, the site
-    that prompted the report: `https://asur.work/auth` serves
-    `<title>Lemma</title>` and does not redirect, so the text this saw was
-    `"https://asur.work/auth Lemma"` -- which contains none of "sign in",
-    "signin", "log in", "login" or "password". `already_signed_in` therefore
-    answered True about a browser sitting on a login form, the agent was
-    told "the browser is already signed in to this site", and it spent five
-    minutes before calling back with `force` to say the form was on screen.
+    refinement.** Title-and-substring alone cannot see a login wall that
+    serves its form at a neutral address under a neutral title -- an app
+    whose sign-in page is titled after the product, say, and which does not
+    redirect. The text then contains none of "sign in", "signin", "log in",
+    "login" or "password", `already_signed_in` answers True, and the caller
+    is told the browser is signed in while a login form is on screen.
 
-    The old docstring named this exact case -- "a site that serves its login
+    The old docstring named that exact case -- "a site that serves its login
     form at the same address under a neutral title passes this" -- and drew
     the wrong conclusion from it: "that costs one unnecessary ask, which is
     the right way round". Passing means we do *not* ask. It costs a false
-    claim of a session, which is the failure this whole feature was rebuilt
-    to remove.
+    claim of a session, which is the failure this whole feature exists to
+    remove.
 
     Still a heuristic, and now erring the other way on purpose: a page whose
     address contains an auth-shaped segment is treated as a wall even if it

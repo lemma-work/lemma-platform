@@ -132,7 +132,7 @@ def configured_email_domain(monkeypatch):
     """
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
 
 
 @pytest_asyncio.fixture
@@ -153,7 +153,7 @@ async def pod_with_a_mailbox(authenticated_client, fixed_test_org, monkeypatch):
     from app.core.config import settings as core_settings
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
 
     response = await authenticated_client.post(

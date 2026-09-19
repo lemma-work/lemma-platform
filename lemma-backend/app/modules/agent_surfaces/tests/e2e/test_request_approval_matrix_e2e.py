@@ -944,7 +944,7 @@ async def test_an_emailed_approve_resolves_the_approval_despite_the_quoted_threa
     a long attribution mid-address, so the reply arrived as
 
         approve\\n\\nOn Wed, Aug 26, 2026 at 12:26 AM butler via Lemma <
-        butler.lemma2@ops.asur.work> wrote:
+        butler.lemma2@ops.lemma.work> wrote:
 
     "approve" was no longer the message, so it stopped being a decision, fell
     through to the ordinary message path, and superseded the approval it was

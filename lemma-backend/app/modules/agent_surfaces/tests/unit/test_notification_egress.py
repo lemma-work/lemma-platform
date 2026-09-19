@@ -101,7 +101,7 @@ def _email_surface(pod_id: UUID | None = None) -> AgentSurfaceEntity:
         name="resend",
         surface_type=SurfacePlatform.RESEND,
         config=SurfaceConfig(),
-        surface_identity_email="pod-1@ops.asur.work",
+        surface_identity_email="pod-1@ops.lemma.work",
     )
 
 
@@ -255,7 +255,7 @@ async def test_a_cold_email_leaves_a_link_the_reply_will_match():
     assert created.surface_id == surface.id
     assert created.conversation_id == conversation_id
     assert created.platform == "RESEND"
-    assert created.external_channel_id == "pod-1@ops.asur.work"
+    assert created.external_channel_id == "pod-1@ops.lemma.work"
     assert created.external_thread_id == seed
     # Lowercased, because that is what the inbound parser records as the sender.
     assert created.external_user_id == "bob@example.com"

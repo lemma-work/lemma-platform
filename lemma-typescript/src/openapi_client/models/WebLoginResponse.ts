@@ -16,7 +16,7 @@ export type WebLoginResponse = {
      */
     signed_in?: boolean;
     /**
-     * The site, as a person would name it. Cookies are grouped by registrable domain, so `asur.work` and `api.asur.work` are one login rather than two -- the second being the half nobody visited on purpose.
+     * The site, as a person would name it. Cookies are grouped by registrable domain, so `lemma.work` and `api.lemma.work` are one login rather than two -- the second being the half nobody visited on purpose.
      */
     site: string;
 };

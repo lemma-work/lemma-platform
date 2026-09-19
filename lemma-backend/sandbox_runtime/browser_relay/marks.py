@@ -1,7 +1,7 @@
 """Which sites somebody actually told us they signed in to.
 
 Measured before it was written: you cannot tell a login from a tracking
-cookie by reading the cookie store. On a real profile, `api.asur.work` held
+cookie by reading the cookie store. On a real profile, `api.lemma.work` held
 two HttpOnly session cookies -- a genuine login -- and `youtube.com` held
 six HttpOnly cookies belonging to nobody, set by visiting one video. Every
 flag CDP reports (`httpOnly`, `secure`, `session`, `sameSite`) says the same

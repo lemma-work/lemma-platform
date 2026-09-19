@@ -21,9 +21,9 @@ from app.modules.agent_surfaces.services.email_address_allocation import (
 def test_the_address_reads_as_the_agent_and_the_pod():
     assert (
         build_agent_email(
-            agent_name="Ops Assistant", pod_name="Acme Corp", domain="ops.asur.work"
+            agent_name="Ops Assistant", pod_name="Acme Corp", domain="ops.lemma.work"
         )
-        == "ops-assistant.acme-corp@ops.asur.work"
+        == "ops-assistant.acme-corp@ops.lemma.work"
     )
 
 
@@ -57,17 +57,17 @@ def test_a_pathologically_long_agent_name_still_yields_a_valid_address():
 
 def test_the_plain_address_is_offered_before_any_suffixed_one():
     candidates = candidate_addresses(
-        agent_name="Ops", pod_name="Acme", domain="ops.asur.work"
+        agent_name="Ops", pod_name="Acme", domain="ops.lemma.work"
     )
 
-    assert candidates[0] == "ops.acme@ops.asur.work"
+    assert candidates[0] == "ops.acme@ops.lemma.work"
     assert len(candidates) > 1
     assert len(set(candidates)) == len(candidates), "suffixes must differ"
 
 
 def test_suffixed_candidates_stay_within_the_limit_too():
     for address in candidate_addresses(
-        agent_name="a" * 50, pod_name="b" * 50, domain="ops.asur.work"
+        agent_name="a" * 50, pod_name="b" * 50, domain="ops.lemma.work"
     ):
         assert len(address.split("@")[0]) <= MAX_LOCAL_PART
 

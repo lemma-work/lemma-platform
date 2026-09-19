@@ -6,7 +6,7 @@ import {
     retryAutoConnect,
 } from '@/lib/desktop/auto-connect';
 
-const WORKSPACE = 'https://asur.work';
+const WORKSPACE = 'https://lemma.work';
 const OTHER = 'http://app.lemma.localhost:56608';
 
 afterEach(() => {

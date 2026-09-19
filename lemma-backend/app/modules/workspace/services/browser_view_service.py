@@ -337,7 +337,7 @@ class BrowserViewService:
         """Record that somebody said they signed in to this site.
 
         The one fact about a login that cannot be read back off the profile.
-        Measured: `api.asur.work`'s two session cookies and `youtube.com`'s
+        Measured: `api.lemma.work`'s two session cookies and `youtube.com`'s
         six visitor cookies are indistinguishable by every flag CDP reports,
         so without this the list can only say "sites with cookies". See
         `sandbox_runtime/browser_relay/marks.py`.

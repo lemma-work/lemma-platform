@@ -799,7 +799,7 @@ async def test_create_resend_email_surface_provisions_address(
         )
     ).scalar_one()
     assert row.surface_identity_email and row.surface_identity_email.endswith(
-        "@ops.asur.work"
+        "@ops.lemma.work"
     )
 
 

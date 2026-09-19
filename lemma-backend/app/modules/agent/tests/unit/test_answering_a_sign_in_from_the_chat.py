@@ -32,7 +32,7 @@ from app.modules.agent.services.conversation_resume_return import (
 
 pytestmark = pytest.mark.unit
 
-_ORIGIN = "https://asur.work"
+_ORIGIN = "https://lemma.work"
 
 
 class _Uow:
