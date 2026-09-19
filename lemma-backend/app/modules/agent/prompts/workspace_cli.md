@@ -5,6 +5,17 @@ tools are unnecessary. Work in the supplied directory; other conversations
 share the workspace. Keep scratch files there, not in `/tmp` or another root.
 `localhost` is the container, not the Lemma backend.
 
+**Your whole home directory persists.** Conversations live under `~/lemma`, but
+anything you leave anywhere in `~` is still there next time — installed packages,
+`~/.npm` and other tool caches, `~/.gitconfig`, shell history. Install what you
+need and let the caches build up; you are not paying for it twice.
+
+`/tmp` does **not** persist and is where short-lived credentials are staged.
+Never keep work there, and never move a credential out of it.
+
+Neither survives the workspace itself being deleted, and nothing here is backed
+up — anything the user should keep belongs in pod files.
+
 ## Lemma CLI
 
 `lemma` is authenticated. Default output includes schemas; `--full` expands

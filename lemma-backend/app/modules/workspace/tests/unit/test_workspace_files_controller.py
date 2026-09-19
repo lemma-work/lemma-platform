@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
 
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.api.controllers import files_controller as controller
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeFileNotFound,
@@ -29,13 +30,13 @@ def _stat(path: str, kind: str = "file", size: int = 12) -> SimpleNamespace:
 
 
 def test_a_relative_path_resolves_under_the_workspace_root() -> None:
-    assert controller._workspace_path("notes/a.md") == "/workspace/notes/a.md"
-    assert controller._workspace_path(None) == "/workspace"
-    assert controller._workspace_path("") == "/workspace"
+    assert controller._workspace_path("notes/a.md") == f"{WORKSPACE_ROOT}/notes/a.md"
+    assert controller._workspace_path(None) == f"{WORKSPACE_ROOT}"
+    assert controller._workspace_path("") == f"{WORKSPACE_ROOT}"
 
 
 def test_the_workspace_root_itself_is_allowed() -> None:
-    assert controller._workspace_path("/workspace") == "/workspace"
+    assert controller._workspace_path(f"{WORKSPACE_ROOT}") == f"{WORKSPACE_ROOT}"
 
 
 @pytest.mark.parametrize(
@@ -45,8 +46,8 @@ def test_the_workspace_root_itself_is_allowed() -> None:
         "/tmp",
         "/etc/passwd",
         "../../etc/passwd",
-        "/workspace/../tmp/secret",
-        "/workspace/../../root",
+        f"{HOME_ROOT}/../tmp/secret",
+        f"{HOME_ROOT}/../../root",
     ],
 )
 def test_nothing_outside_the_workspace_is_readable(path: str) -> None:
@@ -59,12 +60,15 @@ def test_nothing_outside_the_workspace_is_readable(path: str) -> None:
 
 def test_a_traversal_that_lands_back_inside_is_allowed() -> None:
     """Refusing this would be a lie about what the path means."""
-    assert controller._workspace_path("/workspace/a/../b.txt") == "/workspace/b.txt"
+    assert (
+        controller._workspace_path(f"{WORKSPACE_ROOT}/a/../b.txt")
+        == f"{WORKSPACE_ROOT}/b.txt"
+    )
 
 
 def test_a_null_byte_is_refused() -> None:
     with pytest.raises(HTTPException) as raised:
-        controller._workspace_path("/workspace/a\x00b")
+        controller._workspace_path(f"{WORKSPACE_ROOT}/a\x00b")
     assert raised.value.status_code == 422
 
 
@@ -145,7 +149,7 @@ async def test_listing_a_paused_workspace_does_not_start_it() -> None:
 
 @pytest.mark.asyncio
 async def test_listing_wakes_the_workspace_when_asked() -> None:
-    service = _FakeService(running=False, stats=[_stat("/workspace/a.md")])
+    service = _FakeService(running=False, stats=[_stat(f"{WORKSPACE_ROOT}/a.md")])
 
     result = await controller.list_workspace_files(
         _user(), service, path=None, wake=True, after=None
@@ -160,7 +164,7 @@ async def test_listing_wakes_the_workspace_when_asked() -> None:
 async def test_a_running_workspace_is_listed_without_being_asked_to_wake() -> None:
     service = _FakeService(
         running=True,
-        stats=[_stat("/workspace/src", kind="directory", size=0)],
+        stats=[_stat(f"{WORKSPACE_ROOT}/src", kind="directory", size=0)],
     )
 
     result = await controller.list_workspace_files(
@@ -175,7 +179,8 @@ async def test_a_running_workspace_is_listed_without_being_asked_to_wake() -> No
 @pytest.mark.asyncio
 async def test_a_directory_larger_than_one_page_says_so() -> None:
     stats = [
-        _stat(f"/workspace/f{index}") for index in range(controller._MAX_ENTRIES + 5)
+        _stat(f"{WORKSPACE_ROOT}/f{index}")
+        for index in range(controller._MAX_ENTRIES + 5)
     ]
     service = _FakeService(running=True, stats=stats)
 
@@ -202,7 +207,7 @@ async def test_a_directory_larger_than_one_page_says_so() -> None:
 def test_read_failures_map_to_something_the_caller_can_act_on(exc, expected) -> None:
     """The two families are parallel, not shared, so both spellings of "not
     there" have to reach the same 404."""
-    assert controller._as_http_error(exc, "/workspace/a").status_code == expected
+    assert controller._as_http_error(exc, f"{WORKSPACE_ROOT}/a").status_code == expected
 
 
 def test_only_real_read_failures_are_dressed_as_a_status() -> None:
@@ -215,7 +220,7 @@ def test_only_real_read_failures_are_dressed_as_a_status() -> None:
 async def test_content_is_served_as_an_attachment() -> None:
     """Workspace files are the person's own content, never markup this origin
     should render."""
-    service = _FakeService(running=True, stats=[_stat("/workspace/a.html")])
+    service = _FakeService(running=True, stats=[_stat(f"{WORKSPACE_ROOT}/a.html")])
 
     response = await controller.read_workspace_file(
         _user(), service, path="a.html", offset=0, length=None
@@ -239,7 +244,7 @@ async def test_a_conversation_that_has_written_nothing_is_empty_not_missing() ->
     service.session = _MissingDirectorySession([])
 
     result = await controller.list_workspace_files(
-        _user(), service, path="/workspace/conversations/abc", wake=False
+        _user(), service, path=f"{WORKSPACE_ROOT}/conversations/abc", wake=False
     )
 
     assert result.entries == []
@@ -273,7 +278,9 @@ def test_a_symlink_is_refused_rather_than_followed() -> None:
     where a staged git credential and the relay token live.
     """
     with pytest.raises(HTTPException) as raised:
-        controller._inside_workspace(_stat("/workspace/shortcut", kind="symlink"))
+        controller._inside_workspace(
+            _stat(f"{WORKSPACE_ROOT}/shortcut", kind="symlink")
+        )
     assert raised.value.status_code == 422
 
 
@@ -290,15 +297,15 @@ def test_a_symlinked_parent_is_refused() -> None:
 
 
 def test_an_ordinary_workspace_file_is_allowed() -> None:
-    controller._inside_workspace(_stat("/workspace/notes/a.md"))
-    controller._inside_workspace(_stat("/workspace", kind="directory", size=0))
+    controller._inside_workspace(_stat(f"{WORKSPACE_ROOT}/notes/a.md"))
+    controller._inside_workspace(_stat(f"{WORKSPACE_ROOT}", kind="directory", size=0))
 
 
 def test_a_path_that_merely_starts_with_the_root_name_is_refused() -> None:
-    """`/workspace-other` is not inside `/workspace`, and a prefix test that
+    """`/home/user-other` is not inside `/home/user`, and a prefix test that
     forgets the separator says it is."""
     with pytest.raises(HTTPException) as raised:
-        controller._inside_workspace(_stat("/workspace-other/secrets"))
+        controller._inside_workspace(_stat(f"{HOME_ROOT}-other/secrets"))
     assert raised.value.status_code == 422
 
 
@@ -311,7 +318,7 @@ async def test_a_big_directory_can_be_paged_through() -> None:
     pathological one.
     """
     stats = [
-        _stat(f"/workspace/f{index:04d}")
+        _stat(f"{WORKSPACE_ROOT}/f{index:04d}")
         for index in range(controller._MAX_ENTRIES + 5)
     ]
     service = _FakeService(running=True, stats=stats)
@@ -337,7 +344,7 @@ async def test_a_big_directory_can_be_paged_through() -> None:
 
 @pytest.mark.asyncio
 async def test_a_listing_that_fits_offers_no_next_page() -> None:
-    service = _FakeService(running=True, stats=[_stat("/workspace/a.md")])
+    service = _FakeService(running=True, stats=[_stat(f"{WORKSPACE_ROOT}/a.md")])
 
     result = await controller.list_workspace_files(
         _user(), service, path=None, wake=False, after=None

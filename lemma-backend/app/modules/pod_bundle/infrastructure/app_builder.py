@@ -45,6 +45,7 @@ from app.core.concurrency.offload import run_blocking
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import AppBuildFailedError
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 logger = get_logger(__name__)
 
@@ -172,12 +173,12 @@ class AppSandboxBuilder:
             user_id=user_id,
             pod_id=pod_id,
             session_id=f"app-build-{app_slug}",
-            initial_cwd="/workspace",
+            initial_cwd=WORKSPACE_ROOT,
             close_on_exit=False,
             workload_type="pod_bundle_app_build",
             env_vars=env,
         )
-        build_dir = f"/workspace/.lemma-app-build/{app_slug}"
+        build_dir = f"{WORKSPACE_ROOT}/.lemma-app-build/{app_slug}"
         src_dir = f"{build_dir}/src"
         async with session:
             await self._sh(

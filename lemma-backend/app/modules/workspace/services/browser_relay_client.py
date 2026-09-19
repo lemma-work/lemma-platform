@@ -21,6 +21,7 @@ from urllib.parse import quote
 
 import httpx
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.providers.base import (
@@ -192,7 +193,7 @@ class BrowserRelayClient:
                 operation_id=uuid4(),
                 shell_command="start-browser-relay",
                 argv=None,
-                cwd="/workspace",
+                cwd=WORKSPACE_ROOT,
                 environment=(),
                 tty=None,
                 output_limit_bytes=4096,

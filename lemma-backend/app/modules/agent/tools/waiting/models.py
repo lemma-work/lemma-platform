@@ -131,7 +131,7 @@ _WAKE_MESSAGES: dict[tuple[AgentWaitType, AgentWaitWakeReason], str] = {
     (AgentWaitType.PROCESS, AgentWaitWakeReason.TARGET_GONE): (
         "The process can no longer be read — its sandbox was reclaimed, or the "
         "runtime stopped tracking it. Its outcome is unknown, not bad. Anything "
-        "it wrote to the pod survives; anything in /workspace may not."
+        "it wrote to the pod survives; anything in the sandbox may not."
     ),
     (AgentWaitType.PROCESS, AgentWaitWakeReason.ANSWERED): (
         "Everyone you reached with message_user has now replied, which is why "

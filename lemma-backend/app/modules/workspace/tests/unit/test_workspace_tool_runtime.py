@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.services.workspace_tool_runtime import WorkspaceToolRuntime
 
 
@@ -55,7 +56,7 @@ async def test_workspace_tool_runtime_reuses_cached_function_env():
         user_id=user_id,
         pod_id=pod_id,
         session_id=f"function-api-{function_id}",
-        initial_cwd="/workspace/function",
+        initial_cwd=f"{WORKSPACE_ROOT}/function",
         close_on_exit=False,
         workload_type="function",
         workload_id=function_id,
@@ -64,7 +65,7 @@ async def test_workspace_tool_runtime_reuses_cached_function_env():
         user_id=user_id,
         pod_id=pod_id,
         session_id=f"function-api-{function_id}",
-        initial_cwd="/workspace/function",
+        initial_cwd=f"{WORKSPACE_ROOT}/function",
         close_on_exit=False,
         workload_type="function",
         workload_id=function_id,

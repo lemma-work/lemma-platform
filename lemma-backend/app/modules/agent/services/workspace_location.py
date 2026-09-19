@@ -39,11 +39,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Conversation
 
 _SLUG_ALPHABET = string.ascii_lowercase + string.digits
 _SLUG_LENGTH = 8
-_WORKSPACE_ROOT = "/workspace"
+_WORKSPACE_ROOT = WORKSPACE_ROOT
 _POD_ROOT = "/me"
 _REPOS_ROOT = f"{_WORKSPACE_ROOT}/repos"
 
@@ -298,9 +299,11 @@ async def ensure_recorded_location(
 def pod_cwd_from_workspace_cwd(workspace_cwd: str) -> str:
     """Mirror a workspace cwd into the pod filesystem under ``/me``.
 
-    ``/workspace/c/{date}/{slug}`` -> ``/me/c/{date}/{slug}``. A cwd not under
-    ``/workspace`` is placed under ``/me`` as-is (defensive; overrides today are
-    always under ``/workspace``).
+    ``<root>/c/{date}/{slug}`` -> ``/me/c/{date}/{slug}``.
+
+    Both roots are stripped, not just the current one. Every conversation
+    A cwd outside the workspace root is placed under ``/me`` as-is, which is
+    defensive rather than expected.
     """
     if workspace_cwd == _WORKSPACE_ROOT:
         return _POD_ROOT
