@@ -994,3 +994,85 @@ def test_the_last_viewer_leaving_cannot_either(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 409
     assert "recorded" in response.json()["detail"]
+
+
+class TestFindingAPortChromeDidNotRecordWhereItWasTold:
+    """`agent-browser` can run Chrome on a throwaway profile.
+
+    It launches on `--user-data-dir=/tmp/agent-browser-chrome-<uuid>` and
+    copies the profile back on close -- measured, and what a bare
+    `agent-browser open` does. Chrome writes `DevToolsActivePort` into
+    whichever directory it is actually using, so the configured profile's
+    copy can name a launch that has ended while the live browser is
+    recorded somewhere else:
+
+        ensure 1: recorded=45007 live=40977 recorded_answers=no
+        ensure 2: recorded=40977 live=42989 recorded_answers=no
+
+    The script no longer provokes this, but that fix is in the image while
+    this is in the runtime bundle -- installed on every session, so it
+    reaches sandboxes the image has not. Verified against the old image: the
+    bundle found the live port while `recorded_port` still returned the
+    stale one.
+    """
+
+    def test_the_configured_profile_is_asked_first(self, monkeypatch, tmp_path):
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n/devtools/browser/x")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        assert chrome._candidate_ports(None)[0] == 4111
+
+    def test_a_scratch_profile_is_asked_too(self, monkeypatch, tmp_path):
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n/devtools/browser/x")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        scratch = tmp_path / "tmp" / "agent-browser-chrome-abc"
+        scratch.mkdir(parents=True)
+        (scratch / "DevToolsActivePort").write_text("4222\n/devtools/browser/y")
+        monkeypatch.setattr(chrome, "Path", _PathRootedAt(tmp_path / "tmp"))
+
+        assert chrome._candidate_ports(None) == [4111, 4222]
+
+    def test_an_unreadable_scratch_file_is_skipped_not_fatal(
+        self, monkeypatch, tmp_path
+    ):
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        scratch = tmp_path / "tmp" / "agent-browser-chrome-bad"
+        scratch.mkdir(parents=True)
+        (scratch / "DevToolsActivePort").write_text("not a port")
+        monkeypatch.setattr(chrome, "Path", _PathRootedAt(tmp_path / "tmp"))
+
+        assert chrome._candidate_ports(None) == [4111]
+
+
+class _PathRootedAt:
+    """`Path` with `/tmp` pointed at a temporary directory.
+
+    The scan is over a real absolute path, so redirecting it is the only way
+    to test it without writing into the machine's own `/tmp`.
+    """
+
+    def __init__(self, root) -> None:
+        self._root = root
+
+    def __call__(self, value):
+        from pathlib import Path as _Path
+
+        return self._root if str(value) == "/tmp" else _Path(value)

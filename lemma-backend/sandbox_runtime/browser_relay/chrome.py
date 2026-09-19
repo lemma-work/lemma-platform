@@ -268,11 +268,54 @@ async def live_port(session: str | None = None) -> int:
     This is the ambient answer: a workspace whose browser has been shed for
     idleness or memory is the ordinary resting state, and asking to look at it
     should not conjure one.
+
+    **Two places are asked, because Chrome does not always use the profile it
+    was given.** `agent-browser` can run Chrome on a throwaway
+    `--user-data-dir=/tmp/agent-browser-chrome-<uuid>` and copy the profile
+    back on close -- measured, and what a bare `agent-browser open` does --
+    and Chrome writes `DevToolsActivePort` into whichever directory it is
+    actually using. So the configured profile's copy can name a launch that
+    ended, while the live browser is recorded somewhere else entirely:
+
+        ensure 1: recorded=45007 live=40977 recorded_answers=no
+        ensure 2: recorded=40977 live=42989 recorded_answers=no
+
+    `lemma-ensure-display` no longer provokes that, but the fix is in the
+    image and this is in the runtime bundle -- which is installed on every
+    session, so it reaches sandboxes the image has not reached yet. It is
+    also the more durable half: it holds whatever agent-browser decides to do
+    next.
     """
-    port = recorded_port(session)
-    if not await _answers_on(port):
-        raise BrowserNotRunning(f"nothing answers on the recorded port {port}")
-    return port
+    for port in _candidate_ports(session):
+        if await _answers_on(port):
+            return port
+    raise BrowserNotRunning("nothing answers on any recorded port")
+
+
+def _candidate_ports(session: str | None) -> list[int]:
+    """Every port a Chrome in this sandbox could have recorded, best first.
+
+    The configured profile first, because that is where Chrome writes when
+    it is given one and used it. Then agent-browser's own scratch profiles,
+    newest first -- there is normally at most one, and a stale directory
+    whose port answers nothing costs a refused connection to rule out.
+    """
+    found: list[int] = []
+    with suppress(BrowserNotRunning):
+        found.append(recorded_port(session))
+    scratch = sorted(
+        Path("/tmp").glob("agent-browser-chrome-*/DevToolsActivePort"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+    for path in scratch[:4]:
+        try:
+            port = int(path.read_text().splitlines()[0].strip())
+        except OSError, IndexError, ValueError:
+            continue
+        if port not in found:
+            found.append(port)
+    return found
 
 
 async def ensure_port(*, session: str | None = None) -> int:

@@ -74,13 +74,21 @@ class WorkspaceSettings(BaseSettings):
     )
     workspace_profile_digest: str = Field(
         # Bumped when the workspace image changes, so a sandbox built from the
-        # previous one is replaced rather than reused. Last moved for the
-        # browser work: the durable profile, the renamed `lemma-ensure-display`
-        # and the shared `browser-is-live` all ship in the image, and a sandbox
-        # still running the previous one silently keeps the old scripts --
-        # which is what happened to the change before this, where the image
-        # moved and this constant did not.
-        default=f"sha256:{'4' * 64}",
+        # previous one is replaced rather than reused. Last moved when the
+        # GitHub CLI was added to the image.
+        #
+        # Deliberately *not* moved for the browser work, though that work
+        # changes the image. On E2B the sandbox is the disk, so forcing a
+        # replacement destroys the person's workspace and their browser
+        # profile -- which is the act #744 made template drift tolerated to
+        # avoid. It is not needed here either: `sandbox_runtime/browser_relay`
+        # ships in the runtime bundle and is installed on every session, so
+        # the relay half of these fixes reaches existing sandboxes without an
+        # image roll, and every backend caller of a new script is guarded by
+        # `command -v`. What is left -- the shell scripts -- arrives when a
+        # sandbox is next recreated, which costs those sandboxes nothing they
+        # are not already living with.
+        default=f"sha256:{'3' * 64}",
         pattern=r"^sha256:[0-9a-f]{64}$",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_DIGEST"),
         description="Immutable workspace profile digest",
