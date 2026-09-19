@@ -132,6 +132,11 @@ class BrowserViewService:
         provider, instance = service.reach(handle)
         relay = BrowserRelayClient(provider, instance)
         await relay.deliver_token()
+        # Beside the token, and for the same reason: written on every use
+        # rather than asked about. This is what makes withdrawing a proxy
+        # server-side actually reach a sandbox -- it used to be baked in at
+        # create and could never be taken back.
+        await relay.deliver_browser_proxy(sandbox.id, sandbox.kind)
         return relay
 
     async def status(self, user_id: UUID) -> BrowserStatus:

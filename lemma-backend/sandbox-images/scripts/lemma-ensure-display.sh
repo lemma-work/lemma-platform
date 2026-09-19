@@ -90,16 +90,39 @@ CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--n
 # present in the config. What fills the display is the window manager started
 # further down, which maximises whatever Chrome opens; that is measured, and it
 # keeps working when a viewer resizes the display underneath it.
-if [ -n "${AGENT_BROWSER_PROXY:-}" ]; then
-  # `AGENT_BROWSER_PROXY` (comma-separated below is Chrome's own args syntax,
-  # not this one -- agent-browser reads that env var itself) can carry inline
-  # `user:pass@host:port`: agent-browser parses the credentials out before
-  # ever putting the server on Chrome's command line and answers Chrome's CDP
-  # `Fetch.authRequired` event with them, so a credentialed proxy works with
-  # no special handling here. The WebRTC flag still needs adding ourselves --
-  # without it, the sandbox's real IP is visible to any page in ICE
-  # candidates gathered outside the proxy, which defeats the point of having
-  # one.
+# Whether this browser goes through a proxy is the API server's decision,
+# re-asserted at every browser start.
+#
+# It used to be baked into the sandbox's creation environment, which meant
+# it could be given and never withdrawn: clearing the pool server-side left
+# every existing sandbox proxied until it was replaced, and workspace
+# sandboxes are not replaced on drift. The server writes its decision to a
+# file instead -- one line, the URL or empty -- and this reads it on every
+# run. Empty is a decision, not an absence: it is how "stop using a proxy"
+# reaches a sandbox that already has one.
+#
+# `AGENT_BROWSER_PROXY` is then unset, and that is load-bearing rather than
+# tidy. Measured: with both set, the env var wins --
+#
+#     env + config -> --proxy-server=http://ENVWINS.invalid:8080
+#     config only  -> --proxy-server=http://CONFIGONLY.invalid:9091
+#
+# -- so a value baked into an older sandbox would silently override the
+# server's current answer, which is the bug this replaces.
+PROXY_DECISION_FILE="${LEMMA_BROWSER_PROXY_FILE:-/tmp/lemma-browser-policy/proxy}"
+BROWSER_PROXY=""
+if [ -r "$PROXY_DECISION_FILE" ]; then
+  IFS= read -r BROWSER_PROXY < "$PROXY_DECISION_FILE" || BROWSER_PROXY=""
+fi
+unset AGENT_BROWSER_PROXY
+if [ -n "$BROWSER_PROXY" ]; then
+  # The proxy URL can carry inline `user:pass@host:port`: agent-browser
+  # parses the credentials out before ever putting the server on Chrome's
+  # command line and answers Chrome's CDP `Fetch.authRequired` event with
+  # them, so a credentialed proxy works with no special handling here. The
+  # WebRTC flag still needs adding ourselves -- without it, the sandbox's
+  # real IP is visible to any page in ICE candidates gathered outside the
+  # proxy, which defeats the point of having one.
   CHROME_ARGS="${CHROME_ARGS},--force-webrtc-ip-handling-policy=disable_non_proxied_udp"
 fi
 # The per-sandbox extension point this file's comment has always promised and
@@ -110,7 +133,23 @@ if [ -n "${AGENT_BROWSER_ARGS:-}" ]; then
   CHROME_ARGS="${CHROME_ARGS},${AGENT_BROWSER_ARGS}"
 fi
 mkdir -p "$(dirname "$CONFIG_PATH")"
-cat > "$CONFIG_PATH" <<EOF
+# 0600: this file can now carry `user:pass@host` in its `proxy` key, so it
+# is a credential file. Keeping it out of a stray `cat` is worth one umask;
+# it does not hide it from the agent, whose shell runs as this same user.
+(
+  umask 077
+  if [ -n "$BROWSER_PROXY" ]; then
+    cat > "$CONFIG_PATH" <<EOF
+{
+  "headed": true,
+  "profile": "$PROFILE_DIR",
+  "executablePath": "$EXECUTABLE_PATH",
+  "proxy": "$BROWSER_PROXY",
+  "args": "$CHROME_ARGS"
+}
+EOF
+  else
+    cat > "$CONFIG_PATH" <<EOF
 {
   "headed": true,
   "profile": "$PROFILE_DIR",
@@ -118,6 +157,26 @@ cat > "$CONFIG_PATH" <<EOF
   "args": "$CHROME_ARGS"
 }
 EOF
+  fi
+)
+
+# A browser already running under a different decision has to be restarted,
+# or the change does not reach it until the idle timeout retires it. The
+# digest is of what the running browser was actually launched with, and it
+# lives in the ephemeral directory on purpose: it names a running process,
+# so a resumed sandbox must not believe it.
+#
+# `close --all` rather than a signal: it is the only stop that writes the
+# profile back, so changing the proxy does not cost the person their logins.
+PROXY_STAMP="/tmp/lemma-browser/proxy.active"
+PROXY_WANTED="$(printf '%s' "$BROWSER_PROXY" | sha256sum | cut -d" " -f1)"
+PROXY_ACTIVE=""
+if [ -r "$PROXY_STAMP" ]; then
+  IFS= read -r PROXY_ACTIVE < "$PROXY_STAMP" || PROXY_ACTIVE=""
+fi
+if [ -n "$PROXY_ACTIVE" ] && [ "$PROXY_ACTIVE" != "$PROXY_WANTED" ]; then
+  agent-browser close --all >/dev/null 2>&1 || true
+fi
 if ! mkdir -p "$RUNTIME_DIR" 2>/dev/null || [ ! -w "$RUNTIME_DIR" ]; then
   RUNTIME_DIR="/tmp/agent-browser-runtime-${UID:-10001}"
   mkdir -p "$RUNTIME_DIR"
@@ -381,6 +440,10 @@ if agent-browser open "$@" >"$open_log" 2>&1; then
   open_status=0
 else
   open_status=$?
+fi
+if [ "$open_status" = "0" ]; then
+  mkdir -p "$(dirname "$PROXY_STAMP")"
+  printf '%s\n' "$PROXY_WANTED" > "$PROXY_STAMP"
 fi
 if [ "$opened_cold" = "1" ] && [ "$open_status" = "0" ]; then
   close_new_tab_page

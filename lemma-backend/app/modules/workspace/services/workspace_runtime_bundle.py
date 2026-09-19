@@ -35,6 +35,12 @@ from app.modules.workspace.infrastructure.runtime_bundle import (
     runtime_bundle,
 )
 from app.modules.workspace.contracts import SandboxInfo
+from app.modules.workspace.domain.sandbox import SandboxKind
+from app.modules.workspace.services.browser_proxy import (
+    BROWSER_PROXY_DECISION_PATH,
+    browser_proxy_for,
+    decision_bytes,
+)
 from app.modules.workspace.process_output import TERMINAL_PROCESS_STATES
 from app.modules.workspace.providers.base import (
     ProviderFailed,
@@ -431,6 +437,44 @@ class WorkspaceRuntimeBundleMixin:
                 return snapshot
         return None
 
+    async def _ensure_browser_proxy(
+        self, user_id: UUID, sandbox_info: SandboxInfo
+    ) -> None:
+        """Tell this sandbox whether its browser goes through a proxy.
+
+        Here, beside the runtime bundle, because this is the one call that
+        happens on every session -- and the viewer path is not enough on its
+        own. An agent typing `agent-browser open` in its own shell reaches
+        `lemma-ensure-display` without the backend in the loop, so a sandbox
+        no person ever watches would never hear the decision, and an older
+        one would go on using the value baked into its environment.
+
+        Written every session rather than remembered, unlike the bundle
+        above: it is one small file, the answer can change between two
+        sessions, and the whole point is that withdrawing a proxy takes
+        effect without anyone replacing anything.
+
+        Failure degrades rather than propagates, like everything else in
+        this mixin. A sandbox that could not be told keeps what it had --
+        the state it was already in -- and the next session tries again.
+        Refusing somebody a shell because a proxy file did not land would be
+        the worse trade.
+        """
+        proxy = browser_proxy_for(_sandbox_uuid(sandbox_info), SandboxKind.WORKSPACE)
+        try:
+            await self._get_manager_client().write_file(
+                user_id,
+                BROWSER_PROXY_DECISION_PATH,
+                decision_bytes(proxy),
+                deadline_at=_deadline(_INSTALL_BUDGET_SECONDS),
+            )
+        except _SANDBOX_FAILURES:
+            logger.warning(
+                "workspace.browser_proxy.delivery_failed.degraded",
+                user_id=str(user_id),
+                exc_info=True,
+            )
+
     @staticmethod
     def _tail(snapshot) -> str:
         """Enough of the installer's output to say what went wrong."""
@@ -440,6 +484,16 @@ class WorkspaceRuntimeBundleMixin:
             chunk.data.decode("utf-8", "replace") for chunk in snapshot.chunks
         )
         return text.strip()[-500:] or "no output"
+
+
+def _sandbox_uuid(sandbox_info: SandboxInfo) -> UUID:
+    """The logical sandbox id, for choosing a proxy that stays put.
+
+    `allocation_id` moves when a container is replaced; `sandbox_id` does
+    not, and stickiness across replacement is exactly the property the
+    create-time mechanism never had.
+    """
+    return UUID(str(sandbox_info.sandbox_id))
 
 
 __all__ = [

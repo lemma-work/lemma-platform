@@ -20,12 +20,14 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 
 from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
+from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderCapability,
     ProviderInstance,
@@ -33,6 +35,11 @@ from app.modules.workspace.providers.base import (
     require_capability,
 )
 from app.modules.workspace.providers.profiles import WORKSPACE_BROWSER_RELAY_PORT
+from app.modules.workspace.services.browser_proxy import (
+    BROWSER_PROXY_DECISION_PATH,
+    browser_proxy_for,
+    decision_bytes,
+)
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 logger = get_logger(__name__)
@@ -144,6 +151,35 @@ class BrowserRelayClient:
         deadline = datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)
         return await self._provider.reach_port(
             self._instance, port=WORKSPACE_BROWSER_RELAY_PORT, deadline_at=deadline
+        )
+
+    async def deliver_browser_proxy(self, sandbox_id: UUID, kind: SandboxKind) -> None:
+        """Tell the sandbox whether to proxy its browser, and through what.
+
+        Written on every use, like the token above and for the same reason:
+        asking is more expensive than writing, and a resumed sandbox's
+        filesystem may or may not still carry it.
+
+        Always written, including when the answer is "no proxy" -- an empty
+        file is how a withdrawal reaches a sandbox that already has one. A
+        decision that is merely absent means the server has not spoken, and
+        an older sandbox with a baked environment variable would go on using
+        it.
+
+        Delivered as a secret, so the URL never appears in a command line.
+        It is readable by the agent's own shell, which runs as the same
+        user; that is the same exposure the environment variable already
+        had, and it is why a credential put here should be scoped to this.
+        """
+        require_capability(self._provider, ProviderCapability.SECRET_DELIVERY)
+        deadline = datetime.now(timezone.utc) + timedelta(
+            seconds=_QUICK_TIMEOUT_SECONDS
+        )
+        await self._provider.deliver_secret(
+            self._instance,
+            path=BROWSER_PROXY_DECISION_PATH,
+            value=decision_bytes(browser_proxy_for(sandbox_id, kind)),
+            deadline_at=deadline,
         )
 
     async def deliver_token(self) -> None:

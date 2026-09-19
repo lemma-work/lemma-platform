@@ -56,7 +56,6 @@ from app.modules.workspace.providers.base import (
     resumes_stopped_instances,
 )
 from app.modules.workspace.providers.profiles import profile_for, profile_is_stale
-from app.modules.workspace.services.browser_proxy_env import provisioning_env
 from app.modules.workspace.services.sandbox_addressing import (
     SandboxAddressingMixin,
 )
@@ -431,7 +430,6 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
             deadline_at=deadline_at,
             volume_name=volume_name,
             mounts=sandbox.mounts,
-            env=provisioning_env(sandbox.kind),
         )
         try:
             created = await self._provider.create(spec)

@@ -70,6 +70,7 @@ def _workspace(
     _stub(binaries, "websockify", "exit 0")
     _stub(binaries, "curl", "exit 0")
     _stub(binaries, "browser-is-live", "exit 0" if browser_live else "exit 1")
+    _stub(binaries, "sha256sum", 'cat >/dev/null; echo "deadbeef  -"')
     # Records every argv it is given, one invocation per line.
     _stub(binaries, "agent-browser", f'echo "$*" >> "{opened}"')
 
@@ -85,6 +86,7 @@ def _workspace(
             "AGENT_BROWSER_PROFILE": str(profile),
             "AGENT_BROWSER_CONFIG": str(tmp_path / "config.json"),
             "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+            "LEMMA_BROWSER_PROXY_FILE": str(tmp_path / "proxy-decision"),
             "LEMMA_BROWSER_VNC_PORT": str(vnc_port),
             "LEMMA_BROWSER_VNC_WS_PORT": str(vnc_port),
         },
@@ -206,3 +208,77 @@ class TestTheProbeIsShared:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
+
+
+class TestTheProxyIsTheServersDecision:
+    """It could be given and never taken back.
+
+    The proxy used to be baked into the sandbox's creation environment, so
+    clearing the pool server-side left every existing sandbox proxied until
+    it was replaced -- and workspace sandboxes are not replaced on drift.
+    The server writes a one-line file now and this script reads it every
+    run. Verified on the real image end to end: `p1`, then `p2`, then empty,
+    produced exactly those three states on Chrome's command line.
+    """
+
+    def _config(self, environment: dict[str, str]) -> dict:
+        import json
+
+        return json.loads(Path(environment["AGENT_BROWSER_CONFIG"]).read_text())
+
+    def test_a_decision_naming_a_proxy_reaches_the_config(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment, _ = _workspace(tmp_path, browser_live=False, vnc_port=vnc_port)
+        Path(environment["LEMMA_BROWSER_PROXY_FILE"]).write_text(
+            "http://user:pw@proxy.test:8080\n"
+        )
+
+        assert _run(environment).returncode == 0
+        config = self._config(environment)
+        assert config["proxy"] == "http://user:pw@proxy.test:8080"
+        assert "disable_non_proxied_udp" in config["args"], (
+            "without the WebRTC flag the sandbox's real IP leaks in ICE "
+            "candidates gathered outside the proxy"
+        )
+
+    def test_an_empty_decision_withdraws_it(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """The case that was impossible before. Empty is a decision, not an
+        absence."""
+        environment, _ = _workspace(tmp_path, browser_live=False, vnc_port=vnc_port)
+        Path(environment["LEMMA_BROWSER_PROXY_FILE"]).write_text("")
+
+        assert _run(environment).returncode == 0
+        config = self._config(environment)
+        assert "proxy" not in config
+        assert "disable_non_proxied_udp" not in config["args"]
+
+    def test_a_stale_baked_environment_variable_does_not_win(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """Load-bearing, not tidiness. Measured on the image: with both set,
+        the environment variable wins -- so a value baked into an older
+        sandbox would silently override the server's current answer."""
+        environment, _ = _workspace(tmp_path, browser_live=False, vnc_port=vnc_port)
+        Path(environment["LEMMA_BROWSER_PROXY_FILE"]).write_text("")
+        environment["AGENT_BROWSER_PROXY"] = "http://stale.test:1234"
+
+        assert _run(environment).returncode == 0
+        config = self._config(environment)
+        assert "proxy" not in config
+        assert "stale.test" not in Path(environment["AGENT_BROWSER_CONFIG"]).read_text()
+
+    def test_the_config_is_not_world_readable_when_it_holds_a_credential(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment, _ = _workspace(tmp_path, browser_live=False, vnc_port=vnc_port)
+        Path(environment["LEMMA_BROWSER_PROXY_FILE"]).write_text(
+            "http://user:pw@proxy.test:8080\n"
+        )
+
+        _run(environment)
+
+        mode = Path(environment["AGENT_BROWSER_CONFIG"]).stat().st_mode & 0o777
+        assert mode == 0o600, f"config.json is {oct(mode)}, and it holds a password"
