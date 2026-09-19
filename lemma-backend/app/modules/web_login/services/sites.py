@@ -17,6 +17,8 @@ What survives is the two questions that were never guesses:
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from tldextract import TLDExtract
 
 #: Offline and deterministic. `suffix_list_urls=()` because a rule that
@@ -70,6 +72,42 @@ def same_site(host: str, other: str) -> bool:
 #: shortcut past asking a person who does not need asking.
 _WALL_HINTS = ("sign in", "signin", "log in", "login", "password")
 
+#: Path segments that name a site's own way in. Matched as whole segments,
+#: so `/auth` counts and `/authors/jane` does not.
+#:
+#: Separate from `_WALL_HINTS` because this is read off the address, where a
+#: substring search is too blunt: "auth" is inside "author", "authority" and
+#: "oauth-callback", and the title is the only half where loose matching is
+#: safe.
+_WALL_PATHS = frozenset(
+    {
+        "auth",
+        "authenticate",
+        "authentication",
+        "login",
+        "log-in",
+        "signin",
+        "sign-in",
+        "sso",
+    }
+)
+# Deliberately absent: `session`, `account` and their plurals. They are
+# ordinary application areas on plenty of sites -- `/accounts/settings`,
+# `/sessions/42` on a conference schedule -- and treating those as login
+# walls would ask a person to sign in to somewhere they already are, often.
+# The segments above name a way in and very little else.
+
+
+def _address_is_a_way_in(text: str) -> bool:
+    """Whether any URL in `text` points at a site's own sign-in route."""
+    for token in text.split():
+        if "://" not in token:
+            continue
+        path = urlparse(token).path
+        if any(segment.lower() in _WALL_PATHS for segment in path.split("/")):
+            return True
+    return False
+
 
 def page_looks_like_a_login_wall(text: str) -> bool:
     """Whether a page still appears to want a login.
@@ -80,12 +118,34 @@ def page_looks_like_a_login_wall(text: str) -> bool:
     session into, and answered by inspecting cookie names, which is how a
     consent banner came to be read as a session.
 
-    Still a heuristic, and the failure mode is worth naming: a site that
-    serves its login form at the same address under a neutral title passes
-    this. That costs one unnecessary ask, which is the right way round.
+    **The address is read as well as the title, and that is not a
+    refinement.** This was title-and-substring only, and it reported a
+    working session on our own product. Measured on `asur.work`, the site
+    that prompted the report: `https://asur.work/auth` serves
+    `<title>Lemma</title>` and does not redirect, so the text this saw was
+    `"https://asur.work/auth Lemma"` -- which contains none of "sign in",
+    "signin", "log in", "login" or "password". `already_signed_in` therefore
+    answered True about a browser sitting on a login form, the agent was
+    told "the browser is already signed in to this site", and it spent five
+    minutes before calling back with `force` to say the form was on screen.
+
+    The old docstring named this exact case -- "a site that serves its login
+    form at the same address under a neutral title passes this" -- and drew
+    the wrong conclusion from it: "that costs one unnecessary ask, which is
+    the right way round". Passing means we do *not* ask. It costs a false
+    claim of a session, which is the failure this whole feature was rebuilt
+    to remove.
+
+    Still a heuristic, and now erring the other way on purpose: a page whose
+    address contains an auth-shaped segment is treated as a wall even if it
+    is not one. That really does cost one unnecessary ask, and being wrong
+    in that direction is recoverable -- the person says they are already
+    signed in and carries on.
     """
     lowered = (text or "").lower()[:4000]
-    return any(hint in lowered for hint in _WALL_HINTS)
+    if any(hint in lowered for hint in _WALL_HINTS):
+        return True
+    return _address_is_a_way_in(lowered)
 
 
 __all__ = ["page_looks_like_a_login_wall", "same_site", "site_of"]

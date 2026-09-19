@@ -60,11 +60,7 @@ import asyncio
 from dataclasses import dataclass
 import subprocess
 
-from sandbox_runtime.sandbox_memory import (
-    SandboxMemory,
-    available_memory_mb,
-    read_memory,
-)
+from sandbox_runtime.sandbox_memory import SandboxMemory, read_memory
 
 #: The fallback threshold, against `/proc/meminfo`'s `MemAvailable`, used
 #: only where there is no cgroup to read. Chosen from measurement rather

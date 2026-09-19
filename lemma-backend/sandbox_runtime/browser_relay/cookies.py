@@ -36,6 +36,19 @@ from .chrome import BrowserNotRunning, page_targets
 
 _log = logging.getLogger(__name__)
 
+
+def _loggable(value: str) -> str:
+    """One line, bounded, no control characters.
+
+    The host half of an origin reaches here from a caller, and a CDP error
+    message reaches here from the browser -- so neither may be pasted into a
+    log line as-is. A newline in either forges a second log entry, which is
+    what `py/log-injection` is about and is worth avoiding even when the only
+    caller today is our own API.
+    """
+    return "".join(c for c in value if c.isprintable())[:200]
+
+
 #: Chrome answers a CDP call in well under this unless it is wedged, in which
 #: case waiting longer only holds the request open.
 _CDP_TIMEOUT_SECONDS = 15.0
@@ -256,7 +269,7 @@ async def forget_domains(domains: list[str], *, port: int) -> int:
                 # half could not be diagnosed for the length of a release:
                 # a CDP error and a clean clear looked identical from
                 # outside, and the caller reported success either way.
-                refused.append(f"{origin}: {exc}")
+                refused.append(f"{_loggable(origin)}: {_loggable(str(exc))}")
     if refused:
         _log.warning(
             "clearDataForOrigin refused %d of %d origins: %s",
