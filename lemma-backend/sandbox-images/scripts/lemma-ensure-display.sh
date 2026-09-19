@@ -326,18 +326,64 @@ start-browser-relay || true
 # And when a browser is already live, open nothing at all. `open` is not a
 # cheap no-op: it relaunches, which would throw away the page somebody is
 # watching every time the pane reconnects.
+# Chrome opens its new-tab page in the first window whatever we ask for, and
+# we have no use for it. Measured on a cold sandbox: closing it takes the
+# target list from four to three and Chrome from eleven processes to nine.
+#
+# The memory is not the argument -- that was within noise, 938 MB against
+# 935. The argument is what the page is: `chrome://newtab/` pulls in a
+# `chrome-untrusted://new-tab-page/one-google-bar` frame, which is Google's
+# content, in a browser a person signs into their own accounts through. An
+# agent's sandbox has no reason to load it.
+#
+# Closed rather than suppressed because there is no flag for it: the startup
+# page is Chrome's, `--no-first-run` does not govern it, and seeding
+# `Preferences` means owning a file Chrome rewrites. `agent-browser tab
+# list` does not show the page either -- it filters WebUI targets -- so this
+# goes through CDP directly.
+#
+# Never fatal, and never run when we did not just open the browser: a tab
+# somebody is looking at is not ours to close.
+close_new_tab_page() {
+  local port_file="${PROFILE_DIR}/DevToolsActivePort"
+  [ -r "$port_file" ] || return 0
+  local port
+  port="$(head -1 "$port_file" 2>/dev/null)" || return 0
+  [ -n "$port" ] || return 0
+  local target
+  target="$(curl -fsS -m 3 "http://127.0.0.1:${port}/json/list" 2>/dev/null \
+    | python3 -c 'import json, sys
+try:
+    targets = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+for target in targets:
+    if str(target.get("url", "")).startswith("chrome://newtab"):
+        print(target.get("id", ""))
+        break' 2>/dev/null)" || return 0
+  [ -n "$target" ] || return 0
+  curl -fsS -m 3 -o /dev/null "http://127.0.0.1:${port}/json/close/${target}" \
+    2>/dev/null || true
+  return 0
+}
+
 open_log="/tmp/agent-browser-open.log"
+opened_cold=0
 if [ "$#" -gt 0 ]; then
   set -- "$@"
 elif browser-is-live; then
   exit 0
 else
   set -- about:blank
+  opened_cold=1
 fi
 if agent-browser open "$@" >"$open_log" 2>&1; then
   open_status=0
 else
   open_status=$?
+fi
+if [ "$opened_cold" = "1" ] && [ "$open_status" = "0" ]; then
+  close_new_tab_page
 fi
 cat "$open_log"
 exit "$open_status"
