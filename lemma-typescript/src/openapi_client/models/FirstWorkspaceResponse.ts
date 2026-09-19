@@ -12,7 +12,6 @@ export type FirstWorkspaceResponse = {
 };
 export namespace FirstWorkspaceResponse {
     export enum entry {
-        SAVED = 'saved',
         EXISTING = 'existing',
         SURFACE_JOIN = 'surface_join',
         DOMAIN_JOIN = 'domain_join',
