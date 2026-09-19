@@ -156,9 +156,13 @@ def _with_reply_budget(
     never spent.
 
     An operator who set `max_tokens` on the runtime profile outranks this: they
-    know something about their model that a fraction of a window does not.
+    know something about their model that a fraction of a window does not. Any
+    value they set counts, including a zero -- a provider will reject that and
+    say so, which is a better answer than quietly substituting a number they
+    did not choose and leaving them to wonder why their setting did nothing.
+    Absent and explicitly null both mean unset, and are filled.
     """
-    if model_settings and model_settings.get("max_tokens"):
+    if model_settings and model_settings.get("max_tokens") is not None:
         return model_settings
     reply = budget.reply_token_budget
     if reply <= 0:

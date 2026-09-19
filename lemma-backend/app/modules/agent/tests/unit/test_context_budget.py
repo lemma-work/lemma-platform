@@ -312,3 +312,20 @@ def test_an_operator_who_set_max_tokens_keeps_it():
     settings = {"max_tokens": 512}
 
     assert _with_reply_budget(settings, context_budget_for(None)) == settings
+
+
+def test_an_explicit_zero_is_a_choice_and_is_kept():
+    """A truthiness check treated `max_tokens: 0` as unset and replaced it.
+
+    Zero is a value somebody typed. A provider rejecting it tells them so;
+    substituting a number they did not choose leaves them looking at a setting
+    that silently did nothing. Absent and null are the two that mean unset.
+    """
+    from app.modules.agent.services.agent_runner_service import _with_reply_budget
+
+    budget = context_budget_for(None)
+
+    assert _with_reply_budget({"max_tokens": 0}, budget) == {"max_tokens": 0}
+    assert _with_reply_budget({"max_tokens": None}, budget) == {
+        "max_tokens": budget.reply_token_budget
+    }
