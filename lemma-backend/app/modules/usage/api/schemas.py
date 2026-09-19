@@ -136,9 +136,16 @@ class UsageLimitScopeResponse(BaseModel):
     scope: str
     used_usd: float
     reserved_usd: float
-    #: How much of this window is consumed, 0-100. ``None`` means the window is
-    #: uncapped, which is a different statement from "0% used".
-    used_percent: float | None = None
+    used_percent: float | None = Field(
+        default=None,
+        description=(
+            "How much of this window is consumed, as a percentage. Null means "
+            "the window is uncapped, which is a different statement from 0% "
+            "used. May exceed 100: a reservation can settle above what it "
+            "reserved, and a caller wanting a meter should clamp it itself "
+            "rather than be handed a number that has already lost the overage."
+        ),
+    )
     allowed: bool
     reset_at: datetime
     window_start: datetime

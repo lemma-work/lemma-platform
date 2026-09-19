@@ -44,7 +44,10 @@ class UsageLimitScopeResponse:
             scope (str):
             used_usd (float):
             window_start (datetime.datetime):
-            used_percent (float | None | Unset):
+            used_percent (float | None | Unset): How much of this window is consumed, as a percentage. Null means the window
+                is uncapped, which is a different statement from 0% used. May exceed 100: a reservation can settle above what it
+                reserved, and a caller wanting a meter should clamp it itself rather than be handed a number that has already
+                lost the overage.
     """
 
     allowed: bool

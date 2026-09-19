@@ -91,12 +91,34 @@ def test_a_zero_cap_reads_as_fully_consumed_rather_than_dividing_by_zero():
     assert _limit_scope_response(_scope(limit_usd=0.0)).used_percent == 100.0
 
 
-def test_consumption_past_the_cap_is_clamped_to_one_hundred():
-    """A reservation can settle above the cap. A meter reading 130% is a bug
-    report from every customer who sees it."""
+def test_consumption_past_the_cap_is_reported_past_the_cap():
+    """Not clamped, and this test used to assert the opposite.
+
+    A reservation can settle above what it reserved, so consumption genuinely
+    passes the cap. Clamping reads better on a meter, but it is a presentation
+    choice made at the wrong layer: the caller that most needs this number is
+    the one looking at a tenant who has gone over, and a frontend can clamp for
+    itself while nobody can recover 130% from a 100% they were handed.
+
+    It also has to match `/usage/me/limits`, which never clamped. Two endpoints
+    reporting different percentages for the same underlying window is the bug
+    this whole change set out to remove.
+    """
     response = _limit_scope_response(_scope(limit_usd=10.0, used_usd=13.0))
 
-    assert response.used_percent == 100.0
+    assert response.used_percent == 130.0
+
+
+def test_the_two_endpoints_compute_the_same_percentage():
+    """`/usage/me/limits` builds its own response, and the arithmetic has to be
+    the same one — otherwise a customer and an operator reading the same window
+    see different numbers."""
+    scope = _scope(limit_usd=10.0, used_usd=13.0, reserved_usd=2.0)
+
+    consumed = scope["used_usd"] + scope["reserved_usd"]
+    self_endpoint_percent = 100 * consumed / scope["limit_usd"]
+
+    assert _limit_scope_response(scope).used_percent == self_endpoint_percent
 
 
 def test_the_other_scope_fields_still_come_through():

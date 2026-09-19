@@ -30,6 +30,9 @@ export type UsageLimitScopeResponse = {
     reserved_usd: number;
     reset_at: string;
     scope: string;
+    /**
+     * How much of this window is consumed, as a percentage. Null means the window is uncapped, which is a different statement from 0% used. May exceed 100: a reservation can settle above what it reserved, and a caller wanting a meter should clamp it itself rather than be handed a number that has already lost the overage.
+     */
     used_percent?: (number | null);
     used_usd: number;
     window_start: string;

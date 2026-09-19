@@ -262,9 +262,16 @@ def _limit_scope_response(scope: UsageLimitScope) -> UsageLimitScopeResponse:
     used_percent: float | None = None
     if cap is not None:
         consumed = scope["used_usd"] + scope["reserved_usd"]
+        # Not clamped to 100. A reservation can settle above what it reserved,
+        # so consumption genuinely passes the cap, and the caller that most
+        # needs to know is the one looking at a tenant who has gone over. A
+        # clamp throws that away at the boundary: a frontend drawing a meter
+        # can do `min(100, used_percent)` itself, and cannot recover 200% from
+        # a 100% it was handed.
+        #
         # A zero cap is a window nothing fits in, which reads as fully consumed
         # rather than as a division by zero.
-        used_percent = min(100.0, 100 * consumed / cap) if cap > 0 else 100.0
+        used_percent = 100 * consumed / cap if cap > 0 else 100.0
     return UsageLimitScopeResponse(
         scope=scope["scope"],
         used_usd=scope["used_usd"],
