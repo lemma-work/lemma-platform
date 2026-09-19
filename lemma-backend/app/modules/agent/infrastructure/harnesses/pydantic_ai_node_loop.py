@@ -40,6 +40,9 @@ from uuid import UUID
 
 from pydantic_ai import Agent as PydanticAIAgent
 
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+
 from app.core.log.log import get_logger
 from app.modules.agent.domain.run_budget_pause import (
     budget_pause_events,
@@ -126,20 +129,36 @@ class NodeLoop[DepsT]:
             state["run"] = run
             self._run, self._carried_usage = run, carried_usage
             self._usage_emitted = False
-            async for node in run:
-                if PydanticAIAgent.is_model_request_node(node):
-                    # Counted before the request, not after: the ceiling is on
-                    # what the run is about to spend, and a check that only ran
-                    # afterwards would always allow one call past it.
-                    await self._spend_a_model_request()
-                    if await self._pump_model_request(node, run, state):
-                        return
-                elif PydanticAIAgent.is_call_tools_node(node):
-                    if await self._pump_tool_calls(node, run):
-                        return
-                elif PydanticAIAgent.is_end_node(node):
-                    if await self._pump_end_node(node):
-                        return
+            try:
+                async for node in run:
+                    if PydanticAIAgent.is_model_request_node(node):
+                        # Counted before the request, not after: the ceiling is
+                        # on what the run is about to spend, and a check that
+                        # only ran afterwards would always allow one call past
+                        # it.
+                        await self._spend_a_model_request()
+                        if await self._pump_model_request(node, run, state):
+                            return
+                    elif PydanticAIAgent.is_call_tools_node(node):
+                        if await self._pump_tool_calls(node, run):
+                            return
+                    elif PydanticAIAgent.is_end_node(node):
+                        if await self._pump_end_node(node):
+                            return
+            except AgentInputRequired:
+                # A pause, not a failure, and this is the last place that can
+                # say so. The span pydantic-ai opened for the whole run is the
+                # current one here; by the time the harness catches this
+                # outside the graph, that span has already closed ERROR.
+                # `StatusCode.OK` is final in the SDK, so setting it now
+                # survives the unwind.
+                #
+                # Deliberately narrower than the tool-level set. A tool that
+                # raises `ModelRetry` has not failed, but a run that ends on
+                # `UnexpectedModelBehavior` has -- that is the token-limit
+                # failure -- so only the pause is excused here.
+                trace.get_current_span().set_status(Status(StatusCode.OK))
+                raise
 
             # The run finished on its own. The other exits bill for themselves:
             # a terminal event bills before queueing it (the pump finalizes on
