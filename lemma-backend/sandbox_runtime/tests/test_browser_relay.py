@@ -238,8 +238,11 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/health",
         "/targets",
         "/browser:ensure",
+        "/display:resize",
+        "/display:reset",
         "/profile:cookies",
         "/profile:forget",
+        "/profile:signed-in",
         "/vnc",
     } <= served
     # Asserted as an equality, not a subset: `/state:clear` was once here and
@@ -250,6 +253,16 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
     assert {p for p in served if p.startswith("/profile")} == {
         "/profile:cookies",
         "/profile:forget",
+        # Names only, never a cookie: the set of sites somebody said they
+        # signed in to, which is the one thing the cookie store cannot say.
+        "/profile:signed-in",
+    }
+    # Equality here too, for the reason above. Both were absent from this
+    # file while it claimed to assert the served surface, so a display route
+    # could have come or gone without anything noticing.
+    assert {p for p in served if p.startswith("/display")} == {
+        "/display:resize",
+        "/display:reset",
     }
     assert not {p for p in served if p.startswith("/state")}
     assert not {p for p in served if p.startswith("/cdp")}

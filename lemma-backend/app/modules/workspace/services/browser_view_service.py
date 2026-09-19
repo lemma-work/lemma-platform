@@ -301,16 +301,38 @@ class BrowserViewService:
             await relay.health(start=True)
         return await relay.profile_cookies(start=wake)
 
-    async def forget_sites(self, user_id: UUID, *, domains: list[str]) -> int:
+    async def forget_sites(
+        self, user_id: UUID, *, domains: list[str], sites: list[str]
+    ) -> int:
         """Drop the cookies for these hosts, and say how many went.
 
         Unlike the delete this replaces, which removed Lemma's encrypted copy
         and left the browser signed in, this signs the browser out.
+
+        `sites` are the registrable domains those hosts roll up to. They go
+        in the same call so the "they signed in here" mark leaves with the
+        cookies rather than outliving them.
         """
         relay = await self._relay(user_id, start=True)
         await relay.health(start=True)
         await _require_private(relay, doing="forget a saved login")
-        return await relay.forget_cookies(domains=domains)
+        return await relay.forget_cookies(domains=domains, sites=sites)
+
+    async def mark_signed_in(self, user_id: UUID, *, site: str) -> None:
+        """Record that somebody said they signed in to this site.
+
+        The one fact about a login that cannot be read back off the profile.
+        Measured: `api.asur.work`'s two session cookies and `youtube.com`'s
+        six visitor cookies are indistinguishable by every flag CDP reports,
+        so without this the list can only say "sites with cookies". See
+        `sandbox_runtime/browser_relay/marks.py`.
+
+        `start=False`: the browser has just been driven through a sign-in,
+        so the relay is up -- and if it is not, a lost label must not be
+        what fails a sign-in that worked.
+        """
+        relay = await self._relay(user_id, start=False)
+        await relay.mark_signed_in(site=site)
 
     async def ensure_for_sign_in(
         self,

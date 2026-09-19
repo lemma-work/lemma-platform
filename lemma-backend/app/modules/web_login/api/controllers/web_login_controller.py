@@ -60,6 +60,17 @@ class WebLoginResponse(BaseModel):
             "session cookies, which go when the browser does."
         ),
     )
+    signed_in: bool = Field(
+        default=False,
+        description=(
+            "True when somebody answered 'yes, I signed in' to a sign-in "
+            "request for this site. The cookies cannot say this on their "
+            "own: a real profile held two session cookies for a site that "
+            "was signed in and six for one that merely had a video played "
+            "on it, identical on every flag. False means only 'nobody said "
+            "so' -- the browser may still have a usable session."
+        ),
+    )
 
 
 class WebLoginListResponse(BaseModel):
@@ -92,14 +103,22 @@ def _browser():
     return browser_view_service()()
 
 
-def _as_sites(cookies: list[ProfileCookie]) -> list[WebLoginResponse]:
+def _as_sites(
+    cookies: list[ProfileCookie], signed_in: list[str] | None = None
+) -> list[WebLoginResponse]:
     """Group raw cookie hosts into the sites a person would recognise.
 
     Here rather than in the sandbox because this is the public-suffix
     question, and the suffix list lives on this side. The relay reports hosts
     and deletes the hosts it is given; it does not know that two of them are
     one login.
+
+    `signed_in` is intersected rather than trusted outright: it is a file of
+    names beside the profile, so a mark left behind by a profile somebody
+    deleted by hand describes nothing. A site with no cookies never reaches
+    this list, which is what makes the stale case correct itself.
     """
+    marked = {site.lower() for site in signed_in or []}
     grouped: dict[str, list[float | None]] = {}
     for cookie in cookies:
         host = str(cookie.get("domain") or "")
@@ -123,6 +142,7 @@ def _as_sites(cookies: list[ProfileCookie]) -> list[WebLoginResponse]:
                 expires=(
                     datetime.fromtimestamp(min(real), tz=timezone.utc) if real else None
                 ),
+                signed_in=site.lower() in marked,
             )
         )
     return items
@@ -167,7 +187,9 @@ async def list_web_logins(
         return WebLoginListResponse(items=[], sleeping=True)
     if not answer["running"]:
         return WebLoginListResponse(items=[], sleeping=True)
-    return WebLoginListResponse(items=_as_sites(answer["cookies"]))
+    return WebLoginListResponse(
+        items=_as_sites(answer["cookies"], answer.get("signed_in") or [])
+    )
 
 
 @router.delete(
@@ -207,7 +229,9 @@ async def forget_web_login(
     ]
     if not hosts:
         return ForgetResponse(site=site, forgotten=False)
-    dropped = await browser.forget_sites(current_user.id, domains=sorted(set(hosts)))
+    dropped = await browser.forget_sites(
+        current_user.id, domains=sorted(set(hosts)), sites=[site]
+    )
     return ForgetResponse(site=site, forgotten=dropped > 0)
 
 

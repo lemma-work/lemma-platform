@@ -21,6 +21,7 @@ const site = (over: Record<string, unknown> = {}) => ({
     site: 'app.example.com',
     cookie_count: 3,
     expires: null,
+    signed_in: false,
     ...over,
 });
 
@@ -135,5 +136,69 @@ describe('signing out', () => {
         const note = screen.getByText(/signs the agent/i);
         expect(note.textContent).toContain('drops its cookies');
         expect(note.textContent).not.toContain('does not sign you out');
+    });
+});
+
+
+describe('separating a login from a cookie', () => {
+    /**
+     * The reason `signed_in` exists at all, and it was measured rather than
+     * assumed. On a real profile `api.asur.work` held two HttpOnly session
+     * cookies belonging to somebody signed in, and `youtube.com` held six
+     * HttpOnly cookies belonging to nobody -- identical on every flag CDP
+     * reports. So the split comes from what a person answered to a sign-in
+     * request, not from anything read off the cookies.
+     */
+    it('puts the sites somebody signed in to above the rest', async () => {
+        answer.data = {
+            items: [
+                site({ site: 'doubleclick.net' }),
+                site({ site: 'asur.work', signed_in: true }),
+                site({ site: 'youtube.com' }),
+            ],
+            sleeping: false,
+        };
+        render(<BrowserLoginsCard />);
+        await open();
+
+        expect(screen.getByText('Signed in')).toBeTruthy();
+        expect(screen.getByText('Other sites with cookies')).toBeTruthy();
+
+        const rows = screen.getAllByRole('listitem').map((li) => li.textContent);
+        expect(rows[0]).toContain('asur.work');
+        // Still listed, and still signable-out-of: an ad network's cookie is
+        // worth being able to clear, just not worth reading first.
+        expect(rows.join(' ')).toContain('doubleclick.net');
+    });
+
+    it('does not split when nothing has been marked', async () => {
+        // Every profile that predates the marks file starts with none. A
+        // dialog that hid all four sites behind a collapsed "other" because
+        // nobody had answered a sign-in yet would be worse than a flat list.
+        answer.data = {
+            items: [site({ site: 'asur.work' }), site({ site: 'youtube.com' })],
+            sleeping: false,
+        };
+        render(<BrowserLoginsCard />);
+        await open();
+
+        expect(screen.queryByText('Signed in')).toBeNull();
+        expect(screen.queryByText('Other sites with cookies')).toBeNull();
+        expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    });
+
+    it('does not split when every site was signed in to', async () => {
+        answer.data = {
+            items: [
+                site({ site: 'asur.work', signed_in: true }),
+                site({ site: 'other.test', signed_in: true }),
+            ],
+            sleeping: false,
+        };
+        render(<BrowserLoginsCard />);
+        await open();
+
+        expect(screen.queryByText('Other sites with cookies')).toBeNull();
+        expect(screen.getAllByRole('listitem')).toHaveLength(2);
     });
 });

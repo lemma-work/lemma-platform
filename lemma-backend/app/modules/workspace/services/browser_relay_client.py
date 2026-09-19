@@ -85,10 +85,18 @@ class ProfileCookie(TypedDict):
 
 
 class ProfileCookies(TypedDict):
-    """What the browser is holding, or that it is not running to be asked."""
+    """What the browser is holding, or that it is not running to be asked.
+
+    `signed_in` is the set of sites somebody answered "yes, I signed in" to.
+    It comes from a file beside the profile rather than from the cookies,
+    because no flag on a cookie distinguishes a session from visitor
+    tracking -- see `sandbox_runtime/browser_relay/marks.py`. Present even
+    when the browser is not running, since reading it costs no browser.
+    """
 
     running: bool
     cookies: list[ProfileCookie]
+    signed_in: list[str]
 
 
 class BrowserRelayClient:
@@ -281,9 +289,14 @@ class BrowserRelayClient:
             raise BrowserRelayUnavailable(_detail(response))
         body = response.json()
         if not isinstance(body, dict):
-            return {"running": False, "cookies": []}
+            return {"running": False, "cookies": [], "signed_in": []}
         return {
             "running": bool(body.get("running")),
+            "signed_in": [
+                str(site)
+                for site in body.get("signed_in") or []
+                if isinstance(site, str)
+            ],
             "cookies": [
                 {
                     "domain": str(cookie.get("domain") or ""),
@@ -298,12 +311,34 @@ class BrowserRelayClient:
             ],
         }
 
-    async def forget_cookies(self, *, domains: list[str]) -> int:
-        """Drop every cookie set for these hosts. Returns how many went."""
+    async def mark_signed_in(self, *, site: str) -> None:
+        """Record that somebody said they signed in to this site.
+
+        Best effort by the caller's choosing, not by this method's: it
+        raises like everything else here, and the sign-in flow decides that
+        a lost label must not fail a sign-in that worked.
+        """
+        response = await self._request(
+            "POST",
+            "/profile:signed-in",
+            json_body={"site": site},
+            timeout=30.0,
+        )
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+
+    async def forget_cookies(self, *, domains: list[str], sites: list[str]) -> int:
+        """Drop every cookie set for these hosts. Returns how many went.
+
+        `sites` are the registrable domains those hosts roll up to, so the
+        "they signed in here" marks go in the same call. Passed rather than
+        derived: grouping is a public-suffix question and that list lives on
+        this side of the boundary.
+        """
         response = await self._request(
             "POST",
             "/profile:forget",
-            json_body={"domains": domains},
+            json_body={"domains": domains, "sites": sites},
             timeout=60.0,
         )
         if response.status_code != 200:

@@ -60,6 +60,17 @@ export interface WebLogin {
    * cookies.
    */
   expires: string | null;
+  /**
+   * Whether somebody answered "yes, I signed in" to a sign-in request for
+   * this site.
+   *
+   * The cookies cannot say this on their own, and that is measured rather
+   * than assumed: a real profile held two HttpOnly session cookies for a
+   * site somebody was signed in to, and six HttpOnly cookies for one that
+   * had merely had a video played on it. `false` means "nobody said so", not
+   * "no session" — the browser may well still be signed in.
+   */
+  signed_in: boolean;
 }
 
 /** An agent waiting for somebody to sign a site in.

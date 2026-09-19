@@ -41,7 +41,10 @@ from app.modules.web_login.services.pauses import (
     resume_through_approvals,
 )
 from app.modules.web_login.services.resolution import resolve_owner
-from app.modules.web_login.services.sites import page_looks_like_a_login_wall
+from app.modules.web_login.services.sites import (
+    page_looks_like_a_login_wall,
+    site_of,
+)
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 logger = get_logger(__name__)
@@ -245,6 +248,8 @@ class SignInService:
 
         site = found.origin
         working = await self._site_is_open(user_id, site) if signed_in else False
+        if working:
+            await self._remember_they_signed_in(user_id, site)
         await self._tell_the_agent(
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
@@ -253,6 +258,35 @@ class SignInService:
             working=working,
         )
         return SignInOutcome(origin=site, signed_in=signed_in, working=working)
+
+    async def _remember_they_signed_in(self, owner: UUID, site: str) -> None:
+        """Write down the one thing the cookies cannot say.
+
+        A person has just told us they signed in here, and the browser then
+        agreed. That fact is unrecoverable from the profile afterwards:
+        measured on a real one, a site that was signed in and a site that had
+        merely had a video played on it were identical on every flag CDP
+        reports. Without this the management screen can only honestly say
+        "sites with cookies", which is what it said when the list came back
+        led by `doubleclick.net`.
+
+        Names only, beside the profile, and no secret -- see
+        `sandbox_runtime/browser_relay/marks.py`.
+
+        Best effort, and deliberately after `working`: a label that failed to
+        save must not turn a sign-in that worked into one that did not. The
+        person has already done the thing they were asked to do.
+        """
+        host = site.split("://", 1)[-1].split("/", 1)[0]
+        registrable = site_of(host) or host
+        try:
+            await self._browser.mark_signed_in(owner, site=registrable)
+        except _relay_unavailable(), SandboxCapabilityUnsupported, AttributeError:
+            logger.warning(
+                "web_login.sign_in.mark_failed.degraded",
+                origin=site,
+                site=registrable,
+            )
 
     async def _tell_the_agent(
         self,

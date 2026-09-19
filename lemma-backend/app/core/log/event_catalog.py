@@ -773,6 +773,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'web_login.sign_in.browser_not_ready.degraded': EventSpec('warning', frozenset()),
     'web_login.sign_in.browser_unreachable.degraded': EventSpec('warning', frozenset({'origin'})),
     'web_login.sign_in.conversation_gone.degraded': EventSpec('warning', frozenset({'conversation_id'})),
+    'web_login.sign_in.mark_failed.degraded': EventSpec('warning', frozenset({'origin', 'site'})),
     'web_search.request.failed': EventSpec('debug', frozenset()),
     'worker.context.persist_failed': EventSpec('debug', frozenset({'error_type', 'job_id', 'task_name'})),
     'worker.crons.prune_failed.degraded': EventSpec('warning', frozenset({'queue'})),

@@ -50,6 +50,7 @@ from .chrome import (
 )
 from .stream_proxy import CONTROL, VIEW, pump_binary
 from .cookies import forget_domains, list_cookie_domains
+from .marks import forget_marks, mark_signed_in, signed_in_sites
 
 #: Deliberately not under `/tmp/lemma-browser`, which `quiesce` deletes before a
 #: pause: the token has to survive a resume, and the browser profile must not.
@@ -175,6 +176,15 @@ class ForgetRequest(BaseModel):
     #: Exact cookie hosts, chosen by the backend. The relay does not know
     #: which of them are "one site" and must not guess -- see `cookies.py`.
     domains: list[str] = Field(default_factory=list)
+    #: The registrable domain those hosts belong to, so the "they signed in
+    #: here" mark goes with them. Grouping is the backend's question, so the
+    #: answer arrives rather than being worked out here.
+    sites: list[str] = Field(default_factory=list)
+
+
+class SignedInRequest(BaseModel):
+    #: One registrable domain, already grouped by the backend.
+    site: str
 
 
 def _token() -> str:
@@ -380,12 +390,33 @@ def create_app() -> FastAPI:
         is on disk either way, and the daemon retires the browser after five
         idle minutes. So "not running" is "cannot say", not "nothing", and
         `start` is the caller saying it is willing to pay for an answer.
+
+        `signed_in` rides along in both branches because it costs a file
+        read rather than a browser: it is the set of sites somebody said
+        they signed in to, which is the only thing here that distinguishes a
+        login from a tracking cookie. See `marks.py` for why nothing tries
+        to work that out from the cookies themselves.
         """
+        marked = signed_in_sites()
         try:
             port = await ensure_port() if start else await live_port()
         except BrowserNotRunning:
-            return {"running": False, "cookies": []}
-        return {"running": True, "cookies": await list_cookie_domains(port=port)}
+            return {"running": False, "cookies": [], "signed_in": marked}
+        return {
+            "running": True,
+            "cookies": await list_cookie_domains(port=port),
+            "signed_in": marked,
+        }
+
+    @app.post("/profile:signed-in", dependencies=[Depends(require_token)])
+    async def profile_signed_in(request: SignedInRequest) -> dict:
+        """Record that somebody signed in to this site.
+
+        No browser needed: this is a fact a person stated, not one read off
+        the profile, and it must survive being recorded while Chrome is
+        between idle retirements.
+        """
+        return {"signed_in": mark_signed_in(request.site)}
 
     @app.post("/profile:forget", dependencies=[Depends(require_token)])
     async def profile_forget(request: ForgetRequest) -> dict:
@@ -393,7 +424,11 @@ def create_app() -> FastAPI:
             port = await live_port()
         except BrowserNotRunning:
             raise HTTPException(status_code=409, detail="the browser is not running")
-        return {"dropped": await forget_domains(request.domains, port=port)}
+        dropped = await forget_domains(request.domains, port=port)
+        # The mark goes even when no cookie did. A site whose session had
+        # already lapsed would otherwise keep reading "signed in" for as
+        # long as the profile lived, with nothing left to sign out of.
+        return {"dropped": dropped, "signed_in": forget_marks(request.sites)}
 
     @app.websocket("/vnc")
     async def vnc_socket(

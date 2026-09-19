@@ -43,7 +43,15 @@ def list_logins(
         "list means a round trip into the sandbox.",
     ),
 ) -> None:
-    """Every site the browser is signed in to.
+    """Every site the browser holds cookies for.
+
+    Each row carries `signed_in`, which is the only thing here that
+    distinguishes a login from a tracking cookie -- and it is what somebody
+    answered to a sign-in request, not something read off the profile.
+    Measured: a real browser held two HttpOnly session cookies for a site
+    that was signed in and six for one that had merely had a video played on
+    it, identical on every flag. So the rest of the list is honest about
+    being cookies rather than claiming to be logins.
 
     Not paged, and it used to be. That machinery -- follow `next_page_token`
     to exhaustion, bounded so a permissive stub could not hang CI -- belonged

@@ -130,6 +130,18 @@ function BrowserLoginsDialog({
     );
 }
 
+type Site = { site: string; expires: string | null; signed_in: boolean };
+
+/** A band between the two groups. Sticky, so it still names what you are
+ *  looking at once the list below it has been scrolled into view. */
+function Heading({ children }: { children: React.ReactNode }) {
+    return (
+        <p className="sticky top-0 z-10 bg-[var(--surface-1)] px-5 pt-3 pb-1.5 text-xs text-[var(--text-secondary)]">
+            {children}
+        </p>
+    );
+}
+
 function Body({
     data,
     isPending,
@@ -140,7 +152,7 @@ function Body({
     isRemoving,
     onRemove,
 }: {
-    data: { items: { site: string; expires: string | null }[]; sleeping: boolean } | undefined;
+    data: { items: Site[]; sleeping: boolean } | undefined;
     isPending: boolean;
     error: unknown;
     wake: () => void;
@@ -194,6 +206,56 @@ function Body({
         );
     }
 
+    // Only split when the split says something. Marks begin empty on every
+    // profile that predates them, and a dialog that hid four sites behind a
+    // collapsed "other" because nobody had answered a sign-in yet would be
+    // worse than the flat list it replaced.
+    const confirmed = items.filter((item) => item.signed_in);
+    const rest = items.filter((item) => !item.signed_in);
+    const split = confirmed.length > 0 && rest.length > 0;
+
+    const row = (login: Site) => (
+        <li
+            key={login.site}
+            className="flex items-center gap-3 px-5 py-2.5 text-sm"
+        >
+            <Lock className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
+            <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">
+                {login.site}
+            </span>
+            <span className="shrink-0 text-xs text-[var(--text-tertiary)]">
+                {expiryNote(login.expires)}
+            </span>
+            {confirming === login.site ? (
+                <span className="flex shrink-0 items-center gap-1">
+                    <Button
+                        variant="destructive"
+                        size="xs"
+                        loading={isRemoving}
+                        onClick={() => onRemove(login.site)}
+                    >
+                        Sign out
+                    </Button>
+                    <Button variant="quiet" size="xs" onClick={() => setConfirming(null)}>
+                        Keep
+                    </Button>
+                </span>
+            ) : (
+                // Always visible, not revealed on hover: the design audit
+                // holds `hoverOnlyDisplayReveal` at zero, and a control you
+                // cannot find on a touch screen is not a control.
+                <Button
+                    variant="quiet"
+                    size="xs"
+                    aria-label={`Sign out of ${login.site}`}
+                    onClick={() => setConfirming(login.site)}
+                >
+                    <Trash2 className="size-3.5" />
+                </Button>
+            )}
+        </li>
+    );
+
     return (
         <>
             {/* One line per site, name left and expiry right, rather than the
@@ -202,57 +264,36 @@ function Body({
                 Dividers rather than a border each -- at twenty rows, twenty
                 outlines read as a stack of cards instead of a list.
 
-                The scroll is on the list alone, so the header above and the
-                note below stay put. A confirmation that scrolled away from
-                the row it belongs to is worse than none. */}
-            <ul className="flex max-h-[min(70dvh,32rem)] flex-col divide-y divide-[var(--row-border)] overflow-y-auto">
-                {items.map((login) => (
-                    <li
-                        key={login.site}
-                        className="flex items-center gap-3 px-5 py-2.5 text-sm"
-                    >
-                        <Lock className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
-                        <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">
-                            {login.site}
-                        </span>
-                        <span className="shrink-0 text-xs text-[var(--text-tertiary)]">
-                            {expiryNote(login.expires)}
-                        </span>
-                        {confirming === login.site ? (
-                            <span className="flex shrink-0 items-center gap-1">
-                                <Button
-                                    variant="destructive"
-                                    size="xs"
-                                    loading={isRemoving}
-                                    onClick={() => onRemove(login.site)}
-                                >
-                                    Sign out
-                                </Button>
-                                <Button
-                                    variant="quiet"
-                                    size="xs"
-                                    onClick={() => setConfirming(null)}
-                                >
-                                    Keep
-                                </Button>
+                The scroll is on this alone, so the header above and the note
+                below stay put. A confirmation that scrolled away from the row
+                it belongs to is worse than none. */}
+            <div className="max-h-[min(70dvh,32rem)] overflow-y-auto">
+                {split ? (
+                    <Heading>Signed in</Heading>
+                ) : null}
+                <ul className="flex flex-col divide-y divide-[var(--row-border)]">
+                    {(split ? confirmed : items).map(row)}
+                </ul>
+
+                {split ? (
+                    <>
+                        {/* Everything else the profile picked up. A browser
+                            collects a cookie domain per site *visited*, so
+                            this is where the ad networks and the video you
+                            watched once end up -- worth being able to clear,
+                            not worth reading first. */}
+                        <Heading>
+                            Other sites with cookies
+                            <span className="ml-1.5 text-[var(--text-tertiary)]">
+                                {rest.length}
                             </span>
-                        ) : (
-                            // Always visible, not revealed on hover: the
-                            // design audit holds `hoverOnlyDisplayReveal` at
-                            // zero, and a control you cannot find on a touch
-                            // screen is not a control.
-                            <Button
-                                variant="quiet"
-                                size="xs"
-                                aria-label={`Sign out of ${login.site}`}
-                                onClick={() => setConfirming(login.site)}
-                            >
-                                <Trash2 className="size-3.5" />
-                            </Button>
-                        )}
-                    </li>
-                ))}
-            </ul>
+                        </Heading>
+                        <ul className="flex flex-col divide-y divide-[var(--row-border)]">
+                            {rest.map(row)}
+                        </ul>
+                    </>
+                ) : null}
+            </div>
 
             {/* No disclaimer any more, and that is the change rather than an
                 omission: this used to have to say "forgetting removes Lemma's
