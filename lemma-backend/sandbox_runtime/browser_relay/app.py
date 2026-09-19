@@ -46,6 +46,7 @@ from .chrome import (
     live_port,
     open_url,
     page_targets,
+    RecordingInProgress,
     set_display_size,
 )
 from .stream_proxy import CONTROL, VIEW, pump_binary
@@ -389,9 +390,17 @@ def create_app() -> FastAPI:
         opening a panel should not be able to do it by accident.
         """
         cap_width, cap_height = default_display_size()
-        size = await set_display_size(
-            min(request.width, cap_width), min(request.height, cap_height)
-        )
+        try:
+            size = await set_display_size(
+                min(request.width, cap_width), min(request.height, cap_height)
+            )
+        except RecordingInProgress as exc:
+            # 409 rather than a silent no-op, and a reason the pane can show.
+            # A person opening the panel while an agent is recording used to
+            # move the framebuffer under the recorder; the picture is
+            # letterboxed until the take ends instead, which is the
+            # recoverable half of the trade.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if size is None:
             raise HTTPException(
                 status_code=409, detail="the display could not be resized"
@@ -414,7 +423,16 @@ def create_app() -> FastAPI:
         can plan against.
         """
         width, height = default_display_size()
-        size = await set_display_size(width, height)
+        try:
+            size = await set_display_size(width, height)
+        except RecordingInProgress as exc:
+            # The last viewer leaving must not resize either. This is the
+            # more dangerous of the two paths, because nobody is watching
+            # when it fires: the agent is alone with its recording and the
+            # reset would land in the middle of it. The display keeps the
+            # viewer's shape until the take ends, and the next reset -- or
+            # the next viewer -- puts it back.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         if size is None:
             raise HTTPException(status_code=409, detail="the display did not reset")
         return DisplayResizeResponse(size=size)

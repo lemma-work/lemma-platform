@@ -929,3 +929,68 @@ def test_the_display_can_be_put_back(monkeypatch, tmp_path) -> None:
 def test_resetting_the_display_is_behind_the_token(monkeypatch, tmp_path) -> None:
     client = _client(monkeypatch, tmp_path)
     assert client.post("/display:reset").status_code == 401
+
+
+def _refusing_resize(monkeypatch):
+    """`set_display_size` as it behaves while a take is running.
+
+    Raises `relay_app.RecordingInProgress`, not the one importable from
+    `chrome`, and the difference is not pedantry: a test earlier in this
+    file reloads `chrome` to re-read an environment variable, which makes a
+    *new* class object while `app` keeps the one it imported. Raise the
+    wrong one and the route's `except` does not match, the exception escapes
+    as a 500, and the test fails only when run alongside its neighbours.
+    """
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    async def refuse(width: int, height: int) -> str:
+        raise relay_app.RecordingInProgress(
+            "the display is being recorded, so its size is held until the "
+            "recording stops"
+        )
+
+    monkeypatch.setattr(relay_app, "set_display_size", refuse)
+
+
+def test_a_viewer_cannot_resize_the_display_out_from_under_a_recording(
+    monkeypatch, tmp_path
+) -> None:
+    """A person opening the pane must not ruin a capture in flight.
+
+    The recorder is built around the framebuffer it started with -- its
+    ffmpeg runs `-vf pad=...` sized at `record start` -- so moving the
+    display under it produces a broken take. Measured in the sandbox: a
+    recording is exactly one `ffmpeg` process, zero before and zero after,
+    which is how the relay knows.
+
+    The viewer keeps a letterboxed picture until the take ends. That is the
+    recoverable half of the trade; a lost recording is not.
+    """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    _refusing_resize(monkeypatch)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:resize",
+        json={"width": 900, "height": 700},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+
+    assert response.status_code == 409
+    assert "recorded" in response.json()["detail"]
+
+
+def test_the_last_viewer_leaving_cannot_either(monkeypatch, tmp_path) -> None:
+    """The more dangerous of the two, because nobody is watching when it
+    fires: the agent is alone with its recording and the reset would land in
+    the middle of it."""
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    _refusing_resize(monkeypatch)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:reset", headers={"X-Lemma-Relay-Token": "token-abc"}
+    )
+
+    assert response.status_code == 409
+    assert "recorded" in response.json()["detail"]

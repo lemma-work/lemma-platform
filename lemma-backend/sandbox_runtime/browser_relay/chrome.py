@@ -489,6 +489,43 @@ def default_display_size() -> tuple[int, int]:
     return _FALLBACK_SCREEN
 
 
+class RecordingInProgress(RuntimeError):
+    """A recording is running, so the display may not change size."""
+
+
+async def recording_in_progress() -> bool:
+    """Whether `agent-browser record` is capturing the display right now.
+
+    Detected by the recorder process, because agent-browser has no `record
+    status` to ask -- the CLI offers `start` and `stop` and nothing between
+    them. Measured in the sandbox: zero `ffmpeg` processes before a take,
+    exactly one during, zero after. Nothing else in this image runs ffmpeg
+    on its own.
+
+    `-x`, so the match is the program name and not a command line that
+    happens to mention it -- the mistake the old memory guard made with its
+    pattern list, which matched 1 of 14 Chromium processes.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "pgrep",
+            "-x",
+            "ffmpeg",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        # No `pgrep` is not evidence of a recording. Refusing every resize
+        # on a missing tool would be worse than the thing this prevents.
+        return False
+    try:
+        return await asyncio.wait_for(process.wait(), timeout=5) == 0
+    except asyncio.TimeoutError:
+        with suppress(ProcessLookupError):
+            process.kill()
+        return False
+
+
 async def set_display_size(width: int, height: int) -> str | None:
     """Resize the shared display, returning the size it settled on.
 
@@ -504,6 +541,17 @@ async def set_display_size(width: int, height: int) -> str | None:
     """
     if not Path(_SET_DISPLAY_SIZE).exists():
         return None
+    if await recording_in_progress():
+        # The recorder is built around the framebuffer it started with --
+        # its ffmpeg runs `-vf pad=...` sized at `record start` -- so moving
+        # the display under it produces a broken take at best. A person
+        # opening the pane, or the last one closing it, must not be able to
+        # ruin a capture the agent is part-way through; the viewer keeps a
+        # letterboxed picture instead, which is recoverable.
+        raise RecordingInProgress(
+            "the display is being recorded, so its size is held until the "
+            "recording stops"
+        )
     try:
         process = await asyncio.create_subprocess_exec(
             _SET_DISPLAY_SIZE,

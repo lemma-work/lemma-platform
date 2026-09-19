@@ -37,18 +37,6 @@ from .chrome import BrowserNotRunning, page_targets
 _log = logging.getLogger(__name__)
 
 
-def _loggable(value: str) -> str:
-    """One line, bounded, no control characters.
-
-    The host half of an origin reaches here from a caller, and a CDP error
-    message reaches here from the browser -- so neither may be pasted into a
-    log line as-is. A newline in either forges a second log entry, which is
-    what `py/log-injection` is about and is worth avoiding even when the only
-    caller today is our own API.
-    """
-    return "".join(c for c in value if c.isprintable())[:200]
-
-
 #: Chrome answers a CDP call in well under this unless it is wedged, in which
 #: case waiting longer only holds the request open.
 _CDP_TIMEOUT_SECONDS = 15.0
@@ -264,18 +252,26 @@ async def forget_domains(domains: list[str], *, port: int) -> int:
                     {"origin": origin, "storageTypes": _STORAGE_TYPES},
                 )
             except BrowserNotRunning as exc:
-                # Logged rather than suppressed. Every failure here used to
+                # Counted rather than suppressed. Every failure here used to
                 # go into a bare `suppress`, which is why the local-storage
                 # half could not be diagnosed for the length of a release:
                 # a CDP error and a clean clear looked identical from
                 # outside, and the caller reported success either way.
-                refused.append(f"{_loggable(origin)}: {_loggable(str(exc))}")
+                #
+                # The origin and the CDP message are deliberately *not* in
+                # the log line. Both are external -- the host comes from the
+                # caller, the message from the browser -- and a newline in
+                # either forges a second log entry. The counts and the
+                # exception type say that something refused and how much of
+                # the clear did not happen, which is what was missing; the
+                # site is already in the request that caused this.
+                refused.append(type(exc).__name__)
     if refused:
         _log.warning(
-            "clearDataForOrigin refused %d of %d origins: %s",
+            "clearDataForOrigin refused %d of %d origins (%s)",
             len(refused),
             len(origins),
-            "; ".join(refused),
+            ",".join(sorted(set(refused))),
         )
     return dropped
 
