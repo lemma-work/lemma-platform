@@ -20,12 +20,17 @@ export const webLoginsQueryKey = (wake: boolean) => ['web-logins', wake] as cons
  * rather than being started, because opening a settings page should not be
  * what spins one up -- and unlike the old table read, this one costs a round
  * trip into the sandbox.
+ *
+ * `enabled` is the same argument one step earlier. The card that opens this
+ * list sits on a page of eighty connectors, and asking a sandbox anything to
+ * render a door nobody has opened is a round trip spent on nothing.
  */
-export const useWebLogins = (wake = false) =>
+export const useWebLogins = (wake = false, enabled = true) =>
     useQuery<{ items: WebLogin[]; sleeping: boolean }>({
         queryKey: webLoginsQueryKey(wake),
         queryFn: () => getLemmaClient().webLogins.list({ wake }),
         staleTime: 10_000,
+        enabled,
     });
 
 export const useRemoveWebLogin = () => {
