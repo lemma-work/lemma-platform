@@ -41,7 +41,7 @@ from app.modules.agent_surfaces.domain.job_payloads import (
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+from app.modules.agent_surfaces.infrastructure.repositories.surface_conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (

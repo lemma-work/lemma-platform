@@ -1,4 +1,4 @@
-"""Who may claim a Lemma-managed credential, and who is not claiming anything.
+"""Who may claim a Lemma-managed credential or a bot, and who claims nothing.
 
 The rule had no tests, and it shipped applied to a platform it does not fit.
 One system Resend surface anywhere in an organization refused every mailbox
@@ -22,9 +22,12 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceCredentialConflictError,
+    AgentSurfaceValidationError,
 )
+from app.modules.agent_surfaces.domain.ports import PlatformIdentityHolder
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_org_credential_binding,
+    ensure_unique_platform_identity,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -122,3 +125,137 @@ async def test_a_custom_credential_surface_is_not_subject_to_the_system_rule():
     await ensure_unique_org_credential_binding(surface, surface_repository=repository)
 
     assert repository.system_lookups == 0
+
+
+def _slack_surface(
+    *,
+    workspace_id: str | None = "T_ACME",
+    bot_identity: str | None = "U_LEMMABOT",
+    account_id=None,
+) -> AgentSurfaceEntity:
+    """A Slack surface as `SurfaceAccountBindingResolver` leaves one.
+
+    Both ids are populated on every surface it resolves -- the workspace from
+    ``raw_response.team.id``, the bot from ``raw_response.bot_user_id``, which
+    it refuses to create a surface without. The defaults are that shape; the
+    parameters are for the rows that predate it.
+    """
+    pod_id = uuid4()
+    return AgentSurfaceEntity(
+        id=uuid4(),
+        pod_id=pod_id,
+        name="slack",
+        surface_type=SurfacePlatform.SLACK,
+        config=SurfaceConfig(),
+        agent_id=pod_id,
+        credential_mode=SurfaceCredentialMode.CUSTOM,
+        account_id=account_id or uuid4(),
+        external_workspace_id=workspace_id,
+        surface_identity_id=bot_identity,
+    )
+
+
+class _IdentityRepository:
+    """Answers who holds a bot, and records what it was asked."""
+
+    def __init__(self, holder: PlatformIdentityHolder | None = None):
+        self._holder = holder
+        self.calls: list[dict[str, object]] = []
+
+    async def get_platform_identity_holder(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._holder
+
+
+async def test_a_colleague_may_not_connect_the_same_slack_bot():
+    """The case the account rule cannot see.
+
+    Connected accounts are per person, so two colleagues installing one Slack
+    app into one workspace hold two account rows with different ids -- and one
+    bot. Inbound is keyed on the bot, so the second surface would either take
+    the first pod's messages or silently receive none.
+    """
+    holder = _slack_surface()
+    repository = _IdentityRepository(
+        PlatformIdentityHolder(surface=holder, same_org=True)
+    )
+
+    # Same workspace, same bot, a different connected account: exactly what a
+    # second person in the organization produces.
+    with pytest.raises(AgentSurfaceCredentialConflictError) as refused:
+        await ensure_unique_platform_identity(
+            _slack_surface(), surface_repository=repository
+        )
+
+    assert refused.value.details["kind"] == "IDENTITY"
+    assert refused.value.details["conflicting_surface"]["pod_id"] == str(holder.pod_id)
+
+
+async def test_a_holder_in_another_organization_is_refused_but_not_named():
+    """A refusal is not a reason to hand over another tenant's pod.
+
+    The rule reaches across organizations because the platform does -- but the
+    holder's pod name and id belong to a tenant this caller has no relationship
+    with, so the refusal says what is wrong and nothing about who.
+    """
+    holder = _slack_surface()
+    repository = _IdentityRepository(
+        PlatformIdentityHolder(surface=holder, same_org=False)
+    )
+
+    with pytest.raises(AgentSurfaceValidationError) as refused:
+        await ensure_unique_platform_identity(
+            _slack_surface(), surface_repository=repository
+        )
+
+    assert not isinstance(refused.value, AgentSurfaceCredentialConflictError)
+    assert str(holder.pod_id) not in str(refused.value)
+
+
+async def test_a_second_slack_app_in_one_workspace_is_allowed():
+    """The escape hatch `PS-SURF-001` promises.
+
+    "Where a person wants a second agent reachable on a platform, the system
+    shall let them make that agent its own bot." A second Slack app in the same
+    workspace is a different bot user, so it is a different identity and there
+    is nothing to refuse -- which is the whole reason the key is the bot rather
+    than the workspace.
+    """
+    repository = _IdentityRepository(None)
+
+    await ensure_unique_platform_identity(
+        _slack_surface(bot_identity="U_SECONDBOT"), surface_repository=repository
+    )
+
+    assert repository.calls[0]["surface_identity_id"] == "U_SECONDBOT"
+
+
+async def test_a_surface_that_never_recorded_its_bot_is_left_alone():
+    """Missing is not a wildcard.
+
+    A row from before the resolver required ``bot_user_id`` cannot be compared
+    against one that has it. Treating NULL as matching everything would make
+    the first such row block every Slack surface in the deployment.
+    """
+    repository = _IdentityRepository(
+        PlatformIdentityHolder(surface=_slack_surface(), same_org=True)
+    )
+
+    await ensure_unique_platform_identity(
+        _slack_surface(bot_identity=None), surface_repository=repository
+    )
+    await ensure_unique_platform_identity(
+        _slack_surface(workspace_id=None), surface_repository=repository
+    )
+
+    assert repository.calls == []
+
+
+async def test_a_surface_does_not_conflict_with_itself():
+    """Re-saving a surface re-runs the rule; it must not refuse its own row."""
+    surface = _slack_surface()
+    repository = _IdentityRepository(None)
+
+    await ensure_unique_platform_identity(surface, surface_repository=repository)
+
+    assert repository.calls[0]["exclude_surface_id"] == surface.id

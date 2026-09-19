@@ -51,6 +51,48 @@ def _addressed(parsed: ParsedInboundSurfaceEvent) -> bool:
     return bool(parsed.mentioned_agent or parsed.metadata.get("is_thread_reply"))
 
 
+def _warn_if_tied_on_one_bot(
+    member_candidates: list[AgentSurfaceEntity], *, platform: str
+) -> None:
+    """Report a tie that ``ensure_unique_platform_identity`` should have prevented.
+
+    Reaching the tiebreak is ordinary for a shared Lemma bot: one Telegram bot
+    or WhatsApp number legitimately serves several pods, and `PS-SURF-023`
+    promises each person is routed to the right one. It is *not* ordinary for
+    surfaces bound to connected accounts naming one bot in one workspace --
+    that pair cannot be created any more, so a tie here is a row from before the
+    rule existed, and creation order is deciding whose agent answers.
+
+    A warning rather than a refusal: the message is real and somebody is waiting
+    on it, and half-answering it would be worse than answering it from the older
+    pod. This is how the rows that need cleaning up become findable.
+    """
+    if len(member_candidates) < 2:
+        return
+    tied = [
+        surface
+        for surface in member_candidates
+        if surface.account_id is not None
+        and surface.external_workspace_id
+        and surface.surface_identity_id
+    ]
+    by_identity: dict[tuple[str, str], list[AgentSurfaceEntity]] = {}
+    for surface in tied:
+        key = (str(surface.external_workspace_id), str(surface.surface_identity_id))
+        by_identity.setdefault(key, []).append(surface)
+    for (workspace_id, bot_identity), surfaces in by_identity.items():
+        if len(surfaces) < 2:
+            continue
+        logger.warning(
+            "agent_surfaces.surface_routing.several_surfaces_share_one_bot.degraded",
+            platform=platform,
+            external_workspace_id=workspace_id,
+            surface_identity_id=bot_identity,
+            surface_ids=[str(surface.id) for surface in surfaces],
+            answered_by=str(surfaces[0].id),
+        )
+
+
 class SurfaceRoutingMixin:
     async def _match_surface_for_user(
         self,
@@ -155,6 +197,7 @@ class SurfaceRoutingMixin:
 
         # 4. Deterministic tiebreak (candidates are ordered by created_at, id).
         # The user can pick a default via GET/PUT /surfaces/me when this happens.
+        _warn_if_tied_on_one_bot(member_candidates, platform=platform)
         return member_candidates[0]
 
     async def _default_surface(

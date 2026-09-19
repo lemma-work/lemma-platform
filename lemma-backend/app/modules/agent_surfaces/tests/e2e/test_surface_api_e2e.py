@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.connectors.infrastructure.models.account import Account
 import json
+from uuid import uuid4
 
 from urllib.parse import parse_qs, urlparse
 import pytest
@@ -626,6 +628,199 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         json={"platform": "SLACK", "account_id": str(account.id)},
     )
     assert reused_account.status_code == 200, reused_account.text
+
+
+async def _second_account_on_the_same_bot(
+    db_session: AsyncSession,
+    first: Account,
+    *,
+    provider_account_id: str,
+) -> Account:
+    """A second ``accounts`` row carrying the same Slack bot as ``first``.
+
+    Written directly because ``_ensure_connector_account`` upserts one row per
+    (organization, user, connector) -- calling it twice mutates the row rather
+    than making a second one, which is the opposite of what is under test.
+
+    The realistic origin of two rows is two *people* installing one app, and
+    ``provider_account_id`` (the installer's handle, and what the partial unique
+    index is on) is what differs between them. Owning both here rather than
+    inviting a second member is faithful because the rule never reads the
+    owner: it compares the bot, and one person reconnecting a workspace reaches
+    the same state by a shorter road.
+    """
+    account = Account(
+        user_id=first.user_id,
+        organization_id=first.organization_id,
+        auth_config_id=first.auth_config_id,
+        connector_id=first.connector_id,
+        provider_account_id=provider_account_id,
+        credentials=dict(first.credentials or {}),
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+    return account
+
+
+async def test_two_accounts_on_one_slack_bot_are_refused(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    monkeypatch,
+):
+    """The collision the account rule above cannot see.
+
+    ``accounts`` rows are per person, so two people installing the same Slack
+    app into the same workspace hold two rows with different ids and one bot
+    behind them. The account rule compares ids and finds nothing; the surfaces
+    it lets through are indistinguishable to Slack, which delivers to the *app*.
+    Both would land in one ``receiver_surface_ids``, both would pass
+    ``allows_inbound_event``, and creation order would decide whose agent
+    answers -- leaving the second person a surface that reads ACTIVE and never
+    receives a message.
+
+    `PS-SURF-001` already promised the way out: a second agent on a platform
+    gets "its own bot rather than sharing one". This is that promise enforced.
+    """
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    primary_pod_id = test_pod["id"]
+    sibling = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": test_pod["organization_id"],
+            "name": f"sibling-{uuid4().hex[:8]}",
+        },
+    )
+    assert sibling.status_code == 201, sibling.text
+    sibling_pod_id = sibling.json()["id"]
+
+    mine = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-installed-by-me",
+            "scope": "assistant:write,chat:write.customize",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "bot_user_id": "U0SHAREDBOT",
+                "team_id": "T0SHAREDTEAM",
+                "api_base_url": fake_slack.base_url,
+            },
+        },
+    )
+    created = await authenticated_client.post(
+        f"/pods/{primary_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(mine.id)},
+    )
+    assert created.status_code == 200, created.text
+
+    theirs = await _second_account_on_the_same_bot(
+        db_session, mine, provider_account_id="e2e-slack-colleague"
+    )
+    assert theirs.id != mine.id
+
+    refused = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(theirs.id)},
+    )
+    assert refused.status_code == 409, refused.text
+    body = refused.json()
+    assert body["code"] == "AGENT_SURFACE_CREDENTIAL_CONFLICT"
+    # Not "ACCOUNT": nothing is wrong with the account, and releasing it would
+    # not help. The bot is what is taken.
+    assert body["details"]["kind"] == "IDENTITY"
+    assert body["details"]["conflicting_surface"]["pod_id"] == primary_pod_id
+
+    # Freeing the bot frees the identity -- the same lifetime the account rule
+    # has, so the two behave alike from the outside.
+    released = await authenticated_client.delete(
+        f"/pods/{primary_pod_id}/surfaces/slack"
+    )
+    assert released.status_code == 204, released.text
+    reused = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(theirs.id)},
+    )
+    assert reused.status_code == 200, reused.text
+
+
+async def test_a_second_slack_app_in_one_workspace_is_allowed(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    monkeypatch,
+):
+    """The way out the refusal above points at has to actually work.
+
+    A second Slack app in the same workspace is a second bot user, so Slack can
+    tell the two apart and so can routing. Refusing this would leave a person
+    told to make their own app and then refused for doing it -- and it is why
+    the rule keys on the bot rather than on the workspace.
+    """
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    primary_pod_id = test_pod["id"]
+    sibling = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": test_pod["organization_id"],
+            "name": f"sibling-{uuid4().hex[:8]}",
+        },
+    )
+    assert sibling.status_code == 201, sibling.text
+    sibling_pod_id = sibling.json()["id"]
+
+    first = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-first-app",
+            "scope": "assistant:write,chat:write.customize",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "bot_user_id": "U0FIRSTBOT",
+                "team_id": "T0ONEWORKSPACE",
+                "api_base_url": fake_slack.base_url,
+            },
+        },
+    )
+    second = await _second_account_on_the_same_bot(
+        db_session, first, provider_account_id="e2e-slack-second-app"
+    )
+    # Its own app in the same workspace: a different bot user, and a different
+    # app id, which is what makes the two distinguishable on the way back in.
+    second.credentials = {
+        **(first.credentials or {}),
+        "access_token": "xoxb-second-app",
+        "raw_response": {
+            **((first.credentials or {}).get("raw_response") or {}),
+            "bot_user_id": "U0SECONDBOT",
+            "app_id": "A0SECONDAPP",
+        },
+    }
+    await db_session.commit()
+
+    assert (
+        await authenticated_client.post(
+            f"/pods/{primary_pod_id}/surfaces",
+            json={"platform": "SLACK", "account_id": str(first.id)},
+        )
+    ).status_code == 200
+    allowed = await authenticated_client.post(
+        f"/pods/{sibling_pod_id}/surfaces",
+        json={"platform": "SLACK", "account_id": str(second.id)},
+    )
+    assert allowed.status_code == 200, allowed.text
 
 
 async def test_surface_setup_actions_depend_on_auth_config_source(
