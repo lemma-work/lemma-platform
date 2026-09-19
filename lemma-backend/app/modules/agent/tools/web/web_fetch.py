@@ -488,6 +488,20 @@ async def _finish(
         title = text.splitlines()[0].lstrip("# ").strip() or None
         preview = text[:_PREVIEW_CHARS]
 
+    if len(_body_of(text)) < _THIN_CONTENT_CHARS:
+        return WebFetchPage(
+            url=url,
+            success=False,
+            title=title,
+            fetched_with=fetched_with,
+            error=(
+                "The browser rendered this page but there was nothing to "
+                "read in it. Either the site served an empty shell to an "
+                "automated client, or what it shows needs an interaction "
+                "first."
+            ),
+        )
+
     return WebFetchPage(
         url=url,
         success=True,
@@ -497,6 +511,20 @@ async def _finish(
         characters=present[markdown_path],
         fetched_with=fetched_with,
     )
+
+
+def _body_of(markdown: str) -> str:
+    """The captured page, without the header the converter prepends.
+
+    `webpage-to-markdown.mjs` writes a title line and a `Source:`/`Captured:`
+    block before anything from the page, so a capture of an empty page is
+    still a 71 byte file -- measured on `about:blank`. Checking the file size
+    would therefore pass every empty render, and checking it against a flat
+    floor would depend on how long the URL is.
+    """
+    lines = markdown.splitlines()
+    body = [line for line in lines[1:] if not line.startswith(("Source:", "Captured:"))]
+    return "\n".join(body).strip()
 
 
 async def _clean_or_none(url: str) -> ExtractedPage | None:

@@ -122,6 +122,21 @@ Array.from(document.querySelectorAll("table tbody tr")).map(r => ({
 EOF
 ```
 
+**Open, then read. Never `read <url>` in one shot.** Passing a URL to `read`
+does not wait for the page to render, and it fails silently — measured in
+this sandbox:
+
+| page | `read <url>` | `open <url>` then `read` |
+| --- | --- | --- |
+| a React app | 1 byte | 1 964 |
+| an ad-funded news page | **0 bytes** | 8 522 |
+| a static docs page | 4 161 | 5 355 |
+
+Exit code zero every time, so nothing tells you the page was empty. The core
+reference shipped with the CLI recommends the one-shot form; it is wrong for
+anything that renders client-side, which is most of what needs a browser at
+all. `web_fetch` uses the two-step form and checks the result has text in it.
+
 **A screenshot is a file until you look at it.** `screenshot` writes to the sandbox and tells you nothing about what it captured; `view_image` with `workspace_file_path` is what puts the picture in front of you. If this agent's model cannot see images, `view_image` asks one that can and hands you back the description — so set `instructions` to the question you actually have ("is the chart's y-axis labelled?"), not "describe this".
 
 Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg`, and to the viewport. A full-page `.png` is several times the bytes for a photograph of a web page, and a full-page capture of a long article measured 12.4s and 7.0 MB against 2.5s and 76 KB for the viewport. Ask for `--full` only when the part you need is below the fold.
