@@ -98,12 +98,17 @@ function BrowserLoginsDialog({
                 onOpenChange(next);
             }}
         >
-            <DialogContent>
-                <DialogHeader>
+            {/* Wider than the default `max-w-lg`, and scrolled in the body
+                rather than the shell, following `function-access-dialog`:
+                a real browser accumulates a domain per site visited, not per
+                site signed in to, so this list is long more often than it is
+                short -- and the header has to stay put while it is read. */}
+            <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0">
+                <DialogHeader className="border-b border-[color:var(--border-subtle)] px-5 py-4 pr-12 text-left">
                     <DialogTitle>Browser logins</DialogTitle>
-                    <DialogDescription>
-                        Sites you have signed in to in the agent&rsquo;s browser. It keeps
-                        the session the way your own browser does, never your password.
+                    <DialogDescription className="text-xs">
+                        Sites the agent&rsquo;s browser holds cookies for. It keeps a
+                        session the way your own browser does, never your password.
                     </DialogDescription>
                 </DialogHeader>
 
@@ -146,7 +151,7 @@ function Body({
 }) {
     if (isPending) {
         return (
-            <div className="flex items-center gap-2 py-6 text-sm text-[var(--text-tertiary)]">
+            <div className="flex items-center gap-2 px-5 py-6 text-sm text-[var(--text-tertiary)]">
                 <StepLoader size="xs" />
                 Reading the browser&hellip;
             </div>
@@ -155,7 +160,7 @@ function Body({
 
     if (error) {
         return (
-            <p className="py-4 text-sm text-[var(--text-tertiary)]">
+            <p className="px-5 py-6 text-sm text-[var(--text-tertiary)]">
                 Your browser logins could not be read.
             </p>
         );
@@ -167,7 +172,7 @@ function Body({
         // on disk either way -- an empty list here would tell somebody their
         // logins were gone.
         return (
-            <div className="flex flex-col items-start gap-3 py-2">
+            <div className="flex flex-col items-start gap-3 px-5 py-5">
                 <p className="text-sm text-[var(--text-tertiary)]">
                     The browser is not running, so this cannot be read yet. Whatever it
                     was signed in to is still there.
@@ -182,29 +187,36 @@ function Body({
     const items = data?.items ?? [];
     if (items.length === 0) {
         return (
-            <p className="py-4 text-sm text-[var(--text-tertiary)]">
-                Not signed in to anything. When an agent meets a login wall it will ask
-                you once, and the browser will remember after that.
+            <p className="px-5 py-6 text-sm text-[var(--text-tertiary)]">
+                Nothing here yet. When an agent meets a login wall it will ask you
+                once, and the browser will remember after that.
             </p>
         );
     }
 
     return (
-        <div className="flex flex-col gap-3">
-            <ul className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+        <>
+            {/* One line per site, name left and expiry right, rather than the
+                two-line block this started as: stacked, every row wasted the
+                width it had been given and half as many fit before scrolling.
+                Dividers rather than a border each -- at twenty rows, twenty
+                outlines read as a stack of cards instead of a list.
+
+                The scroll is on the list alone, so the header above and the
+                note below stay put. A confirmation that scrolled away from
+                the row it belongs to is worse than none. */}
+            <ul className="flex max-h-[min(70dvh,32rem)] flex-col divide-y divide-[var(--row-border)] overflow-y-auto">
                 {items.map((login) => (
                     <li
                         key={login.site}
-                        className="flex items-center gap-3 rounded-lg border border-[var(--border-subtle)] px-3 py-2.5 text-sm"
+                        className="flex items-center gap-3 px-5 py-2.5 text-sm"
                     >
                         <Lock className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
-                        <span className="min-w-0 flex-1">
-                            <span className="block truncate text-[var(--text-primary)]">
-                                {login.site}
-                            </span>
-                            <span className="block text-xs leading-5 text-[var(--text-tertiary)]">
-                                {expiryNote(login.expires)}
-                            </span>
+                        <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">
+                            {login.site}
+                        </span>
+                        <span className="shrink-0 text-xs text-[var(--text-tertiary)]">
+                            {expiryNote(login.expires)}
                         </span>
                         {confirming === login.site ? (
                             <span className="flex shrink-0 items-center gap-1">
@@ -248,11 +260,11 @@ function Body({
                 true of it. The browser holds the session now, so signing out
                 signs it out. */}
             {confirming ? (
-                <p className="text-xs text-[var(--text-tertiary)]">
+                <p className="border-t border-[color:var(--border-subtle)] px-5 py-3 text-xs text-[var(--text-tertiary)]">
                     This signs the agent&rsquo;s browser out of {confirming} and drops its
                     cookies. It does not touch anywhere you are signed in yourself.
                 </p>
             ) : null}
-        </div>
+        </>
     );
 }
