@@ -115,29 +115,36 @@ describe('clearing a site', () => {
         await open();
 
         await userEvent.click(
-            screen.getByRole('button', { name: 'Clear cookies for app.example.com' }),
+            screen.getByRole('button', { name: 'Sign out of app.example.com' }),
         );
         expect(removed.calls).toEqual([]);
 
-        await userEvent.click(screen.getByRole('button', { name: 'Clear cookies' }));
+        await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
         expect(removed.calls).toEqual(['app.example.com']);
     });
 
     it('promises only what it does', async () => {
-        // The old copy had to say "forgetting removes Lemma's copy, it does
-        // not sign you out at the site", because that was true of it. What is
-        // true now is narrower than "sign out": cookies are removed, and a
-        // site keeping its token in local storage may survive that.
+        // Twice narrowed, now widened, and each move followed a measurement.
+        // The first copy had to say "forgetting removes Lemma's copy, it does
+        // not sign you out at the site", because that was true of it. The
+        // second hedged about local storage -- but that was true of a bug,
+        // not of the design: the relay sent bare hosts to
+        // `clearDataForOrigin` and local storage is keyed by full origin.
+        // With the origins the browser actually has open now included,
+        // cookie and localStorage both go, so the hedge has to go with them.
         answer.data = { items: [site()], sleeping: false };
         render(<BrowserLoginsCard />);
         await open();
         await userEvent.click(
-            screen.getByRole('button', { name: 'Clear cookies for app.example.com' }),
+            screen.getByRole('button', { name: 'Sign out of app.example.com' }),
         );
 
-        const note = screen.getByText(/cookies from the agent/i);
-        expect(note.textContent).toContain('may stay signed in');
-        expect(note.textContent).not.toContain("does not sign you out at");
+        const note = screen.getByText(/stored data from the agent/i);
+        expect(note.textContent).toContain('signs it out');
+        expect(note.textContent).not.toContain('may stay signed in');
+        expect(note.textContent).not.toContain('does not sign you out at');
+        // The one promise that has never changed.
+        expect(note.textContent).toContain('signed in yourself');
     });
 });
 

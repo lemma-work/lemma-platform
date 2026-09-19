@@ -234,7 +234,7 @@ function Body({
                         loading={isRemoving}
                         onClick={() => onRemove(login.site)}
                     >
-                        Clear cookies
+                        Sign out
                     </Button>
                     <Button variant="quiet" size="xs" onClick={() => setConfirming(null)}>
                         Keep
@@ -247,7 +247,7 @@ function Body({
                 <Button
                     variant="quiet"
                     size="xs"
-                    aria-label={`Clear cookies for ${login.site}`}
+                    aria-label={`Sign out of ${login.site}`}
                     onClick={() => setConfirming(login.site)}
                 >
                     <Trash2 className="size-3.5" />
@@ -299,13 +299,19 @@ function Body({
                 omission: this used to have to say "forgetting removes Lemma's
                 copy, it does not sign you out at the site", because that was
                 true of it. The browser holds the session now, so signing out
-                signs it out. */}
+                signs it out.
+
+                It then said "clear cookies" and hedged about local storage,
+                which was true of a bug rather than of the design: the relay
+                only ever sent bare hosts to `clearDataForOrigin`, and local
+                storage is keyed by full origin. Measured after the fix, on
+                the origin that produced the original report -- cookie and
+                localStorage both gone. */}
             {confirming ? (
                 <p className="border-t border-[color:var(--border-subtle)] px-5 py-3 text-xs text-[var(--text-tertiary)]">
-                    This drops {confirming}&rsquo;s cookies from the agent&rsquo;s
-                    browser, which signs it out of most sites. A site that keeps its
-                    token elsewhere may stay signed in. It does not touch anywhere you
-                    are signed in yourself.
+                    This clears {confirming}&rsquo;s cookies and stored data from the
+                    agent&rsquo;s browser, which signs it out. It does not touch
+                    anywhere you are signed in yourself.
                 </p>
             ) : null}
         </>

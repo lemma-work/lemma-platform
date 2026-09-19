@@ -38,10 +38,17 @@ the table read this replaces, answering costs a round trip into the sandbox.
 Signs the browser out of a site. Addressed by origin rather than id, because
 that is what the person recognises and what the agent asked about.
 
-This really signs it out — it drops the cookies. Its predecessor deleted
-Lemma's encrypted copy and left the browser exactly as it was, which is why
-every caller had to carry a disclaimer saying so. Nothing the person is signed
-in to in their *own* browser is touched.
+This really signs it out — it drops the site's cookies and its stored data.
+Its predecessor deleted Lemma's encrypted copy and left the browser exactly as
+it was, which is why every caller had to carry a disclaimer saying so. Nothing
+the person is signed in to in their *own* browser is touched.
+
+The stored-data half was broken on arrival and is fixed here: only bare hosts
+were sent to `Storage.clearDataForOrigin`, and local storage is keyed by full
+origin, so a site on a non-default port kept its storage. The origins of any
+open page now go too. The residual gap, stated because it is real: a site on a
+non-default port with no page open still has only its cookies cleared, because
+nothing then names the port.
 
 Refuses with 409 when the computer is not running, rather than reporting a
 success it did not achieve, and 422 when the origin is not one a session could

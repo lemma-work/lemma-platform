@@ -22,9 +22,10 @@ can be answered in two places is a policy that will be answered differently.
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 import itertools
 import json
+import logging
+from collections.abc import Iterable, Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,6 +33,8 @@ import httpx
 import websockets
 
 from .chrome import BrowserNotRunning, page_targets
+
+_log = logging.getLogger(__name__)
 
 #: Chrome answers a CDP call in well under this unless it is wedged, in which
 #: case waiting longer only holds the request open.
@@ -158,14 +161,22 @@ async def _page_socket(port: int) -> str:
     return f"ws://127.0.0.1:{port}/devtools/page/{found[0]['id']}"
 
 
-async def _open_origins_for(hosts: set[str], *, port: int) -> set[str]:
-    """Origins of open pages whose host is one of these, ports included.
+def origins_to_clear(hosts: set[str], targets: Iterable[Mapping[str, Any]]) -> set[str]:
+    """Every origin worth clearing for these hosts.
 
-    The part the host alone cannot give us: local storage is keyed by full
-    origin, and a cookie records no port.
+    Both schemes on the bare host, which is what a cookie needs -- a cookie
+    matches by domain and records no port -- plus the full origin of any open
+    page on a matching host, which is what site storage needs, because local
+    storage is keyed by origin and an origin includes the port.
+
+    Pure, and given its targets rather than fetching them, so the rule can be
+    tested without a browser and without a double inside its own caller.
+    Getting this wrong is not hypothetical: the version that fetched its own
+    targets was never called at all, and for a whole release the bare hosts it
+    was written to supplement were the only origins sent.
     """
-    found: set[str] = set()
-    for target in await page_targets(port=port):
+    found = {f"{scheme}://{host}" for host in hosts for scheme in ("https", "http")}
+    for target in targets:
         parsed = urlsplit(str(target.get("url") or ""))
         if parsed.scheme in ("http", "https") and parsed.hostname in hosts:
             found.add(f"{parsed.scheme}://{parsed.netloc}")
@@ -187,20 +198,31 @@ async def forget_domains(domains: list[str], *, port: int) -> int:
     just deleted; and the rewrite dropped `partitionKey`, silently turning
     partitioned cookies into unpartitioned ones.
 
-    **Cookies are what this reliably removes, and the wording says so.**
-    `clearDataForOrigin` is asked for the other storage types too, and it
-    demonstrably clears them when driven directly -- but through this path it
-    did not, repeatably, and I could not isolate why. So the attempt stays,
-    because it costs nothing and helps where it lands, and nothing downstream
-    claims more than the cookies. The screen says "clear cookies", not "sign
-    out of everything". A site keeping its token only in local storage may
-    still be signed in afterwards.
+    **It clears site storage too, and the reason it did not is the port.**
+    An earlier version of this said local storage "demonstrably clears when
+    driven directly -- but through this path it did not, repeatably, and I
+    could not isolate why", and narrowed the screen to "clear cookies".
+    `_open_origins_for` was written to fix exactly that and was never called:
+    only bare hosts were ever sent. Measured against a page on
+    `http://127.0.0.1:18099`, which is what the e2e suite serves and so what
+    that investigation was testing:
+
+        clear `http://127.0.0.1`        -> cookie gone, localStorage kept
+        clear `http://127.0.0.1:18099`  -> cookie gone, localStorage gone
+
+    Cookies match by domain and ignore the port; local storage is keyed by
+    the full origin. So a default-port site was always cleared properly and a
+    site on any other port never was.
 
     Both schemes are cleared for each host, because a cookie does not record
-    the one it was set on and `Secure` only tells us it was https *somewhere*,
-    and the origins of any open page on a matching host go in too, since
-    local storage is keyed by full origin and a cookie records no port.
-    Clearing an origin that holds nothing is free.
+    the one it was set on and `Secure` only tells us it was https
+    *somewhere*, and the origins of any open page on a matching host go in
+    too -- that is the part that carries the port. Clearing an origin that
+    holds nothing is free.
+
+    What this still cannot reach is site storage for an origin on a
+    non-default port with **no page open**, because nothing then names the
+    port. That is a narrow gap and it is not the one people meet.
     """
     wanted = {d.lstrip(".").lower() for d in domains if d}
     if not wanted:
@@ -215,21 +237,34 @@ async def forget_domains(domains: list[str], *, port: int) -> int:
         if str(cookie.get("domain") or "").lstrip(".").lower() in wanted
     )
 
+    origins = origins_to_clear(wanted, await page_targets(port=port))
+
+    refused: list[str] = []
     async with websockets.connect(
         await _page_socket(port), open_timeout=_CDP_TIMEOUT_SECONDS
     ) as page:
-        for host in sorted(wanted):
-            for scheme in ("https", "http"):
-                with suppress(BrowserNotRunning):
-                    await _call(
-                        page,
-                        "Storage.clearDataForOrigin",
-                        {
-                            "origin": f"{scheme}://{host}",
-                            "storageTypes": _STORAGE_TYPES,
-                        },
-                    )
+        for origin in sorted(origins):
+            try:
+                await _call(
+                    page,
+                    "Storage.clearDataForOrigin",
+                    {"origin": origin, "storageTypes": _STORAGE_TYPES},
+                )
+            except BrowserNotRunning as exc:
+                # Logged rather than suppressed. Every failure here used to
+                # go into a bare `suppress`, which is why the local-storage
+                # half could not be diagnosed for the length of a release:
+                # a CDP error and a clean clear looked identical from
+                # outside, and the caller reported success either way.
+                refused.append(f"{origin}: {exc}")
+    if refused:
+        _log.warning(
+            "clearDataForOrigin refused %d of %d origins: %s",
+            len(refused),
+            len(origins),
+            "; ".join(refused),
+        )
     return dropped
 
 
-__all__ = ["forget_domains", "list_cookie_domains"]
+__all__ = ["forget_domains", "list_cookie_domains", "origins_to_clear"]
