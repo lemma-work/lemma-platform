@@ -239,6 +239,11 @@ def workspace_template():
             "/usr/local/bin/browser-is-live",
             mode=0o755,
         )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh",
+            "/usr/local/bin/start-vnc-bridge",
+            mode=0o755,
+        )
         # The browser relay, and the package files it needs to be importable.
         #
         # This template deliberately ships no workspace runtime -- an E2B

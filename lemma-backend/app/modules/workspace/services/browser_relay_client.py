@@ -111,11 +111,22 @@ class ProfileCookies(TypedDict):
 #: Falling back costs one `command -v`. It comes out when the images are
 #: rolled, and until then this is the difference between a deploy that is
 #: safe in either order and one that is not.
+#:
+#: `start-vnc-bridge` is the viewing half -- x11vnc and websockify, 66 MiB
+#: measured -- which `lemma-ensure-display` no longer starts, because an
+#: agent doing research pays for it and nobody is watching. This is the
+#: viewer's own path, so this is where it is asked for. Guarded by
+#: `command -v` for the same rollout reason as the line above: on an image
+#: that predates the split, the two are already running and there is
+#: nothing to start.
 _ENSURE_DISPLAY = (
     "if command -v lemma-ensure-display >/dev/null 2>&1; then "
     "  lemma-ensure-display; "
     "else "
     "  start-browser; "
+    "fi; "
+    "if command -v start-vnc-bridge >/dev/null 2>&1; then "
+    "  start-vnc-bridge; "
     "fi"
 )
 

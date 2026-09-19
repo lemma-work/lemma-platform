@@ -240,24 +240,16 @@ fi
 # either port. Idempotent by pgrep for the same reason as Xvfb above: this
 # script runs from every `exec_command` that wants a browser, not once per
 # sandbox.
-VNC_PORT="${LEMMA_BROWSER_VNC_PORT:-5900}"
-VNC_WS_PORT="${LEMMA_BROWSER_VNC_WS_PORT:-5901}"
-if ! pgrep -f "x11vnc .*-rfbport ${VNC_PORT}" >/dev/null 2>&1; then
-  # `-noshm`: MIT-SHM attach fails under this container's X server and takes
-  # x11vnc down with it moments after a clean-looking start -- proven by
-  # running it without the flag, not assumed. `setsid`, same reason as Xvfb.
-  # `-xrandr resize`: follow the display when it changes size instead of
-  # serving the geometry it saw at startup. Without it a `/display:resize`
-  # leaves x11vnc describing a screen that no longer exists, and the viewer
-  # gets a picture that does not match the framebuffer behind it.
-  setsid nohup x11vnc -display "$DISPLAY_VALUE" -noshm -forever -shared -nopw \
-    -rfbport "$VNC_PORT" -listen 127.0.0.1 -noxdamage -quiet -xrandr resize \
-    >/tmp/lemma-x11vnc.log 2>&1 < /dev/null &
-fi
-if ! pgrep -f "websockify .*${VNC_WS_PORT}" >/dev/null 2>&1; then
-  setsid nohup websockify --heartbeat 30 127.0.0.1:"$VNC_WS_PORT" 127.0.0.1:"$VNC_PORT" \
-    >/tmp/lemma-websockify.log 2>&1 < /dev/null &
-fi
+# x11vnc and websockify are NOT started here. They serve a person watching,
+# and nobody is watching most of the time: an agent doing research holds the
+# display, the browser and the relay, and pays for the viewing half of the
+# stack for nothing. Measured by starting one process at a time in a 2 GB
+# sandbox -- Xvfb 21 MiB, matchbox 9, x11vnc 27, websockify 40. That is
+# 66 MiB, or the whole viewing chain, for a picture no socket is attached to.
+#
+# `start-vnc-bridge` brings both up, and the viewer path runs it: the relay
+# client's ensure string, and `/vnc` itself before it accepts a socket. The
+# agent's own paths -- `lemma-node-tool`, `save-webpage` -- do not.
 
 # Down to the size we actually mean to run at.
 #
@@ -277,20 +269,22 @@ fi
 # Non-fatal: a display left at the ceiling is a bigger picture than intended,
 # which is worth a line in the log and not a failed browser.
 #
-# One more ordering constraint, learned the hard way twice: x11vnc must be
-# *settled*, not merely started. A mode change that lands while it is taking
-# its first frame kills it outright -- `X_GetImage`, and the pane then has
-# nothing to connect to. Once it is serving, it follows a resize happily
-# (`-xrandr resize`), which is why every later `/display:resize` is safe.
-# So: wait for the port to answer, then a breath, then change the mode.
+# The precondition is an X client, and matchbox is one.
+#
+# This used to wait for x11vnc's port before resizing, on the recorded
+# grounds that "against an Xvfb that x11vnc has not attached to,
+# `xrandr --newmode` exits 0 and creates nothing". The first half of that is
+# true and the attribution was wrong. Measured three times each, on this
+# image:
+#
+#     nothing attached   -> stays 1920x1200 (and says so on stderr)
+#     matchbox only      -> 1440x960
+#     matchbox + x11vnc  -> 1440x960
+#
+# So any X client satisfies it, matchbox is already running by this point,
+# and the size-down no longer needs the viewing half of the stack to exist.
+# That is what makes x11vnc deferrable at all.
 if [ "$START_SCREEN" != "$SCREEN" ] && command -v set-display-size >/dev/null 2>&1; then
-  waited=0
-  while [ "$waited" -lt 100 ] \
-    && ! (exec 3<>"/dev/tcp/127.0.0.1/${VNC_PORT}") 2>/dev/null; do
-    sleep 0.05
-    waited=$((waited + 1))
-  done
-  sleep 0.5
   start_w="${START_SCREEN%%x*}"
   start_rest="${START_SCREEN#*x}"
   start_h="${start_rest%%x*}"
