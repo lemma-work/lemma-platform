@@ -817,6 +817,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workflow.schedule_start_service.waking_workflow_run_scheduler.observed': EventSpec('debug', frozenset({'run_id'})),
     'workflow.step.started': EventSpec('debug', frozenset({'flow_id', 'node_id', 'node_type', 'run_id'})),
     'workflow.step.suspended': EventSpec('debug', frozenset({'node_id', 'run_id', 'wait_type'})),
+    'workspace.browser_proxy.delivery_failed.degraded': EventSpec('warning', frozenset({'user_id'})),
     'workspace.browser_view.accept_before_close_failed.observed': EventSpec('debug', frozenset({'doing', 'error_type'})),
     'workspace.browser_view.browser_start_failed.degraded': EventSpec('warning', frozenset({'reason'})),
     'workspace.browser_view.close_not_delivered.observed': EventSpec('debug', frozenset({'close_code', 'doing', 'error_type'})),
