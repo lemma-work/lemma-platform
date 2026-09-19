@@ -54,6 +54,13 @@ from app.core.log.log import get_logger
 from app.core.net.impersonating_client import web_page_policy
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.web.capture_result import (
+    PREVIEW_CHARS as _PREVIEW_CHARS,
+)
+from app.modules.agent.tools.web.capture_result import (
+    THIN_CONTENT_CHARS as _THIN_CONTENT_CHARS,
+)
+from app.modules.agent.tools.web.capture_result import finish as _finish
 from app.modules.agent.tools.web.models import (
     WebFetchPage,
     WebFetchRequest,
@@ -112,15 +119,6 @@ _MAX_BROWSER_RENDERS = 5
 # sites at once.
 _MAX_CONCURRENT_FETCHES = 5
 
-_PREVIEW_CHARS = 400
-
-# The real "this page needs a browser" signal is extraction returning nothing,
-# which `fetch_and_clean` raises for. This floor only catches a degenerate
-# extraction — a breadcrumb or a cookie notice and nothing else. It is
-# deliberately low: plenty of real pages are short (example.com extracts to 167
-# clean characters), and treating "short" as "broken" spends a browser render to
-# re-fetch a page that was already read correctly.
-_THIN_CONTENT_CHARS = 120
 
 _ALLOWED_SCHEMES = {"http", "https"}
 
@@ -180,11 +178,6 @@ def _browser_script(url: str, out_dir: str, name: str, formats: list[str]) -> st
         f"--formats {shlex.quote(','.join(formats))} "
         f"--out {shlex.quote(out_dir)} --name {shlex.quote(name)}"
     )
-
-
-def _expected_files(out_dir: str, name: str, formats: list[str]) -> dict[str, str]:
-    suffix = {"markdown": "md", "pdf": "pdf", "jpeg": "jpg", "png": "png"}
-    return {fmt: f"{out_dir}/{name}.{suffix[fmt]}" for fmt in formats if fmt in suffix}
 
 
 async def web_fetch_internal(
@@ -416,133 +409,6 @@ async def _capture_with_browser(
         fetched_with="browser",
         failure_output=(result.get("stderr") or result.get("stdout") or ""),
     )
-
-
-async def _present_files(session, paths: list[str]) -> dict[str, int]:
-    """Of the captures we asked for, the ones that are really on disk.
-
-    One command for the whole set, printing `size path` per non-empty file.
-    """
-    if not paths:
-        return {}
-    quoted = " ".join(shlex.quote(path) for path in paths)
-    listing = await session.exec_command(
-        cmd=(
-            f'for f in {quoted}; do [ -s "$f" ] && '
-            'printf "%s %s\\n" "$(wc -c < "$f" | tr -d " ")" "$f"; done'
-        ),
-        timeout=30,
-    )
-    sizes: dict[str, int] = {}
-    for line in (listing.get("stdout") or "").splitlines():
-        size, _, path = line.strip().partition(" ")
-        if path and size.isdigit():
-            sizes[path] = int(size)
-    return sizes
-
-
-async def _finish(
-    session,
-    *,
-    url: str,
-    out_dir: str,
-    name: str,
-    formats: list[str],
-    fetched_with: str,
-    failure_output: str,
-) -> WebFetchPage:
-    """Report what the browser actually produced, not what was requested.
-
-    The result used to be the *expected* paths plus `success=True` whenever the
-    capture command did not exit non-zero — so a page the browser could not
-    render (Britannica refuses ours) came back as a success naming a file that
-    was never written, and the agent went looking for it. Exit codes were the
-    wrong thing to trust anyway: a render outliving its wait window reports no
-    exit code at all, which read as success. What is on disk is the answer.
-    """
-    expected = _expected_files(out_dir, name, formats)
-    present = await _present_files(session, list(expected.values()))
-    files = {fmt: path for fmt, path in expected.items() if path in present}
-
-    markdown_path = files.get("markdown")
-    if markdown_path is None:
-        return WebFetchPage(
-            url=url,
-            success=False,
-            fetched_with=fetched_with,
-            error=(
-                failure_output.strip()[:400]
-                or "The browser produced no readable article for this page. "
-                "Some sites refuse automated clients outright."
-            ),
-        )
-
-    head = await session.exec_command(
-        cmd=f"head -c {_PREVIEW_CHARS * 2} {shlex.quote(markdown_path)}",
-        timeout=20,
-    )
-    preview = None
-    title = None
-    text = (head.get("stdout") or "").strip()
-    if text:
-        title = text.splitlines()[0].lstrip("# ").strip() or None
-        preview = text[:_PREVIEW_CHARS]
-
-    # Thin text is reported, not treated as total failure -- and the files
-    # that *were* produced are still handed back.
-    #
-    # The first version of this returned `success=False` with no `files` at
-    # all, which threw away a perfectly good screenshot or PDF whenever the
-    # page's text was short. A chart, a diagram, an image-led page and a
-    # one-line status page are all legitimate captures; "few characters" is
-    # a fact about the markdown, not a verdict on the request. It is only a
-    # failure when markdown was the whole of what was asked for.
-    thin = len(_body_of(text)) < _THIN_CONTENT_CHARS
-    visual = [fmt for fmt in files if fmt != "markdown"]
-    if thin and not visual:
-        return WebFetchPage(
-            url=url,
-            success=False,
-            title=title,
-            fetched_with=fetched_with,
-            error=(
-                "The browser rendered this page but there was nothing to "
-                "read in it. Either the site served an empty shell to an "
-                "automated client, or what it shows needs an interaction "
-                "first."
-            ),
-        )
-
-    return WebFetchPage(
-        notice=(
-            "This page rendered with almost no text. The "
-            f"{', '.join(sorted(visual))} capture is here and may be what you "
-            "want; the markdown is nearly empty."
-            if thin
-            else None
-        ),
-        url=url,
-        success=True,
-        title=title,
-        files=files,
-        preview=preview,
-        characters=present[markdown_path],
-        fetched_with=fetched_with,
-    )
-
-
-def _body_of(markdown: str) -> str:
-    """The captured page, without the header the converter prepends.
-
-    `webpage-to-markdown.mjs` writes a title line and a `Source:`/`Captured:`
-    block before anything from the page, so a capture of an empty page is
-    still a 71 byte file -- measured on `about:blank`. Checking the file size
-    would therefore pass every empty render, and checking it against a flat
-    floor would depend on how long the URL is.
-    """
-    lines = markdown.splitlines()
-    body = [line for line in lines[1:] if not line.startswith(("Source:", "Captured:"))]
-    return "\n".join(body).strip()
 
 
 async def _clean_or_none(url: str) -> ExtractedPage | None:

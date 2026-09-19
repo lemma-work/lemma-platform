@@ -108,34 +108,36 @@ describe('reading what the browser holds', () => {
     });
 });
 
-describe('signing out', () => {
-    it('asks first, then signs the browser out of that site', async () => {
+describe('clearing a site', () => {
+    it('asks first, then clears that site', async () => {
         answer.data = { items: [site()], sleeping: false };
         render(<BrowserLoginsCard />);
         await open();
 
         await userEvent.click(
-            screen.getByRole('button', { name: 'Sign out of app.example.com' }),
+            screen.getByRole('button', { name: 'Clear cookies for app.example.com' }),
         );
         expect(removed.calls).toEqual([]);
 
-        await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+        await userEvent.click(screen.getByRole('button', { name: 'Clear cookies' }));
         expect(removed.calls).toEqual(['app.example.com']);
     });
 
-    it('no longer disclaims itself, because it no longer has to', async () => {
+    it('promises only what it does', async () => {
         // The old copy had to say "forgetting removes Lemma's copy, it does
-        // not sign you out at the site", because that was true of it.
+        // not sign you out at the site", because that was true of it. What is
+        // true now is narrower than "sign out": cookies are removed, and a
+        // site keeping its token in local storage may survive that.
         answer.data = { items: [site()], sleeping: false };
         render(<BrowserLoginsCard />);
         await open();
         await userEvent.click(
-            screen.getByRole('button', { name: 'Sign out of app.example.com' }),
+            screen.getByRole('button', { name: 'Clear cookies for app.example.com' }),
         );
 
-        const note = screen.getByText(/signs the agent/i);
-        expect(note.textContent).toContain('drops its cookies');
-        expect(note.textContent).not.toContain('does not sign you out');
+        const note = screen.getByText(/cookies from the agent/i);
+        expect(note.textContent).toContain('may stay signed in');
+        expect(note.textContent).not.toContain("does not sign you out at");
     });
 });
 

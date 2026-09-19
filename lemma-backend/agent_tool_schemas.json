@@ -3852,6 +3852,18 @@
               ],
               "default": null
             },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
+            },
             "error": {
               "anyOf": [
                 {
@@ -3903,6 +3915,18 @@
             }
           ],
           "default": null
+        },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
         },
         "error": {
           "anyOf": [

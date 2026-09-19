@@ -234,7 +234,7 @@ function Body({
                         loading={isRemoving}
                         onClick={() => onRemove(login.site)}
                     >
-                        Sign out
+                        Clear cookies
                     </Button>
                     <Button variant="quiet" size="xs" onClick={() => setConfirming(null)}>
                         Keep
@@ -247,7 +247,7 @@ function Body({
                 <Button
                     variant="quiet"
                     size="xs"
-                    aria-label={`Sign out of ${login.site}`}
+                    aria-label={`Clear cookies for ${login.site}`}
                     onClick={() => setConfirming(login.site)}
                 >
                     <Trash2 className="size-3.5" />
@@ -302,8 +302,10 @@ function Body({
                 signs it out. */}
             {confirming ? (
                 <p className="border-t border-[color:var(--border-subtle)] px-5 py-3 text-xs text-[var(--text-tertiary)]">
-                    This signs the agent&rsquo;s browser out of {confirming} and drops its
-                    cookies. It does not touch anywhere you are signed in yourself.
+                    This drops {confirming}&rsquo;s cookies from the agent&rsquo;s
+                    browser, which signs it out of most sites. A site that keeps its
+                    token elsewhere may stay signed in. It does not touch anywhere you
+                    are signed in yourself.
                 </p>
             ) : null}
         </>

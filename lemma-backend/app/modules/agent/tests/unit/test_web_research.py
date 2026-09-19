@@ -23,6 +23,7 @@ from app.core.web_search.search_client import (
     SearXNGSearchClient,
     apply_domain_operators,
 )
+from app.modules.agent.tools.web import capture_result
 from app.modules.agent.tools.web import web_fetch as web_fetch_module
 from pydantic import ValidationError
 
@@ -640,7 +641,7 @@ class TestBrowserCaptureHelpers:
         self,
     ) -> None:
         session = _FakeSession()
-        result = await web_fetch_module._present_files(session, [])
+        result = await capture_result.present_files(session, [])
         assert result == {}
         assert session.commands == []
 
@@ -662,7 +663,7 @@ class TestBrowserCaptureHelpers:
             }
         )
 
-        result = await web_fetch_module._present_files(
+        result = await capture_result.present_files(
             session, ["research/a.md", "research/broken.md", "research/b.pdf"]
         )
 
