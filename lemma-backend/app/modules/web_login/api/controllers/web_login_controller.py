@@ -226,6 +226,21 @@ async def forget_web_login(
             detail="This computer is not running, so its browser cannot be changed yet.",
         ) from exc
 
+    if not answer["running"]:
+        # Awake sandbox, retired browser -- no exception, and until now a
+        # 200 with `forgotten: false`. The screen read that as "signed out"
+        # while the session sat untouched on the durable disk, which is the
+        # same lie in a different costume from the one this feature replaced.
+        # Cookies are read and cleared over CDP, so a browser that is not
+        # running cannot be changed and must not be reported as changed.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The browser is not running, so its cookies cannot be "
+                "cleared yet. Open it and try again."
+            ),
+        )
+
     hosts = [
         cookie["domain"]
         for cookie in answer["cookies"]

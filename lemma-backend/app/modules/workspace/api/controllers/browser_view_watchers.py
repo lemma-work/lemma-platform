@@ -65,6 +65,16 @@ async def _reset_after_settling(
         return
     service = build_service()
     try:
+        # The local count is a hint, not the answer. Two viewers of one
+        # sandbox can arrive through different API workers, so this process
+        # seeing zero says nothing about the other one -- and resetting on
+        # that would resize the display under somebody still watching. The
+        # relay is per-sandbox, so its count is the only single answer.
+        # `None` means it could not say (an older image), and the local
+        # count is all there is to go on then.
+        with contextlib.suppress(Exception):
+            if await service.viewers(user_id):
+                return
         with contextlib.suppress(Exception):
             await service.reset_display(user_id)
     finally:

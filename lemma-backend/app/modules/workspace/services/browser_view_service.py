@@ -270,6 +270,16 @@ class BrowserViewService:
         relay = await self._relay(user_id, start=False)
         return await relay.resize_display(width=width, height=height)
 
+    async def viewers(self, user_id: UUID) -> int | None:
+        """How many people the sandbox's own relay is serving.
+
+        Asked of the relay rather than counted here: two viewers of one
+        sandbox can arrive through different API workers, and a count local
+        to one of them says zero while the other is still watching.
+        """
+        relay = await self._relay(user_id, start=False)
+        return await relay.viewers()
+
     async def reset_display(self, user_id: UUID) -> str:
         """Put the display back to its resting size.
 

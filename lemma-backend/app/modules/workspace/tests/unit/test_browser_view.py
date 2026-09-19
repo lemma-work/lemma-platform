@@ -419,6 +419,13 @@ class _ResettableService:
         self.resets = 0
         self.fails = fails
 
+    #: What the sandbox's own relay says is watching. `None` is an older
+    #: image that cannot answer.
+    watching: int | None = 0
+
+    async def viewers(self, _user_id) -> int | None:
+        return self.watching
+
     async def reset_display(self, _user_id) -> str:
         self.resets += 1
         if self.fails:
@@ -525,3 +532,37 @@ async def test_a_reset_that_fails_does_not_fail_the_socket(watching) -> None:
     await _settle()
 
     assert broken.resets == 1
+
+
+async def test_a_viewer_on_another_worker_keeps_their_shape(watching) -> None:
+    """The count that decides this lives in the sandbox, not in a process.
+
+    `_watchers` is a module-level dict, so two people watching one sandbox
+    through different API workers each see a count of one. The first to
+    close saw zero locally and reset the display under the second. The relay
+    is per-sandbox, so its count is the only one with a single answer.
+    """
+    mod, watcher, service = watching
+    service.watching = 1
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 0, "somebody is still attached to this sandbox"
+
+
+async def test_an_image_that_cannot_count_falls_back_to_the_local_view(
+    watching,
+) -> None:
+    """An older relay has no `viewers` field. Refusing to reset on that
+    would leave every display stuck at the last pane's shape, which is the
+    bug the reset exists for."""
+    mod, watcher, service = watching
+    service.watching = None
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 1

@@ -282,8 +282,13 @@ async def test_bringing_a_viewer_up_asks_for_the_whole_display(_key) -> None:
     provider = _Provider(relay, starts_answering=True)
     try:
         await _client(provider).health(start=True)
-        assert [r.shell_command for r in provider.start_requests] == [
-            "lemma-ensure-display"
-        ]
+        started = [r.shell_command for r in provider.start_requests]
+        assert len(started) == 1
+        assert "lemma-ensure-display" in started[0]
+        # And the old name, because the image rollout is deferred: a sandbox
+        # still running the previous image has only `start-browser`, and
+        # asking it for a command it does not have fails the viewer outright
+        # rather than degrading.
+        assert "start-browser" in started[0]
     finally:
         relay.close()

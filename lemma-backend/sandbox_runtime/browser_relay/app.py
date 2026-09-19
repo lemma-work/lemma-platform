@@ -247,6 +247,16 @@ def _session_name(session: str | None, domain: str | None) -> str:
     return candidate
 
 
+#: How many VNC sockets this relay is serving right now.
+#:
+#: Counted here rather than in the API, which was counting in a
+#: process-local dict: two people watching one sandbox can arrive through
+#: different API workers, and the first to leave then reset the display
+#: under the second. One sandbox has exactly one relay, so this is the only
+#: place the question has a single answer.
+_viewers = 0
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Lemma browser relay", docs_url=None, redoc_url=None)
 
@@ -285,11 +295,12 @@ def create_app() -> FastAPI:
         to tell them apart from outside the sandbox.
         """
         vnc = "listening" if await _vnc_is_listening() else "down"
+        _ = _viewers
         try:
             await live_port()
         except BrowserNotRunning:
-            return {"chrome": "stopped", "vnc": vnc}
-        return {"chrome": "running", "vnc": vnc}
+            return {"chrome": "stopped", "vnc": vnc, "viewers": _viewers}
+        return {"chrome": "running", "vnc": vnc, "viewers": _viewers}
 
     @app.get("/targets", dependencies=[Depends(require_token)])
     async def targets(
@@ -506,6 +517,8 @@ def create_app() -> FastAPI:
             return
 
         await websocket.accept()
+        global _viewers
+        _viewers += 1
         # Watching is not a command, so without this the agent's idle timeout
         # retires the browser out from under somebody reading the page.
         #
@@ -543,6 +556,7 @@ def create_app() -> FastAPI:
             with suppress(RuntimeError):
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)
         finally:
+            _viewers = max(0, _viewers - 1)
             keepalive_task.cancel()
             # Awaited, not just cancelled: a cancelled task is not finished
             # until it has been collected, and leaving it uncollected is how a

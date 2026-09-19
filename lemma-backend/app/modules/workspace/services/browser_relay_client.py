@@ -99,6 +99,27 @@ class ProfileCookies(TypedDict):
     signed_in: list[str]
 
 
+#: Bring the display stack up, on this image or on the one before it.
+#:
+#: `lemma-ensure-display` is `start-browser` renamed. The rename ships in the
+#: image and the image rollout is deliberately deferred, so for as long as
+#: that gap is open a backend that only knew the new name would fail to start
+#: the browser at all on every sandbox still running the old one -- not
+#: degrade, fail: the command does not exist, the relay never comes up, and
+#: the viewer gets "the browser relay did not start".
+#:
+#: Falling back costs one `command -v`. It comes out when the images are
+#: rolled, and until then this is the difference between a deploy that is
+#: safe in either order and one that is not.
+_ENSURE_DISPLAY = (
+    "if command -v lemma-ensure-display >/dev/null 2>&1; then "
+    "  lemma-ensure-display; "
+    "else "
+    "  start-browser; "
+    "fi"
+)
+
+
 class BrowserRelayClient:
     """One sandbox's relay, reached through whatever door its fabric has."""
 
@@ -194,6 +215,21 @@ class BrowserRelayClient:
             )
         return str(response.json().get("chrome", "stopped"))
 
+    async def viewers(self) -> int | None:
+        """How many sockets this sandbox's relay is serving, or None.
+
+        None when the relay cannot say -- an older image, or one that is not
+        answering. The caller treats that as "cannot tell" rather than as
+        zero, because acting on a guess here resizes a display somebody is
+        looking at.
+        """
+        response = await self._request("GET", "/health", timeout=10.0)
+        if response.status_code != 200:
+            return None
+        body = response.json()
+        count = body.get("viewers") if isinstance(body, dict) else None
+        return count if isinstance(count, int) else None
+
     async def ensure_running(self) -> None:
         """Bring up everything a viewer needs, and wait for it to answer.
 
@@ -224,7 +260,7 @@ class BrowserRelayClient:
             self._instance,
             StartProcessRequest(
                 operation_id=uuid4(),
-                shell_command="lemma-ensure-display",
+                shell_command=_ENSURE_DISPLAY,
                 argv=None,
                 cwd=WORKSPACE_ROOT,
                 environment=(),

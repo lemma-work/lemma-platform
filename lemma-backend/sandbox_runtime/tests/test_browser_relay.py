@@ -310,7 +310,7 @@ def test_health_needs_no_token_and_says_when_chrome_is_down(
     client = _client(monkeypatch, tmp_path)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"chrome": "stopped", "vnc": "down"}
+    assert response.json() == {"chrome": "stopped", "vnc": "down", "viewers": 0}
 
 
 def test_a_guarded_route_without_a_token_is_refused_as_unauthorised(
