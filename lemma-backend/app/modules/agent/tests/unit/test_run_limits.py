@@ -337,3 +337,87 @@ def test_both_approvals_renew_and_neither_retires_the_guard():
     # to repair something that was never broken.
     assert denied["success"] is True
     assert "Stop here" in str(denied["message"])
+
+
+async def test_a_paused_run_does_not_export_as_a_failed_run():
+    """The run span is the other half of "a pause is not a failure".
+
+    Marking the tool span was not enough. Every pause also unwinds through the
+    span the harness opened for the whole run, and a span context manager
+    stamps ERROR on anything that leaves that way -- so in the backend where
+    error rates are read, every `ask_user` and every `wait_for` still closed
+    its run as failed. Verified against live traces: the tool spans came back
+    clean and the `agent run` spans did not.
+
+    Inside `drive_once` the current span *is* that run span, which is the only
+    place left that can mark it before it closes. `StatusCode.OK` is final in
+    the SDK, so it survives the unwind.
+    """
+    import asyncio
+    from contextlib import asynccontextmanager
+
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter
+    from opentelemetry.trace import StatusCode
+
+    from app.modules.agent.domain.harness_options import HarnessOptions
+    from app.modules.agent.infrastructure.harnesses.pydantic_ai_node_loop import (
+        NodeLoop,
+    )
+    from app.modules.agent.tools.tool_errors import AgentInputRequired
+
+    exported: list = []
+
+    class _Collect(SpanExporter):
+        def export(self, spans):
+            exported.extend(spans)
+
+        def shutdown(self):
+            return None
+
+    provider = trace.get_tracer_provider()
+    if not isinstance(provider, TracerProvider):
+        provider = TracerProvider()
+        trace.set_tracer_provider(provider)
+    provider.add_span_processor(SimpleSpanProcessor(_Collect()))
+
+    class _PausingRun:
+        """A graph that pauses on its first node, the way `ask_user` does."""
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise AgentInputRequired("call-1", "ask_user")
+
+    @asynccontextmanager
+    async def _run_context(_history):
+        yield _PausingRun()
+
+    loop = NodeLoop(
+        run_context=_run_context,
+        queue=asyncio.Queue(),
+        streamer=None,
+        options=HarnessOptions(model_name="test-model"),
+        agent_run_id=uuid4(),
+        conversation_id=uuid4(),
+        final_output_message=lambda **_kwargs: None,
+    )
+
+    # Stands in for the span pydantic-ai opens around the whole run; the probe
+    # that settled this showed `agent run` is what `drive_once` runs inside.
+    before = len(exported)
+    tracer = trace.get_tracer("app.tests.run_span")
+    # `pytest.raises` goes OUTSIDE the span, or it swallows the exception
+    # before the context manager sees it and nothing ever stamps ERROR -- a
+    # test that passes against the unfixed code and proves nothing.
+    with pytest.raises(AgentInputRequired):
+        with tracer.start_as_current_span("agent run"):
+            await loop.drive_once(None, {}, {})
+
+    (span,) = exported[before:]
+    assert span.name == "agent run"
+    assert span.status.status_code is not StatusCode.ERROR, (
+        "a paused run still closes as a failed run"
+    )
