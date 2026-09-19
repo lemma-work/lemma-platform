@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowUpRight, X } from '@/components/ui/icons';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { ArrowUpRight, Maximize2, Minimize2, X } from '@/components/ui/icons';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { useAppPage } from '@/components/app/app-context';
 import { AppFrame } from '@/components/app/app-launch';
@@ -18,6 +18,7 @@ import {
     resolveConversationStageNavigationHref,
 } from '@/lib/assistant/conversation-presentation';
 import { formatWorkspaceAppTitle } from '@/lib/pods/workspace-tabs';
+import { cn } from '@/lib/utils';
 import type { AppPageRef } from '@/lib/types/app';
 
 function decodeLabel(value: string | null | undefined): string {
@@ -127,6 +128,10 @@ export function ConversationPresentationStage({
     stageStandaloneHref?: string;
 }) {
     const router = useRouter();
+    // Local, and deliberately not in the URL: it is how you are looking at
+    // this right now, not what you are looking at. `?computer=1` is the
+    // second and survives a reload; this does not need to.
+    const [expanded, setExpanded] = useState(false);
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     // An app is presented in place rather than framed: the stage already sits
     // inside the pod's `AppProvider`, so it can mount the app's own frame
@@ -175,7 +180,12 @@ export function ConversationPresentationStage({
     if (!stageBody || (!standaloneHref && !stageBodyOverride)) return children;
 
     return (
-        <div className="conversation-presentation-layout grid h-full min-h-0 min-w-0 overflow-hidden">
+        <div
+            className={cn(
+                'conversation-presentation-layout grid h-full min-h-0 min-w-0 overflow-hidden',
+                expanded && 'is-stage-expanded',
+            )}
+        >
             <section className="conversation-presentation-chat min-h-0 min-w-0 overflow-hidden bg-[var(--pod-main-bg)]">
                 {children}
             </section>
@@ -196,6 +206,29 @@ export function ConversationPresentationStage({
                     <div className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
                         {title}
                     </div>
+                    {/* Takes the conversation's half of the page and gives
+                        it back, rather than opening a tab. Looking at a
+                        machine's files is a thing you do *about* the
+                        conversation beside it, so leaving the page for it is
+                        a worse trade than temporarily covering it -- and
+                        nothing unmounts, so a live browser view keeps its
+                        socket across the toggle. */}
+                    <Button
+                        type="button"
+                        variant="quiet"
+                        size="icon"
+                        onClick={() => setExpanded((was) => !was)}
+                        className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
+                        aria-label={expanded ? 'Show the conversation' : 'Full screen'}
+                        aria-pressed={expanded}
+                        title={expanded ? 'Show the conversation' : 'Full screen'}
+                    >
+                        {expanded ? (
+                            <Minimize2 className="h-4 w-4" strokeWidth={1.8} />
+                        ) : (
+                            <Maximize2 className="h-4 w-4" strokeWidth={1.8} />
+                        )}
+                    </Button>
                     {/* A resolved resource always has a page of its own; a
                         supplied body has one only if it said so. */}
                     {standaloneHref ? (

@@ -2,14 +2,12 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { usePathname } from 'next/navigation';
 
 import { createPortal } from 'react-dom';
 
 import { BrowserPane } from '@/components/workspace/browser-pane';
 import { Button } from '@/components/ui/button';
-import { AppWindow, Maximize2 } from '@/components/ui/icons';
-import { podIdFromPathname } from '@/lib/pods/pod-id-from-pathname';
+import { AppWindow } from '@/components/ui/icons';
 import { usePictureInPicture } from '@/lib/hooks/use-picture-in-picture';
 import { WorkspaceFilesPane } from '@/components/workspace/workspace-files-pane';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
@@ -71,21 +69,6 @@ export function ComputerPanel({
     const steerTo = signInRequest.data?.origin;
     const pip = usePictureInPicture();
 
-    // Where this panel's current tab lives at full size. Read off the URL
-    // rather than passed in, because every pod route already carries the id
-    // and threading a prop through every caller of this panel to build one
-    // link is more plumbing than the link is worth. Null outside a pod, and
-    // the control simply is not offered there.
-    const podId = podIdFromPathname(usePathname());
-    const fullScreenHref = podId
-        ? `/pod/${encodeURIComponent(podId)}/computer?view=${tab}` +
-          // The browser page needs to know which conversation is watching;
-          // the files page resolves the one sandbox on its own.
-          (tab === 'browser' && conversationId
-              ? `&conversation=${encodeURIComponent(conversationId)}`
-              : '')
-        : null;
-
     return (
         <div className="flex h-full min-h-0 flex-col gap-2">
             <div className="flex items-center gap-1 px-1">
@@ -105,42 +88,17 @@ export function ComputerPanel({
                         {name === 'files' ? 'Files' : 'Browser'}
                     </Button>
                 ))}
-                <span className="ml-auto flex items-center gap-1">
-                    {/* Two different things, and the wording says which:
-                        full screen is this same view in a tab of its own,
-                        popping out is a small window that floats above
-                        everything else you are doing. */}
-                    {fullScreenHref ? (
-                        <Button
-                            variant="quiet"
-                            size="xs"
-                            className="text-[var(--text-tertiary)]"
-                            asChild
-                        >
-                            <a
-                                href={fullScreenHref}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                            >
-                                <Maximize2 className="size-3.5" />
-                                Full screen
-                            </a>
-                        </Button>
-                    ) : null}
-                    {tab === 'browser' && pip.supported ? (
-                        <Button
-                            variant="quiet"
-                            size="xs"
-                            className="text-[var(--text-tertiary)]"
-                            onClick={() =>
-                                pip.pipWindow ? pip.close() : void pip.open()
-                            }
-                        >
-                            <AppWindow className="size-3.5" />
-                            {pip.pipWindow ? 'Bring it back' : 'Pop out'}
-                        </Button>
-                    ) : null}
-                </span>
+                {tab === 'browser' && pip.supported ? (
+                    <Button
+                        variant="quiet"
+                        size="xs"
+                        className="ml-auto text-[var(--text-tertiary)]"
+                        onClick={() => (pip.pipWindow ? pip.close() : void pip.open())}
+                    >
+                        <AppWindow className="size-3.5" />
+                        {pip.pipWindow ? 'Bring it back' : 'Pop out'}
+                    </Button>
+                ) : null}
             </div>
 
             <div className="min-h-0 flex-1">

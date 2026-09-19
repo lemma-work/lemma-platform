@@ -16,12 +16,6 @@ const withQuery = (ui: ReactElement) => (
     </QueryClientProvider>
 );
 
-// The full-screen link is built from the pod id on the URL, so the panel
-// needs a path to read. A pod route is the ordinary case; the test for the
-// other one overrides this.
-const path = vi.hoisted(() => ({ value: '/pod/pod-7/conversations/conv-1' }));
-vi.mock('next/navigation', () => ({ usePathname: () => path.value }));
-
 vi.mock('@/lib/sdk/lemma-client', () => ({
     getLemmaClient: () => ({
         webLogins: {
@@ -55,10 +49,7 @@ vi.mock('./browser-pane', () => ({
 vi.mock('./workspace-files-pane', () => ({
     WorkspaceFilesPane: () => <div data-testid="files-pane" />,
 }));
-afterEach(() => {
-    path.value = '/pod/pod-7/conversations/conv-1';
-    cleanup();
-});
+afterEach(cleanup);
 
 describe('the computer panel', () => {
     it('opens on files, so rendering it does not start a browser', () => {
@@ -172,44 +163,5 @@ describe('popping the browser out into its own window', () => {
         win.close();
 
         expect(await screen.findByTestId('browser-pane')).toBeTruthy();
-    });
-});
-
-describe('opening the same view full screen', () => {
-    /**
-     * Distinct from popping out, and deliberately so: full screen is a tab of
-     * its own at the size a file manager or a browser wants, and the floating
-     * window is a small always-on-top view for watching while you do
-     * something else. Offering only the second one was the gap -- there was a
-     * way to make the browser float and no way to make it big.
-     */
-    const link = () => screen.getByRole('link', { name: /Full screen/ });
-
-    it('points at the files view while the panel is on files', () => {
-        render(withQuery(<ComputerPanel conversationId="conv-1" />));
-
-        expect(link().getAttribute('href')).toBe('/pod/pod-7/computer?view=files');
-        // A new tab, not this one: the conversation is the thing you were
-        // reading, and navigating away from it to look at a file is the
-        // behaviour this replaces.
-        expect(link().getAttribute('target')).toBe('_blank');
-    });
-
-    it('follows the panel to the browser, and says which conversation is watching', () => {
-        render(withQuery(<ComputerPanel conversationId="conv-1" />));
-        fireEvent.click(screen.getByRole('button', { name: 'Browser' }));
-
-        expect(link().getAttribute('href')).toBe(
-            '/pod/pod-7/computer?view=browser&conversation=conv-1',
-        );
-    });
-
-    it('is not offered where there is no pod to open it in', () => {
-        // The panel is reachable outside a pod route, and a link built from a
-        // pod id that is not there would be `/pod/null/computer`.
-        path.value = '/conversations/conv-1';
-        render(withQuery(<ComputerPanel conversationId="conv-1" />));
-
-        expect(screen.queryByRole('link', { name: /Full screen/ })).toBeNull();
     });
 });
