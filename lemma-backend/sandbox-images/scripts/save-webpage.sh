@@ -173,15 +173,11 @@ fi
 # step can abort the script, and the failing captures are exactly the expensive
 # pages worth reclaiming. `--no-open` reuses whatever page the caller already
 # has open -- that tab belongs to them, so this must not touch it.
-# Is a browser already serving this profile? The port file alone is not
-# enough -- Chrome leaves it behind -- so the port is probed too.
+# Is a browser already serving this profile? Shared with
+# `lemma-ensure-display`, which asks the same question for a different
+# reason, and the two must not drift.
 browser_is_live() {
-  local port_file="${AGENT_BROWSER_PROFILE:-/home/user/.lemma/browser/profile}/DevToolsActivePort"
-  [[ -r "$port_file" ]] || return 1
-  local port
-  port="$(head -1 "$port_file" 2>/dev/null)" || return 1
-  [[ -n "$port" ]] || return 1
-  curl -fsS -m 2 -o /dev/null "http://127.0.0.1:${port}/json/version" 2>/dev/null
+  browser-is-live
 }
 
 CAPTURE_TAB=""

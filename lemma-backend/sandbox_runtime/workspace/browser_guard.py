@@ -27,13 +27,25 @@ leaving every process that held the memory -- and nobody noticed, which is
 the most useful thing anybody has learnt about what the machinery was worth.
 
 What replaces it is one call. `agent-browser close --all` is the CLI that
-owns the browser's lifecycle, and it is also the only stop measured to commit
-Chrome's cookie store: on a real sandbox, one second after a login, it keeps
-the session, while SIGTERM to all eleven processes loses it and so does
-SIGTERM to the browser process alone, even exiting cleanly in half a second.
-A signal never flushed the queue. So the simpler version is also the correct
-one, and it names no process, so it cannot go quietly out of date the way the
-pattern list did.
+owns the browser's lifecycle, and it is also the only stop that keeps a
+login: on a real sandbox, one second after signing in, it keeps the session,
+while SIGTERM to all eleven processes loses it and so does SIGTERM to the
+browser process alone, even exiting cleanly in half a second.
+
+The reason is not Chrome's own commit timer, which is what this said first.
+`agent-browser` does not run Chrome on the profile it is configured with --
+it launches on a throwaway `--user-data-dir=/tmp/agent-browser-chrome-<uuid>`
+and copies the profile back **when it is closed cleanly, and only then**.
+Measured directly: the durable `Cookies` file's mtime does not move while the
+browser runs, moves on `close --all`, and the cookie is there after a reopen.
+
+The difference matters. Under a commit timer, waiting long enough would make
+a kill safe; under copy-on-close nothing ever does, so there is no version of
+this that escalates to a signal after a timeout. That is also why `release`
+and `quiesce` both close before they pause rather than after.
+
+So the simpler version is also the correct one, and it names no process, so
+it cannot go quietly out of date the way the pattern list did.
 
 It can fail -- a sandbox with nothing left may not manage to spawn a Node
 CLI -- and nothing here escalates to a signal afterwards. The honest reason

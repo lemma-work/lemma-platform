@@ -317,6 +317,7 @@ COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/
 COPY lemma-backend/sandbox-images/scripts/set-display-size.sh /usr/local/bin/set-display-size
 COPY lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh /usr/local/bin/lemma-ensure-display
 COPY lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
+COPY lemma-backend/sandbox-images/scripts/browser-is-live.sh /usr/local/bin/browser-is-live
 COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
 COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
 RUN ln -sf /opt/lemma-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
@@ -324,6 +325,7 @@ RUN chmod 0755 \
         /usr/local/bin/start-workspace-runtime \
         /usr/local/bin/lemma-ensure-display \
         /usr/local/bin/start-browser-relay \
+        /usr/local/bin/browser-is-live \
         /usr/local/bin/save-webpage \
         /usr/local/lib/webpage-to-markdown.mjs \
     && python -m compileall -q /app/sandbox_runtime

@@ -312,19 +312,35 @@ fi
 # that fix, and it gives a 2 GB sandbox two processes back.
 start-browser-relay || true
 
-if [ "$#" -gt 0 ]; then
-  open_log="/tmp/agent-browser-open.log"
-  if agent-browser open "$@" >"$open_log" 2>&1; then
-    open_status=0
-  else
-    open_status=$?
-  fi
-  cat "$open_log"
-  exit "$open_status"
-fi
-
+# Never `agent-browser open` with no URL. Measured, on this image with
+# agent-browser 0.37.1: a bare `open` relaunches Chrome onto a throwaway
+# `--user-data-dir=/tmp/agent-browser-chrome-<uuid>`, while `open <url>`
+# keeps it on the profile this script configured. That matters far beyond
+# tidiness, because Chrome writes `DevToolsActivePort` into whichever
+# directory it is actually using -- so after a bare open, the port file in
+# the durable profile names the *previous* launch and answers nothing.
+#
+# Everything that asks "is the browser running" without starting one reads
+# that file: `browser_relay.chrome.live_port`, and through it `/health`'s
+# `chrome` field, `/vnc`'s "the browser is not running" refusal, `/targets`,
+# and both cookie routes; plus `browser-is-live` here and in `save-webpage`.
+# Measured end to end: after `lemma-ensure-display about:blank`, `live_port()`
+# returns the live port; after a bare `lemma-ensure-display` on top of that
+# same healthy browser, it raises -- so a viewer attaching was breaking the
+# thing that tells the backend a browser is there.
+#
+# And when a browser is already live, open nothing at all. `open` is not a
+# cheap no-op: it relaunches, which would throw away the page somebody is
+# watching every time the pane reconnects.
 open_log="/tmp/agent-browser-open.log"
-if agent-browser open >"$open_log" 2>&1; then
+if [ "$#" -gt 0 ]; then
+  set -- "$@"
+elif browser-is-live; then
+  exit 0
+else
+  set -- about:blank
+fi
+if agent-browser open "$@" >"$open_log" 2>&1; then
   open_status=0
 else
   open_status=$?

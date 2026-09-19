@@ -290,10 +290,11 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         #    correctly.
         #
         #    "The way production ends it" is doing the work, and it took
-        #    three measurements on a real sandbox to get right. Chrome
-        #    batches its cookie store to disk on a 30 second timer, so how
+        #    three measurements on a real sandbox to get right.
+        #    `agent-browser` runs Chrome on a throwaway profile under `/tmp`
+        #    and copies it to the durable one only on a clean close, so how
         #    the browser stops decides whether a login made a second ago is
-        #    still there:
+        #    still there -- and no delay before the stop changes the answer:
         #
         #        agent-browser close --all   keeps it
         #        SIGTERM to all 11 processes loses it

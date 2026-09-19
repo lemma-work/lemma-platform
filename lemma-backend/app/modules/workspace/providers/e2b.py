@@ -373,13 +373,14 @@ class E2BSandboxProvider(E2BOpsMixin):
         could not happen.
 
         A filesystem-only pause is also why the browser is closed first. It
-        freezes a running Chrome the way pulling the power would, and Chrome's
-        cookie store batches to disk on a 30 second timer -- so somebody who
-        signed in to a site and had their sandbox released a moment later lost
-        the login. Measured on a real E2B sandbox: sign in, pause immediately,
-        resume, and the cookie is gone; close the browser first and it is
-        there. Docker gets this from quiesce, which the E2B path has no
-        equivalent of.
+        freezes a running Chrome the way pulling the power would, and a frozen
+        Chrome has written nothing back: `agent-browser` runs it on a
+        throwaway profile under `/tmp` and copies that to the durable one only
+        when it is closed cleanly. So somebody who signed in to a site and had
+        their sandbox released a moment later lost the login. Measured on a
+        real E2B sandbox: sign in, pause immediately, resume, and the cookie is
+        gone; close the browser first and it is there. Docker gets this from
+        quiesce, which the E2B path has no equivalent of.
         """
         # Functions keep memory -- same rule as `_lifecycle` uses for timeouts.
         keep_memory = kind is SandboxKind.FUNCTION
