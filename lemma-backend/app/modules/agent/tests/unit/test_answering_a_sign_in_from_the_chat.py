@@ -2,15 +2,21 @@
 
 The card in the conversation resolves a waiting sign-in the same way it
 resolves an `ask_user`, because that is the path the transcript subscribes to.
-Answering anywhere else -- as the standalone page's own endpoint did -- resolved
-the pause server-side while the screen the person was looking at never heard
-about it, so the card kept asking over a run that had already carried on.
+Answering anywhere else -- as the standalone page's own endpoint once did --
+resolved the pause server-side while the screen the person was looking at
+never heard about it, so the card kept asking over a run that had already
+carried on.
 
-What moves with the answer is the capture. The standalone page reads the
-browser at the moment the button is pressed, because it is the only surface
-that can say "the browser holds nothing for this site" while the person is
-still in front of it; it passes `saved` along and this has nothing left to do.
-The card has no browser of its own, so the capture happens here.
+This file used to be twice the size, and the half that went was the capture:
+reading the browser at this point, deciding which cookies were the login, and
+storing them. That ran *after* the execution claim had been committed, so
+anything it raised wrote no tool return at all -- and a paused call with no
+return is a conversation nobody can get out of, because the composer is locked
+on the pause and only a message can supersede it. The browser keeps its own
+profile now. There is nothing to capture here, so there is nothing here to
+fail, and the tests for that hazard are gone with the hazard.
+
+What is left is what the agent gets told.
 """
 
 from __future__ import annotations
@@ -34,155 +40,65 @@ class _Uow:
         return None
 
 
-class _SignInService:
-    """Stands in for the real service, recording how it was called."""
-
-    def __init__(self, result: tuple[bool, str | None] | Exception) -> None:
-        self._result = result
-        self.calls: list[dict[str, object]] = []
-        self.closed = 0
-
-    async def capture(self, **kwargs) -> tuple[bool, str | None]:
-        self.calls.append(kwargs)
-        if isinstance(self._result, Exception):
-            raise self._result
-        return self._result
-
-    async def close(self) -> None:
-        self.closed += 1
+def _builder() -> ResumeToolReturnBuilder:
+    return ResumeToolReturnBuilder(_Uow(), agent_repository=None)  # type: ignore[arg-type]
 
 
 async def _answer(
-    *,
-    decision: AgentRunApprovalDecision,
-    response: dict[str, object],
-    service: _SignInService | None = None,
-) -> dict[str, object]:
-    # Injected, not patched. Reaching the real construction by monkeypatching
-    # `app.modules.web_login.contracts.SignInService` doubled a name this file
-    # also imports, which proves nothing about the object production builds
-    # and survives a rename that should have failed -- the in-subject-doubles
-    # gate is what says so.
-    builder = ResumeToolReturnBuilder(
-        _Uow(), None, sign_in_service=lambda: service or _SignInService((True, None))
-    )
-    return await builder._browser_sign_in_return(
+    decision: AgentRunApprovalDecision, response: dict | None = None
+) -> dict:
+    return await _builder()._browser_sign_in_return(
         tool_args={"origin": _ORIGIN},
         decision=decision,
-        response=response,
+        response=response or {},
         user_id=uuid4(),
         conversation_id=uuid7(),
     )
 
 
-def test_the_stand_in_is_called_the_way_the_real_service_can_be() -> None:
-    """The double takes `**kwargs`, so on its own it would happily certify a
-    call the real `capture` cannot accept. This binds the same arguments
-    against the real signature, so a rename there fails here rather than at
-    the one moment somebody is waiting to be let in."""
-    from inspect import signature
+async def test_signing_in_tells_the_agent_to_carry_on() -> None:
+    result = await _answer(AgentRunApprovalDecision.APPROVE_ONCE)
 
-    from app.modules.web_login.contracts import SignInService
-
-    signature(SignInService.capture).bind(
-        SignInService,
-        user_id=uuid4(),
-        origin=_ORIGIN,
-        conversation_id=uuid7(),
-        force=True,
-    )
+    assert result["outcome"] == "signed_in"
+    assert result["source"] == "person"
+    assert result["origin"] == _ORIGIN
+    assert "carry on" in result["message"]
 
 
-@pytest.mark.asyncio
-async def test_the_chat_answer_captures_the_login() -> None:
-    """The card carries no `saved`, so this is the surface that must read the
-    browser. Without it the run resumed with the login discarded and the person
-    was asked for the same site again on the next run."""
-    service = _SignInService((True, None))
+async def test_a_site_still_showing_a_form_is_passed_on_as_a_warning() -> None:
+    """The standalone page looks at the site straight after the person
+    finishes and puts the answer on the decision. It is a warning rather than
+    a failure: the check is a heuristic, and the person has already done what
+    was asked."""
+    result = await _answer(AgentRunApprovalDecision.APPROVE_ONCE, {"working": False})
 
-    content = await _answer(
-        decision=AgentRunApprovalDecision.APPROVE_ONCE, response={}, service=service
-    )
-
-    assert content["outcome"] == "signed_in"
-    assert content["saved"] is True
-    assert service.calls[0]["origin"] == _ORIGIN
-    # Nobody is in front of a page that could offer "save anyway", so the
-    # capture is not allowed to stop and ask.
-    assert service.calls[0]["force"] is True
-    assert service.closed == 1
+    assert result["outcome"] == "signed_in"
+    assert "still showed a login form" in result["message"]
 
 
-@pytest.mark.asyncio
-async def test_a_page_that_already_captured_is_not_read_twice() -> None:
-    """`saved` in the payload is the standalone page's own answer. Capturing
-    again would read a browser the person has already walked away from."""
-    service = _SignInService((True, None))
+async def test_a_card_answered_in_the_chat_does_not_claim_a_check_it_never_made() -> (
+    None
+):
+    """The card has no browser to ask, so `working` is simply absent.
 
-    content = await _answer(
-        decision=AgentRunApprovalDecision.APPROVE_ONCE,
-        response={"saved": False, "saved_detail": "nothing to keep"},
-        service=service,
-    )
-
-    assert service.calls == []
-    assert content["saved"] is False
-    assert "nothing to keep" in str(content["message"])
-
-
-@pytest.mark.asyncio
-async def test_an_unkept_login_still_resumes_the_run() -> None:
-    """A browser that cannot be read answers `(False, why)` rather than
-    raising, and the person has signed in either way. The run carries on and
-    the agent is told what it costs."""
-    service = _SignInService((False, "the relay is unreachable"))
-
-    content = await _answer(
-        decision=AgentRunApprovalDecision.APPROVE_ONCE, response={}, service=service
-    )
-
-    assert content["success"] is True
-    assert content["outcome"] == "signed_in"
-    assert content["saved"] is False
-    assert "the relay is unreachable" in str(content["message"])
-
-
-@pytest.mark.asyncio
-async def test_a_broken_capture_does_not_strand_the_conversation() -> None:
-    """The deadlock this exists to prevent.
-
-    By the time this runs the caller has already committed the execution claim,
-    so raising writes no tool return at all -- and a paused call with no return
-    is a conversation nobody can leave: the composer is locked on the pause,
-    the only thing that supersedes a stale pause runs when a message is sent,
-    and sending a message is what the lock prevents.
-
-    So the run continues and the agent is told. `success` is still true because
-    the *sign-in* succeeded; only keeping it for next time did not.
+    Absent must not read as "not working" -- that would tell the agent the
+    site rejected a sign-in nobody looked at.
     """
-    service = _SignInService(RuntimeError("the store is down"))
+    result = await _answer(AgentRunApprovalDecision.APPROVE_ONCE)
 
-    content = await _answer(
-        decision=AgentRunApprovalDecision.APPROVE_ONCE, response={}, service=service
-    )
-
-    assert content["success"] is True
-    assert content["outcome"] == "signed_in"
-    assert content["saved"] is False
-    assert "could not be read back" in str(content["message"])
-    assert service.closed == 1
+    assert "still showed a login form" not in result["message"]
 
 
-@pytest.mark.asyncio
-async def test_declining_never_touches_the_browser() -> None:
-    """Declining is an answer, not a failure: the run continues, and the agent
-    is told not to ask for this site again."""
-    service = _SignInService((True, None))
+async def test_declining_says_so_and_tells_the_agent_not_to_re_ask() -> None:
+    result = await _answer(AgentRunApprovalDecision.DENY)
 
-    content = await _answer(
-        decision=AgentRunApprovalDecision.DENY, response={}, service=service
-    )
+    assert result["outcome"] == "declined"
+    assert "Do not ask again" in result["message"]
 
-    assert service.calls == []
-    assert content["outcome"] == "declined"
-    assert content["success"] is True
+
+def test_nothing_on_this_path_can_read_or_store_a_session() -> None:
+    """Structural. The deadlock this used to risk came from doing browser
+    work after the execution claim was committed; the guarantee that it
+    cannot happen again is that there is no such work left to do."""
+    for gone in ("_capture_for_resume", "_sign_in_service"):
+        assert not hasattr(ResumeToolReturnBuilder, gone), f"{gone} should be gone"

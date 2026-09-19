@@ -122,6 +122,7 @@ export function BrowserPane({
     conversationId,
     accessToken,
     onNavigated,
+    autoResize = true,
 }: {
     /** A site to steer the browser to before attaching, and the session that
      *  steer lands in: naming one means a sign-in. Without it this shows
@@ -129,10 +130,8 @@ export function BrowserPane({
      *  shared display, not a session-scoped tab, so there is nothing else to
      *  ask for. */
     origin?: string;
-    /** Which conversation's agent browser to check for "is it up" -- ignored
-     *  alongside `origin`, which names its own session. Without either this
-     *  checks the bare shared session, which is never what `run_browser_script`
-     *  actually used -- see `vncSocketUrl`. */
+    /** Carried for the keepalive and the logs. It no longer picks a browser:
+     *  there is one per sandbox and everything shares it. */
     conversationId?: string;
     accessToken?: string;
     /** Called with the page the browser is actually showing, polled rather
@@ -140,10 +139,25 @@ export function BrowserPane({
      *  `origin`: nothing here knows the current page without one to ask the
      *  relay's `/targets` about. */
     onNavigated?: (url: string) => void;
+    /**
+     * Whether this viewer may reshape the sandbox display to its own box.
+     *
+     * One display serves the sandbox, so two viewers of different shapes
+     * both asking for a fit would fight, last writer wins, and each would
+     * keep seeing the other's size. A second viewer therefore watches at
+     * whatever size the first has chosen and lets noVNC scale it to fit --
+     * which is what `scaleViewport` is already doing for the gap between
+     * asking and the resize landing.
+     */
+    autoResize?: boolean;
 }) {
     const containerRef = useRef<HTMLDivElement>(null);
     const rfbRef = useRef<NoVncClient | null>(null);
     const [state, setState] = useState<PaneState>('connecting');
+    //: The size last asked for, so a flurry of resize events is one request.
+    //: A ref rather than a closure variable because it has to outlive the
+    //: effect that reads it and be clearable by the one that re-runs.
+    const askedSize = useRef('');
     // Whether keystrokes are actually going to the page. RFB moves focus to
     // the remote session on click by default, but "driving" being on is not
     // the same claim as "this element currently has the keyboard" -- a person
@@ -349,32 +363,48 @@ export function BrowserPane({
     // Debounced because a person dragging the panel divider generates a
     // resize per frame, and each one is an X server mode change behind a
     // sandbox round trip.
+    //
+    // Re-asserted on every connect, and this is the part that was missing.
+    // The last requested size used to live in a closure with `[]` deps, so it
+    // survived reconnects while the display did not: after a sandbox resume,
+    // an idle retirement, or an Xvfb restart the display comes back at its
+    // starting size, the pane's own box never changed, no `ResizeObserver`
+    // fired, and the guard said "already asked for that". The picture stayed
+    // letterboxed with nothing to un-stick it short of dragging the window.
+    // Depending on `state` makes each fresh `live` re-send it; the ref is
+    // cleared at the same moment so the guard cannot veto that.
     useEffect(() => {
         const container = containerRef.current;
-        if (!container) return;
+        if (!container || state !== 'live' || !autoResize) return;
         let cancelled = false;
         let timer: ReturnType<typeof setTimeout> | null = null;
-        let asked = '';
+        askedSize.current = '';
 
         const fit = (width: number, height: number) => {
             const target = `${Math.round(width)}x${Math.round(height)}`;
-            if (target === asked || width < 1 || height < 1) return;
-            asked = target;
+            if (target === askedSize.current || width < 1 || height < 1) return;
+            askedSize.current = target;
             void getLemmaClient()
                 .workspace.browserResizeDisplay(Math.round(width), Math.round(height))
                 .catch(() => {
                     // A display that would not resize is a worse fit, not a
                     // failure: the picture is still live and still scaled to
                     // fit. Let the next resize try again.
-                    if (!cancelled) asked = '';
+                    if (!cancelled) askedSize.current = '';
                 });
         };
 
+        // Straight away, not only on the next resize. This is the connect
+        // case: the box is whatever it already was and nothing is about to
+        // change it.
+        const box = container.getBoundingClientRect();
+        fit(box.width, box.height);
+
         const observer = new ResizeObserver((entries) => {
-            const box = entries[0]?.contentRect;
-            if (!box) return;
+            const measured = entries[0]?.contentRect;
+            if (!measured) return;
             if (timer) clearTimeout(timer);
-            timer = setTimeout(() => fit(box.width, box.height), RESIZE_SETTLE_MS);
+            timer = setTimeout(() => fit(measured.width, measured.height), RESIZE_SETTLE_MS);
         });
         observer.observe(container);
         return () => {
@@ -382,7 +412,7 @@ export function BrowserPane({
             if (timer) clearTimeout(timer);
             observer.disconnect();
         };
-    }, []);
+    }, [state, autoResize]);
 
     // ⌘C on a Mac reaches a Linux browser as Super+c, which copies nothing.
     // The keystroke that works over there is Ctrl+c, so the native gesture is

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote, unquote
+
+import httpx
 
 
 class FakeE2BError(Exception):
@@ -288,6 +291,10 @@ class FakeE2B:
                 self.files = _Files()
                 self.pty = _Pty()
 
+            def download_url(self, path, **_kwargs):
+                """Where envd serves this file. Sync in the real SDK too."""
+                return f"{FAKE_ENVD_ORIGIN}/files?path={quote(path)}"
+
             @staticmethod
             async def create(
                 template=None,
@@ -460,6 +467,66 @@ class FakeE2B:
                 return world.volumes.pop(volume_id, None) is not None
 
         return FakeAsyncVolume
+
+
+#: The origin `download_url` points at. Nothing resolves it; `envd_transport`
+#: is what answers.
+FAKE_ENVD_ORIGIN = "https://fake-envd.invalid"
+
+
+def envd_transport(world: FakeE2B) -> httpx.MockTransport:
+    """envd's file route, including the part the provider now depends on.
+
+    Range support is the reason this exists rather than a fake that returns
+    whole files. It is written from a measurement against a real sandbox,
+    not from the spec: `Range: bytes=1048576-2097151` against a 20 MiB file
+    answered `206` with `Content-Range: bytes 1048576-2097151/20971520`,
+    `Accept-Ranges: bytes`, and exactly 1048576 bytes. A double that served
+    whole files would certify the provider against the behaviour it was
+    written to stop using.
+    """
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = unquote(request.url.params.get("path", ""))
+        if path not in world.files:
+            return httpx.Response(404)
+        content = world.files[path]
+        header = request.headers.get("Range")
+        if not header:
+            return httpx.Response(200, content=content)
+        spec = header.removeprefix("bytes=")
+        first, _, last = spec.partition("-")
+        start = int(first)
+        if start >= len(content):
+            return httpx.Response(416)
+        end = min(int(last) if last else len(content) - 1, len(content) - 1)
+        return httpx.Response(
+            206,
+            content=content[start : end + 1],
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{len(content)}",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    return httpx.MockTransport(handle)
+
+
+def envd_client_class(world: FakeE2B) -> type[httpx.AsyncClient]:
+    """An `httpx.AsyncClient` wired to `envd_transport`, for monkeypatching.
+
+    The provider builds its own client, as it must -- the URL is signed per
+    file and there is nothing to inject. So the substitution happens at the
+    class, and the real client code path runs.
+    """
+    transport = envd_transport(world)
+
+    class _Client(httpx.AsyncClient):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    return _Client
 
 
 @dataclass

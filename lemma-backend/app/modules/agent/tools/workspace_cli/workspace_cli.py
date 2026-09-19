@@ -131,16 +131,12 @@ async def get_workspace_session(
     runtime_context = workspace_runtime_context(ctx)
     if runtime is None:
         runtime = get_workspace_tool_runtime()
-    # Named here rather than left to the image, because a shell that inherits
-    # the image's `AGENT_BROWSER_SESSION` is in the sandbox's *shared* browser.
-    # The typed browser tools name their session per command; a raw
-    # `agent-browser` in `exec_command` does not, and agents reach for one --
-    # so the agent browsed in the default session while the person's pane
-    # watched this conversation's, which showed a blank page throughout.
-    from app.modules.workspace.contracts.browser import agent_session
-
+    # Nothing names a browser session here any more. The image's
+    # `AGENT_BROWSER_SESSION` is the only browser there is, so a shell that
+    # inherits it, the relay, and the pane the person watches are all looking
+    # at the same Chrome -- which is what this used to have to arrange by
+    # overriding the name per conversation.
     return await runtime.get_session(
-        browser_session=agent_session(ctx.conversation_id),
         user_id=ctx.user_id,
         pod_id=ctx.pod_id,
         organization_id=ctx.organization_id,

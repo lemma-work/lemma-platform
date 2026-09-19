@@ -8,51 +8,61 @@ tool call in the same sandbox degraded with it -- `python -c pass` took 61
 seconds, `lemma --version` never returned, and the agent saw `exit_code: 124`
 with no explanation.
 
-Three things already try to stop it getting there: a capture closes its own
-tab, the agent-browser daemon retires itself after two idle minutes, and
-`release` sheds the browser before a pause can snapshot it. This is the one
-that holds when those cannot. Each of them needs a healthy process to act --
-the daemon has to be responsive enough to notice its own idle timer, and
-`release` has to be reached at all -- and the failure being defended against is
-precisely the one where memory is gone and nothing is responsive. Worse, it
-does not settle: sampled three times inside a single command, with nothing
-driving the browser, renderer count and resident size still climbed while
-available memory fell 32 -> 24 -> 21 MB. A sandbox that reaches this state does
-not come back on its own.
+So the rule is about *what* to end, not how much. Only the browser is ever
+touched. The agent's own processes are its work -- a build, a test run, a
+server it started -- and killing those to free memory would destroy something
+unreproducible to save something that is a cache by construction. The browser
+can always be started again, and the next `web_fetch` does exactly that.
 
-So the rule here is deliberately blunt, and it is a rule about *what* to kill
-rather than how much. Only the browser is ever touched. The agent's own
-processes are its work -- a build, a test run, a server it started -- and
-killing those to free memory would destroy something unreproducible to save
-something that is a cache by construction. The browser can always be started
-again, and the next `web_fetch` does exactly that.
+**This used to do the ending itself, and it was never once ending anything.**
+It scanned `/proc`, matched command lines against a list of patterns, and
+sent SIGTERM then SIGKILL. The patterns were written when agent-browser
+installed its own Chromium under `~/.agent-browser/browsers/` and the image
+launched it through a `workspace-chrome` wrapper. The image uses Debian's
+chromium now and a running process reports `/usr/lib/chromium/chromium`,
+which carries none of those strings: counted on a real sandbox, 14 Chromium
+processes and 13 matched by nothing in the list. So for as long as that has
+been true this guard has been shedding the display and the daemon while
+leaving every process that held the memory -- and nobody noticed, which is
+the most useful thing anybody has learnt about what the machinery was worth.
+
+What replaces it is one call. `agent-browser close --all` is the CLI that
+owns the browser's lifecycle, and it is also the only stop measured to commit
+Chrome's cookie store: on a real sandbox, one second after a login, it keeps
+the session, while SIGTERM to all eleven processes loses it and so does
+SIGTERM to the browser process alone, even exiting cleanly in half a second.
+A signal never flushed the queue. So the simpler version is also the correct
+one, and it names no process, so it cannot go quietly out of date the way the
+pattern list did.
+
+It can fail -- a sandbox with nothing left may not manage to spawn a Node
+CLI -- and nothing here escalates to a signal afterwards. The honest reason
+is that the escalation is what was there before and it did not work. A
+sandbox that far gone is released and replaced, and the daemon retires the
+browser by itself five minutes after anything stops driving it.
 """
 
 from __future__ import annotations
 
-import os
+import asyncio
 from pathlib import Path
-import signal
+import subprocess
 
-# Below this, the sandbox is close enough to unusable that a browser is no
-# longer worth what it costs. Chosen from measurement rather than taste: a
-# workspace at rest with no browser sits near 1485 MB available of 1983 MB, and
-# a browser session holding three rendered pages still leaves about 1155 MB.
-# Both are an order of magnitude clear of this, so a healthy research session
-# never trips it, while the degraded sandboxes observed in production -- 14 MB,
-# 19 MB, 21 MB available -- are all far below it.
+#: Below this, the sandbox is close enough to unusable that a browser is no
+#: longer worth what it costs. Chosen from measurement rather than taste: a
+#: workspace at rest with no browser sits near 1485 MB available of 1983 MB,
+#: and a browser session holding three rendered pages still leaves about
+#: 1155 MB. Both are an order of magnitude clear of this, while the degraded
+#: sandboxes observed in production -- 14 MB, 19 MB, 21 MB available -- are
+#: all far below it.
 LOW_MEMORY_MB = 220
 
-# What the browser is, as processes. `workspace-chrome` is the wrapper the
-# image installs; the renderers exec the real binary out of the agent-browser
-# profile directory, so they are matched on that path rather than on "chrome",
-# which would also catch an agent's own chromium script.
-_BROWSER_PATTERNS = (
-    "agent-browser",
-    "workspace-chrome",
-    ".agent-browser/browsers/",
-    "Xvfb",
-)
+#: The CLI that owns the browser's lifecycle.
+AGENT_BROWSER = "/usr/local/bin/agent-browser"
+
+#: How long it gets. Long enough for a CLI to reach a busy daemon, short
+#: enough that a starved sandbox's reaper tick is not held open by it.
+CLOSE_TIMEOUT_SECONDS = 8.0
 
 
 def available_memory_mb() -> int | None:
@@ -71,68 +81,45 @@ def available_memory_mb() -> int | None:
     return None
 
 
-def browser_process_ids() -> tuple[int, ...]:
-    """Every pid whose command line says it belongs to the browser."""
-    found: list[int] = []
-    self_id = os.getpid()
-    try:
-        entries = sorted(
-            int(path.name) for path in Path("/proc").iterdir() if path.name.isdigit()
-        )
-    except OSError:
-        return ()
-    for process_id in entries:
-        if process_id == self_id:
-            continue
-        try:
-            # NUL-separated argv, so a pattern cannot match across arguments.
-            command = (
-                Path(f"/proc/{process_id}/cmdline")
-                .read_bytes()
-                .replace(b"\0", b" ")
-                .decode("utf-8", "replace")
-            )
-        except OSError:
-            # Exited between the listing and the read.
-            continue
-        if any(pattern in command for pattern in _BROWSER_PATTERNS):
-            found.append(process_id)
-    return tuple(found)
+async def shed_browser() -> bool:
+    """Ask the daemon to close the browser. True if it says it did.
 
+    On a thread, because the caller is the runtime's reaper loop and this
+    spawns a Node CLI that can take seconds against a wedged browser.
+    Blocking the loop there would freeze process-output handling and every
+    other runtime request at exactly the moment the sandbox is struggling --
+    which is the state this exists to get out of.
 
-def shed_browser() -> int:
-    """End the browser. Returns how many processes were signalled.
-
-    SIGKILL, not SIGTERM. A graceful shutdown asks Chrome to run teardown in a
-    sandbox that has no memory to run it in, which is how a shutdown becomes a
-    hang; and there is nothing to flush, because everything a capture produced
-    was already written to the workspace before this could be reached.
+    False covers both "there was nothing to close" and "the CLI could not
+    run", and the caller need not tell those apart: neither is something this
+    module can do anything further about.
     """
-    process_ids = browser_process_ids()
-    signalled = 0
-    for process_id in process_ids:
+
+    def _close() -> bool:
         try:
-            os.kill(process_id, signal.SIGKILL)
-        except ProcessLookupError, PermissionError:
-            continue
-        signalled += 1
-    return signalled
+            done = subprocess.run(  # noqa: S603
+                [AGENT_BROWSER, "close", "--all"],
+                capture_output=True,
+                timeout=CLOSE_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except OSError, subprocess.SubprocessError:
+            return False
+        return done.returncode == 0
+
+    return await asyncio.to_thread(_close)
 
 
-def shed_browser_if_starved(
+async def shed_browser_if_starved(
     *, threshold_mb: int = LOW_MEMORY_MB
-) -> tuple[int, int] | None:
-    """Shed the browser when memory is short. None when nothing was due.
+) -> tuple[int, bool] | None:
+    """Close the browser when memory is short. None when nothing was due.
 
-    Returns (available_mb, processes_killed) so the caller can say what it did
-    and why -- a sandbox that silently repaired itself would leave the next
-    person reading these logs with the same mystery this was built from.
+    Returns (available_mb, closed) so the caller can say what it did and why
+    -- a sandbox that silently repaired itself would leave the next person
+    reading these logs with the same mystery this was built from.
     """
     available = available_memory_mb()
     if available is None or available >= threshold_mb:
         return None
-    if not browser_process_ids():
-        # Something else is using the memory. Not this module's call to make:
-        # the only safe thing it knows how to kill is absent.
-        return None
-    return available, shed_browser()
+    return available, await shed_browser()

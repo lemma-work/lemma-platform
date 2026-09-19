@@ -18,7 +18,6 @@ would have to store -- and the thing under test is our half, not theirs.
 
 from __future__ import annotations
 
-import shlex
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -233,16 +232,22 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
 
     await _serve_the_site(ctx)
 
-    try:
-        # 1. Nothing saved, so there is nothing to reuse.
-        loaded, detail = await service.try_saved_login(
-            origin=SITE, conversation_id=ctx.conversation_id, auth_ctx=auth
-        )
-        assert loaded is False, detail
+    # Start signed out, and arrange it rather than assume it. The profile is
+    # durable and one sandbox serves the whole module, so a sibling test --
+    # or an earlier run of this one against a resumed sandbox -- leaves this
+    # site signed in. That is the feature working; it just means a test whose
+    # first assertion is "nobody is signed in" has to make that true.
+    await _run(
+        ctx, "agent-browser open about:blank && agent-browser cookies clear || true"
+    )
 
-        # 2. The ask. This opens the site in the session the capture will read,
-        #    which is the pairing the viewer used to get wrong. Nothing is
-        #    written: the paused tool call is the record of what was asked.
+    try:
+        # 1. Nothing signed in, so the person has to be asked.
+        assert not await service.already_signed_in(origin=SITE, auth_ctx=auth)
+
+        # 2. The ask. Nothing is written: the paused tool call is the record
+        #    of what was asked, and the browser is opened now so somebody who
+        #    clicks straight away finds the page already there.
         tool_call_id = f"call_{uuid4().hex[:8]}"
         site = await service.open_request(
             origin=SITE,
@@ -253,43 +258,22 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         )
         assert site.rstrip("/") == SITE
 
-        # 3. The person signs in. Driven here with the CLI in the *login*
-        #    session -- the same browser `ensure_for_sign_in` opened and the same
-        #    one `finish` reads. If those three ever disagree again, this fails.
-        from app.modules.workspace.domain.browser_context import agent_session
-        from sandbox_runtime.browser_relay.chrome import profile_for_session
-        from sandbox_runtime.browser_relay.state import session_for_domain
-
-        def _in(session: str) -> str:
-            """Run the CLI in one named browser, the way each caller does."""
-            profile = profile_for_session(session)
-            return (
-                f"export AGENT_BROWSER_SESSION={shlex.quote(session)} "
-                f"AGENT_BROWSER_PROFILE={shlex.quote(profile or '')} ; "
-            )
-
-        #: Where the person signs in.
-        env = _in(session_for_domain("127.0.0.1"))
-        #: Where the *agent* works -- a different Chrome with its own profile,
-        #: and the one every assertion about "is it signed in" has to use.
-        #: Checking the login browser instead is how this test passed while the
-        #: feature was broken: it proved the browser the person signed into was
-        #: signed in, which was never in doubt.
-        agent_env = _in(agent_session(ctx.conversation_id))
+        # 3. The person signs in. No environment juggling: there is one
+        #    browser, so the CLI, the relay and whatever a person is watching
+        #    are all the same Chrome. The three-way pairing this used to have
+        #    to arrange -- a login session, an agent session, and a capture
+        #    read from whichever of them was right -- is what went.
         signed = await _run(
             ctx,
-            f"{env} agent-browser open {SITE}/ && "
+            f"agent-browser open {SITE}/ && "
             "agent-browser find role button click --name 'Sign in' && "
             "sleep 1 && agent-browser get title",
             timeout=240,
         )
         assert "Account" in (signed.stdout or ""), signed.stdout
 
-        # 4. Keeping it. `finish` refuses an empty capture, so reaching
-        #    `saved is True` means real cookies came back from a real browser.
-        # Answered the way the page answers: by naming the pause, not a row.
-        # There is no request id to pass, because there is no request row --
-        # the paused tool call is the record.
+        # 4. Answering resumes the run and reports what the site looks like.
+        #    Answered the way the page answers: by naming the pause.
         finished = await _service(
             db_manager, waiting_on=tool_call_id, owner=user_id
         ).answer(
@@ -298,48 +282,57 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
             user_id=user_id,
             signed_in=True,
         )
-        assert finished.saved is True, finished.saved_detail
+        assert finished.working is True
 
-        # 4b. And the run it resumes into is signed in *now*, in the agent's own
-        #     browser. Without the hand-over this is the assertion that fails:
-        #     the person signed in to one Chrome and the agent carried on in
-        #     another, which had never seen the site.
-        resumed = await _run(
-            ctx, f"{agent_env} agent-browser open {SITE}/ ; agent-browser get title"
+        # 5. The load-bearing one. End the browser the way production ends
+        #    it, and the login survives -- because it is in a profile on the
+        #    durable disk rather than in a capture somebody has to read back
+        #    correctly.
+        #
+        #    "The way production ends it" is doing the work, and it took
+        #    three measurements on a real sandbox to get right. Chrome
+        #    batches its cookie store to disk on a 30 second timer, so how
+        #    the browser stops decides whether a login made a second ago is
+        #    still there:
+        #
+        #        agent-browser close --all   keeps it
+        #        SIGTERM to all 11 processes loses it
+        #        SIGTERM to the browser process alone, exiting cleanly in
+        #                                    half a second -- loses it
+        #        SIGKILL                     loses it
+        #
+        #    A signal does not flush the queue; a shutdown through CDP does.
+        #    So every path that stops this browser closes it first --
+        #    `shed_browser` before it signals, and an E2B release before it
+        #    pauses -- and this asserts the guarantee that is actually
+        #    shipped rather than one that sounded right.
+        #
+        #    Then Xvfb, to prove the display is rebuilt too: `agent-browser`
+        #    brings its own back, which is why nothing here runs
+        #    `lemma-ensure-display` to recover.
+        closed = await _run(ctx, "agent-browser close --all ; pkill -x Xvfb || true")
+        assert "Closed" in (closed.stdout or ""), closed.stdout
+
+        # Diagnose before asserting. `already_signed_in` answers one bool for
+        # two very different failures -- the cookie went, or the browser did
+        # not come back -- and the bool alone sent this round three wrong
+        # fixes.
+        reopened = await _run(
+            ctx, f"agent-browser open {SITE}/ && agent-browser get title", timeout=240
         )
-        assert "Account" in (resumed.stdout or ""), resumed.stdout
+        assert "Account" in (reopened.stdout or ""), reopened.stdout
+        assert await service.already_signed_in(origin=SITE, auth_ctx=auth)
 
-        # 5. A later run reuses it without asking. The browser is wiped first,
-        #    so this cannot pass on cookies left lying in the profile -- it has
-        #    to come from what was stored and injected.
-        await _run(ctx, "pkill -x Xvfb || true ; rm -rf /tmp/lemma-browser* || true")
-        loaded, detail = await service.try_saved_login(
-            origin=SITE, conversation_id=ctx.conversation_id, auth_ctx=auth
-        )
-        assert loaded is True, detail
-
-        # 6. And the *agent's* browser really is signed in, not merely loaded.
-        #    Two failures hide behind the wrong env here: a session the site had
-        #    rejected reported as working, and -- the one that made the whole
-        #    feature a no-op -- a session loaded into the login browser while
-        #    the agent worked in its own.
-        landed = await _run(
-            ctx, f"{agent_env} agent-browser open {SITE}/ ; agent-browser get title"
-        )
-        assert "Account" in (landed.stdout or ""), landed.stdout
-
-        # 7. Removing it makes the next run ask again. Removed the way a person
-        #    removes one -- over the route the saved-logins screen calls -- and
-        #    not by reaching into a repository, which is no longer something a
-        #    caller outside `web_login` can do.
+        # 6. Forgetting it really signs the browser out, over the route the
+        #    saved-logins screen calls. Its predecessor deleted an encrypted
+        #    copy and left the browser signed in, so this assertion could not
+        #    have been written against it.
         removed = await authenticated_client.request(
             "DELETE", "/web-logins", params={"origin": site}
         )
         assert removed.status_code == status.HTTP_200_OK, removed.text
+        assert removed.json()["forgotten"] is True
 
-        loaded, detail = await service.try_saved_login(
-            origin=SITE, conversation_id=ctx.conversation_id, auth_ctx=auth
-        )
-        assert loaded is False, detail
+        assert not await service.already_signed_in(origin=SITE, auth_ctx=auth)
     finally:
         await service.close()

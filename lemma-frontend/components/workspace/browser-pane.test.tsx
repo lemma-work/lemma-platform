@@ -29,24 +29,33 @@ vi.stubGlobal('WebSocket', FakeSocket);
 
 /**
  * jsdom has no `ResizeObserver`, and the pane uses one to ask the sandbox
- * display to match its own size. Never fired here: what a resize *does* is a
- * round trip to the backend, which belongs to the tests for that endpoint
- * rather than to a component test standing in front of a fake socket. This
- * exists so constructing one does not throw.
+ * display to match its own size.
+ *
+ * This used to exist only so constructing one did not throw, on the grounds
+ * that what a resize *does* is a round trip belonging to the endpoint's own
+ * tests. That reasoning missed the part that is genuinely this component's:
+ * *when* it asks. The pane memoised the last size it requested and never
+ * re-sent it on a reconnect, so after a sandbox resume the display came back
+ * at its starting size and the picture stayed letterboxed with nothing to
+ * un-stick it. No test could see that, because none of them ever connected
+ * twice with an observer that fired.
  */
 class FakeResizeObserver {
     // Same signature as the real constructor, and it keeps what it is handed.
-    // A stub that took no callback would still work here -- nothing fires it --
-    // but it would be a narrower contract than the thing it replaces, which is
-    // how a test comes to pass against a call the browser would reject.
+    // A stub that took no callback would still work for the tests that never
+    // fire it, but it would be a narrower contract than the thing it
+    // replaces -- which is how a test comes to pass against a call the
+    // browser would reject.
     readonly callback: ResizeObserverCallback;
     constructor(callback: ResizeObserverCallback) {
         this.callback = callback;
+        observers.push(this);
     }
     observe() {}
     unobserve() {}
     disconnect() {}
 }
+const observers: FakeResizeObserver[] = [];
 vi.stubGlobal('ResizeObserver', FakeResizeObserver);
 
 /**
@@ -60,6 +69,7 @@ vi.stubGlobal('ResizeObserver', FakeResizeObserver);
  * synthetic Ctrl+V) that makes a real synced clipboard actually paste
  * something rather than merely holding it.
  */
+const resized: string[] = [];
 const rfbInstances = vi.hoisted(() => [] as FakeRfb[]);
 
 class FakeRfb {
@@ -134,13 +144,18 @@ vi.mock('@/lib/sdk/lemma-client', async (importOriginal) => ({
             browserCurrentPageUrl: async () => ({ url: page.url }),
             // Exercised by the pane's ResizeObserver; the display fitting is
             // not what these tests are about.
-            browserResizeDisplay: async () => ({ size: null }),
+            browserResizeDisplay: async (width: number, height: number) => {
+                resized.push(`${width}x${height}`);
+                return { size: null };
+            },
         },
     }),
 }));
 
 afterEach(() => {
     rfbInstances.length = 0;
+    observers.length = 0;
+    resized.length = 0;
     page.url = 'about:blank';
     cleanup();
 });
@@ -453,5 +468,77 @@ describe('the clipboard, both ways', () => {
         act(() => rfb.emit('clipboard', { detail: { text: 'copied over there' } }));
 
         expect(written).toEqual(['copied over there']);
+    });
+});
+
+describe('keeping the display the shape of the pane', () => {
+    /**
+     * jsdom gives every element a zero-size box, so `getBoundingClientRect`
+     * reports 0x0 and the pane's own guard skips it. Measuring is the
+     * browser's job and not what these assert; what they assert is *when* a
+     * request goes out.
+     */
+    const measure = (width: number, height: number) => {
+        Element.prototype.getBoundingClientRect = function () {
+            return { width, height, top: 0, left: 0, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+        };
+    };
+    const realRect = Element.prototype.getBoundingClientRect;
+    afterEach(() => {
+        Element.prototype.getBoundingClientRect = realRect;
+    });
+
+    it('asks once the picture is live, not merely once it is mounted', async () => {
+        measure(900, 700);
+        render(<BrowserPane origin="https://a.example" />);
+
+        // Mounting is not connecting. Asking before there is a display to
+        // resize is a request into a sandbox that may not be running.
+        expect(resized).toEqual([]);
+
+        await connect();
+        await waitFor(() => expect(resized).toEqual(['900x700']));
+    });
+
+    it('re-asserts the size on a reconnect, which is the bug it exists for', async () => {
+        // The pane memoised the last size it had asked for and depended on
+        // nothing, so the guard outlived the connection it was true of. After
+        // a sandbox resume or an Xvfb restart the display comes back at its
+        // starting size; the pane's own box never changed, so no observer
+        // fired, and the memo said "already asked for that". The picture
+        // stayed letterboxed with no way back short of dragging the window.
+        measure(900, 700);
+        render(<BrowserPane origin="https://a.example" />);
+        const first = await connect();
+        await waitFor(() => expect(resized).toEqual(['900x700']));
+
+        act(() => first.socket!.closeWith(1006));
+        act(() => first.emit('disconnect'));
+
+        await waitFor(() => expect(rfbInstances.length).toBeGreaterThan(1));
+        act(() => rfbInstances[rfbInstances.length - 1].emit('connect'));
+
+        await waitFor(() => expect(resized).toEqual(['900x700', '900x700']));
+    });
+
+    it('does not repeat itself while one connection stays up', async () => {
+        measure(900, 700);
+        render(<BrowserPane origin="https://a.example" />);
+        await connect();
+        await waitFor(() => expect(resized).toEqual(['900x700']));
+
+        // The observer firing with the same box is the common case: a
+        // re-layout that did not change anything. One display resize is an X
+        // mode change behind a sandbox round trip, so it must not be sent
+        // again for a size already asked for.
+        act(() => {
+            observers[observers.length - 1].callback(
+                [{ contentRect: { width: 900, height: 700 } } as ResizeObserverEntry],
+                {} as ResizeObserver,
+            );
+        });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        expect(resized).toEqual(['900x700']);
     });
 });

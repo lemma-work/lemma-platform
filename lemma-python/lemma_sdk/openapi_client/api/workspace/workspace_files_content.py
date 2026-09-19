@@ -14,7 +14,15 @@ def _get_kwargs(
     path: str,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
+    range_: None | str | Unset = UNSET,
+    if_none_match: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
+    headers: dict[str, Any] = {}
+    if not isinstance(range_, Unset):
+        headers["Range"] = range_
+
+    if not isinstance(if_none_match, Unset):
+        headers["If-None-Match"] = if_none_match
 
     params: dict[str, Any] = {}
 
@@ -37,6 +45,7 @@ def _get_kwargs(
         "params": params,
     }
 
+    _kwargs["headers"] = headers
     return _kwargs
 
 
@@ -75,6 +84,8 @@ def sync_detailed(
     path: str,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
+    range_: None | str | Unset = UNSET,
+    if_none_match: None | str | Unset = UNSET,
 ) -> Response[Any | ErrorResponse]:
     """Read workspace file content
 
@@ -82,6 +93,8 @@ def sync_detailed(
         path (str):
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
+        range_ (None | str | Unset):
+        if_none_match (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -95,6 +108,8 @@ def sync_detailed(
         path=path,
         offset=offset,
         length=length,
+        range_=range_,
+        if_none_match=if_none_match,
     )
 
     response = client.get_httpx_client().request(
@@ -110,6 +125,8 @@ def sync(
     path: str,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
+    range_: None | str | Unset = UNSET,
+    if_none_match: None | str | Unset = UNSET,
 ) -> Any | ErrorResponse | None:
     """Read workspace file content
 
@@ -117,6 +134,8 @@ def sync(
         path (str):
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
+        range_ (None | str | Unset):
+        if_none_match (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -131,6 +150,8 @@ def sync(
         path=path,
         offset=offset,
         length=length,
+        range_=range_,
+        if_none_match=if_none_match,
     ).parsed
 
 
@@ -140,6 +161,8 @@ async def asyncio_detailed(
     path: str,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
+    range_: None | str | Unset = UNSET,
+    if_none_match: None | str | Unset = UNSET,
 ) -> Response[Any | ErrorResponse]:
     """Read workspace file content
 
@@ -147,6 +170,8 @@ async def asyncio_detailed(
         path (str):
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
+        range_ (None | str | Unset):
+        if_none_match (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -160,6 +185,8 @@ async def asyncio_detailed(
         path=path,
         offset=offset,
         length=length,
+        range_=range_,
+        if_none_match=if_none_match,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -173,6 +200,8 @@ async def asyncio(
     path: str,
     offset: int | Unset = 0,
     length: int | None | Unset = UNSET,
+    range_: None | str | Unset = UNSET,
+    if_none_match: None | str | Unset = UNSET,
 ) -> Any | ErrorResponse | None:
     """Read workspace file content
 
@@ -180,6 +209,8 @@ async def asyncio(
         path (str):
         offset (int | Unset):  Default: 0.
         length (int | None | Unset):
+        range_ (None | str | Unset):
+        if_none_match (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -195,5 +226,7 @@ async def asyncio(
             path=path,
             offset=offset,
             length=length,
+            range_=range_,
+            if_none_match=if_none_match,
         )
     ).parsed

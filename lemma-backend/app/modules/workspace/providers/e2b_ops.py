@@ -45,6 +45,7 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_errors,
 )
 from app.modules.workspace.providers.e2b_paths import resolve_real_path
+from app.modules.workspace.providers.e2b_ranged_read import read_range
 from app.modules.workspace.providers.e2b_reach import E2BReachMixin
 from app.modules.workspace.providers.e2b_process_index import (
     ENTRY_TTL_SECONDS,
@@ -371,16 +372,13 @@ class E2BOpsMixin(E2BReachMixin):
         deadline_at: datetime,
     ) -> AsyncIterator[bytes]:
         sandbox = await self._connect(instance.provider_id)
-        with sdk_errors(path):
-            content = await sandbox.files.read(path, format="bytes")
-
-        # E2B reads whole files, so the range is applied here. Callers use it
-        # for previews and image thumbnails, where the file is small; a genuine
-        # partial read of a huge file would need SDK support to avoid pulling
-        # the whole thing.
-        start = byte_range.offset or 0
-        end = start + byte_range.length if byte_range.length else len(content)
-        yield bytes(content)[start:end]
+        # Not `files.read`: it has no notion of a range and returns the whole
+        # file for the caller to slice, which made a 1 GiB download into 128
+        # requests of 1 GiB each. See `e2b_ranged_read`.
+        async for chunk in read_range(
+            sandbox, path=path, byte_range=byte_range, deadline_at=deadline_at
+        ):
+            yield chunk
 
     async def write_file(
         self,

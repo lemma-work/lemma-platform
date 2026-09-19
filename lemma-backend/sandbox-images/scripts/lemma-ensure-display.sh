@@ -24,13 +24,13 @@ DISPLAY_VALUE="${DISPLAY:-:99}"
 # branch that restarts Xvfb kills both first.
 SCREEN="${WORKSPACE_XVFB_MAX_SCREEN:-${WORKSPACE_XVFB_SCREEN:-1920x1200x24}}"
 START_SCREEN="${WORKSPACE_XVFB_SCREEN:-1440x960x24}"
-PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/tmp/lemma-browser/profile}"
+PROFILE_DIR="${AGENT_BROWSER_PROFILE:-/home/user/.lemma/browser/profile}"
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/lemma-browser/runtime}"
 CONFIG_PATH="${AGENT_BROWSER_CONFIG:-/tmp/lemma-browser/config.json}"
 EXECUTABLE_PATH="${AGENT_BROWSER_EXECUTABLE_PATH:-/usr/local/bin/workspace-chrome}"
 DISPLAY_NUMBER="${DISPLAY_VALUE#:}"
 DISPLAY_NUMBER="${DISPLAY_NUMBER%%.*}"
-HOME_DIR="${HOME:-/home/appuser}"
+HOME_DIR="${HOME:-/home/user}"
 if ! mkdir -p "$HOME_DIR" 2>/dev/null || [ ! -w "$HOME_DIR" ]; then
   HOME_DIR="/tmp/lemma-home-${UID:-10001}"
   mkdir -p "$HOME_DIR"
@@ -44,11 +44,19 @@ export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-workspace}"
 unset AGENT_BROWSER_SESSION_NAME
 
 mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
-rm -f \
-  "$PROFILE_DIR/SingletonCookie" \
-  "$PROFILE_DIR/SingletonLock" \
-  "$PROFILE_DIR/SingletonSocket" \
-  "$PROFILE_DIR/DevToolsActivePort"
+# No lock-file cleanup here, and none in quiesce either.
+#
+# This removed `SingletonCookie`, `SingletonLock`, `SingletonSocket` and
+# `DevToolsActivePort` before every launch, on the theory that a file naming
+# a dead process would stop the next Chrome starting. Measured on a real
+# sandbox instead: `kill -9` the browser, leave all four behind, and
+# `agent-browser open` starts one and rewrites them, because Chrome checks
+# whether the pid a lock names is still alive.
+#
+# It was never free, either. `DevToolsActivePort` is the only record of a
+# running browser's port, and this script is idempotent by `pgrep` -- a
+# second run leaves the existing Chrome alone -- so deleting it here left a
+# browser that nothing could find, for as long as the sandbox lived.
 # `--disable-blink-features=AutomationControlled` is the one that matters for
 # the journey this feature exists for. Chrome otherwise sets
 # `navigator.webdriver` and turns on the AutomationControlled blink feature,
@@ -155,7 +163,7 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   # This script is usually reached from an `exec_command` the backend makes, and
   # an exec's process group is torn down when the operation that owns it
   # finishes. `nohup` blocks SIGHUP; it does nothing about the group being
-  # killed. So a merely-backgrounded Xvfb dies moments after start-browser
+  # killed. So a merely-backgrounded Xvfb dies moments after lemma-ensure-display
   # returns "done", and the *next* command in the same sandbox reports "Missing
   # X server or $DISPLAY" -- which reads like a broken image rather than like a
   # server that was killed for being in the wrong process group.
@@ -288,7 +296,7 @@ if [ "$START_SCREEN" != "$SCREEN" ] && command -v set-display-size >/dev/null 2>
   start_h="${start_rest%%x*}"
   if ! DISPLAY="$DISPLAY_VALUE" set-display-size "$start_w" "$start_h" \
     >/tmp/lemma-initial-size.log 2>&1; then
-    echo "[start-browser] could not size the display to ${start_w}x${start_h}" >&2
+    echo "[lemma-ensure-display] could not size the display to ${start_w}x${start_h}" >&2
   fi
 fi
 

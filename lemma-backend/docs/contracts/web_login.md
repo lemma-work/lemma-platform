@@ -10,9 +10,8 @@ The table below is generated from the committed OpenAPI specification by `script
 
 | Operation | Method | Path | Summary |
 | --- | --- | --- | --- |
-| `web_login.delete` | DELETE | `/web-logins` | Remove a saved site login |
-| `web_login.history` | GET | `/web-logins/history` | What has been done with your saved logins |
-| `web_login.list` | GET | `/web-logins` | List saved site logins |
+| `web_login.delete` | DELETE | `/web-logins` | Sign your browser out of a site |
+| `web_login.list` | GET | `/web-logins` | List the sites your browser is signed in to |
 | `web_login.sign_in.answer` | POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer` | Say whether you signed in |
 | `web_login.sign_in.pending` | GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | What a sign-in link is asking for |
 
@@ -20,31 +19,31 @@ The table below is generated from the committed OpenAPI specification by `script
 
 ## `web_login.list`
 
-Every site the caller has a saved login for, with when each was last used.
-**Never carries a secret**, at any privilege level, including to the person who
-created it — the same promise `connector.auth_config.get` makes. The response
-shape has no field to put one in, so this is structural rather than a rule
-somebody has to remember.
+Every site the caller's sandbox browser is signed in to, grouped by
+registrable domain so `example.com` and `api.example.com` read as one login
+rather than two.
+
+Read from the browser each time, not from a table — the browser keeps its own
+profile, so what it holds is the only true answer. **Never carries a secret**,
+and that is now structural in a stronger sense than a response shape with no
+field for one: cookie values never cross the sandbox boundary at all. What
+comes back is a host, a count and an expiry.
+
+Does not start a paused computer unless `wake=true`, and answers `sleeping`
+instead. Rendering a settings page should not be what spins one up, and unlike
+the table read this replaces, answering costs a round trip into the sandbox.
 
 ## `web_login.delete`
 
-Forgets a site. Addressed by origin rather than id, because that is what the
-person recognises and what the agent asked about.
+Signs the browser out of a site. Addressed by origin rather than id, because
+that is what the person recognises and what the agent asked about.
 
-Removing the row is the whole revocation from Lemma's side. It does **not** sign
-the person out at the site: a deleted session is still a valid session there
-until it expires or they log out, and the copy says so rather than implying a
-revocation that did not happen.
+This really signs it out — it drops the cookies. Its predecessor deleted
+Lemma's encrypted copy and left the browser exactly as it was, which is why
+every caller had to carry a disclaimer saying so. Nothing the person is signed
+in to in their *own* browser is touched.
 
-Refuses with 404 when nothing is saved for that origin, and 422 when the origin
-is not one a session could belong to.
-
-## `web_login.history`
-
-What has been done with the caller's saved logins: used, captured, asked for,
-removed — with which agent did it and when. Carries no secret and no page
-content by construction.
-
-This exists because a credential store nobody can inspect is one nobody can
-trust, and because nothing else in the platform keeps a durable audit trail to
-fall back on.
+Refuses with 409 when the computer is not running, rather than reporting a
+success it did not achieve, and 422 when the origin is not one a session could
+belong to. Answers `forgotten: false` when the browser was holding nothing for
+that site, which is not an error.

@@ -155,6 +155,23 @@
           "description": "What you are doing and why this site needs a login, in one sentence and in plain words. This is shown to the person as the explanation for why they are being asked, so write it for them rather than for a log.",
           "maxLength": 500,
           "type": "string"
+        },
+        "page_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page you were actually blocked on, if you have one \u2014 `https://app.example.com/reports/42`. Checking this instead of the site's front page is what makes the answer mean anything: a marketing homepage loads for everybody, signed in or not, so a site whose root is one will otherwise report you as already signed in when you are not."
+        },
+        "force": {
+          "default": false,
+          "description": "Ask the person even if the check thinks you are already signed in. Use this when you have met the login wall yourself and been told otherwise \u2014 the check reads a page and can be wrong, and without this there is no way to say so.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -3852,6 +3869,18 @@
               ],
               "default": null
             },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
+            },
             "error": {
               "anyOf": [
                 {
@@ -3903,6 +3932,18 @@
             }
           ],
           "default": null
+        },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
         },
         "error": {
           "anyOf": [

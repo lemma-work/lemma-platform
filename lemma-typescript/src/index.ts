@@ -260,7 +260,6 @@ export type {
   PendingSignIn,
   SignInOutcome,
   WebLogin,
-  WebLoginAuditEntry,
   WebLoginsNamespace,
   WorkspaceNamespace,
 } from "./namespaces/workspace.js";

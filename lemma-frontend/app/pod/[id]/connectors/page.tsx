@@ -4,7 +4,7 @@ import { use } from 'react';
 
 import { ConceptHint } from '@/components/education/concept-hint';
 import { ConnectorsView } from '@/components/connectors/connectors-view';
-import { SavedLogins } from '@/components/web-logins/saved-logins';
+import { BrowserLoginsCard } from '@/components/web-logins/browser-logins-card';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { usePod } from '@/lib/hooks/use-pods';
 import { StepLoader } from '@/components/brand/loader';
@@ -27,17 +27,20 @@ export default function PodConnectorsPage({ params }: { params: Promise<{ id: st
                 title="Connectors"
                 meta={<ConceptHint concept="connector" />}
             />
+            {/*
+              The sandbox browser's logins are the same idea as a connector
+              account — my credential at a third party — reached a different
+              way, so they live on this page rather than becoming a second
+              place to look, and in "Add your own" rather than stapled
+              underneath: a section of its own below eighty app cards read as
+              a footnote to the page instead of part of it.
+            */}
             <ConnectorsView
                 embedded
                 showHeader={false}
                 organizationId={pod?.organization_id}
+                extraOwnConnection={<BrowserLoginsCard />}
             />
-            {/*
-              A saved site login is the same idea as a connector account — my
-              credential at a third party — reached a different way, so it lives
-              on the same page rather than becoming a second place to look.
-            */}
-            <SavedLogins />
         </ResourceIndexShell>
     );
 }

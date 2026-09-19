@@ -21,6 +21,7 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { Input } from '@/components/ui/input';
 import { Plug, Search } from '@/components/ui/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { toast } from 'sonner';
 import type { Account, AuthConfig, Connector } from '@/lib/types';
 import type { InstallationChoiceSchema } from 'lemma-sdk';
@@ -59,6 +60,13 @@ interface ConnectorsViewProps {
     organizationName?: string;
     embedded?: boolean;
     showHeader?: boolean;
+    /**
+     * One more card for "Add your own", for a door this view knows nothing
+     * about. Passed in rather than imported so the catalog stays a catalog:
+     * the pod page has a sandbox browser to offer and the organisation-wide
+     * page does not.
+     */
+    extraOwnConnection?: ReactNode;
 }
 
 /** Where a popup round trip comes back to. See `app/oauth/complete`. */
@@ -94,7 +102,7 @@ const openAuthorization = (url?: string | null) => {
     if (!opened) window.location.assign(url);
 };
 
-export function ConnectorsView({ organizationId, organizationName, embedded = false, showHeader = true }: ConnectorsViewProps) {
+export function ConnectorsView({ organizationId, organizationName, embedded = false, showHeader = true, extraOwnConnection }: ConnectorsViewProps) {
     const { currentOrg, organizations } = useOrganization();
     const effectiveOrganizationId = organizationId || currentOrg?.id;
     const effectiveOrganizationName =
@@ -930,7 +938,11 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         <div className={embedded ? 'min-h-full bg-transparent' : 'context-shell min-h-full bg-transparent pb-8'}>
             {masthead}
 
-            <AddYourOwnRow connectors={tenantConfiguredConnectors} onAdd={(app) => openConnectionDialog(app)} />
+            <AddYourOwnRow
+                connectors={tenantConfiguredConnectors}
+                onAdd={(app) => openConnectionDialog(app)}
+                extra={extraOwnConnection}
+            />
 
             {connections.length > 0 && (
                 <section className="context-section">

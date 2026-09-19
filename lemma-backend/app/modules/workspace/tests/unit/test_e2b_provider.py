@@ -42,6 +42,7 @@ from app.modules.workspace.testing.fake_e2b import (
     FakeSandboxSdk,
     NotFoundException,
     RateLimitException,
+    envd_client_class,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -83,6 +84,14 @@ def provider(world: FakeE2B, monkeypatch) -> E2BSandboxProvider:
             # would be checking the fixture against itself.
             metadata_namespace=DEFAULT_METADATA_NAMESPACE,
         )
+    )
+    # Reading a file no longer goes through the SDK: it is an HTTP GET to
+    # envd, so that the byte range asked for is the byte range transferred.
+    # The client is built per call against a signed per-file URL, so the
+    # substitution is at the class and the provider's own request code runs.
+    monkeypatch.setattr(
+        "app.modules.workspace.providers.e2b_ranged_read.httpx.AsyncClient",
+        envd_client_class(world),
     )
     # Only the SDK is substituted. The query type comes through the SDK itself,
     # so this one patch is enough and the real e2b package is never imported.
@@ -705,6 +714,73 @@ async def test_files_round_trip(provider: E2BSandboxProvider) -> None:
     assert b"".join(chunks) == b"contents"
 
 
+async def test_a_range_transfers_only_that_range(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The reason this stopped going through `files.read`.
+
+    That call has no notion of a range: it returned the whole file and the
+    provider sliced it afterwards. The workspace file API caps a response at
+    8 MiB and its clients read anything larger as a series of ranges, so a
+    1 GiB download was 128 requests of 1 GiB each -- 128 GiB over the wire,
+    and a gigabyte resident in this process every time.
+    """
+    instance = await provider.create(_spec(uuid4()))
+    world.files[f"{WORKSPACE_ROOT}/big.bin"] = bytes(range(256)) * 64
+
+    chunks = [
+        chunk
+        async for chunk in provider.open_file(
+            instance,
+            path=f"{WORKSPACE_ROOT}/big.bin",
+            byte_range=ByteRange(offset=1000, length=500),
+            deadline_at=_deadline(),
+        )
+    ]
+
+    body = b"".join(chunks)
+    assert body == (bytes(range(256)) * 64)[1000:1500]
+    assert len(body) == 500
+
+
+async def test_a_range_past_the_end_is_empty_rather_than_an_error(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """envd answers 416, which is a fact about the range and not a failure of
+    the read. The layer above turns it into the caller's 416."""
+    instance = await provider.create(_spec(uuid4()))
+    world.files[f"{WORKSPACE_ROOT}/small.txt"] = b"twelve chars"
+
+    chunks = [
+        chunk
+        async for chunk in provider.open_file(
+            instance,
+            path=f"{WORKSPACE_ROOT}/small.txt",
+            byte_range=ByteRange(offset=9999, length=10),
+            deadline_at=_deadline(),
+        )
+    ]
+
+    assert chunks == []
+
+
+async def test_reading_a_missing_file_says_so(
+    provider: E2BSandboxProvider,
+) -> None:
+    """A 404 from envd is a missing file, not a missing sandbox -- the same
+    distinction `sdk_errors(path)` makes for the SDK calls."""
+    instance = await provider.create(_spec(uuid4()))
+
+    with pytest.raises(SandboxPathNotFound):
+        async for _chunk in provider.open_file(
+            instance,
+            path=f"{WORKSPACE_ROOT}/nope.bin",
+            byte_range=ByteRange(offset=0, length=None),
+            deadline_at=_deadline(),
+        ):
+            pass
+
+
 async def test_a_missing_file_is_definitively_missing(
     provider: E2BSandboxProvider,
 ) -> None:
@@ -870,6 +946,60 @@ async def test_a_pause_discards_memory(
     assert world.pause_kept_memory == [False], (
         "a workspace pause is filesystem-only; see lifecycle-state-model.md"
     )
+
+
+async def test_a_workspace_release_closes_the_browser_before_pausing(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A filesystem-only pause is power loss, and Chrome writes cookies late.
+
+    Its store batches to disk on a 30 second timer, so somebody who signed in
+    to a site and had their sandbox released a moment later came back signed
+    out. Measured on a real E2B sandbox: sign in, pause immediately, resume,
+    and the cookie is gone; close the browser first and it is there.
+
+    Docker gets this from quiesce, which sheds the browser before stopping the
+    container. The E2B path has no quiesce -- `sandbox_runtime.workspace` is
+    not even shipped into the template -- so the close goes through the
+    daemon's own command, which the image does have.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert "agent-browser close --all" in world.commands
+    assert world.paused == [instance.provider_id]
+
+
+async def test_a_browser_that_will_not_close_does_not_block_the_release(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A sandbox whose browser cannot be reached is the one most in need of
+    being released. Same rule as Docker's quiesce, which is documented as
+    never allowed to fail a release."""
+    instance = await provider.create(_spec(uuid4()))
+    world.agent_answers = False
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.paused == [instance.provider_id]
+
+
+async def test_a_function_release_has_no_browser_to_close(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A function sandbox contains the runner and the SDK and nothing else --
+    there is no Chrome in that template, so the command would only be a failed
+    round trip on every release."""
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
+
+    assert "agent-browser close --all" not in world.commands
 
 
 async def test_a_function_sandbox_pause_keeps_memory(

@@ -10,26 +10,27 @@ round trip per step where the command line chains with `&&`.
 What the wrappers were quietly providing had to move rather than be dropped,
 and that is what this file guards:
 
-* the conversation's own browser, which the *shell's environment* now names for
-  every command rather than each tool naming it per call; and
 * the human-takeover lease, which now lives in the `lemma-node-tool` wrapper --
   see `sandbox_runtime/tests/test_agent_browser_bootstrap.py`, because it has
   to hold for a command the agent typed itself, which is precisely what the
   typed tools never saw.
+
+The other thing it used to guard is gone on purpose. Each conversation had a
+browser of its own, named into the shell's environment, and a sign-in
+therefore had to be captured in one browser and rebuilt in another -- which
+meant guessing which cookies were the login, and guessing wrong. One durable
+profile per person removed the carrying and the guess together, so there is no
+per-conversation name left to assert.
 """
 
 from __future__ import annotations
 
-from uuid import uuid4
 
 import pytest
 
 from app.modules.agent.tools.browser.pydantic_adapter import (
     BROWSER_TOOLS,
     browser_toolset,
-)
-from app.modules.workspace.services.workspace_sandbox_service import (
-    _browser_session_env,
 )
 
 pytestmark = pytest.mark.unit
@@ -50,25 +51,22 @@ def test_the_sign_in_tool_still_says_it_never_wants_a_password() -> None:
     assert "never put one in a command" in doc
 
 
-def test_a_conversations_shell_is_put_in_its_own_browser() -> None:
-    """Now that the CLI is the whole surface, this is the *only* thing that
-    keeps two conversations out of each other's browser. The typed tools used
-    to name the session on every command they built; a command the agent types
-    itself inherits it from the shell or not at all."""
-    first = _browser_session_env(f"conv-{uuid4().hex}")
-    second = _browser_session_env(f"conv-{uuid4().hex}")
+def test_the_shell_is_left_in_the_images_own_browser() -> None:
+    """Nothing overrides the browser a shell lands in, and that is the fix.
 
-    assert first["AGENT_BROWSER_SESSION"] != second["AGENT_BROWSER_SESSION"]
-    # Both names or neither. `agent-browser` points every session at the
-    # image's single profile directory unless told otherwise, and the second
-    # browser to open a profile Chrome has locked exits at once, reporting only
-    # "Chrome exited early".
-    assert first["AGENT_BROWSER_PROFILE"] != second["AGENT_BROWSER_PROFILE"]
+    This used to export a per-conversation `AGENT_BROWSER_SESSION` and a
+    profile path to match, because each conversation had a Chrome of its own.
+    There is one now, it keeps its profile in the durable home, and the image
+    names it -- so a command the agent types, the relay, and the pane a person
+    is watching all reach the same browser without anyone passing a name.
+    """
+    from app.modules.workspace.services import workspace_sandbox_service as module
 
+    assert not hasattr(module, "_browser_session_env"), (
+        "a per-conversation browser name is what the durable profile removed"
+    )
 
-def test_no_session_leaves_the_images_own_defaults_alone() -> None:
-    """A shell with no conversation behind it must not be handed an empty
-    session name -- that is not the same as saying nothing, and it would point
-    the browser at a profile path built from nothing."""
-    assert _browser_session_env(None) == {}
-    assert _browser_session_env("") == {}
+    from app.modules.workspace.domain import browser_context
+
+    assert not hasattr(browser_context, "agent_session")
+    assert browser_context.DEFAULT_SESSION == "workspace"

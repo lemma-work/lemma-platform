@@ -100,18 +100,28 @@ ENV PYTHONUNBUFFERED=1 \
     WORKSPACE_XVFB_SCREEN=1440x960x24 \
     AGENT_BROWSER_CONFIG=/tmp/lemma-browser/config.json \
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome \
-    AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile \
+    # In the home, which is the durable root, so a person signs in to a site
+    # once rather than once per conversation. See `sandbox_runtime/paths.py`;
+    # the two must agree, and the quiescer knows to keep it.
+    AGENT_BROWSER_PROFILE=/home/user/.lemma/browser/profile \
     AGENT_BROWSER_SESSION=workspace \
     AGENT_BROWSER_HEADED=true \
     # A browser nobody is using stops being one. The agent-browser daemon
     # closes Chrome and exits after this long without a command, which is the
     # only thing that reclaims the browser's whole footprint -- Chrome keeps a
     # process per site-instance, and a headed session carries a GPU process and
-    # browser UI on top. Two minutes is well inside the 180s idle-release
-    # window that retires the sandbox itself, so a workspace that goes quiet
-    # sheds the browser before anything else decides what to do with it, and a
-    # research batch mid-flight never sees it: every capture is a command.
-    AGENT_BROWSER_IDLE_TIMEOUT_MS=120000 \
+    # browser UI on top.
+    #
+    # Five minutes, not two. The old value was chosen to sit "well inside the
+    # 180s idle-release window", and that window is now 900s
+    # (`WORKSPACE_IDLE_RELEASE_SECONDS`), so two minutes had quietly become far
+    # more aggressive than anyone picked. It is also shorter than a real
+    # sign-in: a person reading an OAuth consent screen and fetching a code
+    # from their phone can spend most of two minutes without issuing a single
+    # command, and the browser retiring underneath them is what they see.
+    # Shedding a browser late costs memory the guard will reclaim; shedding it
+    # early costs the person their login.
+    AGENT_BROWSER_IDLE_TIMEOUT_MS=300000 \
     # The largest framebuffer a viewer's `/display:resize` may ask for. RandR
     # cannot grow a screen past what Xvfb allocated at startup, so this is the
     # ceiling and `WORKSPACE_XVFB_SCREEN` is only where the display begins.
@@ -269,6 +279,7 @@ RUN groupadd --gid 10001 appuser \
         /app/sandbox_runtime/workspace \
         /home/user \
         /home/user/lemma \
+        /home/user/.lemma/browser \
         /opt/lemma-runtime \
         /run/lemma-bootstrap \
         /tmp/.X11-unix \
@@ -304,14 +315,14 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_ru
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/browser_relay /app/sandbox_runtime/browser_relay
 COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
 COPY lemma-backend/sandbox-images/scripts/set-display-size.sh /usr/local/bin/set-display-size
-COPY lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
+COPY lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh /usr/local/bin/lemma-ensure-display
 COPY lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
 COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
 COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
 RUN ln -sf /opt/lemma-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
 RUN chmod 0755 \
         /usr/local/bin/start-workspace-runtime \
-        /usr/local/bin/start-browser \
+        /usr/local/bin/lemma-ensure-display \
         /usr/local/bin/start-browser-relay \
         /usr/local/bin/save-webpage \
         /usr/local/lib/webpage-to-markdown.mjs \

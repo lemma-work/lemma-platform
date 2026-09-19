@@ -123,14 +123,17 @@ describe('a waiting sign-in', () => {
                 invocation={{
                     ...paused,
                     state: 'result',
-                    result: { success: true, outcome: 'signed_in', origin: 'https://asur.work', saved: true },
+                    result: { success: true, outcome: 'signed_in', origin: 'https://asur.work' },
                 }}
                 conversationId="conv-1"
             />),
         );
 
         expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
-        expect(screen.getByText('kept for next time')).toBeTruthy();
+        // There is no "kept for next time" any more, because nothing is kept
+        // on Lemma's side to be. The browser holds the session; it either is
+        // signed in or it is not.
+        expect(screen.getByText('signed in')).toBeTruthy();
         expect(screen.queryByRole('link')).toBeNull();
     });
 
@@ -150,13 +153,14 @@ describe('a waiting sign-in', () => {
         expect(screen.getByText('skipped')).toBeTruthy();
     });
 
-    it('says when it reused a saved login, and offers to forget it', () => {
+    it('says when the browser was already signed in, and offers to sign out', () => {
         // The three identical "Signed in to asur.work" cards nobody clicked.
-        // `try_saved_login` restores a stored session and returns signed_in
-        // without asking, and the card read exactly like one the person had
-        // just answered -- so a dead session being restored again, run after
-        // run, was indistinguishable from a working sign-in. The only remedy
-        // lived on a settings page they had to know to go and find.
+        // The tool returns signed_in without asking when the browser is
+        // already signed in, and the card read exactly like one the person
+        // had just answered -- so a session the site had stopped accepting,
+        // reported as working run after run, was indistinguishable from a
+        // real sign-in. The only remedy lived on a settings page they had to
+        // know to go and find.
         render(
             withQuery(<SignInCard
                 invocation={{
@@ -174,10 +178,10 @@ describe('a waiting sign-in', () => {
         );
 
         expect(screen.getByText('Used your saved login for asur.work')).toBeTruthy();
-        expect(screen.getByRole('button', { name: /forget it/i })).toBeTruthy();
+        expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy();
     });
 
-    it('does not offer to forget a login the person just made', () => {
+    it('does not offer to sign out of a login the person just made', () => {
         render(
             withQuery(<SignInCard
                 invocation={{
@@ -188,7 +192,6 @@ describe('a waiting sign-in', () => {
                         outcome: 'signed_in',
                         source: 'person',
                         origin: 'https://asur.work',
-                        saved: true,
                     },
                 }}
                 conversationId="conv-1"
@@ -196,6 +199,6 @@ describe('a waiting sign-in', () => {
         );
 
         expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
-        expect(screen.queryByRole('button', { name: /forget it/i })).toBeNull();
+        expect(screen.queryByRole('button', { name: /sign out/i })).toBeNull();
     });
 });

@@ -29,16 +29,54 @@ agent-browser click @e3 && agent-browser wait --url "**/dashboard" && agent-brow
 
 Split them only where you genuinely need to see the output before choosing the next step. `&&` also stops at the first failure, so a click that missed does not go on to report a snapshot of the page it failed to leave.
 
-Environment facts:
+What is different about this browser:
 
-- Nothing is running at startup, and you do not have to start it. Any `agent-browser` command brings the browser up first if it is down. `start-browser [url]` still exists and is harmless, but it is no longer a step you must remember.
-- The browser is **this conversation's own**, not the sandbox's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself unless you genuinely need a second browser (see *Parallel isolated sessions*). Naming one by hand puts you in a different browser from the one a saved login was loaded into — and from the one the panel checks when deciding whether a browser is running for this conversation at all.
-- **The profile is scratch, not storage.** Cookies and logins survive across commands *inside a live workspace*, and nothing more: the browser daemon closes Chrome after 2 minutes with no command (`AGENT_BROWSER_IDLE_TIMEOUT_MS=120000`), and suspending the workspace deletes `/tmp/lemma-browser` outright. Never leave the only copy of anything there.
-- **Do not save session state into your working directory.** `agent-browser state save ./auth.json` writes cookies in plain text onto the durable root, where it outlives the run that made it and is readable by whatever runs next. Use `browser_sign_in` instead: it asks the person, keeps what they signed in to encrypted and scoped to that one site, and loads it back on the next run without asking again.
-- **A person may be watching this browser, and may take it over.** It is streamed live into the workspace app's *Your computer → Browser* panel, where they can click and type in the page themselves. Nothing stops you acting at the same time and you do not need to wait: this is your browser and they are looking over your shoulder. If a step lands somewhere you did not expect — a page you did not navigate to, a field already filled — assume they did it, re-snapshot, and carry on from what is on screen rather than from what you last saw.
-- **The window size is not yours alone, and it can change under you.** One display serves the sandbox, and when somebody opens the *Your computer → Browser* panel it is resized to match their pane — so the viewport you measured at the start of a run may not be the one you have now. Mostly that is what you want: the page gets a real, human-shaped window. It bites when a task depends on a fixed size, and the usual casualty is a recording or a set of screenshots that turn out to be the wrong shape after the fact. If the size matters, set it and say so: `set-display-size <width> <height>` (bounded by `WORKSPACE_XVFB_MAX_SCREEN`), then take the recording. Re-read it with `xrandr --current` if you need to be sure rather than hopeful.
-- Local apps: browse `http://127.0.0.1:<port>` from inside the container, never the public preview URL.
-- Never install Playwright or browser binaries — everything is preinstalled.
+- **It is the person's, and there is one of it.** Its session and profile are
+  set for you: do not pass `--session` or `--profile` unless you genuinely
+  need a second browser at the same time (see *Parallel isolated sessions*).
+  Naming one by hand opens a different, empty Chrome — not the one that is
+  signed in, and not the one the person is watching.
+- **Sites stay signed in**, across your run and across conversations, the way
+  they do in the browser on their desk. If one is not, `browser_sign_in` asks
+  them; you never type a password. Never save session state to a file
+  (`agent-browser state save`) — it writes cookies in plaintext that outlive
+  your run, and the browser already remembers.
+- **Somebody may be watching, and may take over.** If a step lands somewhere
+  you did not expect — a page you did not navigate to, a field already
+  filled — assume they did it, re-snapshot, and carry on from what is on
+  screen. You do not need to wait for them.
+- **The window size can change under you**, because it follows whoever is
+  watching. If the size matters for a screenshot or a recording, set it
+  first: `set-display-size <width> <height>`.
+- **Use `$PWD` whenever `agent-browser` writes a file.** It resolves a
+  relative path inside the browser daemon, whose working directory is
+  whichever conversation happened to start the browser -- not yours. So
+  `screenshot ./shot.png` can land in somebody else's directory, and
+  `screenshot` with no path goes somewhere you will not find it.
+
+  ```bash
+  agent-browser screenshot "$PWD/shot.jpeg"     # lands where you are
+  agent-browser pdf "$PWD/page.pdf"
+  agent-browser record start "$PWD/run.webm"
+  agent-browser screenshot ./shot.jpeg          # DON'T — resolved elsewhere
+  ```
+
+  `save-webpage --out` already does this for you, and a shell redirect
+  (`agent-browser get html html > page.html`) is written by the shell, so it
+  lands where you are as normal.
+- **A file the page downloads goes to `~/Downloads`**, not your working
+  directory -- that is Chrome's, and one browser serves every conversation.
+  Move it if you want it beside your other output.
+- **One browser serves every conversation, and it has one active tab.**
+  `agent-browser tab new` binds the session to the tab it opens, and every
+  command after it acts on that binding -- so a run in another conversation
+  that opens a tab takes the binding from you, and your next `get html` or
+  `screenshot` is of their page. Nothing fails; you just save the wrong page.
+  `save-webpage` takes a lock and is safe. Driving the CLI directly over
+  several steps is not, so keep such a sequence short, and re-check `get url`
+  before you trust what you are reading.
+- Local apps: browse `http://127.0.0.1:<port>`, never the public preview URL.
+- Everything is preinstalled. Never install Playwright or a browser.
 
 ## Acting On Pages
 
@@ -80,8 +118,9 @@ Raw CSS selectors (`agent-browser click "#submit"`) are the last resort.
 agent-browser get text @e5 ; agent-browser get attr @e10 href
 agent-browser get url ; agent-browser get title
 agent-browser --max-output 500000 get html html > page.html   # big output needs --max-output
-agent-browser screenshot shot.jpeg ; agent-browser screenshot --full full.jpeg
-agent-browser screenshot --annotate map.png                   # numbered labels keyed to @eN refs
+agent-browser screenshot "$PWD/shot.jpeg"        # viewport — what you usually want
+agent-browser screenshot --full "$PWD/full.jpeg" # whole scroll: slow, and megabytes
+agent-browser screenshot --annotate "$PWD/map.png"            # numbered labels keyed to @eN refs
 
 # Arbitrary JS — heredoc avoids quote-escaping hell
 cat <<'EOF' | agent-browser eval --stdin
@@ -91,37 +130,53 @@ Array.from(document.querySelectorAll("table tbody tr")).map(r => ({
 EOF
 ```
 
+**Open, then read. Never `read <url>` in one shot.** Passing a URL to `read`
+does not wait for the page to render, and it fails silently — measured in
+this sandbox:
+
+| page | `read <url>` | `open <url>` then `read` |
+| --- | --- | --- |
+| a React app | 1 byte | 1 964 |
+| an ad-funded news page | **0 bytes** | 8 522 |
+| a static docs page | 4 161 | 5 355 |
+
+Exit code zero every time, so nothing tells you the page was empty. The core
+reference shipped with the CLI recommends the one-shot form; it is wrong for
+anything that renders client-side, which is most of what needs a browser at
+all. `web_fetch` uses the two-step form and checks the result has text in it.
+
 **A screenshot is a file until you look at it.** `screenshot` writes to the sandbox and tells you nothing about what it captured; `view_image` with `workspace_file_path` is what puts the picture in front of you. If this agent's model cannot see images, `view_image` asks one that can and hands you back the description — so set `instructions` to the question you actually have ("is the chart's y-axis labelled?"), not "describe this".
 
-Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg` — a full-page `.png` is several times the bytes for a photograph of a web page.
+Use it for what a snapshot cannot describe: layout, charts, broken styles, error overlays. Everything textual is cheaper through `snapshot` and `get text`. `--annotate` writes numbered labels keyed to the `@eN` refs, which is how you tell two identical-looking buttons apart. Default to `.jpeg`, and to the viewport. A full-page `.png` is several times the bytes for a photograph of a web page, and a full-page capture of a long article measured 12.4s and 7.0 MB against 2.5s and 76 KB for the viewport. Ask for `--full` only when the part you need is below the fold.
 
 Save pages for later reading/citation (markdown via Readability+Turndown; pdf/jpeg/png direct):
 
 ```bash
 save-webpage https://example.com/article --formats markdown,pdf --out research
+save-webpage https://example.com/article --formats jpeg --full-page   # whole scroll, when you need it
 ```
 
 ## Recipes
 
 **Login walls.** You do not sign in. Call `browser_sign_in(origin, reason)` and stop there.
 
-It loads a saved session if there is a working one, and otherwise asks the person, puts the site in front of them, and pauses your run until they answer — however long that takes. When it returns, open the page again and carry on.
+It opens the site and looks. If the browser is already signed in — which it often is, because the profile is durable and somebody may have signed in weeks ago in another conversation — it returns immediately and you carry on. Otherwise it puts the site in front of the person and pauses your run until they answer, however long that takes.
 
 ```bash
 # Never do any of these:
 #   ask the person for their password, in the conversation or on a page
 #   type a password you were given, or one you found in a file or an env var
 #   agent-browser auth save ... --password-stdin
-#   agent-browser state save ./auth.json     # plaintext cookies on the durable volume
+#   agent-browser state save ./auth.json     # plaintext cookies on the durable disk
 ```
 
-A password is never yours to hold, and a session you save by hand outlives the run that made it. `browser_sign_in` is the only sanctioned path: what it keeps is the site's session, encrypted, scoped to that one site, and visible to the person to remove.
+A password is never yours to hold. `browser_sign_in` is the only sanctioned path, and what it produces is the person's own browser session, held by their browser — visible to them on the connectors page, where signing out really signs the browser out.
 
 **Tabs.** `agent-browser tab` (list), `tab new <url>`, `tab 2`, `tab close 2`. Refs are per-page — re-snapshot after switching.
 
 **Parallel isolated sessions.** `agent-browser --session user-a --profile /tmp/lemma-browser/profile-user-a open ...` gives a separate browser with its own cookies, tabs and refs. Use it only when you genuinely need two at once — comparing two signed-in users, say.
 
-**Pass `--profile` with `--session`, always.** A session is a whole separate Chrome and needs a profile directory of its own; every session shares one default profile path, and Chrome locks it. `--session` on its own therefore exits immediately with nothing but `Chrome exited early`. Your ordinary commands already run in this conversation's own session with both set for you, which is the other reason not to name one by hand: a person watching sees the whole screen either way, but the panel checks *this conversation's* session to decide whether a browser is running at all.
+**Pass `--profile` with `--session`, always.** A session is a whole separate Chrome and needs a profile directory of its own; Chrome locks the one it opens. `--session` on its own therefore exits immediately with nothing but `Chrome exited early`. A named session's profile is also **scratch** — under `/tmp`, gone with the sandbox — so anything you sign in to there is lost. That is deliberate: the durable profile is the default one, and a second browser is for comparing two accounts, not for keeping one.
 
 **Dialogs and iframes.** `agent-browser dialog accept|dismiss`; iframes are auto-inlined in snapshots (refs work through them), or `agent-browser frame @e3` / `frame main` to switch context explicitly.
 

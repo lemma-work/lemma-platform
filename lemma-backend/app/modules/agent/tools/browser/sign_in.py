@@ -119,23 +119,28 @@ async def sign_in_internal(
 
     service = SignInService(get_uow_factory())
     try:
-        loaded, detail = await service.try_saved_login(
-            origin=site,
-            # Which browser to load it into. Without this the session goes to
-            # the site's login browser, which this run does not use.
-            conversation_id=deps.conversation_id,
-            auth_ctx=auth_ctx,
-        )
-        if loaded:
+        # Open the site and look. Nothing is loaded, restored or rebuilt --
+        # the browser has kept whatever it had since the last time anybody
+        # signed in on it, which may well be a different conversation weeks
+        # ago. This is the same question a person would ask by opening the
+        # page, and that is the whole of the check now.
+        # `force` is the agent saying it has met the wall itself. The check
+        # below reads a page and can be wrong -- that is the defect this
+        # whole feature was built on -- so there has to be a way to say so,
+        # and a different `reason` was never it.
+        if not request.force and await service.already_signed_in(
+            origin=site, auth_ctx=auth_ctx, page_url=request.page_url
+        ):
             return BrowserSignInResponse(
                 success=True,
                 outcome="signed_in",
                 source="saved",
                 origin=site,
                 message=(
-                    f"{detail}. Open the page again -- it should not ask now. "
-                    "If it still shows a login, call this again and say so in "
-                    "`reason`, and the person will be asked."
+                    "The browser is already signed in to this site. Open the "
+                    "page and carry on. If it does show a login after all, "
+                    "call this again and say so in `reason`, and the person "
+                    "will be asked."
                 ),
             )
 

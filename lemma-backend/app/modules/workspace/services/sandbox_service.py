@@ -561,10 +561,13 @@ class SandboxService(SandboxAddressingMixin, SandboxVolumeMixin):
         watching their browser, or part-way through signing in to a site, is
         using it just as much -- and the sweep measures idleness from the last
         time a caller *asked* for the sandbox, so a long look at a live page
-        counted as fifteen minutes of nothing. Releasing runs quiesce, which
-        deletes the browser profile: a person signing in slowly had their
-        half-finished session thrown away, and the capture afterwards found an
-        empty browser.
+        counted as fifteen minutes of nothing.
+
+        What releasing costs has changed. Quiesce used to delete the browser
+        profile, so a person signing in slowly had the half-finished session
+        thrown away under them; it now removes only the lock files that name
+        a dead process. Being stopped part-way through is still worth
+        avoiding -- it is just no longer destructive.
         """
         await self._touch(sandbox_id)
 
