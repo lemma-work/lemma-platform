@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shlex
 
+from app.modules.agent.tools.web.blocked import classify
 from app.modules.agent.tools.web.models import WebFetchPage
 
 #: How much of the markdown to show back. Enough to recognise the page.
@@ -113,6 +114,28 @@ async def finish(
     if text:
         title = text.splitlines()[0].lstrip("# ").strip() or None
         preview = text[:PREVIEW_CHARS]
+
+    # The same question the http path asks, with the only evidence that
+    # survives a render: the title. Rules 1-4 need response headers, and
+    # markdown conversion keeps none -- so a Cloudflare interstitial the
+    # browser rendered is caught here by its title and nothing else. Worth
+    # the twelve lines anyway, because the failure without it is the http
+    # path's exactly: "Verify you are human" clears the 120-character floor
+    # and is saved as the article.
+    rendered_block = classify(status=0, headers={}, body_snippet=text, title=title)
+    if rendered_block.blocked:
+        return WebFetchPage(
+            url=url,
+            success=False,
+            title=title,
+            fetched_with=fetched_with,
+            blocked_by=rendered_block.vendor,
+            error=(
+                "The browser reached this page and was shown a bot check "
+                "rather than the article. The page is not readable from this "
+                "sandbox; use a different source."
+            ),
+        )
 
     # Thin text is reported, not treated as total failure -- and the files
     # that *were* produced are still handed back.

@@ -147,6 +147,9 @@ class _FakeSession:
         #: Emulate a page that rendered but had nothing in it -- the
         #: converter still writes its title and `Source:` header.
         self.header_only = False
+        #: The heading the converter writes. An interstitial renders to a
+        #: perfectly ordinary markdown file whose title is the giveaway.
+        self.browser_title = "A Title"
 
     # `writes` names only what the file API put there, so a test can still
     # assert the cheap path did not go through the browser.
@@ -192,7 +195,7 @@ class _FakeSession:
                     # ten-character body is not what a real capture looks
                     # like, and a fixture that thin makes the "nothing to
                     # read" guard fire on every test meant to be a success.
-                    else b"# A Title\n\nSource: https://example.com/\n\n"
+                    else f"# {self.browser_title}\n\nSource: https://example.com/\n\n".encode()
                     + b"Body text that is long enough to read. " * 5
                 )
 
@@ -1193,3 +1196,25 @@ class TestTellingABlockFromAPage:
         )
 
         assert any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_a_rendered_bot_check_is_not_an_article(self, monkeypatch) -> None:
+        """The browser path's version of the same hole. An interstitial
+        renders to markdown with a title and a couple of hundred characters
+        -- comfortably past the thin-content floor -- and was saved as the
+        article. Headers do not survive the markdown conversion, so the
+        title is the only evidence left, and it is enough for this case."""
+        _patch_extraction(monkeypatch, markdown=None)
+        session = _FakeSession()
+        session.browser_title = "Just a moment..."
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/walled"], formats=["markdown"]),
+        )
+
+        page = result.pages[0]
+        assert page.success is False
+        assert page.blocked_by == "unnamed"
+        assert "bot check" in (page.error or "")
