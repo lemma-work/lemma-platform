@@ -1993,15 +1993,20 @@ def test_a_toolkit_composio_manages_no_credentials_for_asks_the_org_for_them():
 
 
 def test_an_unmanaged_toolkit_prefers_a_pasted_key_to_an_oauth_app():
-    """Shopify offers both OAuth and an API key, and Composio manages neither.
+    """A toolkit offering both, with Composio managing neither, takes the key.
 
     Asking the org to register an OAuth application when the same toolkit takes
     a token from its own settings page is the more expensive of two answers that
     both work. The install then needs nothing from the org at all -- the key
     belongs to the account -- so this stays a one-click Connect.
+
+    This used to be written with Shopify as the example. It is not one any more:
+    "both work" was the load-bearing claim and Shopify does not satisfy it, so
+    it now has an entry in `COMPOSIO_AUTH_METHOD_OVERRIDES` and its own test
+    below. The rule itself is unchanged, which is what this still guards.
     """
     capability = _composio_catalog_row(
-        _toolkit("shopify", auth_schemes=["OAUTH2", "API_KEY"], managed_schemes=[]),
+        _toolkit("freshservice", auth_schemes=["OAUTH2", "API_KEY"], managed_schemes=[]),
         _toolkit_detail(
             mode="API_KEY",
             connected_account_initiation=SimpleNamespace(
@@ -2181,3 +2186,47 @@ def test_a_field_listed_both_required_and_optional_stays_required():
     # Named once, not twice: a JSON Schema `required` array repeating a field is
     # what the deduplication is also protecting against.
     assert sorted(schema["properties"]) == ["client_id", "scopes"]
+
+
+def test_infer_composio_auth_method_overrides_shopify_to_oauth2():
+    """Shopify takes OAuth even though a pasted key looks cheaper.
+
+    Its API_KEY mode accepts an Admin API access token and nothing in that mode
+    can refresh one, so the cheap path is the path that stops working.
+    """
+    item = _toolkit(
+        "shopify",
+        auth_schemes=["OAUTH2", "API_KEY", "S2S_OAUTH2"],
+        managed_schemes=[],
+    )
+    detail = _toolkit_detail(mode="OAUTH2")
+
+    assert importer._infer_composio_auth_method(item, detail) == AuthMethod.OAUTH2
+
+
+def test_composio_credential_schema_is_none_for_a_plain_oauth_toolkit():
+    """Unchanged behaviour: signing in is the whole form."""
+    detail = _toolkit_detail(mode="OAUTH2")
+
+    assert importer._composio_credential_schema(detail, AuthMethod.OAUTH2) is None
+
+
+def test_composio_credential_schema_keeps_an_oauth_toolkits_connect_fields():
+    """An OAuth toolkit may still need to know *which* account.
+
+    Shopify's OAuth2 mode requires `subdomain`: signing in says who you are but
+    not which store you mean. Skipping this on the scheme left the connect
+    dialog with no field to ask for it.
+    """
+    detail = _toolkit_detail(
+        mode="OAUTH2",
+        connected_account_initiation=SimpleNamespace(
+            required=[_composio_field("subdomain")], optional=[]
+        ),
+    )
+
+    schema = importer._composio_credential_schema(detail, AuthMethod.OAUTH2)
+
+    assert schema is not None
+    assert "subdomain" in schema["properties"]
+    assert schema["required"] == ["subdomain"]
