@@ -284,12 +284,25 @@ class ResumeToolReturnBuilder:
         # absence means "not checked" rather than "not working".
         checked = "working" in response
         working = bool(response.get("working"))
-        note = (
-            "The site stopped asking for a login."
-            if not checked or working
-            else "The site still showed a login form straight afterwards, so "
-            "check before relying on it."
-        )
+        if not checked:
+            # Three states, not two. This used to fold "nobody looked" in
+            # with "it worked" and tell the agent "the site stopped asking
+            # for a login" -- a verification claim about a check that never
+            # ran. The standalone page verifies and puts `working` here; a
+            # card answered in the chat has no browser of its own to ask.
+            # Saying so is the difference between a fact and a guess, and
+            # this feature exists because of a guess of exactly this shape.
+            note = (
+                "Nobody checked whether it took, so open the page and see "
+                "before relying on it."
+            )
+        elif working:
+            note = "The site stopped asking for a login."
+        else:
+            note = (
+                "The site still showed a login form straight afterwards, so "
+                "check before relying on it."
+            )
         return BrowserSignInResponse(
             success=True,
             outcome="signed_in",

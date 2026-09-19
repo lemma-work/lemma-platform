@@ -32,6 +32,26 @@ class BrowserSignInRequest(BaseModel):
         ),
         max_length=500,
     )
+    page_url: str | None = Field(
+        default=None,
+        description=(
+            "The page you were actually blocked on, if you have one — "
+            "`https://app.example.com/reports/42`. Checking this instead of "
+            "the site's front page is what makes the answer mean anything: a "
+            "marketing homepage loads for everybody, signed in or not, so a "
+            "site whose root is one will otherwise report you as already "
+            "signed in when you are not."
+        ),
+    )
+    force: bool = Field(
+        default=False,
+        description=(
+            "Ask the person even if the check thinks you are already signed "
+            "in. Use this when you have met the login wall yourself and been "
+            "told otherwise — the check reads a page and can be wrong, and "
+            "without this there is no way to say so."
+        ),
+    )
 
 
 class BrowserSignInResponse(BaseToolResponse):

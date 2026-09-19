@@ -124,7 +124,13 @@ async def sign_in_internal(
         # signed in on it, which may well be a different conversation weeks
         # ago. This is the same question a person would ask by opening the
         # page, and that is the whole of the check now.
-        if await service.already_signed_in(origin=site, auth_ctx=auth_ctx):
+        # `force` is the agent saying it has met the wall itself. The check
+        # below reads a page and can be wrong -- that is the defect this
+        # whole feature was built on -- so there has to be a way to say so,
+        # and a different `reason` was never it.
+        if not request.force and await service.already_signed_in(
+            origin=site, auth_ctx=auth_ctx, page_url=request.page_url
+        ):
             return BrowserSignInResponse(
                 success=True,
                 outcome="signed_in",

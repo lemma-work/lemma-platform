@@ -67,7 +67,7 @@ class _Service:
         self.tried: list[dict] = []
         self.closed = False
 
-    async def already_signed_in(self, *, origin, auth_ctx=None):
+    async def already_signed_in(self, *, origin, auth_ctx=None, page_url=None):
         self.tried.append({"origin": origin, "auth_ctx": auth_ctx})
         return self._loaded
 
@@ -226,7 +226,13 @@ def test_the_tool_never_offers_a_place_to_put_a_password() -> None:
     """`connectors-and-accounts.md`: the system shall never ask a person for
     their provider password. A field for one is how that starts."""
     fields = set(BrowserSignInRequest.model_fields)
-    assert fields == {"origin", "reason"}
+    # Exact, not a "no password field" check: the point is that adding any
+    # field here is a decision somebody has to come and change this line
+    # for. `page_url` is the protected page to check instead of the site
+    # root, and `force` lets an agent that has met the wall itself insist --
+    # neither carries a credential, and both exist because the check can be
+    # wrong.
+    assert fields == {"origin", "reason", "page_url", "force"}
     for banned in ("password", "username", "secret", "totp", "credential"):
         assert not any(banned in f for f in fields)
 

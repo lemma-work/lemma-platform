@@ -52,6 +52,10 @@ class PendingSignIn:
     tool_call_id: str
     origin: str
     reason: str
+    #: The protected page the agent was blocked on, when it named one.
+    #: Verified instead of the origin root, both before asking and after
+    #: answering -- see `SignInService.already_signed_in`.
+    page_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

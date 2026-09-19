@@ -375,3 +375,32 @@ def test_the_service_cannot_store_or_restore_a_session() -> None:
     ):
         assert not hasattr(SignInService, gone), f"{gone} should be gone"
     assert "WebLoginRepository" not in dir(module)
+
+
+async def test_the_protected_page_is_what_gets_opened() -> None:
+    """The defect this whole feature was built on, in its last hiding place.
+
+    `already_signed_in` opens a page and reports "signed in" when what comes
+    back does not look like a login wall. Against the *origin root* that is
+    close to meaningless: a marketing homepage loads for everybody, signed
+    in or not, so the answer was yes for a browser with no session at all.
+    That is the shape of the site that produced the original loop -- moving
+    from a stored-cookie guess to a page read did not fix it, it moved it.
+    """
+    browser = _Browser()
+    page = f"{SITE}/reports/42"
+
+    assert await _service(browser).already_signed_in(
+        origin=SITE, auth_ctx=_Ctx(uuid4()), page_url=page
+    )
+    assert browser.opened == [page], "the root would have answered for everybody"
+
+
+async def test_without_a_page_it_still_falls_back_to_the_origin() -> None:
+    """Not every caller has one, and the origin beats refusing to look."""
+    browser = _Browser()
+
+    assert await _service(browser).already_signed_in(
+        origin=SITE, auth_ctx=_Ctx(uuid4())
+    )
+    assert browser.opened == [SITE]

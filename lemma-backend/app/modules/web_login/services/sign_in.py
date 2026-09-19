@@ -105,7 +105,11 @@ class SignInService:
             await built.close()
 
     async def already_signed_in(
-        self, *, origin: str, auth_ctx: Context | None = None
+        self,
+        *,
+        origin: str,
+        auth_ctx: Context | None = None,
+        page_url: str | None = None,
     ) -> bool:
         """Whether the browser can already reach this site signed in.
 
@@ -125,7 +129,12 @@ class SignInService:
         the person, not a reason to claim they are signed in.
         """
         owner = await resolve_owner(auth_ctx=auth_ctx)
-        return await self._site_is_open(owner, normalize_origin(origin))
+        # The page the caller was blocked on, when it gave one. Opening the
+        # origin root instead is what made this vacuous: a marketing
+        # homepage loads for everybody, so "it did not look like a login
+        # wall" said nothing about whether there was a session. The site
+        # that prompted this whole change has exactly that shape.
+        return await self._site_is_open(owner, page_url or normalize_origin(origin))
 
     async def _site_is_open(self, owner: UUID, site: str) -> bool:
         """The same question, for a caller that has already been authorised.
@@ -214,6 +223,7 @@ class SignInService:
             tool_call_id=paused.tool_call_id,
             origin=normalize_origin(origin),
             reason=str(paused.tool_args.get("reason") or ""),
+            page_url=str(paused.tool_args.get("page_url") or "") or None,
         )
 
     async def answer(
@@ -247,7 +257,10 @@ class SignInService:
             raise SignInNotPending(tool_call_id)
 
         site = found.origin
-        working = await self._site_is_open(user_id, site) if signed_in else False
+        # The same page the ask was made about, for the same reason: a root
+        # that always loads cannot tell us the sign-in worked either.
+        checked = found.page_url or site
+        working = await self._site_is_open(user_id, checked) if signed_in else False
         if working:
             await self._remember_they_signed_in(user_id, site)
         await self._tell_the_agent(
