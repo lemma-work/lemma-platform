@@ -48,6 +48,25 @@ What is different about this browser:
 - **The window size can change under you**, because it follows whoever is
   watching. If the size matters for a screenshot or a recording, set it
   first: `set-display-size <width> <height>`.
+- **Use `$PWD` whenever `agent-browser` writes a file.** It resolves a
+  relative path inside the browser daemon, whose working directory is
+  whichever conversation happened to start the browser -- not yours. So
+  `screenshot ./shot.png` can land in somebody else's directory, and
+  `screenshot` with no path goes somewhere you will not find it.
+
+  ```bash
+  agent-browser screenshot "$PWD/shot.jpeg"     # lands where you are
+  agent-browser pdf "$PWD/page.pdf"
+  agent-browser record start "$PWD/run.webm"
+  agent-browser screenshot ./shot.jpeg          # DON'T — resolved elsewhere
+  ```
+
+  `save-webpage --out` already does this for you, and a shell redirect
+  (`agent-browser get html html > page.html`) is written by the shell, so it
+  lands where you are as normal.
+- **A file the page downloads goes to `~/Downloads`**, not your working
+  directory -- that is Chrome's, and one browser serves every conversation.
+  Move it if you want it beside your other output.
 - Local apps: browse `http://127.0.0.1:<port>`, never the public preview URL.
 - Everything is preinstalled. Never install Playwright or a browser.
 
@@ -91,9 +110,9 @@ Raw CSS selectors (`agent-browser click "#submit"`) are the last resort.
 agent-browser get text @e5 ; agent-browser get attr @e10 href
 agent-browser get url ; agent-browser get title
 agent-browser --max-output 500000 get html html > page.html   # big output needs --max-output
-agent-browser screenshot shot.jpeg      # the viewport — what you usually want
-agent-browser screenshot --full full.jpeg   # whole scroll: slow, and megabytes
-agent-browser screenshot --annotate map.png                   # numbered labels keyed to @eN refs
+agent-browser screenshot "$PWD/shot.jpeg"        # viewport — what you usually want
+agent-browser screenshot --full "$PWD/full.jpeg" # whole scroll: slow, and megabytes
+agent-browser screenshot --annotate "$PWD/map.png"            # numbered labels keyed to @eN refs
 
 # Arbitrary JS — heredoc avoids quote-escaping hell
 cat <<'EOF' | agent-browser eval --stdin

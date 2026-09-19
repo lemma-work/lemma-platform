@@ -108,6 +108,14 @@ if [[ -z "$URL" && "$OPEN_PAGE" == "1" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
+# Absolute from here on, and this is load-bearing rather than tidy.
+#
+# `agent-browser` resolves a relative path in the *daemon*, not in this
+# process -- and the daemon's working directory is whichever one happened to
+# start the browser. One browser serves every conversation in a sandbox, so
+# running this from conversation B wrote the markdown here (the shell does
+# that) and the jpeg into conversation A's directory. Measured exactly that.
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
 # A capture gets its own tab, and gives it back.
 #
@@ -115,11 +123,21 @@ mkdir -p "$OUT_DIR"
 # session is deliberately long-lived -- one browser, one Xvfb display, one
 # profile per sandbox -- so nothing ever reclaimed what a capture rendered, and
 # Chrome keeps a process per site-instance. A workspace measured after a normal
-# research session held 63 Chrome processes at 2123 MB RSS on a sandbox with
+# research session held 63 Chrome processes (2123 MB summed across them, which
+# over-counts: see below) RSS on a sandbox with
 # 2048 MB total: `MemAvailable` was 14 MB, kswapd0 burned a third of the only
 # vCPU, and every unrelated tool call in that sandbox degraded with it --
 # `python -c pass` took over 12 seconds and `lemma --version` never returned at
 # all. The agent saw `exit_code: 124` and no explanation.
+#
+# A correction to the arithmetic above, since it has been quoted as a reason
+# not to open a second tab: summing per-process RSS counts Chrome's shared
+# mappings once per process. Measured against the cgroup, which is what
+# actually OOMs, five concurrent tabs in one browser peaked at 1656 MiB of
+# 2048 and fell back to baseline when they closed. Tabs are cheap. What is
+# not cheap is a second *browser*: three captures with a session each
+# measured 75.4s against 11.0s for the same three run serially through one
+# warm browser, because the sandbox has one vCPU.
 #
 # So the tab is closed on the way out, via trap: `set -e` means any capture
 # step can abort the script, and the failing captures are exactly the expensive

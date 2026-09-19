@@ -22,9 +22,18 @@ a screenshot, or runs `pod_view_document_pages` over a captured PDF.
 
 Fetches on the http path run concurrently — they are independent network waits,
 and a research batch is the case this tool was built for. The browser path stays
-serialised on purpose: `start-browser` runs one shared session per sandbox (one
-Xvfb display, one profile), so concurrent captures would fight over the same
-page. A whole-batch deadline bounds the pathological case where most of the list
+serialised on purpose, and that was re-measured rather than inherited. Every
+`agent-browser` command acts on its session's *active* tab -- `--session` can
+be targeted, a tab cannot -- so two captures sharing a session read each
+other's page. Giving each its own session sidesteps that and costs a cold
+Chrome apiece: measured on 1 vCPU / 2 GB, three pages, byte-identical
+markdown either way, serial 11.0s against parallel 75.4s.
+
+Memory is not the constraint, whatever the RSS sums elsewhere suggest: five
+concurrent tabs in one browser peaked at 1656 MiB of a 2048 MiB cgroup. The
+one vCPU is.
+
+A whole-batch deadline bounds the pathological case where most of the list
 needs rendering.
 
 Every URL is checked against `assert_safe_url` before *either* path runs. The
