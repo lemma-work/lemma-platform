@@ -4,13 +4,9 @@
 /* eslint-disable */
 export type SignInOutcomeResponse = {
     origin: string;
-    /**
-     * Whether the login was kept for next time.
-     */
-    saved?: boolean;
-    /**
-     * Why it was not kept, in words, when it was not.
-     */
-    saved_detail?: (string | null);
     signed_in: boolean;
+    /**
+     * Whether the site stopped asking for a login straight afterwards. Reported, not enforced: the person has already done what was asked, and a site that shows a form at the same address under a neutral title reads as still asking.
+     */
+    working?: boolean;
 };

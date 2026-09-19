@@ -10,6 +10,10 @@ export type WorkspaceFileListResponse = {
      */
     exists?: boolean;
     /**
+     * The durable root, and the furthest up a caller may browse. Served rather than assumed: this path has moved once already, and the clients that had hardcoded the old one went on asking for a directory that no longer existed.
+     */
+    home_root?: string;
+    /**
      * Pass as `after` to get the next page. Null when this is the last one. A directory with more entries than fit was previously a dead end: the rest could be counted and never reached.
      */
     next_after?: (string | null);
@@ -25,4 +29,8 @@ export type WorkspaceFileListResponse = {
      * True when the directory holds more entries than were returned.
      */
     truncated?: boolean;
+    /**
+     * Where projects and conversation directories live. Inside `home_root`, and the sensible place for a file browser to open.
+     */
+    workspace_root?: string;
 };

@@ -155,6 +155,23 @@
           "description": "What you are doing and why this site needs a login, in one sentence and in plain words. This is shown to the person as the explanation for why they are being asked, so write it for them rather than for a log.",
           "maxLength": 500,
           "type": "string"
+        },
+        "page_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page you were actually blocked on, if you have one \u2014 `https://app.example.com/reports/42`. Checking this instead of the site's front page is what makes the answer mean anything: a marketing homepage loads for everybody, signed in or not, so a site whose root is one will otherwise report you as already signed in when you are not."
+        },
+        "force": {
+          "default": false,
+          "description": "Ask the person even if the check thinks you are already signed in. Use this when you have met the login wall yourself and been told otherwise \u2014 the check reads a page and can be wrong, and without this there is no way to say so.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -790,6 +807,18 @@
           "description": "Whether the process has finished. `false` whenever the command outlived this call's wait window \u2014 a long build or test run as much as an interactive TTY session. The command is still running; it was not cancelled.",
           "type": "boolean"
         },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something about this call that is not about the command itself \u2014 most often that a wait you asked for was longer than one call can give. Read it: it usually explains an empty result."
+        },
         "process_id": {
           "anyOf": [
             {
@@ -831,7 +860,9 @@
         },
         "timeout_seconds": {
           "default": 60,
-          "description": "Maximum execution time in seconds before timing out.",
+          "description": "How long to wait before giving up, up to 300s. Unlike `exec_command` there is no handle to come back to: this runs in the shared kernel and a timeout ends it. For work that may take longer, run it with `exec_command` and wait for the process.",
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -1214,6 +1245,117 @@
         }
       },
       "title": "SkillListResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "list_voices",
+    "toolset": "SPEECH",
+    "description": "What `say` can sound like: the voices this deployment can actually use.\n\nRead from the provider rather than a list kept here, so it is the whole\nrange and cannot go stale. Filter by `language` when you know it; each\nvoice carries an accent and use-case tags, which is usually what decides\nbetween two that speak the same language.\n\nA language with no voices is a real answer: say so rather than speaking it\nwith a voice that does not.",
+    "input_schema": {
+      "properties": {
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "BCP-47 code to filter by, e.g. 'es' or 'ja'. Omit to see every voice the provider has."
+        },
+        "limit": {
+          "default": 20,
+          "description": "How many to return. There are roughly eighty in total.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "VoiceSummary": {
+          "properties": {
+            "name": {
+              "description": "Pass this to `say` as `voice`.",
+              "type": "string"
+            },
+            "languages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "accent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "VoiceSummary",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "default": false,
+          "type": "boolean"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "voices": {
+          "items": {
+            "$ref": "#/$defs/VoiceSummary"
+          },
+          "type": "array"
+        },
+        "total": {
+          "default": 0,
+          "description": "How many matched before `limit` was applied.",
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesResponse",
       "type": "object"
     }
   },
@@ -3187,7 +3329,7 @@
             }
           ],
           "default": null,
-          "description": "Optional provider-specific voice/model id. None = default."
+          "description": "A specific voice, by its full name \u2014 `aura-2-andromeda-en`, not `andromeda`. Omit it and one is chosen for `language`. Call `list_voices` to see what exists; there are far more than one per language, differing by accent, age and intended use."
         }
       },
       "required": [
@@ -3436,7 +3578,7 @@
   {
     "tool_name": "wait_for",
     "toolset": "WAIT",
-    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  `/workspace`, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `message_user` ends your turn and gets you a new one when\nthe answers arrive.",
+    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `message_user` ends your turn and gets you a new one when\nthe answers arrive.",
     "input_schema": {
       "properties": {
         "reason": {
@@ -3727,6 +3869,18 @@
               ],
               "default": null
             },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
+            },
             "error": {
               "anyOf": [
                 {
@@ -3778,6 +3932,18 @@
             }
           ],
           "default": null
+        },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
         },
         "error": {
           "anyOf": [

@@ -24,7 +24,7 @@ set -euo pipefail
 # biggest display available, not an error.
 #
 # Chrome follows the new size on its own because a window manager is running
-# (see `start-browser`); without one it would keep the geometry it launched
+# (see `lemma-ensure-display`); without one it would keep the geometry it launched
 # with and the resize would only change how much empty desktop was on screen.
 
 if [ "$#" -ne 2 ]; then
@@ -57,7 +57,7 @@ want_width=$((want_width - want_width % 2))
 want_height=$((want_height - want_height % 2))
 
 # Wait for the X server to actually answer, rather than for its socket to
-# exist. `start-browser` calls this the moment Xvfb's socket appears, and a
+# exist. `lemma-ensure-display` calls this the moment Xvfb's socket appears, and a
 # server that has bound but is not yet serving RandR answers nothing: the
 # output name comes back empty, every `xrandr` below fails, and the display
 # silently stays at the framebuffer's full size. That is how the initial

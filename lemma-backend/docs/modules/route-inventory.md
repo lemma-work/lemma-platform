@@ -302,9 +302,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
-| DELETE | `/web-logins` | `web_login.delete` | Remove a saved site login |
-| GET | `/web-logins` | `web_login.list` | List saved site logins |
-| GET | `/web-logins/history` | `web_login.history` | What has been done with your saved logins |
+| DELETE | `/web-logins` | `web_login.delete` | Sign your browser out of a site |
+| GET | `/web-logins` | `web_login.list` | List the sites your browser is signed in to |
 | GET | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}` | `web_login.sign_in.pending` | What a sign-in link is asking for |
 | POST | `/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer` | `web_login.sign_in.answer` | Say whether you signed in |
 

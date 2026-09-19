@@ -13,6 +13,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     user_prompt_text,
 )
@@ -308,7 +309,11 @@ def _workspace_cwd(ctx: AgentContext) -> str:
         value = get_workspace_cwd()
         if value:
             return str(value)
-    return f"/workspace/conversations/{ctx.conversation_id}"
+    # The project root, not a directory named after the conversation id: that
+    # shape is not what `resolve_workspace_location` produces, so a payload
+    # carrying it would send a remote harness somewhere the conversation's own
+    # metadata does not name.
+    return WORKSPACE_ROOT
 
 
 def _output_contract(*, agent: Agent, conversation: Conversation) -> str:

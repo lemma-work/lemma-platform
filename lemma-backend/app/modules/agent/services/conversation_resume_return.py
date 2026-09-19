@@ -22,9 +22,7 @@ repository, and nothing else the service holds.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import partial
-from typing import Protocol
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -52,37 +50,6 @@ from app.modules.agent.services.pod_runtime_defaults import (
 from app.modules.agent.services.workspace_location import resolve_workspace_location
 
 logger = get_logger(__name__)
-
-
-class SignInServiceLike(Protocol):
-    """The two methods `_capture_for_resume` needs of a sign-in service."""
-
-    async def capture(
-        self,
-        *,
-        user_id: UUID,
-        origin: str,
-        conversation_id: UUID | None,
-        force: bool = False,
-    ) -> tuple[bool, str | None]: ...
-
-    async def close(self) -> None: ...
-
-
-def _build_sign_in_service() -> SignInServiceLike:
-    """The real service, with a unit-of-work factory of its own.
-
-    Short-lived units of work inside it: the capture runs while the caller's
-    unit of work is open, and a sandbox round trip must not be the thing a
-    pooled connection waits on.
-
-    Imported here rather than at module scope to keep the web_login module out
-    of the import graph of everything that resumes a run.
-    """
-    from app.core.api.dependencies import get_uow_factory
-    from app.modules.web_login.contracts import SignInService
-
-    return SignInService(get_uow_factory())
 
 
 def _budget_decision_return(decision: AgentRunApprovalDecision) -> dict[str, object]:
@@ -120,17 +87,9 @@ class ResumeToolReturnBuilder:
         self,
         uow: SqlAlchemyUnitOfWork,
         agent_repository: AgentRepository,
-        *,
-        sign_in_service: Callable[[], SignInServiceLike] | None = None,
     ) -> None:
         self.uow = uow
         self.agent_repository = agent_repository
-        # Injected rather than constructed inside `_capture_for_resume`, which
-        # is what it used to do. A factory seam reached only by patching the
-        # name means a test proves nothing about the object production builds,
-        # and a rename behind that name lands green -- the thing the
-        # in-subject-doubles gate exists to stop.
-        self._sign_in_service = sign_in_service or _build_sign_in_service
 
     async def build(
         self,
@@ -286,23 +245,21 @@ class ResumeToolReturnBuilder:
     ) -> dict[str, object]:
         """What the agent is told after somebody answered a sign-in request.
 
-        The capture happens here when nobody has done it already, which is what
-        lets the card in the conversation answer a sign-in the same way it
-        answers an `ask_user`: through the ordinary approval decision, with no
-        second endpoint and no state of its own. That matters for more than
-        symmetry -- the transcript and the composer both key off the paused
-        tool call, so a resolution the client did not make itself is a
-        resolution it never learns about, and the card sat there afterwards
-        saying "sign in to continue" over a run that had already moved on.
+        The card in the conversation answers a sign-in the same way it answers
+        an `ask_user`: through the ordinary approval decision, with no second
+        endpoint and no state of its own. That matters for more than symmetry
+        -- the transcript and the composer both key off the paused tool call,
+        so a resolution the client did not make itself is a resolution it
+        never learns about, and the card sat there afterwards saying "sign in
+        to continue" over a run that had already moved on.
 
-        The standalone page -- the link that reaches a phone from Slack or
-        email -- still captures at the moment the person presses the button,
-        because it is the only surface that can tell them "the browser holds
-        nothing for this site" while they are still in front of it. It passes
-        `saved` along on the decision, and this then has nothing to do.
-
-        Never fatal. A run is allowed to carry on with a browser that is signed
-        in and a login that was not kept, and the agent is told exactly that.
+        This used to *capture* here as well: read the browser, decide which
+        cookies were the login, encrypt them. That ran after the execution
+        claim had been committed, so anything it raised wrote no tool return
+        at all -- and a paused call with no return is a conversation nobody
+        can get out of. The whole hazard is gone with the capture: the browser
+        keeps its own profile, so finishing a sign-in is the person finishing
+        it, and there is nothing left here to fail.
         """
         from app.modules.agent.tools.browser.models import BrowserSignInResponse
 
@@ -321,86 +278,38 @@ class ResumeToolReturnBuilder:
             ).model_dump(mode="json")
 
         # Read from the decision's own payload, the way the `ask_user` branch
-        # above reads its answers. This used to query a table of this feature's
-        # own, keyed by the same tool call -- two stores for two values, and
-        # they drifted: the lookup filtered on a status the capture had already
-        # moved past, so the agent was told the login had not been kept every
-        # single time, including the times it had.
-        #
-        # `captured` distinguishes "the capture ran and kept nothing" from "no
-        # capture has run at all". Only the second is ours to do: a payload
-        # that carries the key is the standalone page's answer, and repeating
-        # its capture would read a browser the person has already left.
-        if "saved" in response:
-            saved = bool(response.get("saved"))
-            detail = response.get("saved_detail")
-            detail = str(detail) if detail else None
-        else:
-            saved, detail = await self._capture_for_resume(
-                user_id=user_id, conversation_id=conversation_id, origin=origin
+        # above reads its answers. The standalone page puts `working` there --
+        # what the site looked like straight after the person finished -- and
+        # a card answered in the chat has no browser of its own to ask, so its
+        # absence means "not checked" rather than "not working".
+        checked = "working" in response
+        working = bool(response.get("working"))
+        if not checked:
+            # Three states, not two. This used to fold "nobody looked" in
+            # with "it worked" and tell the agent "the site stopped asking
+            # for a login" -- a verification claim about a check that never
+            # ran. The standalone page verifies and puts `working` here; a
+            # card answered in the chat has no browser of its own to ask.
+            # Saying so is the difference between a fact and a guess, and
+            # this feature exists because of a guess of exactly this shape.
+            note = (
+                "Nobody checked whether it took, so open the page and see "
+                "before relying on it."
             )
-
-        kept = (
-            "It has been kept, so the next run will not ask."
-            if saved
-            else f"It was not kept{f' ({detail})' if detail else ''}, so a later "
-            "run may ask again."
-        )
+        elif working:
+            note = "The site stopped asking for a login."
+        else:
+            note = (
+                "The site still showed a login form straight afterwards, so "
+                "check before relying on it."
+            )
         return BrowserSignInResponse(
             success=True,
             outcome="signed_in",
             source="person",
             origin=origin,
-            saved=saved,
-            message=f"The person signed in. {kept} Open the page again to carry on.",
+            message=f"The person signed in. {note} Open the page again to carry on.",
         ).model_dump(mode="json")
-
-    async def _capture_for_resume(
-        self, *, user_id: UUID, conversation_id: UUID, origin: str
-    ) -> tuple[bool, str | None]:
-        """Read the browser and keep the login, for an answer given in the chat.
-
-        Best effort, and never fatal, because of where it runs. The caller has
-        already committed the execution claim by the time this is reached
-        (`_claim_execution`, committed on its own so a killed worker leaves
-        evidence). Raising from here therefore writes no tool return at all --
-        and a paused call with no return is a conversation nobody can get out
-        of: the composer is locked on the pause, `supersede_stale_pending_
-        interactions` only runs when a message is sent, and sending a message
-        is what the lock prevents. The card is not even retryable until the
-        claim ages out.
-
-        So the failure is absorbed and reported to the agent instead. That is
-        not the same as hiding it: `saved=False` travels back with the reason
-        in the message, the run carries on with a browser that *is* signed in,
-        and what it costs is being asked again next time. The alternative was
-        not "fail loudly", it was "fail silently and take the conversation with
-        it".
-        """
-        service = self._sign_in_service()
-        try:
-            return await service.capture(
-                user_id=user_id,
-                origin=origin,
-                conversation_id=conversation_id,
-                # Nobody is waiting to be offered "save anyway": this answer
-                # came from the conversation, not from the page that can ask.
-                force=True,
-            )
-        except Exception:
-            # Logged whole, at error, with the traceback: `capture` already
-            # answers a browser's *expected* failures as `(False, why)`, so
-            # anything arriving here is a bug or a store that is down, and it
-            # must be visible even though the run is allowed to continue.
-            logger.error(
-                "agent.sign_in.capture_on_resume_failed",
-                conversation_id=str(conversation_id),
-                origin=origin,
-                exc_info=True,
-            )
-            return False, "the login could not be read back"
-        finally:
-            await service.close()
 
     async def _execute_approved_tool_as_user(
         self,

@@ -57,7 +57,6 @@ REGISTRY: list[EncryptedColumn] = [
     EncryptedColumn(
         "agent_surfaces", "webhook_secret", "str", "agent_surfaces.webhook_secret"
     ),
-    EncryptedColumn("web_logins", "secret", "json", "web_logins.secret"),
 ]
 
 

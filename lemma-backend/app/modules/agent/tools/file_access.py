@@ -1,8 +1,9 @@
 """Dual-store file reads for agent tools.
 
 The pod datastore (``/me/...`` and other pod-visible paths) is the source of
-truth for user-facing files; the workspace sandbox (``/workspace/...`` or paths
-relative to the conversation cwd) is the agent's ephemeral working area. Tools
+truth for user-facing files; the workspace sandbox (an absolute path under the
+sandbox home, or one relative to the conversation cwd) is the agent's ephemeral
+working area. Tools
 that read a file should target the store they mean: ``read_pod_file_bytes`` for
 the datastore (grant-checked) and ``read_workspace_file_bytes`` for the sandbox.
 
@@ -19,7 +20,9 @@ uses); scratch files stay in the sandbox via ``file_manager.write_file``.
 from __future__ import annotations
 
 import mimetypes
+import posixpath
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from app.core.file_types import is_untyped_mime, sniff_media_mime
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.pod.pod_data_access import pod_services
@@ -50,12 +53,35 @@ def is_datastore_path(path: str) -> bool:
     """True when ``path`` addresses the pod datastore rather than the sandbox.
 
     Absolute paths (``/me/...`` and other pod-visible roots) are datastore
-    paths; ``/workspace/...`` and relative paths belong to the sandbox.
+    paths; anything under a runtime filesystem root -- the sandbox user's home
+    and ``/tmp`` -- and every relative path belong to the sandbox.
+
+    The roots are read from `RUNTIME_FILESYSTEM_ROOTS` rather than spelled here,
+    because the default when a path matches nothing is to route it at the pod:
+    a root this list forgot does not fail, it silently addresses the wrong disk.
+
+    The path is normalised first, so the prefix being compared is the one the
+    path actually names: `/tmp/../me/report` reads as `/me/report` and goes to
+    the pod, where a raw prefix check saw `/tmp/` and sent it to the sandbox.
+    Lexical only, deliberately -- symlinks are resolved by the containment clamp
+    on the sandbox side, which is where the filesystem to resolve them against
+    actually is.
+
+    Leading slashes collapse before that, because `normpath` will not do it:
+    POSIX leaves exactly two implementation-defined, so `//tmp/x` survives while
+    `///tmp/x` becomes `/tmp/x`. Joining a cwd that ends in `/` to an absolute
+    name produces precisely that doubled form, and it named the sandbox.
     """
-    candidate = (path or "").strip()
+    raw = (path or "").strip()
+    if raw.startswith("/"):
+        raw = "/" + raw.lstrip("/")
+    candidate = posixpath.normpath(raw)
     if not candidate.startswith("/"):
         return False
-    return candidate != "/workspace" and not candidate.startswith("/workspace/")
+    return not any(
+        candidate == root or candidate.startswith(f"{root}/")
+        for root in RUNTIME_FILESYSTEM_ROOTS
+    )
 
 
 async def read_pod_file_bytes(

@@ -117,7 +117,7 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "browser-logins": (
         f"{_CMD}.browser_logins",
         "app",
-        "Site logins saved from the agent's browser.",
+        "Sites the agent's browser is signed in to.",
         False,
     ),
     "profile": (

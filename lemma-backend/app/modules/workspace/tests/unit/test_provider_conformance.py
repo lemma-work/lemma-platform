@@ -305,7 +305,7 @@ async def test_new_e2b_sandboxes_do_not_answer_the_internet(
 ) -> None:
     """The exposure this closes was reachable, unauthenticated, in production.
 
-    `start-browser.sh` republishes the agent-browser dashboard on 0.0.0.0:4848,
+    `lemma-ensure-display.sh` republishes the agent-browser dashboard on 0.0.0.0:4848,
     which on Docker is the container's own network and on E2B is a public name.
     Nothing in front of it asks who you are. Closing public traffic at create is
     what puts E2B's own doorkeeper there; `reach_port` then carries the token.

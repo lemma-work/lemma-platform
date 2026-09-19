@@ -23,6 +23,7 @@ handed a fresh one without restarting anything.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from contextlib import suppress
 import hmac
 import logging
@@ -39,20 +40,17 @@ from .chrome import (
     BrowserNotRunning,
     DEFAULT_SESSION,
     is_safe_session,
-    ensure_port,
     keepalive,
+    default_display_size,
+    ensure_port,
     live_port,
     open_url,
     page_targets,
     set_display_size,
 )
 from .stream_proxy import CONTROL, VIEW, pump_binary
-from .state import (
-    StateOperationFailed,
-    load_session,
-    save_session,
-    session_for_domain,
-)
+from .cookies import forget_domains, list_cookie_domains
+from .marks import forget_marks, mark_signed_in, signed_in_sites
 
 #: Deliberately not under `/tmp/lemma-browser`, which `quiesce` deletes before a
 #: pause: the token has to survive a resume, and the browser profile must not.
@@ -174,15 +172,19 @@ class DisplayResizeResponse(BaseModel):
     size: str
 
 
-class StateSaveRequest(BaseModel):
-    domain: str | None = None
-    session: str | None = None
+class ForgetRequest(BaseModel):
+    #: Exact cookie hosts, chosen by the backend. The relay does not know
+    #: which of them are "one site" and must not guess -- see `cookies.py`.
+    domains: list[str] = Field(default_factory=list)
+    #: The registrable domain those hosts belong to, so the "they signed in
+    #: here" mark goes with them. Grouping is the backend's question, so the
+    #: answer arrives rather than being worked out here.
+    sites: list[str] = Field(default_factory=list)
 
 
-class StateLoadRequest(BaseModel):
-    state: dict = Field(default_factory=dict)
-    domain: str | None = None
-    session: str | None = None
+class SignedInRequest(BaseModel):
+    #: One registrable domain, already grouped by the backend.
+    site: str
 
 
 def _token() -> str:
@@ -229,11 +231,15 @@ def _session_name(session: str | None, domain: str | None) -> str:
     A caller-supplied name is checked before it is used, because it becomes a
     profile directory. Refused with a 422 rather than coerced: a name silently
     rewritten would point the browser somewhere the caller did not ask for and
-    still report success. A name *derived* from a domain is safe by
-    construction, but goes through the same check so there is one answer to
-    "what may a session be called".
+    still report success.
+
+    `domain` no longer derives one. A sign-in used to open a browser named for
+    its site so that a capture taken from it could only contain that site;
+    nothing is captured now, and everything shares the one durable profile, so
+    a domain says which page to open and nothing about which browser.
     """
-    candidate = session or (session_for_domain(domain) if domain else DEFAULT_SESSION)
+    del domain
+    candidate = session or DEFAULT_SESSION
     if candidate != DEFAULT_SESSION and not is_safe_session(candidate):
         raise HTTPException(
             status_code=422, detail=f"{candidate!r} is not a usable session name"
@@ -241,22 +247,60 @@ def _session_name(session: str | None, domain: str | None) -> str:
     return candidate
 
 
+#: How many VNC sockets this relay is serving right now.
+#:
+#: Counted here rather than in the API, which was counting in a
+#: process-local dict: two people watching one sandbox can arrive through
+#: different API workers, and the first to leave then reset the display
+#: under the second. One sandbox has exactly one relay, so this is the only
+#: place the question has a single answer.
+_viewers = 0
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Lemma browser relay", docs_url=None, redoc_url=None)
 
+    async def _vnc_is_listening() -> bool:
+        """Whether websockify is accepting connections on its port.
+
+        The picture is `x11vnc` in front of Xvfb with `websockify` in front
+        of that, and none of it is this process -- so "the relay answered"
+        has never meant "a viewer will get a picture". Probing the socket is
+        the only thing that does.
+        """
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", VNC_WS_PORT), timeout=2.0
+            )
+        except OSError, asyncio.TimeoutError:
+            return False
+        writer.close()
+        with contextlib.suppress(OSError):
+            await writer.wait_closed()
+        return True
+
     @app.get("/health")
     async def health() -> dict:
-        """Whether Chrome is up, without starting it.
+        """Whether Chrome is up, and whether a viewer could see it.
 
         A paused or idle workspace has no browser, and that is its resting
         state rather than a fault -- so this reports it as one and never
         conjures a browser to answer a health check.
+
+        `vnc` is separate from `chrome` because they fail separately and the
+        remedies differ. A viewer that could not get a picture used to close
+        with 4409, "the browser is not running", which was the same answer
+        for a browser that was down, a display that never came up, and a
+        websockify that had died -- three faults, one sentence, and no way
+        to tell them apart from outside the sandbox.
         """
+        vnc = "listening" if await _vnc_is_listening() else "down"
+        _ = _viewers
         try:
             await live_port()
         except BrowserNotRunning:
-            return {"chrome": "stopped"}
-        return {"chrome": "running"}
+            return {"chrome": "stopped", "vnc": vnc, "viewers": _viewers}
+        return {"chrome": "running", "vnc": vnc, "viewers": _viewers}
 
     @app.get("/targets", dependencies=[Depends(require_token)])
     async def targets(
@@ -334,29 +378,95 @@ def create_app() -> FastAPI:
 
         noVNC's own `resizeSession` cannot do this for us: it refuses while
         the client is view-only, and watching is the default here.
+
+        **Clamped to the starting size, not to the framebuffer ceiling.** A
+        maximised pane on a large monitor would otherwise leave a 1 vCPU /
+        2 GB sandbox running at 1920x1200 -- 1.67x the pixels for x11vnc to
+        encode and for `agent-browser record` to grab, which was measured to
+        lose a recording part-way through on a loaded runner. An agent that
+        genuinely wants the ceiling can still ask for it with
+        `set-display-size`, deliberately, for as long as it needs; a person
+        opening a panel should not be able to do it by accident.
         """
-        size = await set_display_size(request.width, request.height)
+        cap_width, cap_height = default_display_size()
+        size = await set_display_size(
+            min(request.width, cap_width), min(request.height, cap_height)
+        )
         if size is None:
             raise HTTPException(
                 status_code=409, detail="the display could not be resized"
             )
         return DisplayResizeResponse(size=size)
 
-    @app.post("/state:save", dependencies=[Depends(require_token)])
-    async def state_save(request: StateSaveRequest) -> dict:
-        session = _session_name(request.session, request.domain)
-        try:
-            return {"state": await save_session(session=session)}
-        except StateOperationFailed as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+    @app.post(
+        "/display:reset",
+        response_model=DisplayResizeResponse,
+        dependencies=[Depends(require_token)],
+    )
+    async def display_reset() -> DisplayResizeResponse:
+        """Put the display back to its starting size.
 
-    @app.post("/state:load", status_code=204, dependencies=[Depends(require_token)])
-    async def state_load(request: StateLoadRequest) -> None:
-        session = _session_name(request.session, request.domain)
+        Called when the last person watching disconnects. Without it the
+        sandbox kept whichever shape the last pane happened to be for the
+        rest of its life -- so an agent taking a screenshot or a recording
+        afterwards inherited the dimensions of a sidebar it could not see and
+        had no way to know about. A predictable resting size is something it
+        can plan against.
+        """
+        width, height = default_display_size()
+        size = await set_display_size(width, height)
+        if size is None:
+            raise HTTPException(status_code=409, detail="the display did not reset")
+        return DisplayResizeResponse(size=size)
+
+    @app.get("/profile:cookies", dependencies=[Depends(require_token)])
+    async def profile_cookies(start: bool = False) -> dict:
+        """Which hosts the browser holds cookies for. No values, ever.
+
+        The cookies are read over CDP, so this needs Chrome running -- and
+        Chrome not running does *not* mean there are no logins: the profile
+        is on disk either way, and the daemon retires the browser after five
+        idle minutes. So "not running" is "cannot say", not "nothing", and
+        `start` is the caller saying it is willing to pay for an answer.
+
+        `signed_in` rides along in both branches because it costs a file
+        read rather than a browser: it is the set of sites somebody said
+        they signed in to, which is the only thing here that distinguishes a
+        login from a tracking cookie. See `marks.py` for why nothing tries
+        to work that out from the cookies themselves.
+        """
+        marked = signed_in_sites()
         try:
-            await load_session(request.state, session=session)
-        except StateOperationFailed as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            port = await ensure_port() if start else await live_port()
+        except BrowserNotRunning:
+            return {"running": False, "cookies": [], "signed_in": marked}
+        return {
+            "running": True,
+            "cookies": await list_cookie_domains(port=port),
+            "signed_in": marked,
+        }
+
+    @app.post("/profile:signed-in", dependencies=[Depends(require_token)])
+    async def profile_signed_in(request: SignedInRequest) -> dict:
+        """Record that somebody signed in to this site.
+
+        No browser needed: this is a fact a person stated, not one read off
+        the profile, and it must survive being recorded while Chrome is
+        between idle retirements.
+        """
+        return {"signed_in": mark_signed_in(request.site)}
+
+    @app.post("/profile:forget", dependencies=[Depends(require_token)])
+    async def profile_forget(request: ForgetRequest) -> dict:
+        try:
+            port = await live_port()
+        except BrowserNotRunning:
+            raise HTTPException(status_code=409, detail="the browser is not running")
+        dropped = await forget_domains(request.domains, port=port)
+        # The mark goes even when no cookie did. A site whose session had
+        # already lapsed would otherwise keep reading "signed in" for as
+        # long as the profile lived, with nothing left to sign out of.
+        return {"dropped": dropped, "signed_in": forget_marks(request.sites)}
 
     @app.websocket("/vnc")
     async def vnc_socket(
@@ -407,16 +517,19 @@ def create_app() -> FastAPI:
             return
 
         await websocket.accept()
+        global _viewers
+        _viewers += 1
         # Watching is not a command, so without this the agent's idle timeout
         # retires the browser out from under somebody reading the page.
         #
         # `session_name`, not the default -- the same distinction the liveness
-        # check above already makes. A sign-in runs in `login-<host>` and a
-        # watch names its conversation's session, so keeping the *default*
-        # session warm left the browser actually on screen idle: retired after
-        # two minutes, mid-page, and for a sign-in that also takes the profile
-        # with it. It kept a browser nobody was watching alive at the same
-        # time, in a sandbox where the memory guard kills on ~220 MB free.
+        # check above already makes. This used to keep the *default* session
+        # warm while a sign-in ran in `login-<host>` and a watch named its
+        # conversation's session -- so the browser actually on screen went
+        # idle and retired mid-page, taking a sign-in with it, while a browser
+        # nobody was watching was held open in a sandbox whose memory guard
+        # kills on ~220 MB free. There is one session now, so the name this
+        # keeps warm and the one being watched cannot disagree.
         keepalive_task = create_background_task(_keepalive_loop(session_name))
         # Nothing is claimed here. There was a lease -- a file the agent's own
         # commands read before acting, so a person driving could not be typed
@@ -443,6 +556,7 @@ def create_app() -> FastAPI:
             with suppress(RuntimeError):
                 await websocket.close(code=CLOSE_UPSTREAM_GONE)
         finally:
+            _viewers = max(0, _viewers - 1)
             keepalive_task.cancel()
             # Awaited, not just cancelled: a cancelled task is not finished
             # until it has been collected, and leaving it uncollected is how a

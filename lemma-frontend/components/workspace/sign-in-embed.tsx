@@ -53,7 +53,6 @@ export function SignInEmbed({
      *  can put itself away rather than leaving a spent sign-in on screen. */
     onResolved?: () => void;
 }) {
-    const [forced, setForced] = useState(false);
     const [liveUrl, setLiveUrl] = useState<string | null>(null);
     // What the person was told, kept here rather than re-read: the answer
     // resolves the pause, so asking again returns nothing at all.
@@ -67,7 +66,7 @@ export function SignInEmbed({
     });
 
     const answer = useMutation({
-        mutationFn: (options: { signedIn: boolean; force?: boolean }) =>
+        mutationFn: (options: { signedIn: boolean }) =>
             getLemmaClient().webLogins.answerSignIn(conversationId, toolCallId, options),
         onSuccess: (result) => {
             setOutcome(result);
@@ -100,11 +99,9 @@ export function SignInEmbed({
                     description={
                         !outcome.signed_in
                             ? 'The agent knows you could not sign in, and will not wait. You can close this.'
-                            : outcome.saved
-                              ? 'The agent is carrying on, and the login has been kept so you will not be asked next time. You can close this.'
-                              : `The agent is carrying on. The login could not be kept${
-                                    outcome.saved_detail ? ` (${outcome.saved_detail})` : ''
-                                }, so you may be asked again.`
+                            : outcome.working
+                              ? 'The agent is carrying on. The browser stays signed in, so you will not be asked again. You can close this.'
+                              : 'The agent is carrying on, but the site was still showing a login form just now — so you may be asked again. You can close this.'
                     }
                 />
             </Centered>
@@ -172,18 +169,9 @@ export function SignInEmbed({
 
             {answer.isError ? (
                 <div className="rounded-lg border border-[var(--state-warning)] px-3 py-2 text-sm">
-                    It does not look like you are signed in yet — the browser holds nothing
-                    for this site.{' '}
-                    <Button
-                        variant="quiet"
-                        size="xs"
-                        onClick={() => {
-                            setForced(true);
-                            answer.mutate({ signedIn: true, force: true });
-                        }}
-                    >
-                        Save anyway
-                    </Button>
+                    That did not reach the agent. It may have stopped waiting — try
+                    again, and if it keeps failing you can close this and tell it in
+                    the conversation.
                 </div>
             ) : null}
 
@@ -199,7 +187,7 @@ export function SignInEmbed({
                 <Button
                     variant="primary"
                     size={compact ? 'xs' : undefined}
-                    onClick={() => answer.mutate({ signedIn: true, force: forced })}
+                    onClick={() => answer.mutate({ signedIn: true })}
                     disabled={answer.isPending}
                 >
                     {answer.isPending ? 'Checking…' : 'I’m signed in'}

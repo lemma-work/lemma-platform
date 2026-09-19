@@ -81,6 +81,16 @@ class WebFetchPage(BaseModel):
         default=None, description="Length of the extracted markdown."
     )
     fetched_with: Optional[Literal["http", "browser"]] = None
+    notice: Optional[str] = Field(
+        default=None,
+        description=(
+            "Something worth knowing about a capture that still succeeded. "
+            "Set when a page rendered with almost no text but produced the "
+            "screenshot or PDF that was asked for -- a chart or an image-led "
+            "page is a legitimate capture, and dropping its files because "
+            "the markdown was short would throw away what was wanted."
+        ),
+    )
     error: Optional[str] = None
 
 
@@ -89,4 +99,14 @@ class WebFetchResponse(BaseModel):
     out_dir: Optional[str] = None
     pages: list[WebFetchPage] = Field(default_factory=list)
     message: Optional[str] = None
+    notice: Optional[str] = Field(
+        default=None,
+        description=(
+            "Something worth knowing about a capture that still succeeded. "
+            "Set when a page rendered with almost no text but produced the "
+            "screenshot or PDF that was asked for -- a chart or an image-led "
+            "page is a legitimate capture, and dropping its files because "
+            "the markdown was short would throw away what was wanted."
+        ),
+    )
     error: Optional[str] = None

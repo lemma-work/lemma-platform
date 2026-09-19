@@ -7,6 +7,7 @@ open sockets.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -268,40 +269,31 @@ def _service_with_relay(relay: _VncRelay):
     return _Service()
 
 
-async def test_a_plain_watch_with_a_conversation_lands_in_that_conversations_session() -> (
-    None
-):
-    """`run_browser_script` puts every agent browser command in
-    `agent_session(conversation_id)` -- its own session and profile, so one
-    conversation's agent never inherits another's cookies. A plain watch/drive
-    naming that same conversation has to resolve the same session, or it
-    finds nothing the agent touched."""
-    from app.modules.workspace.contracts.browser import agent_session
+async def test_no_caller_names_a_browser_session() -> None:
+    """There is one browser per sandbox, so nothing picks between them.
 
+    A conversation used to select `agent_session(conversation_id)`, a Chrome
+    and profile of its own -- which is exactly what forced a sign-in to be
+    captured in one browser and rebuilt in another, and the rebuilding is what
+    kept being wrong. The conversation id is still accepted, for logging and
+    the keepalive; it must no longer steer anything.
+    """
     relay = _VncRelay()
-    conversation_id = uuid4()
     await _service_with_relay(relay).open_vnc_session(
-        uuid4(), mode="view", conversation_id=conversation_id
+        uuid4(), mode="view", conversation_id=uuid4()
     )
-    assert relay.ensured == {
-        "origin": None,
-        "session": agent_session(conversation_id),
-        "domain": None,
-    }
+    assert relay.ensured == {"origin": None, "session": None, "domain": None}
 
 
-async def test_a_plain_watch_with_no_conversation_lands_in_the_shared_default_session() -> (
-    None
-):
+async def test_a_plain_watch_with_no_conversation_lands_in_the_same_browser() -> None:
     relay = _VncRelay()
     await _service_with_relay(relay).open_vnc_session(uuid4(), mode="view")
     assert relay.ensured == {"origin": None, "session": None, "domain": None}
 
 
-async def test_a_sign_ins_own_site_session_wins_over_a_conversation() -> None:
-    """`save_login_state` reads a sign-in's capture back by the site's own
-    domain-derived session name -- a conversation id present alongside
-    `origin` must not steer it into the conversation's session instead."""
+async def test_a_sign_in_steers_the_one_browser_rather_than_opening_another() -> None:
+    """An origin still steers -- it just does so in the browser everything
+    else is already using, instead of a session named for the site."""
 
     relay = _VncRelay()
     await _service_with_relay(relay).open_vnc_session(
@@ -413,3 +405,164 @@ async def test_every_way_a_socket_is_seen_to_end_is_handled() -> None:
         socket = _WebSocketThatIsAlreadyGone(failure)
         await view._refuse(socket, view.CLOSE_NO_BROWSER)
         assert socket.close_attempts == 1, f"{type(failure).__name__} was not handled"
+
+
+# ---------------------------------------------------------------------------
+# Putting the display back
+# ---------------------------------------------------------------------------
+
+
+class _ResettableService:
+    """A view service that records whether it was asked to reset."""
+
+    def __init__(self, *, fails: bool = False) -> None:
+        self.resets = 0
+        self.fails = fails
+
+    #: What the sandbox's own relay says is watching. `None` is an older
+    #: image that cannot answer.
+    watching: int | None = 0
+
+    async def viewers(self, _user_id) -> int | None:
+        return self.watching
+
+    async def reset_display(self, _user_id) -> str:
+        self.resets += 1
+        if self.fails:
+            raise RuntimeError("the relay went away")
+        return "1440x960"
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture
+def watching(monkeypatch):
+    """The viewer bookkeeping, with the settle window collapsed.
+
+    The service and the window are both parameters of `watch_ended`, so the
+    double goes in through the call rather than being patched onto the
+    module: patching the constructor a subject reaches for from inside it
+    puts a double in front of half of what is under test.
+    """
+    from app.modules.workspace.api.controllers import browser_view_watchers as mod
+
+    service = _ResettableService()
+    watcher = uuid4()
+    try:
+        yield mod, watcher, service
+    finally:
+        mod._watchers.pop(watcher, None)
+
+
+def _ended(mod, watcher, service) -> None:
+    """A viewer leaving, with the collaborators injected."""
+    mod.watch_ended(watcher, build_service=lambda: service, settle_seconds=0.01)
+
+
+async def _settle() -> None:
+    """Let the detached reset run."""
+    await asyncio.sleep(0.05)
+
+
+async def test_the_last_viewer_leaving_puts_the_display_back(watching) -> None:
+    """Counted server-side, because a pane often never runs its cleanup.
+
+    A closed tab, a killed renderer or a dropped network fires no unmount.
+    The socket closing is the only signal that is always there, which is why
+    this does not live in the React effect it would be tidier in.
+    """
+    mod, watcher, service = watching
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 1
+    assert watcher not in mod._watchers
+
+
+async def test_a_second_viewer_leaving_does_not_resize_under_the_first(
+    watching,
+) -> None:
+    """Two people can watch one display. The first to close must not take the
+    other's picture back to the default shape underneath them."""
+    mod, watcher, service = watching
+    mod._watchers[watcher] = 2
+
+    _ended(mod, watcher, service)
+    await _settle()
+    assert service.resets == 0, "somebody is still watching"
+    assert mod._watchers[watcher] == 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+    assert service.resets == 1
+
+
+async def test_somebody_reconnecting_keeps_their_shape(watching) -> None:
+    """The reason the reset waits at all.
+
+    A socket closing is not a person leaving: a dropped network, a reload,
+    and the pane's own retry after `CLOSE_NO_BROWSER` each close one and open
+    another a moment later. Resetting on the close resized the display under
+    the handshake that followed -- which the browser e2e caught as a
+    framebuffer that never painted, having agreed its dimensions just before
+    they changed.
+    """
+    mod, watcher, service = watching
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    # Arrives while the reset is still settling, as a reconnect does.
+    mod._watchers[watcher] = 1
+    await _settle()
+
+    assert service.resets == 0
+
+
+async def test_a_reset_that_fails_does_not_fail_the_socket(watching) -> None:
+    """Tidying up is best effort. The socket has already done its job, and a
+    sandbox that went away between the last frame and the close is ordinary."""
+    mod, watcher, _ = watching
+    broken = _ResettableService(fails=True)
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, broken)
+    await _settle()
+
+    assert broken.resets == 1
+
+
+async def test_a_viewer_on_another_worker_keeps_their_shape(watching) -> None:
+    """The count that decides this lives in the sandbox, not in a process.
+
+    `_watchers` is a module-level dict, so two people watching one sandbox
+    through different API workers each see a count of one. The first to
+    close saw zero locally and reset the display under the second. The relay
+    is per-sandbox, so its count is the only one with a single answer.
+    """
+    mod, watcher, service = watching
+    service.watching = 1
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 0, "somebody is still attached to this sandbox"
+
+
+async def test_an_image_that_cannot_count_falls_back_to_the_local_view(
+    watching,
+) -> None:
+    """An older relay has no `viewers` field. Refusing to reset on that
+    would leave every display stuck at the last pane's shape, which is the
+    bug the reset exists for."""
+    mod, watcher, service = watching
+    service.watching = None
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 1

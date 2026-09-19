@@ -82,7 +82,18 @@ _CAPABILITY_ONLY_TOOLSETS: frozenset[AgentToolset] = frozenset(
 # prefix. The singleton object identities let the capability assembler split the
 # assembled toolset list into visible-core vs deferred-extra.
 EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
-    AgentToolset.POD,
+    # POD is deliberately NOT here, and it is the one entry whose absence needs
+    # a reason. It was deferred like the rest, and the pod tools then went
+    # almost unused — most conversations that touched pod files did it through
+    # the `lemma` CLI in a shell instead, and paid for it in CLI usage errors.
+    #
+    # Deferral was not the whole cause: the workspace prompt taught the CLI
+    # equivalent of most of those tools in the *visible* prefix, so the bypass
+    # was cheaper than the search. Both halves changed together. Visible POD
+    # costs real prefix budget in every pod-default prompt, which is the trade
+    # being made on purpose: the tools that touch the pod's own data are the
+    # ones that must not need finding first.
+    #
     # An org with a couple of MCP servers installed can expose thousands of
     # operations. Deferred so the model finds them via search_tools rather than
     # carrying the surface in every prompt prefix.
@@ -108,6 +119,11 @@ EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     # is now `agent-browser` through `exec_command`, so what is left behind
     # ToolSearch is the one tool that pauses the run.
     AgentToolset.BROWSER,
+    # Speech is a minority of turns and now three tools rather than two, so it
+    # is behind the search like the browser. It went the other way to POD for
+    # the opposite reason: nobody reaches for `say` by accident, and a prompt
+    # that mentions voice is a prompt where finding it costs one call.
+    AgentToolset.SPEECH,
 )
 EXTRA_TOOLSET_OBJECTS: tuple[AbstractToolset[ConversationContext], ...] = tuple(
     _TOOLSET_BY_NAME[name] for name in EXTRA_TOOLSETS

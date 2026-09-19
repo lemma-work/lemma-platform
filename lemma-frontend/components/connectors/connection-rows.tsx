@@ -1,6 +1,6 @@
 'use client';
 
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { CheckCircle, Database, ExternalLink, Globe2, KeyRound, Pencil, Plus, RefreshCw, Wrench } from '@/components/ui/icons';
@@ -56,15 +56,22 @@ function KindTile({ kind }: { kind: string | null | undefined }) {
  * way you browse for Slack, you arrive already knowing you have one. Rendered
  * from whichever catalog entries advertise a tenant-configured kind, so a
  * fourth one appears here without a code change.
+ *
+ * `extra` is for the one door that is not a catalog entry -- the sandbox
+ * browser's own logins, which no connector describes. It belongs in this grid
+ * rather than in a section of its own for the same reason the others do: it
+ * is a place your agent can reach that you set up yourself.
  */
 export function AddYourOwnRow({
     connectors,
     onAdd,
+    extra,
 }: {
     connectors: Connector[];
     onAdd: (connector: Connector) => void;
+    extra?: ReactNode;
 }) {
-    if (connectors.length === 0) return null;
+    if (connectors.length === 0 && !extra) return null;
 
     return (
         <section className="context-section">
@@ -103,6 +110,7 @@ export function AddYourOwnRow({
                         </Button>
                     );
                 })}
+                {extra}
             </div>
         </section>
     );

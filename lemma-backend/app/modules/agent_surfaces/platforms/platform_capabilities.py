@@ -384,7 +384,7 @@ def platform_agent_guidance(platform: str | None) -> str:
             delivery.append(
                 "- Files: call `display_resource` with `type=FILE, path=<pod file "
                 "path>` — a pod path such as `/me/reports/q3.pdf`. A "
-                "`/workspace/...` path is your sandbox and is rejected: upload it "
+                "sandbox path is your own working area and is rejected: upload it "
                 "with `lemma files upload` first and display the pod path that "
                 "comes back. The surface delivers the file to the user "
                 "automatically — never paste raw bytes or a link. Files up to "

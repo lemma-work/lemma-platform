@@ -19,6 +19,7 @@ from sandbox_runtime.protocol import (
     PythonExecutionState,
     PythonResult,
 )
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.sandbox_session import SandboxWorkspaceSession
 
 
@@ -355,7 +356,7 @@ async def test_relative_initial_cwd_is_canonicalized_under_workspace() -> None:
 
     await session.execute_code("40 + 2")
 
-    assert client.python_creates[0]["cwd"] == "/workspace/tasks/function-1"
+    assert client.python_creates[0]["cwd"] == f"{WORKSPACE_ROOT}/tasks/function-1"
 
 
 @pytest.mark.asyncio
@@ -373,7 +374,7 @@ async def test_every_execution_carries_the_directory_the_shell_uses() -> None:
         client=client,  # type: ignore[arg-type]
         sandbox_id=uuid4(),
         session_id="conversation-1",
-        initial_cwd="/workspace/c/2026-08-21/0d8y15k6",
+        initial_cwd=f"{WORKSPACE_ROOT}/c/2026-08-21/0d8y15k6",
     )
 
     await session.exec_command(cmd="pwd")
@@ -383,7 +384,7 @@ async def test_every_execution_carries_the_directory_the_shell_uses() -> None:
     await session.execute_code("import os; os.getcwd()")
 
     shell_cwd = client.started[0]["cwd"]
-    assert shell_cwd == "/workspace/c/2026-08-21/0d8y15k6"
+    assert shell_cwd == f"{WORKSPACE_ROOT}/c/2026-08-21/0d8y15k6"
     assert [call["cwd"] for call in client.python_executes] == [shell_cwd, shell_cwd]
     assert client.python_creates[0]["cwd"] == shell_cwd
 
@@ -398,7 +399,11 @@ async def test_workspace_paths_cannot_escape_runtime_roots() -> None:
     with pytest.raises(ValueError, match="must remain under"):
         await session._resolve_path("/etc/passwd")
 
-    assert await session._resolve_path("../tmp/result") == "/tmp/result"
+    # A relative path may still climb out of one allowed root into another.
+    # Written from the root's own depth rather than assuming one segment,
+    # which is what `../tmp` quietly assumed while the root was WORKSPACE_ROOT.
+    up = "../" * WORKSPACE_ROOT.strip("/").count("/") + "../"
+    assert await session._resolve_path(f"{up}tmp/result") == "/tmp/result"
     assert await session._resolve_path("/tmp/result") == "/tmp/result"
 
 

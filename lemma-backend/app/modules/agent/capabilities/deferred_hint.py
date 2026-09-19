@@ -18,9 +18,9 @@ from app.modules.agent.tools.registry import (
     browser_toolset,
     connectors_toolset,
     messaging_toolset,
-    pod_toolset,
-    waiting_toolset,
+    speech_toolset,
     subagents_toolset,
+    waiting_toolset,
 )
 
 # Identity → human label for the deferred toolset groups. Every deferred
@@ -29,12 +29,12 @@ from app.modules.agent.tools.registry import (
 # about when to go looking. CONNECTORS sat unlabelled here for exactly that
 # reason and its tools were correspondingly hard to discover.
 _GROUP_LABELS: dict[int, str] = {
-    id(pod_toolset): "Pod datastore & files",
     id(subagents_toolset): "Sub-agent delegation",
     id(connectors_toolset): "Connected third-party apps",
     id(messaging_toolset): "Reaching pod members",
     id(waiting_toolset): "Pausing and resuming later",
     id(browser_toolset): "Driving a real browser",
+    id(speech_toolset): "Speaking and transcribing",
 }
 
 

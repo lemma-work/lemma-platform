@@ -1,64 +1,41 @@
-"""Which browser a caller means, named once.
+"""Which browser a caller means. There is one, and this says so.
 
-The answer used to be worked out independently wherever it was needed, and the
-copies disagreed: a viewer opened a page in one session and attached the person
-to another; a saved login was injected into a third that the agent's own
-commands never selected. Each derivation was defensible on its own and the
-feature did not work.
+There used to be three kinds of browser in a sandbox and a function here to
+name two of them: `agent_session(conversation_id)` gave each conversation its
+own Chrome, and the relay named a third per site for a sign-in to happen in.
+Each was a separate profile directory, because Chrome locks the one it opens.
 
-Two functions, and they are the whole of it. There were three purposes and a
-`BrowserContext` dataclass here as well, carrying a sandbox, an endpoint and a
-target id; it had no callers, and the invariant it was introduced to enforce
-lived in this docstring while every caller went on choosing sessions for
-itself. A comment is not an abstraction. What actually stopped the copies
-disagreeing is that there is one place each name is spelled, so this is that
-place and nothing more.
+All three are now one, and the reason is what a login is for. A sign-in
+captured in a site's browser had to be carried into the conversation's
+browser, and reconstructing it there meant deciding which cookies *were* the
+login -- a guess that was wrong in a different way three times, and the last
+time told the person their login had been kept when what had been kept was a
+cookie banner's consent flag. A browser that keeps its own profile has nothing
+to carry and nothing to guess.
 
-* `agent_session` -- the agent working. One per conversation, so two
-  conversations do not read each other's cookies. The sandbox is per *person*,
-  shared by every agent they run, and the session is the only thing between
-  them.
-A sign-in's browser is *not* named here. It is named for the site, and the
-relay is what names it (`browser_relay.state.session_for_domain`) because the
-relay is what has to find the profile on disk. Spelling it here as well was a
-second derivation of one name -- the exact thing this module exists to prevent
--- and the copy had no production caller at all: everything passes the domain
-and lets the relay answer.
+What that trades away, stated plainly because it was a real property: a
+conversation no longer has cookies of its own. Signing in to a site in one
+conversation signs the person in for every later one, without being asked
+again. That is how the browser on their own desk behaves, and the sandbox was
+already one machine per person -- an agent with a shell in it could always
+*use* any session that existed. What changes is that the session now outlives
+the conversation that created it.
 
-Watching or driving names no session of its own either: a viewer joins one of
-these, and which one is the caller's to say.
-
-The names are *policy* and live here. A `target_id` is *fact* and comes back
-from the relay, which is the only thing that knows what the browser has open.
+An agent that genuinely needs two browsers at once -- two accounts on one site,
+side by side -- still passes `--session` with a `--profile` of its own, and
+those stay under `/tmp` where they die with the sandbox. That is the escape
+hatch, and it is deliberately the noisy one.
 """
 
 from __future__ import annotations
 
-from uuid import UUID
-
-
-#: The session the image's own tooling defaults to. Kept as the fallback for a
-#: caller with no conversation -- a CLI, a test -- rather than as anybody's
-#: normal answer.
+#: The session every browser command lands in, and the one the image's own
+#: `AGENT_BROWSER_SESSION` names. A shell in the sandbox inherits it, so the
+#: agent's `agent-browser` in `exec_command`, the relay, and the pane a person
+#: watches are all looking at the same Chrome without anyone passing a name.
 DEFAULT_SESSION = "workspace"
-
-
-def agent_session(conversation_id: UUID | None) -> str:
-    """The session one conversation's agent browses in.
-
-    Per conversation rather than per person, because the sandbox is already per
-    person: without this, an agent in one pod inherits every cookie an agent in
-    another pod picked up, including a saved login the person granted for a
-    different task entirely. `agent-browser --session` is a whole separate
-    browser with its own profile, which is the isolation we want and already
-    have the mechanism for.
-    """
-    if conversation_id is None:
-        return DEFAULT_SESSION
-    return f"conv-{conversation_id.hex}"
 
 
 __all__ = [
     "DEFAULT_SESSION",
-    "agent_session",
 ]

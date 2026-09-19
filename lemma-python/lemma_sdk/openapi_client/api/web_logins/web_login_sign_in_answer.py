@@ -76,11 +76,12 @@ def sync_detailed(
 ) -> Response[ErrorResponse | SignInOutcomeResponse]:
     r"""Say whether you signed in
 
-     Capture what the browser now holds, and let the waiting run carry on.
+     Let the waiting run carry on, and check the site while they are here.
 
-    The capture happens here, while the person is still present, rather than
-    later in the resumed run -- so that \"it did not work\" is something they can
-    be told at the moment they can still fix it.
+    Nothing is captured: the browser keeps its own profile, so finishing a
+    sign-in is the person finishing it. What this does do is look at the site
+    straight afterwards, while they are still present -- so \"it still wants a
+    login\" is something they hear now rather than the agent discovering it.
 
     One route for both answers because it is one answer. Two routes meant two
     status writes with two different guards, and the weaker one let a stale tab
@@ -121,11 +122,12 @@ def sync(
 ) -> ErrorResponse | SignInOutcomeResponse | None:
     r"""Say whether you signed in
 
-     Capture what the browser now holds, and let the waiting run carry on.
+     Let the waiting run carry on, and check the site while they are here.
 
-    The capture happens here, while the person is still present, rather than
-    later in the resumed run -- so that \"it did not work\" is something they can
-    be told at the moment they can still fix it.
+    Nothing is captured: the browser keeps its own profile, so finishing a
+    sign-in is the person finishing it. What this does do is look at the site
+    straight afterwards, while they are still present -- so \"it still wants a
+    login\" is something they hear now rather than the agent discovering it.
 
     One route for both answers because it is one answer. Two routes meant two
     status writes with two different guards, and the weaker one let a stale tab
@@ -161,11 +163,12 @@ async def asyncio_detailed(
 ) -> Response[ErrorResponse | SignInOutcomeResponse]:
     r"""Say whether you signed in
 
-     Capture what the browser now holds, and let the waiting run carry on.
+     Let the waiting run carry on, and check the site while they are here.
 
-    The capture happens here, while the person is still present, rather than
-    later in the resumed run -- so that \"it did not work\" is something they can
-    be told at the moment they can still fix it.
+    Nothing is captured: the browser keeps its own profile, so finishing a
+    sign-in is the person finishing it. What this does do is look at the site
+    straight afterwards, while they are still present -- so \"it still wants a
+    login\" is something they hear now rather than the agent discovering it.
 
     One route for both answers because it is one answer. Two routes meant two
     status writes with two different guards, and the weaker one let a stale tab
@@ -204,11 +207,12 @@ async def asyncio(
 ) -> ErrorResponse | SignInOutcomeResponse | None:
     r"""Say whether you signed in
 
-     Capture what the browser now holds, and let the waiting run carry on.
+     Let the waiting run carry on, and check the site while they are here.
 
-    The capture happens here, while the person is still present, rather than
-    later in the resumed run -- so that \"it did not work\" is something they can
-    be told at the moment they can still fix it.
+    Nothing is captured: the browser keeps its own profile, so finishing a
+    sign-in is the person finishing it. What this does do is look at the site
+    straight afterwards, while they are still present -- so \"it still wants a
+    login\" is something they hear now rather than the agent discovering it.
 
     One route for both answers because it is one answer. Two routes meant two
     status writes with two different guards, and the weaker one let a stale tab

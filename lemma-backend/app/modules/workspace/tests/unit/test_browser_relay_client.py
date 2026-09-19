@@ -36,14 +36,21 @@ from app.modules.workspace.services.browser_relay_client import (
 class _Relay:
     """A port that answers however the test needs it to, over real HTTP."""
 
-    def __init__(self, status: int) -> None:
+    def __init__(self, status: int, vnc: str | None = "listening") -> None:
         self.status = status
+        self.vnc = vnc
         relay = self
 
         class _Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
+                healthy = (
+                    b'{"chrome": "running", "vnc": "%s"}' % relay.vnc.encode()
+                    if relay.vnc is not None
+                    # An image that predates the `vnc` field.
+                    else b'{"chrome": "running"}'
+                )
                 body = (
-                    b'{"chrome": "running"}'
+                    healthy
                     if relay.status == 200
                     # E2B's edge says exactly this for a port nothing has bound.
                     else b'{"message": "The sandbox is running but port is not open"}'
@@ -231,3 +238,57 @@ async def test_a_clamped_resize_reports_what_the_display_became(_key) -> None:
         relay.close()
 
     assert size == "1920x1200"
+
+
+async def test_a_display_nothing_is_serving_says_so(_key) -> None:
+    """The reason `vnc` is reported separately from `chrome`.
+
+    A viewer that got no picture used to close with 4409, "the browser is
+    not running" -- the same answer for a browser that was down, a display
+    that never came up, and a websockify that had died. Three faults, one
+    sentence, and no way to tell them apart from outside the sandbox.
+    """
+    relay = _Relay(200, vnc="down")
+    provider = _Provider(relay, starts_answering=True)
+    try:
+        with pytest.raises(BrowserRelayUnavailable) as raised:
+            await _client(provider).ensure_running()
+        assert "x11vnc or websockify did not start" in str(raised.value)
+    finally:
+        relay.close()
+
+
+async def test_an_image_that_predates_the_vnc_field_is_not_refused(_key) -> None:
+    """A resumed sandbox can be running an older relay. Reading its silence
+    as "the display is down" would wait out the whole budget and then refuse
+    a sandbox that works perfectly well."""
+    relay = _Relay(200, vnc=None)
+    provider = _Provider(relay, starts_answering=True)
+    try:
+        await _client(provider).ensure_running()
+    finally:
+        relay.close()
+
+
+async def test_bringing_a_viewer_up_asks_for_the_whole_display(_key) -> None:
+    """`lemma-ensure-display`, not the relay's own start script.
+
+    The relay answering has never meant a viewer would get a picture: that
+    is x11vnc in front of Xvfb with websockify in front of it, none of which
+    is the relay, and all of which used to arrive as a side effect of
+    whichever browser command happened to run first.
+    """
+    relay = _Relay(502)
+    provider = _Provider(relay, starts_answering=True)
+    try:
+        await _client(provider).health(start=True)
+        started = [r.shell_command for r in provider.start_requests]
+        assert len(started) == 1
+        assert "lemma-ensure-display" in started[0]
+        # And the old name, because the image rollout is deferred: a sandbox
+        # still running the previous image has only `start-browser`, and
+        # asking it for a command it does not have fails the viewer outright
+        # rather than degrading.
+        assert "start-browser" in started[0]
+    finally:
+        relay.close()

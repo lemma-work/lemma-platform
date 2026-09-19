@@ -33,10 +33,16 @@ from typing import AsyncIterator, Literal
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from sandbox_runtime.paths import (
+    HOME_ROOT,
+    WORKSPACE_ROOT,
+    is_browser_private,
+    is_inside_home,
+)
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
@@ -62,7 +68,7 @@ def get_workspace_service() -> WorkspaceSandboxService:
 
 WorkspaceServiceDep = Annotated[WorkspaceSandboxService, Depends(get_workspace_service)]
 
-_ROOT = "/workspace"
+_ROOT = WORKSPACE_ROOT
 
 # One page of a directory. A workspace holding a `node_modules` is the ordinary
 # case, not the pathological one, and a pane that asks for all of it stalls on
@@ -91,10 +97,41 @@ class WorkspaceFileEntry(BaseModel):
     )
     size_bytes: int = Field(description="Size in bytes; 0 for a directory.")
     modified_at: datetime = Field(description="Last modification time.")
+    mode: int | None = Field(
+        default=None,
+        description=(
+            "POSIX permission bits, when the fabric reports them. A viewer "
+            "showing a file it cannot write should be able to say so."
+        ),
+    )
+    sha256: str | None = Field(
+        default=None,
+        description=(
+            "Content hash, when the fabric computes one. Doubles as the "
+            "`ETag` on a read, so re-opening a file a viewer already has is "
+            "a 304 rather than the bytes again."
+        ),
+    )
 
 
 class WorkspaceFileListResponse(BaseModel):
     path: str = Field(description="The directory that was listed.")
+    home_root: str = Field(
+        default=HOME_ROOT,
+        description=(
+            "The durable root, and the furthest up a caller may browse. Served "
+            "rather than assumed: this path has moved once already, and the "
+            "clients that had hardcoded the old one went on asking for a "
+            "directory that no longer existed."
+        ),
+    )
+    workspace_root: str = Field(
+        default=WORKSPACE_ROOT,
+        description=(
+            "Where projects and conversation directories live. Inside "
+            "`home_root`, and the sensible place for a file browser to open."
+        ),
+    )
     sleeping: bool = Field(
         default=False,
         description=(
@@ -127,7 +164,7 @@ class WorkspaceFileListResponse(BaseModel):
 
 
 def _workspace_path(path: str | None) -> str:
-    """Resolve a caller path to an absolute one under ``/workspace``.
+    """Resolve a caller path to an absolute one under the durable home.
 
     Rejects rather than clamps, so a caller asking for ``/tmp`` or ``/etc`` is
     told no instead of quietly being handed the workspace root and believing the
@@ -143,12 +180,34 @@ def _workspace_path(path: str | None) -> str:
         candidate if candidate.startswith("/") else posixpath.join(_ROOT, candidate)
     )
     normalized = posixpath.normpath(absolute)
-    if normalized != _ROOT and not normalized.startswith(f"{_ROOT}/"):
+    # The home rather than the project root: a sandbox belongs to one user and
+    # browsing their own `~/.config` is not a boundary worth enforcing, since
+    # the shell can already read it. `/tmp` is outside it, which is the whole
+    # point of asking this question here rather than deferring to the runtime.
+    if not is_inside_home(normalized):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
+    _refuse_browser_profile(normalized)
     return normalized
+
+
+def _refuse_browser_profile(path: str) -> None:
+    """The one thing under the home these routes will not serve.
+
+    See `is_browser_private`: the profile is a live credential store, and
+    the listing endpoint's care not to return cookie *values* would be
+    theatre if the file holding them could be downloaded.
+    """
+    if is_browser_private(path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The browser's profile holds live sessions and is not served "
+                "over the file API. Manage sign-ins through /web-logins."
+            ),
+        )
 
 
 def _inside_workspace(stat) -> None:
@@ -178,13 +237,17 @@ def _inside_workspace(stat) -> None:
     if getattr(stat, "kind", None) == FileKind.SYMLINK:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
-    if reported and reported != _ROOT and not reported.startswith(f"{_ROOT}/"):
+    if reported and not is_inside_home(reported):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Path must stay inside /workspace",
+            detail=f"Path must stay inside {HOME_ROOT}",
         )
+    # Against the *reported* path too, so a symlink whose parent resolves
+    # into the profile is refused rather than followed.
+    if reported:
+        _refuse_browser_profile(reported)
 
 
 #: What the runtime can report an entry as. Narrowed here rather than trusted,
@@ -207,6 +270,13 @@ def _entry(stat: object) -> WorkspaceFileEntry:
         kind=_kind_of(stat),
         size_bytes=int(getattr(stat, "size_bytes", 0) or 0),
         modified_at=getattr(stat, "modified_at"),
+        # Both already on `FileStat` and both were dropped here, so a client
+        # had no way to tell a file it already holds from one it does not,
+        # and no way to know a file is read-only until a write failed.
+        mode=(
+            int(mode) if isinstance(mode := getattr(stat, "mode", None), int) else None
+        ),
+        sha256=(str(digest) if (digest := getattr(stat, "sha256", None)) else None),
     )
 
 
@@ -319,7 +389,13 @@ async def read_workspace_file(
     path: str = Query(min_length=1, max_length=4096),
     offset: int = Query(default=0, ge=0),
     length: int | None = Query(default=None, ge=1, le=_MAX_CONTENT_BYTES),
-) -> StreamingResponse:
+    # `Annotated` rather than a `Header(...)` default, so the default really
+    # is `None`. A unit test calls this function directly, and with the other
+    # spelling it would receive the `Header` object itself -- which reads as
+    # a truthy string right up until something calls `.lower()` on it.
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+    if_none_match: Annotated[str | None, Header(alias="If-None-Match")] = None,
+) -> Response:
     target = _workspace_path(path)
     session = None
     try:
@@ -329,8 +405,32 @@ async def read_workspace_file(
         await session.__aenter__()
         # Statted before it is read. The extra round trip is what makes the
         # boundary hold: reading straight from the path asked for is what
-        # followed a symlink out of /workspace.
-        _inside_workspace(await session.stat_file(target))
+        # followed a symlink out of the home.
+        stat = await session.stat_file(target)
+        _inside_workspace(stat)
+        total = int(getattr(stat, "size_bytes", 0) or 0)
+        etag = f'"{digest}"' if (digest := getattr(stat, "sha256", None)) else None
+
+        # A viewer that already holds this exact content is told so rather
+        # than sent it again. Cheap on a file pane, where re-selecting the
+        # same file is the commonest thing a person does.
+        if etag and if_none_match and _matches(if_none_match, etag):
+            await _release(service, session)
+            return Response(
+                status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag}
+            )
+
+        wanted = _requested_range(range_header, total)
+        if isinstance(wanted, _Unsatisfiable):
+            await _release(service, session)
+            raise HTTPException(
+                status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                detail=f"That range is outside a {total}-byte file",
+                headers={"Content-Range": f"bytes */{total}"},
+            )
+        partial = wanted is not None
+        if wanted is not None:
+            offset, length = wanted
         content = await session.read_file(
             target, offset=offset, length=length or _MAX_CONTENT_BYTES
         )
@@ -347,18 +447,108 @@ async def read_workspace_file(
         finally:
             await _release(service, session)
 
+    headers = {
+        "Content-Length": str(len(content)),
+        # A workspace file is the person's own content and is never markup
+        # this app should render: served inline it would run as script on
+        # the API origin.
+        "Content-Disposition": "attachment",
+        "X-Content-Type-Options": "nosniff",
+        # Advertised so a client knows it may ask for part of a file at all.
+        # Without it, a file past `_MAX_CONTENT_BYTES` was simply unreachable:
+        # the read was capped and nothing told the caller there was more, or
+        # how to come back for it.
+        "Accept-Ranges": "bytes",
+    }
+    if etag:
+        headers["ETag"] = etag
+    if partial:
+        start = offset
+        end = start + len(content) - 1
+        headers["Content-Range"] = f"bytes {start}-{end}/{total}"
+
     return StreamingResponse(
         body(),
+        status_code=(
+            status.HTTP_206_PARTIAL_CONTENT
+            if wanted is not None
+            else status.HTTP_200_OK
+        ),
         media_type="application/octet-stream",
-        headers={
-            "Content-Length": str(len(content)),
-            # A workspace file is the person's own content and is never markup
-            # this app should render: served inline it would run as script on
-            # the API origin.
-            "Content-Disposition": "attachment",
-            "X-Content-Type-Options": "nosniff",
-        },
+        headers=headers,
     )
+
+
+class _Unsatisfiable:
+    """A `Range` that names nothing this file has.
+
+    A type of its own rather than a bare `object` sentinel so the caller's
+    `isinstance` actually narrows -- with `object` in the union, unpacking the
+    tuple case does not typecheck, and silencing that would be silencing the
+    check that makes this safe to unpack at all.
+    """
+
+
+_UNSATISFIABLE = _Unsatisfiable()
+
+
+def _matches(if_none_match: str, etag: str) -> bool:
+    """Whether the caller already holds this exact content.
+
+    `*` matches anything, and a list is comma-separated. Weak validators
+    (`W/"..."`) compare equal to their strong form for this purpose: the
+    question is only "is this the same bytes".
+    """
+    candidates = [part.strip() for part in if_none_match.split(",")]
+    if "*" in candidates:
+        return True
+    return any(part.removeprefix("W/") == etag for part in candidates)
+
+
+def _requested_range(
+    header: str | None, total: int
+) -> tuple[int, int] | _Unsatisfiable | None:
+    """A `Range` header as an offset and a length, or `None` for the whole file.
+
+    Only `bytes=` with a single range: multipart ranges would mean building a
+    multipart body, and nothing that reads a workspace file asks for one. A
+    header this does not understand is ignored rather than refused, which is
+    what RFC 9110 asks for -- the caller gets the whole file, which is always
+    a correct answer.
+
+    A suffix range (`bytes=-500`, the last 500 bytes) is supported because it
+    is how a reader peeks at the end of a log.
+    """
+    if not header or not header.lower().startswith("bytes="):
+        return None
+    spec = header[len("bytes=") :].strip()
+    if "," in spec or "-" not in spec:
+        return None
+    first, _, last = spec.partition("-")
+    try:
+        if not first:
+            length = int(last)
+            if length <= 0:
+                return None
+            if total == 0:
+                # There is no last byte of an empty file. Falling through
+                # produced `(0, 0)`, which renders as `bytes 0--1/0` -- a
+                # malformed header for a range that cannot be satisfied.
+                return _UNSATISFIABLE
+            start = max(total - length, 0)
+            # The same ceiling the ordinary branch applies. Without it
+            # `bytes=-999999999` read far more in one response than
+            # `bytes=0-999999999` would, which is the cap the whole-file
+            # reader is built around.
+            return start, min(length, total - start, _MAX_CONTENT_BYTES)
+        start = int(first)
+        end = int(last) if last else total - 1
+    except ValueError:
+        return None
+    if start >= total or start > end:
+        return _UNSATISFIABLE
+    end = min(end, total - 1)
+    return start, min(end - start + 1, _MAX_CONTENT_BYTES)
 
 
 async def _release(service: WorkspaceSandboxService, session) -> None:

@@ -240,6 +240,24 @@
   grid-template-columns: minmax(22rem, 0.88fr) minmax(30rem, 1.12fr);
 }
 
+/* Expanded: the same shape the narrow container below already collapses to,
+   asked for on purpose rather than forced by width. Opening a second browser
+   tab was the alternative, and leaving the page you are reading to look at
+   something belonging to it is the disruption this avoids -- the stage simply
+   takes the room, and gives it back. */
+.conversation-presentation-layout.is-stage-expanded {
+  display: block;
+}
+
+.conversation-presentation-layout.is-stage-expanded .conversation-presentation-chat {
+  display: none;
+}
+
+.conversation-presentation-layout.is-stage-expanded .conversation-presentation-stage {
+  height: 100%;
+  border-left-width: 0;
+}
+
 @container pod-surface (max-width: 980px) {
   .conversation-presentation-layout {
     display: block;

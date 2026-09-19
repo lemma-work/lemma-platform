@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import shutil
 import signal
 
 from .browser_guard import shed_browser
+from sandbox_runtime.paths import HOME_ROOT
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,24 +21,34 @@ class QuiesceResult:
 class WorkspaceQuiescer:
     """Remove nonportable compute state before a workspace is suspended."""
 
-    # The browser profile is under the *running user's* home, and which user
-    # that is depends on the runtime: the Docker image runs as `appuser`, the
-    # E2B template as `user`. Naming only one of them meant the E2B fleet --
-    # every production workspace -- carried its Chrome profile through every
-    # suspend, because the path being deleted did not exist there. Both are
-    # listed rather than derived from $HOME so that a quiesce running as root,
-    # which is how the runtime supervisor invokes it, still clears the profile
-    # belonging to the user the browser actually ran as.
+    # Three of the paths this used to name no longer exist. `/home/appuser` and
+    # `/home/user` were once different runtimes' homes, and naming only one of
+    # them carried the E2B fleet's Chrome profile through every suspend; #744
+    # gave the Docker image's `appuser` `--home-dir /home/user`, so the two have
+    # converged and only the survivor is listed. `/workspace/.browser-profile`
+    # and `/workspace/agent-browser.json` went the same way when the durable
+    # root moved into the home. Deleting a path that cannot exist is not free:
+    # it reads as coverage this had stopped providing.
     _ephemeral_directories = (
         Path("/tmp/lemma-browser"),
-        Path("/home/appuser/.agent-browser"),
-        Path("/home/user/.agent-browser"),
-        Path("/workspace/.browser-profile"),
+        Path(f"{HOME_ROOT}/.agent-browser"),
     )
-    _ephemeral_files = (
-        Path("/tmp/.X99-lock"),
-        Path("/workspace/agent-browser.json"),
-    )
+    _ephemeral_files = (Path("/tmp/.X99-lock"),)
+
+    # Inside the profile that *does* survive, the few files that cannot.
+    #
+    # This class removes nonportable compute state, and a suspend ends every
+    # process -- so anything naming one is a lie by the time the sandbox comes
+    # back. Chrome refuses to start against a `SingletonLock` it believes
+    # another instance holds, and `DevToolsActivePort` advertises a port nobody
+    # is listening on.
+    #
+    # Everything else in the profile is emphatically portable: `Cookies` is
+    # SQLite, `Local Storage` is LevelDB, and both are built to survive a
+    # process that stopped without warning -- which is also why the memory
+    # guard's SIGKILL does not cost a login. Deleting the whole directory was
+    # over-broad for this class's own purpose, and it is the reason a sign-in
+    # used to last exactly as long as the sandbox did.
 
     def __init__(
         self,
@@ -47,7 +59,7 @@ class WorkspaceQuiescer:
         # Injected so a test never signals a real process. The patterns this
         # matches -- agent-browser, Xvfb -- are things a developer plausibly
         # has running, and a unit test that kills their browser is not a test.
-        shed_browser_processes: Callable[[], int] = shed_browser,
+        shed_browser_processes: Callable[[], Awaitable[object] | object] = shed_browser,
     ) -> None:
         self._shed_browser_processes = shed_browser_processes
         self._directories = (
@@ -65,26 +77,52 @@ class WorkspaceQuiescer:
         )
 
     async def quiesce(self) -> QuiesceResult:
+        # The browser closes first, on every fabric, before anything is
+        # signalled or swept.
+        #
+        # This used to be in the `else` -- so Docker, which sets
+        # `LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated` and takes the branch
+        # above, never closed the browser at all. It went straight to a
+        # blanket SIGTERM/SIGKILL of every process. Measured on this image,
+        # one second after a login: a graceful close keeps the session and a
+        # signal does not, whether SIGTERM to all eleven Chrome processes or
+        # to the browser process alone. So the fabric most people develop on
+        # was losing exactly the logins this branch exists to preserve, and
+        # the suspend/resume story was only ever true on E2B.
+        #
+        # Ordering, not duplication: the sweep below still runs and still
+        # ends anything the close left behind.
+        closed = self._shed_browser_processes()
+        if inspect.isawaitable(closed):
+            closed = await closed
+        closed = bool(closed)
+
         terminated = 0
         if self._isolated_process_namespace:
             terminated = await self._terminate_unmanaged_processes()
         else:
-            # The blanket sweep above is only safe where the PID namespace
-            # holds nothing but us, which is the Docker image -- it is the only
+            # The blanket sweep is only safe where the PID namespace holds
+            # nothing but us, which is the Docker image -- it is the only
             # runtime that sets the flag. On E2B the namespace also holds
-            # envd and E2B's own services, so signalling everything would take
-            # the sandbox down with the browser.
-            #
-            # That left the runtime carrying production with no process
-            # cleanup at all: deleting the profile directory does nothing to a
-            # Chrome that is still running and still holding 2 GB. Shedding the
-            # browser by name is the part that is safe everywhere, and it is
-            # the part that mattered.
-            terminated = self._shed_browser_processes()
+            # envd and E2B's own services, so signalling everything would
+            # take the sandbox down with the browser. There, the close above
+            # is the whole of the cleanup, which is why it reports itself.
+            terminated = int(closed)
         for path in self._directories:
             shutil.rmtree(path, ignore_errors=True)
         for path in self._files:
             path.unlink(missing_ok=True)
+        # No lock-file cleanup. This removed `SingletonLock`,
+        # `SingletonSocket`, `SingletonCookie` and `DevToolsActivePort` on the
+        # theory that a file naming a dead process would stop the next Chrome
+        # starting. Measured on a real sandbox instead: `kill -9` the browser,
+        # leave all four behind, and `agent-browser open` starts a browser and
+        # rewrites them. Chrome checks whether the pid a lock names is alive.
+        #
+        # Deleting them was not free either. `DevToolsActivePort` is the only
+        # record of a running browser's port, so removing it while one was up
+        # left a browser nothing could find -- which is exactly what happened
+        # when `start-browser` did the same thing on every call.
         return QuiesceResult(terminated_unmanaged_processes=terminated)
 
     @staticmethod

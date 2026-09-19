@@ -174,7 +174,8 @@ Create:
 1. reserve a provider allocation in sandbox PostgreSQL;
 2. create or reuse the named volume recorded for the logical workspace storage row;
 3. create the container from the workspace image digest;
-4. mount the volume at `/workspace` and no host project paths;
+4. mount the volume at the sandbox user's home (`/home/user`) and no host
+   project paths;
 5. on the installed stack, attach the container to the manager's private network
    without publishing runtime or app ports; a standalone development fallback may
    publish required ports on `127.0.0.1` with random host ports;
@@ -275,7 +276,7 @@ Create one dynamically provisioned PVC per logical workspace:
 
 ```text
 access mode: ReadWriteOnce by default
-mount: /workspace
+mount: /home/user
 owner labels: workload kind, logical ID, environment
 deletion policy: retained across Pod deletion; deleted on logical permanent delete
 ```
@@ -292,7 +293,7 @@ The adapter never substitutes a different workspace's PVC by name or label.
 The Pod template contains:
 
 - one workspace container using an immutable image digest;
-- `/workspace` PVC mount;
+- home-directory PVC mount;
 - ephemeral `/tmp` and runtime-state volumes;
 - no Docker/container runtime socket;
 - no writable hostPath;

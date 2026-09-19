@@ -259,7 +259,7 @@ Name exactly one target:
 ```
 
 A process wait keeps its sandbox alive, because the running process is what holds it.
-Across a plain `seconds` wait nothing is holding it, so `/workspace` may be reclaimed —
+Across a plain `seconds` wait nothing is holding it, so the sandbox may be reclaimed —
 write anything you need to the pod first.
 
 **No record waits.** Waking on a row changing is deliberately not offered — see the
@@ -278,7 +278,7 @@ Four constraints worth designing around:
   beats several short ones. Below 30s the call is rejected rather than clamped — asking
   for a few seconds means the agent has mistaken this for `sleep()`.
 - **The sandbox does not survive.** The workspace container is reclaimed during the sleep,
-  so `/workspace` files, background processes, and the shell's cwd are gone on wake.
+  so sandbox files, background processes, and the shell's cwd are gone on wake.
   Anything needed afterwards must be written to the pod first.
 - **24 hours, hard.** Partly because each wake replays the whole conversation, and partly
   because `reply_window_hours` is real — an agent that sleeps past a platform's reply

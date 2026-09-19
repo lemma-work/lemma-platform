@@ -37,6 +37,10 @@ from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
 )
+from app.modules.workspace.api.controllers.browser_view_watchers import (
+    watch_begun,
+    watch_ended,
+)
 from app.modules.workspace.services.browser_view_service import (
     MODE_CONTROL,
     MODE_VIEW,
@@ -91,7 +95,7 @@ class BrowserStatusResponse(BaseModel):
     """What the pane can say without waking anything.
 
     `asleep` the computer is paused or was never started; `stopped` it is up but
-    the browser is not (the resting state after two idle minutes); `running` a
+    the browser is not (the resting state after five idle minutes); `running` a
     browser is there now; `unavailable` the relay did not answer, which on an
     older image is permanent until it is replaced; `unsupported` this fabric
     cannot reach a port at all.
@@ -507,8 +511,10 @@ async def browser_view(
     # counted as idle and had their computer stopped underneath them. Releasing
     # runs quiesce, which deletes the browser profile, so what a slow sign-in
     # lost was the sign-in.
+    watcher = UUID(user_id)
+    watch_begun(watcher)
     awake = create_inherited_task(
-        _keep_awake(service, UUID(user_id)), name="workspace.browser_view.keep_awake"
+        _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
@@ -532,6 +538,7 @@ async def browser_view(
         await _hang_up(websocket, status.WS_1011_INTERNAL_ERROR, doing="failing")
     finally:
         await _collect(awake)
+        watch_ended(watcher)
         await service.close()
 
 
