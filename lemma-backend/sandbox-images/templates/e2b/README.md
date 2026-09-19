@@ -6,8 +6,8 @@ Sandbox provisioning uses two immutable E2B template builds:
   environment (including the Lemma SDK), Node 24, pnpm, uv, LiteParse, and
   headful Chrome. The shell, `python`, `python3`, `pip`, `pip3`, and E2B code
   contexts all use the locked Python 3.14 environment. Packages installed with
-  plain `pip install` go into `/workspace/.python`, so shell commands and
-  persistent Python contexts see the same workspace-backed package set.
+  plain `pip install` go into `~/.python`, so shell commands and persistent
+  Python contexts see the same home-backed package set.
 - `lemma-function` contains only the function runner and Lemma SDK.
 
 Builds are created from the monorepo source. Both profiles default to 1 vCPU and

@@ -23,6 +23,7 @@ from app.core.web_search.search_client import (
     SearXNGSearchClient,
     apply_domain_operators,
 )
+from app.modules.agent.tools.web import capture_result
 from app.modules.agent.tools.web import web_fetch as web_fetch_module
 from pydantic import ValidationError
 
@@ -143,6 +144,9 @@ class _FakeSession:
         self._responses = responses or {}
         self._write_error = write_error
         self._browser_writes_nothing = browser_writes_nothing
+        #: Emulate a page that rendered but had nothing in it -- the
+        #: converter still writes its title and `Source:` header.
+        self.header_only = False
 
     # `writes` names only what the file API put there, so a test can still
     # assert the cheap path did not go through the browser.
@@ -176,7 +180,21 @@ class _FakeSession:
         suffix = {"markdown": "md", "pdf": "pdf", "jpeg": "jpg", "png": "png"}
         for fmt in formats:
             if fmt in suffix:
-                self.files[f"{out}/{name}.{suffix[fmt]}"] = b"# A Title\n\nBody text."
+                # Long enough to clear `_THIN_CONTENT_CHARS`. A ten-character
+                # body is not what a real capture looks like, and a fixture
+                # that thin makes the "nothing to read" guard fire on every
+                # test that was meant to be a success.
+                self.files[f"{out}/{name}.{suffix[fmt]}"] = (
+                    b"# Nothing Here\n\nSource: https://example.com/shell\n"
+                    b"Captured: 2026-09-19T00:00:00.000Z\n"
+                    if self.header_only
+                    # Long enough to clear `_THIN_CONTENT_CHARS`. A
+                    # ten-character body is not what a real capture looks
+                    # like, and a fixture that thin makes the "nothing to
+                    # read" guard fire on every test meant to be a success.
+                    else b"# A Title\n\nSource: https://example.com/\n\n"
+                    + b"Body text that is long enough to read. " * 5
+                )
 
     async def exec_command(self, *, cmd: str, timeout: int = 60, **_kwargs):
         self.commands.append(cmd)
@@ -623,7 +641,7 @@ class TestBrowserCaptureHelpers:
         self,
     ) -> None:
         session = _FakeSession()
-        result = await web_fetch_module._present_files(session, [])
+        result = await capture_result.present_files(session, [])
         assert result == {}
         assert session.commands == []
 
@@ -645,7 +663,7 @@ class TestBrowserCaptureHelpers:
             }
         )
 
-        result = await web_fetch_module._present_files(
+        result = await capture_result.present_files(
             session, ["research/a.md", "research/broken.md", "research/b.pdf"]
         )
 
@@ -949,3 +967,75 @@ class TestTheToolAlwaysReturns:
         WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit)])
         with pytest.raises(ValidationError):
             WebFetchRequest(urls=[f"https://e{i}.example/a" for i in range(limit + 1)])
+
+
+class TestAnEmptyBrowserCapture:
+    """A rendered page with nothing in it is a failure, not a success.
+
+    `_finish` used to check only that the markdown file existed. A capture of
+    a page that served an empty shell to an automated client still writes
+    one: `webpage-to-markdown.mjs` prepends a title and a `Source:`/
+    `Captured:` block, so `about:blank` measured 71 bytes on disk. The agent
+    got `success=True`, a path, and a preview of nothing but the header.
+
+    The floor is applied to the body rather than the file, because the header
+    grows with the length of the URL.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_text_only_request_that_rendered_nothing_is_a_failure(
+        self, monkeypatch
+    ) -> None:
+        session = _FakeSession()
+        session.header_only = True
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/shell"], formats=["markdown"]),
+        )
+
+        assert result.pages[0].success is False
+        assert "nothing to read" in (result.pages[0].error or "")
+
+    @pytest.mark.asyncio
+    async def test_a_thin_page_keeps_the_picture_it_was_asked_for(
+        self, monkeypatch
+    ) -> None:
+        """Thin text is a fact about the markdown, not a verdict on the call.
+
+        A chart, a diagram, an image-led page and a one-line status page are
+        all legitimate captures. The first version of this check returned
+        `success=False` with no files at all, throwing away a screenshot
+        that was exactly what somebody asked for.
+        """
+        session = _FakeSession()
+        session.header_only = True
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["https://example.com/chart"], formats=["markdown", "jpeg"]
+            ),
+        )
+
+        page = result.pages[0]
+        assert page.success is True
+        assert page.files.get("jpeg"), "the capture that was wanted must survive"
+        assert "almost no text" in (page.notice or "")
+
+    @pytest.mark.asyncio
+    async def test_a_page_with_real_text_is_still_a_success(self, monkeypatch) -> None:
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["https://example.com/real"], formats=["markdown", "jpeg"]
+            ),
+        )
+
+        assert result.pages[0].success is True
+        assert result.pages[0].files.get("markdown")

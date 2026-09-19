@@ -17,6 +17,7 @@ import json
 import re
 from typing import TYPE_CHECKING
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.value_objects import AgentToolset
 from app.modules.agent.services.workspace_location import (
     resolve_pod_cwd,
@@ -160,11 +161,12 @@ def _pod_directory_section(*, ctx: AgentContext, conversation: Conversation) -> 
         "**Anything the person attached to a message in this conversation is "
         "in that directory.** Look there first and read it by name. It is not "
         "in the workspace sandbox.\n\n"
-        "Do not go looking for it with search. Search runs over an index built "
-        "after a file is stored, so a file uploaded moments ago is readable by "
-        "path while search still returns nothing for it. An empty search result "
-        "means *not indexed yet*, never *not there* — listing the directory or "
-        "reading the path is what answers whether a file exists.\n\n"
+        "Search will not find it yet. Search runs over an index built after a "
+        "file is stored, so a file uploaded moments ago is readable by path "
+        "while search still returns nothing for it. For a file you were just "
+        "given, list the directory or read the path. Search is the right tool "
+        "for finding something by what is *in* it across the pod — just never "
+        "the way to answer whether a specific file exists.\n\n"
         "This is the pod filesystem, shared with the person and durable — not "
         "the workspace, which is your own scratch space. Deliverables belong "
         "here; working files belong in the workspace."
@@ -210,6 +212,15 @@ def _sandbox_root(cwd: str) -> str:
         # one handed the string straight back, backticks and all, into the same
         # code spans.
         return "the working directory"
+    # A root we actually know wins over guessing at one. The guess below takes
+    # the first path segment, which was right while the root was a single
+    # segment and silently wrong the moment it stopped being: a cwd under
+    # `/home/user` reported `/home`, so every sentence built from this told the
+    # agent to work one directory above the one it was given.
+    if trimmed == WORKSPACE_ROOT or trimmed.startswith(f"{WORKSPACE_ROOT}/"):
+        return WORKSPACE_ROOT
+    # Otherwise the cwd is a host path from a native run, where the root really
+    # is unknown and its first segment is the best available answer.
     first = trimmed.strip("/").split("/", 1)[0]
     if not first:
         return "/"
@@ -245,8 +256,8 @@ def _workspace_directory_section(
             "Agent Host supplies its exact path in Native Working Directory; "
             "it persists across conversation turns. You have no Lemma sandbox "
             "execution tools on this run. Work only in the directory you were "
-            "given; do not invent a sandbox path such as `/workspace` for "
-            "native tools. Tool approvals still apply."
+            "given; do not invent a sandbox path such as "
+            f"`{WORKSPACE_ROOT}` for native tools. Tool approvals still apply."
         )
     repo = _workspace_repo(ctx)
     orientation = (

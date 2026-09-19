@@ -6,7 +6,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
-from ...models.web_login_response import WebLoginResponse
+from ...models.forget_response import ForgetResponse
 from ...types import UNSET, Response
 
 
@@ -32,9 +32,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> ErrorResponse | WebLoginResponse | None:
+) -> ErrorResponse | ForgetResponse | None:
     if response.status_code == 200:
-        response_200 = WebLoginResponse.from_dict(response.json())
+        response_200 = ForgetResponse.from_dict(response.json())
 
         return response_200
 
@@ -51,7 +51,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[ErrorResponse | WebLoginResponse]:
+) -> Response[ErrorResponse | ForgetResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -64,25 +64,18 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     origin: str,
-) -> Response[ErrorResponse | WebLoginResponse]:
-    """Remove a saved site login
-
-     Forget a site.
-
-    Removing the row is the whole revocation from Lemma's side. It does **not**
-    sign the person out at the site, and the response says so — a saved session
-    that has been deleted here is still a valid session there until they log out
-    or it expires, and implying otherwise would be the more dangerous lie.
+) -> Response[ErrorResponse | ForgetResponse]:
+    """Sign your browser out of a site
 
     Args:
-        origin (str):
+        origin (str): The site to forget, as an origin or a host.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | WebLoginResponse]
+        Response[ErrorResponse | ForgetResponse]
     """
 
     kwargs = _get_kwargs(
@@ -100,25 +93,18 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     origin: str,
-) -> ErrorResponse | WebLoginResponse | None:
-    """Remove a saved site login
-
-     Forget a site.
-
-    Removing the row is the whole revocation from Lemma's side. It does **not**
-    sign the person out at the site, and the response says so — a saved session
-    that has been deleted here is still a valid session there until they log out
-    or it expires, and implying otherwise would be the more dangerous lie.
+) -> ErrorResponse | ForgetResponse | None:
+    """Sign your browser out of a site
 
     Args:
-        origin (str):
+        origin (str): The site to forget, as an origin or a host.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | WebLoginResponse
+        ErrorResponse | ForgetResponse
     """
 
     return sync_detailed(
@@ -131,25 +117,18 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     origin: str,
-) -> Response[ErrorResponse | WebLoginResponse]:
-    """Remove a saved site login
-
-     Forget a site.
-
-    Removing the row is the whole revocation from Lemma's side. It does **not**
-    sign the person out at the site, and the response says so — a saved session
-    that has been deleted here is still a valid session there until they log out
-    or it expires, and implying otherwise would be the more dangerous lie.
+) -> Response[ErrorResponse | ForgetResponse]:
+    """Sign your browser out of a site
 
     Args:
-        origin (str):
+        origin (str): The site to forget, as an origin or a host.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[ErrorResponse | WebLoginResponse]
+        Response[ErrorResponse | ForgetResponse]
     """
 
     kwargs = _get_kwargs(
@@ -165,25 +144,18 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     origin: str,
-) -> ErrorResponse | WebLoginResponse | None:
-    """Remove a saved site login
-
-     Forget a site.
-
-    Removing the row is the whole revocation from Lemma's side. It does **not**
-    sign the person out at the site, and the response says so — a saved session
-    that has been deleted here is still a valid session there until they log out
-    or it expires, and implying otherwise would be the more dangerous lie.
+) -> ErrorResponse | ForgetResponse | None:
+    """Sign your browser out of a site
 
     Args:
-        origin (str):
+        origin (str): The site to forget, as an origin or a host.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        ErrorResponse | WebLoginResponse
+        ErrorResponse | ForgetResponse
     """
 
     return (

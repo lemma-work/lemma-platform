@@ -1,4 +1,13 @@
+import { ApiError } from "../http.js";
 import type { HttpClient } from "../http.js";
+
+/**
+ * The most the server will return from one read, whatever is asked for.
+ *
+ * `_MAX_CONTENT_BYTES` in the files controller. Kept here so the chunked
+ * reader clamps to it rather than discovering it a slice at a time.
+ */
+export const MAX_READ_BYTES = 8 * 1024 * 1024;
 
 /** One entry in a workspace directory listing. */
 export interface WorkspaceFileEntry {
@@ -11,12 +20,24 @@ export interface WorkspaceFileEntry {
 
 export interface WorkspaceFileListResponse {
   path: string;
+  /**
+   * The durable root, and the furthest up a caller may browse.
+   *
+   * Served rather than assumed. This path has moved once already, and the
+   * clients holding a hardcoded copy went on asking for a directory that no
+   * longer existed — which lists identically to an empty one.
+   */
+  home_root: string;
+  /** Where projects live, inside `home_root`. Where a browser should open. */
+  workspace_root: string;
   /** The workspace is paused and was not started to answer. */
   sleeping: boolean;
   /** The directory holds more entries than were returned. */
   truncated: boolean;
   /** Pass back as `after` for the next page; null on the last one. */
   next_after?: string | null;
+  /** False when the directory is not there, as against merely empty. */
+  exists: boolean;
   entries: WorkspaceFileEntry[];
 }
 
@@ -32,13 +53,33 @@ export interface WorkspaceFileListResponse {
  * compute open for as long as it was on screen.
  */
 export interface WebLogin {
-  id: string;
-  origin: string;
-  /** Whether the stored session still signs you in. */
-  working: boolean;
-  created_at: string;
-  updated_at: string;
-  last_used_at: string | null;
+  /**
+   * The site, as a person would name it.
+   *
+   * Grouped by registrable domain, so `asur.work` and `api.asur.work` are one
+   * login rather than two — the second being the half nobody visited on
+   * purpose.
+   */
+  site: string;
+  /** How many cookies it has. A rough sense of scale, not a health check. */
+  cookie_count: number;
+  /**
+   * When the soonest of them lapses, which is the closest a browser can come
+   * to "when will I have to sign in again". Null when they are all session
+   * cookies.
+   */
+  expires: string | null;
+  /**
+   * Whether somebody answered "yes, I signed in" to a sign-in request for
+   * this site.
+   *
+   * The cookies cannot say this on their own, and that is measured rather
+   * than assumed: a real profile held two HttpOnly session cookies for a
+   * site somebody was signed in to, and six HttpOnly cookies for one that
+   * had merely had a video played on it. `false` means "nobody said so", not
+   * "no session" — the browser may well still be signed in.
+   */
+  signed_in: boolean;
 }
 
 /** An agent waiting for somebody to sign a site in.
@@ -57,55 +98,51 @@ export interface PendingSignIn {
 export interface SignInOutcome {
   origin: string;
   signed_in: boolean;
-  /** Whether the login was kept for next time. */
-  saved: boolean;
-  /** Why it was not kept, when it was not. */
-  saved_detail: string | null;
-}
-
-/** One thing that was done with one saved login. */
-export interface WebLoginAuditEntry {
-  origin: string;
-  action: string;
-  outcome: string;
-  /** Why, when the outcome was not plain "ok" — in the platform's own words. */
-  detail: string | null;
-  /** The run that did it; null for something the person did themselves. */
-  conversation_id: string | null;
-  created_at: string;
+  /**
+   * Whether the site stopped asking for a login straight afterwards.
+   * Reported, not enforced — the check is a heuristic and the person has
+   * already done what was asked.
+   */
+  working: boolean;
 }
 
 /**
- * Saved site logins.
+ * The sites your sandbox's browser is signed in to.
  *
- * Nothing here ever returns a secret — not to an agent, and not to the person
- * who created it. `WebLogin` has no field to put one in.
+ * Read from the browser every time, not from a table: it keeps its own
+ * profile, so what it holds is the only true answer. Nothing here returns a
+ * secret, and that is now structural rather than a promise — cookie values
+ * never leave the sandbox at all.
  */
 export class WebLoginsNamespace {
   constructor(private readonly http: HttpClient) {}
 
-  list(): Promise<{ items: WebLogin[] }> {
-    return this.http.request<{ items: WebLogin[] }>("GET", "/web-logins");
+  /**
+   * Every site the browser is signed in to.
+   *
+   * Not paged: this is what one browser is holding, not a table that grows.
+   * `wake` is off by default so that rendering the list is never what starts
+   * somebody's computer — a paused one answers `sleeping`.
+   */
+  list(
+    options: { wake?: boolean } = {},
+  ): Promise<{ items: WebLogin[]; sleeping: boolean }> {
+    const params: Record<string, string | number> = {};
+    if (options.wake) params.wake = "true";
+    return this.http.request("GET", "/web-logins", { params });
   }
 
   /**
-   * Forget a site.
+   * Sign the browser out of a site.
    *
-   * Revokes Lemma's copy and nothing else: the session stays valid at the site
-   * until it expires or the person logs out there.
+   * Really signs it out, which its predecessor did not: that removed Lemma's
+   * encrypted copy and left the browser as it was. Needs the computer
+   * running, and says so rather than reporting a success it did not achieve.
    */
-  remove(origin: string): Promise<WebLogin> {
-    return this.http.request<WebLogin>("DELETE", "/web-logins", {
+  remove(origin: string): Promise<{ site: string; forgotten: boolean }> {
+    return this.http.request("DELETE", "/web-logins", {
       params: { origin },
     });
-  }
-
-  history(limit = 100): Promise<{ items: WebLoginAuditEntry[] }> {
-    return this.http.request<{ items: WebLoginAuditEntry[] }>(
-      "GET",
-      "/web-logins/history",
-      { params: { limit } },
-    );
   }
 
   /** What a sign-in link is asking for, addressed by the pause it is for.
@@ -124,19 +161,19 @@ export class WebLoginsNamespace {
   /**
    * Say whether you signed in, so the waiting run can carry on.
    *
-   * One call for both answers because it is one answer. `force` saves whatever
-   * the browser holds even when it does not look signed in, for sites the check
-   * reads wrongly.
+   * One call for both answers because it is one answer. Nothing is stored:
+   * the browser holds the session, so finishing is the person finishing. The
+   * reply says whether the site stopped asking, which the agent is told.
    */
   answerSignIn(
     conversationId: string,
     toolCallId: string,
-    options: { signedIn: boolean; force?: boolean },
+    options: { signedIn: boolean },
   ): Promise<SignInOutcome> {
     return this.http.request<SignInOutcome>(
       "POST",
       `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
-      { body: { signed_in: options.signedIn, force: Boolean(options.force) } },
+      { body: { signed_in: options.signedIn } },
     );
   }
 }
@@ -207,18 +244,120 @@ export class WorkspaceNamespace {
   }
 
   /**
+   * Fit the workspace display to the pane showing it.
+   *
+   * The pane is a box of an arbitrary shape and the display is a real screen
+   * with a fixed size, so one of them has to move. Scaling the picture is
+   * what made the browser a small letterboxed rectangle; resizing the display
+   * means the pixels sent are the pixels shown, and a narrow pane gets a
+   * narrow *viewport* — so sites serve their mobile layout on a phone.
+   *
+   * `size` is what the display actually became, which may be smaller than
+   * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
+   * could be resized (a sleeping computer, an older image), which is not an
+   * error — the pane keeps the picture it had.
+   */
+  browserResizeDisplay(
+    width: number,
+    height: number,
+  ): Promise<{ size: string | null }> {
+    return this.http.request("POST", "/workspace/browser/display-size", {
+      body: { width, height },
+    });
+  }
+
+  /**
    * Raw bytes of one file, from `offset`, at most `length` bytes.
    *
    * The query is built into the path because `requestBytes` takes no options —
    * it is the byte-returning sibling of `request`, not a full request builder.
    */
+  /**
+   * A file, or a slice of one.
+   *
+   * `range` sends an HTTP `Range` header and gets a 206 back. That is how a
+   * file larger than the server's single-read ceiling is reachable at all:
+   * ask for it a piece at a time. See `readWholeFile`, which does that for
+   * you.
+   */
   readFile(
     path: string,
-    options: { offset?: number; length?: number } = {},
+    options: { offset?: number; length?: number; range?: { start: number; end: number } } = {},
   ): Promise<Blob> {
     const query = new URLSearchParams({ path });
     if (options.offset) query.set("offset", String(options.offset));
     if (options.length) query.set("length", String(options.length));
-    return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`);
+    return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`, {
+      headers: options.range
+        ? { Range: `bytes=${options.range.start}-${options.range.end}` }
+        : undefined,
+    });
+  }
+
+  /**
+   * A whole file, however big, in as many requests as that takes.
+   *
+   * The server caps one read at 8 MiB, which used to mean a larger file
+   * could be listed and never opened — the pane offered a download that
+   * silently returned the first 8 MiB under the full name. Ranges are
+   * requested in order and stitched, so what a person saves is the file.
+   *
+   * **The size is discovered, not trusted.** This took a `sizeBytes` and
+   * stopped there, which made the caller's bookkeeping load-bearing for
+   * whether a download was complete. The explorer's was wrong on the case
+   * that matters: the open file lives in the URL and its size lived in React
+   * state, so a reload restored the path with a size of 0 and every download
+   * after it truncated at 8 MiB, under the whole file's name. Reading until
+   * the server returns a short slice needs nobody to have remembered
+   * anything. `sizeBytes` survives only as a hint that lets a small file skip
+   * straight to a single unranged read; passing 0 or nothing is correct.
+   *
+   * `chunk` is clamped to the server's ceiling rather than trusted either.
+   * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
+   * eighths of the file was skipped and the result was a corrupt download of
+   * roughly the right length — the same failure, reintroduced by the
+   * parameter meant to tune it.
+   */
+  async readWholeFile(
+    path: string,
+    sizeBytes = 0,
+    chunk = MAX_READ_BYTES,
+  ): Promise<Blob> {
+    const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
+    const parts: Blob[] = [];
+    let start = 0;
+    if (sizeBytes > 0 && sizeBytes <= step) {
+      const only = await this.readFile(path);
+      // Short of the server's ceiling means that was the whole file. Exactly
+      // the ceiling means the hint was stale -- the file grew after the
+      // listing that measured it -- and returning here would truncate at
+      // 8 MiB, which is the failure this method exists to prevent. So keep
+      // what arrived and carry on reading from where it stopped.
+      if (only.size < MAX_READ_BYTES) return only;
+      parts.push(only);
+      start = only.size;
+    }
+    for (;;) {
+      let part: Blob;
+      try {
+        part = await this.readFile(path, {
+          range: { start, end: start + step - 1 },
+        });
+      } catch (error) {
+        // 416. The file ended exactly on a chunk boundary, or it is empty:
+        // both are "there is nothing at this offset", and neither is a
+        // failure. Any other status is.
+        if (error instanceof ApiError && error.statusCode === 416) break;
+        throw error;
+      }
+      if (part.size === 0) break;
+      parts.push(part);
+      start += part.size;
+      // Short of what was asked for means the server ran out of file, which
+      // is the ordinary way this ends — one request more than the file
+      // needs, rather than a 416 every time.
+      if (part.size < step) break;
+    }
+    return new Blob(parts);
   }
 }

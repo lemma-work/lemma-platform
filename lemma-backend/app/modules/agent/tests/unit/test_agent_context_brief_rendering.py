@@ -170,7 +170,7 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         framed = brief_lines.with_run_framing(
             "BRIEF",
             conversation=SimpleNamespace(metadata=self.SCHEDULED),
-            run_source="snooze_resume",
+            run_source="wait_resume",
         )
         assert "Assume nobody is watching" in framed
 
@@ -200,18 +200,34 @@ class TestTheRunSaysWhetherAnybodyIsWaiting:
         framed = brief_lines.with_run_framing("BRIEF", conversation=conversation)
         assert "arrived from slack" in framed
 
-    def test_an_unmarked_run_is_told_nothing_rather_than_guessed_at(self):
-        """Somebody typing is the common case and needs no line at all."""
+    def test_an_unmarked_run_is_told_its_budget_and_nothing_guessed_at(self):
+        """Somebody typing is the common case: no provenance line, but a budget.
+
+        The budget reaches every run on purpose. The study's first finding was
+        that nothing in the brief says stop, and the common case is exactly the
+        one that must not be the exception — a run that knows it has twenty
+        minutes can pick the short route.
+        """
         conversation = SimpleNamespace(metadata={})
-        assert (
-            brief_lines.with_run_framing("BRIEF", conversation=conversation) == "BRIEF"
-        )
+
+        framing = brief_lines.with_run_framing("BRIEF", conversation=conversation)
+
+        assert framing.startswith("BRIEF")
+        assert "steps" in framing and "minutes" in framing
+        # The number never travels alone. Stated bare, a ceiling reads as a
+        # target and the run hurries to fit it; the work should take as long as
+        # it takes, and the limit is only there for a run going in circles.
+        assert "Take the time the work needs" in framing
+        assert "shortest route" not in framing
+        # Nothing is claimed about who started it, or whether anybody is waiting.
+        assert "schedule" not in framing.lower()
+        assert "nobody is watching" not in framing.lower()
 
     def test_a_conversation_with_no_metadata_at_all_is_safe(self):
-        assert (
-            brief_lines.with_run_framing("BRIEF", conversation=SimpleNamespace())
-            == "BRIEF"
-        )
+        framing = brief_lines.with_run_framing("BRIEF", conversation=SimpleNamespace())
+
+        assert framing.startswith("BRIEF")
+        assert "nobody is watching" not in framing.lower()
 
 
 class TestTheRunSourceComesOffTheRun:

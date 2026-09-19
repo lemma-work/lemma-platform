@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
+from ..types import UNSET, Unset
+
 if TYPE_CHECKING:
     from ..models.web_login_response import WebLoginResponse
 
@@ -18,9 +20,12 @@ class WebLoginListResponse:
     """
     Attributes:
         items (list[WebLoginResponse]):
+        sleeping (bool | Unset): True when the computer is paused and was not woken to answer. Items are empty; its
+            browser still holds whatever it held. Default: False.
     """
 
     items: list[WebLoginResponse]
+    sleeping: bool | Unset = False
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -29,6 +34,8 @@ class WebLoginListResponse:
             items_item = items_item_data.to_dict()
             items.append(items_item)
 
+        sleeping = self.sleeping
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -36,6 +43,8 @@ class WebLoginListResponse:
                 "items": items,
             }
         )
+        if sleeping is not UNSET:
+            field_dict["sleeping"] = sleeping
 
         return field_dict
 
@@ -51,8 +60,11 @@ class WebLoginListResponse:
 
             items.append(items_item)
 
+        sleeping = d.pop("sleeping", UNSET)
+
         web_login_list_response = cls(
             items=items,
+            sleeping=sleeping,
         )
 
         web_login_list_response.additional_properties = d

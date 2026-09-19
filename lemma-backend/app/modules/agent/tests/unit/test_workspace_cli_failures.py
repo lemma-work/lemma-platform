@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.workspace_cli import helper as workspace_helper
 from app.modules.agent.tools.workspace_cli import process_visibility, workspace_cli
@@ -85,11 +86,20 @@ class _FakeRuntime:
         self.process_sessions.pop(process_id, None)
 
 
-def _context() -> BaseAgentContext:
+def _context(cwd: str | None = None) -> BaseAgentContext:
+    """A context with a directory, because every real caller resolves one.
+
+    Left unset these tests leaned on `get_workspace_cwd`'s fallback, which used
+    to invent `<root>/conversations/<uuid>` -- a shape nothing else in the system
+    produces. The scoping tests below then compared two paths that only differed
+    because of that invention.
+    """
+    conversation_id = uuid4()
     return BaseAgentContext(
         user_id=uuid4(),
         pod_id=uuid4(),
-        conversation_id=uuid4(),
+        conversation_id=conversation_id,
+        workspace_cwd=cwd or f"{WORKSPACE_ROOT}/c/2026-09-19/{conversation_id.hex[:8]}",
     )
 
 
@@ -101,7 +111,7 @@ async def test_exec_command_internal_uses_conversation_default_session(
     runtime = _FakeRuntime(
         {
             "success": True,
-            "stdout": "/workspace",
+            "stdout": WORKSPACE_ROOT,
             "stderr": "",
             "exit_code": 0,
             "completed": True,
@@ -561,7 +571,9 @@ async def test_list_processes_hides_another_directorys_running_process(
     runtime = _FakeRuntime(
         {
             "processes": [
-                _process("proc-theirs", cwd="/workspace/conversations/someone-else"),
+                _process(
+                    "proc-theirs", cwd=f"{WORKSPACE_ROOT}/c/2026-09-19/someoneelse"
+                ),
                 _process("proc-mine", cwd=own_cwd),
             ]
         }
@@ -593,12 +605,12 @@ def test_a_process_with_no_recorded_directory_stays_visible() -> None:
     """Older entries carry no directory, and the in-sandbox runtime reports
     none. Excluding those would drop a live process out of the only listing
     that can return its id."""
-    assert process_visibility.within("", "/workspace/conversations/a") is True
-    assert process_visibility.within(None, "/workspace/conversations/a") is True
+    assert process_visibility.within("", f"{WORKSPACE_ROOT}/conversations/a") is True
+    assert process_visibility.within(None, f"{WORKSPACE_ROOT}/conversations/a") is True
     # And a prefix that is not a path boundary is not a match.
     assert (
         process_visibility.within(
-            "/workspace/conversations/ab", "/workspace/conversations/a"
+            f"{WORKSPACE_ROOT}/conversations/ab", f"{WORKSPACE_ROOT}/conversations/a"
         )
         is False
     )

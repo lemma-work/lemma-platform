@@ -349,7 +349,7 @@ public-site availability never decides core correctness.
 | `WS-FS-003` | Atomic/conflict | Interrupted atomic write and expected-digest conflict preserve valid content |
 | `WS-FS-004` | Boundary | traversal, symlink escape, special devices and disallowed roots fail closed |
 | `WS-LC-001` | Idle release | Five-minute logical idle path quiesces processes/sessions before provider release |
-| `WS-LC-002` | Resume | `/workspace` digest is preserved; nonportable session/process references are stale |
+| `WS-LC-002` | Resume | the home directory's digest is preserved; nonportable session/process references are stale |
 | `WS-LC-003` | Profile replacement | Provider storage policy is explicit, epoch increments, and no stale completion becomes current |
 | `WS-LC-004` | Permanent delete | Exact compute/storage disappear and late events cannot resurrect them |
 | `WS-LC-005` | Retention | Activity before seven days resumes; expiry permanently deletes |

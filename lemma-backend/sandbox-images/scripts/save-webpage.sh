@@ -9,6 +9,9 @@ Save a rendered web page from the shared Agent Browser session.
 
 Options:
   --formats <list>   Comma-separated: markdown,md,pdf,jpeg,jpg,png (default: markdown,pdf,jpeg)
+  --full-page        Capture the whole scroll, not just the viewport. Slow and
+                     large -- one news page measured 12.4s and 7.0 MB.
+  --screenshot-quality <0-100>  JPEG quality (default 70).
   --out <dir>        Output directory (default: current working directory)
   --name <name>      Base output filename without extension
   --wait-ms <ms>     Fallback wait after navigation (default: 1000)
@@ -17,7 +20,7 @@ Options:
 
 Examples:
   save-webpage https://arxiv.org/abs/1706.03762
-  save-webpage https://example.com --formats markdown,pdf,jpeg --out /workspace/research
+  save-webpage https://example.com --formats markdown,pdf,jpeg --out ~/research
 EOF
 }
 
@@ -34,6 +37,16 @@ OUT_DIR="."
 NAME=""
 WAIT_MS="1000"
 OPEN_PAGE="1"
+# The viewport, not the whole page, and not at maximum quality.
+#
+# `--full` at quality 85 produced a 7.0 MB jpeg in 12.4s for one news page,
+# measured. That is a default nobody asked for: it is slow, it is most of a
+# tool call's budget, and it lands a file that size in somebody's workspace
+# for a screenshot they wanted in order to *look at the page*. A viewport
+# shot answers that. `--full-page` and `--screenshot-quality` are there for
+# the times the whole scroll or the detail genuinely matters.
+FULL_PAGE=""
+SCREENSHOT_QUALITY="70"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,6 +65,16 @@ while [[ $# -gt 0 ]]; do
     --wait-ms)
       WAIT_MS="${2:-}"
       shift 2
+      ;;
+    --full-page)
+      FULL_PAGE="--full"
+      shift
+      continue
+      ;;
+    --screenshot-quality)
+      SCREENSHOT_QUALITY="${2:-70}"
+      shift 2
+      continue
       ;;
     --no-open)
       OPEN_PAGE="0"
@@ -85,6 +108,44 @@ if [[ -z "$URL" && "$OPEN_PAGE" == "1" ]]; then
 fi
 
 mkdir -p "$OUT_DIR"
+# Absolute from here on, and this is load-bearing rather than tidy.
+#
+# `agent-browser` resolves a relative path in the *daemon*, not in this
+# process -- and the daemon's working directory is whichever one happened to
+# start the browser. One browser serves every conversation in a sandbox, so
+# running this from conversation B wrote the markdown here (the shell does
+# that) and the jpeg into conversation A's directory. Measured exactly that.
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+
+# One capture at a time in a sandbox.
+#
+# `tab new` binds the session to the tab it opens, and every command after it
+# -- `wait`, `eval`, `get url`, `get html`, `screenshot`, `pdf` -- acts on
+# whatever the session is bound to *now*. One browser serves every
+# conversation in a sandbox, so two captures running at once rebind the same
+# session: the second `tab new` steals the binding and the first capture then
+# reads, screenshots and saves the second one's page, under the first one's
+# name. Nothing fails; the file is just of the wrong page.
+#
+# A lock rather than per-command tab addressing, because tab addressing is
+# still a select followed by a command and the race lives in the gap. And it
+# costs nothing: the sandbox has one vCPU, and three captures run in parallel
+# measured 75.4s against 11.0s for the same three run one after another. The
+# serialisation was already the faster arrangement.
+#
+# The wait sits just under `_BROWSER_TIMEOUT_SECONDS` (75s), which is what
+# `web_fetch` gives one capture. Longer would be moot -- the caller kills us
+# first, and the agent gets a bare timeout instead of a sentence saying the
+# browser was busy. A typical capture is 4-12s, so this covers a queue of
+# several.
+CAPTURE_LOCK="${AGENT_BROWSER_CAPTURE_LOCK:-/tmp/lemma-capture.lock}"
+CAPTURE_LOCK_WAIT="${AGENT_BROWSER_CAPTURE_LOCK_WAIT:-70}"
+exec 9>"$CAPTURE_LOCK"
+if ! flock -w "$CAPTURE_LOCK_WAIT" 9; then
+  echo "save-webpage: another capture in this sandbox has held the browser for" \
+       "more than ${CAPTURE_LOCK_WAIT}s. Try again, or capture fewer pages at once." >&2
+  exit 75
+fi
 
 # A capture gets its own tab, and gives it back.
 #
@@ -92,16 +153,37 @@ mkdir -p "$OUT_DIR"
 # session is deliberately long-lived -- one browser, one Xvfb display, one
 # profile per sandbox -- so nothing ever reclaimed what a capture rendered, and
 # Chrome keeps a process per site-instance. A workspace measured after a normal
-# research session held 63 Chrome processes at 2123 MB RSS on a sandbox with
+# research session held 63 Chrome processes (2123 MB summed across them, which
+# over-counts: see below) RSS on a sandbox with
 # 2048 MB total: `MemAvailable` was 14 MB, kswapd0 burned a third of the only
 # vCPU, and every unrelated tool call in that sandbox degraded with it --
 # `python -c pass` took over 12 seconds and `lemma --version` never returned at
 # all. The agent saw `exit_code: 124` and no explanation.
 #
+# A correction to the arithmetic above, since it has been quoted as a reason
+# not to open a second tab: summing per-process RSS counts Chrome's shared
+# mappings once per process. Measured against the cgroup, which is what
+# actually OOMs, five concurrent tabs in one browser peaked at 1656 MiB of
+# 2048 and fell back to baseline when they closed. Tabs are cheap. What is
+# not cheap is a second *browser*: three captures with a session each
+# measured 75.4s against 11.0s for the same three run serially through one
+# warm browser, because the sandbox has one vCPU.
+#
 # So the tab is closed on the way out, via trap: `set -e` means any capture
 # step can abort the script, and the failing captures are exactly the expensive
 # pages worth reclaiming. `--no-open` reuses whatever page the caller already
 # has open -- that tab belongs to them, so this must not touch it.
+# Is a browser already serving this profile? The port file alone is not
+# enough -- Chrome leaves it behind -- so the port is probed too.
+browser_is_live() {
+  local port_file="${AGENT_BROWSER_PROFILE:-/home/user/.lemma/browser/profile}/DevToolsActivePort"
+  [[ -r "$port_file" ]] || return 1
+  local port
+  port="$(head -1 "$port_file" 2>/dev/null)" || return 1
+  [[ -n "$port" ]] || return 1
+  curl -fsS -m 2 -o /dev/null "http://127.0.0.1:${port}/json/version" 2>/dev/null
+}
+
 CAPTURE_TAB=""
 close_capture_tab() {
   if [[ -n "$CAPTURE_TAB" ]]; then
@@ -114,23 +196,58 @@ trap close_capture_tab EXIT
 if [[ "$OPEN_PAGE" == "1" ]]; then
   # Brings up the daemon, Xvfb and the dashboard if they are not up yet,
   # without navigating the caller's active tab.
-  start-browser >/dev/null
+  #
+  # Probed first, because the full ensure costs 1.5-1.8s on a 1 vCPU sandbox
+  # and nearly all of it is `agent-browser open` re-confirming a browser that
+  # is already up. A capture in a warm sandbox is the common case and it was
+  # paying that every time -- about a third of a simple capture. The probe is
+  # the same question `live_port` asks: a recorded port, and something
+  # answering on it.
+  if ! browser_is_live; then
+    lemma-ensure-display >/dev/null
+  fi
   CAPTURE_TAB="lemma-capture-$$"
   agent-browser tab new --label "$CAPTURE_TAB" "$URL" >/dev/null
-  # Bounded, because networkidle is a condition an ad-funded page never
-  # reaches: something is always polling. Measured on the two news sites a user
-  # actually asked for, the unbounded wait cost 32.6s and 40.0s per capture and
-  # produced byte-for-byte the same markdown as a 5s cap did in 10.3s and
-  # 32.7s. A tool call fetching two such pages renders them one at a time, so
-  # that difference is most of the minute and a half the caller waits.
+  # Wait for the *text to stop changing*, not for the network to go quiet.
   #
-  # The cap is not a page-load timeout: whatever has loaded by then is what
-  # gets captured, and the fallback wait below still gives a slow page its
-  # settle time. Pages that do go idle are unaffected -- they reach it in well
-  # under the cap and this returns immediately.
-  timeout "${NETWORKIDLE_TIMEOUT_S:-5}" \
-    agent-browser wait --load networkidle >/dev/null 2>&1 \
-    || agent-browser wait "$WAIT_MS" >/dev/null 2>&1 || true
+  # networkidle is the wrong question twice over. An ad-funded page never
+  # reaches it -- something is always polling -- and a React page reaches
+  # `domcontentloaded` with an empty shell, so neither signal says "there is
+  # something here to read". This used to wrap networkidle in `timeout 5`,
+  # which made it worse rather than bounded: killing the CLI leaves the wait
+  # pending in the daemon and the next CDP call queues behind it. Measured on
+  # reuters, the call after the cap blocked 20.3s whatever it was --
+  # `window.stop()` blocked exactly as long as `get url`. The cap moved the
+  # wait; it never shortened it.
+  #
+  # So: poll the rendered text length until it holds still, inside a single
+  # `eval` that bounds itself. One CDP call, always resolves, nothing left
+  # pending. Measured, wall clock and extracted markdown:
+  #
+  #                      timeout-5 networkidle    this
+  #   reuters            27.0s  2560 chars        3.7s  2560 chars
+  #   news.ycombinator    1.8s 15669              0.3s 15669
+  #   wikipedia           2.4s 187571             3.6s 187571
+  #   example.com         --                      0.2s   232
+  #
+  # Three stable samples rather than two: at two, reuters returned 200 chars
+  # short. The deadline is what protects a page that never settles.
+  agent-browser wait --load domcontentloaded >/dev/null 2>&1 || true
+  agent-browser eval --stdin <<'SETTLE' >/dev/null 2>&1 || \
+    agent-browser wait "$WAIT_MS" >/dev/null 2>&1 || true
+(async () => {
+  const deadline = Date.now() + 6000;
+  const size = () => (document.body ? document.body.innerText.length : 0);
+  let last = -1, stable = 0;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 250));
+    const now = size();
+    if (now === last && now > 0) { if (++stable >= 3) break; } else { stable = 0; }
+    last = now;
+  }
+  return last;
+})()
+SETTLE
 fi
 
 PAGE_URL="$(agent-browser get url)"
@@ -161,11 +278,14 @@ for raw_format in "${FORMAT_LIST[@]}"; do
       printf 'pdf %s\n' "$OUT_DIR/$NAME.pdf"
       ;;
     jpeg|jpg)
-      agent-browser screenshot --full --screenshot-format jpeg --screenshot-quality 85 "$OUT_DIR/$NAME.jpg" >/dev/null
+      # shellcheck disable=SC2086 # $FULL_PAGE is a flag or empty, on purpose.
+      agent-browser screenshot $FULL_PAGE --screenshot-format jpeg \
+        --screenshot-quality "$SCREENSHOT_QUALITY" "$OUT_DIR/$NAME.jpg" >/dev/null
       printf 'jpeg %s\n' "$OUT_DIR/$NAME.jpg"
       ;;
     png)
-      agent-browser screenshot --full "$OUT_DIR/$NAME.png" >/dev/null
+      # shellcheck disable=SC2086
+      agent-browser screenshot $FULL_PAGE "$OUT_DIR/$NAME.png" >/dev/null
       printf 'png %s\n' "$OUT_DIR/$NAME.png"
       ;;
     "")

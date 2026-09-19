@@ -10223,9 +10223,20 @@ var LemmaClient = (() => {
       }
       return response.body;
     }
-    async requestBytes(method, path) {
+    /**
+     * A binary response, optionally only part of one.
+     *
+     * `headers` exists for `Range`. Without it a file past the server's
+     * single-read ceiling was simply unreachable through this client: the read
+     * was capped and there was no way to ask for the rest.
+     */
+    async requestBytes(method, path, options = {}) {
       const url = `${this.apiUrl}${path}`;
-      const response = await this.fetchWithTimeout(url, this.auth.getRequestInit({ method }));
+      const init = this.auth.getRequestInit({ method });
+      if (options.headers) {
+        init.headers = { ...init.headers, ...options.headers };
+      }
+      const response = await this.fetchWithTimeout(url, init);
       if (response.status === 401) {
         this.auth.markUnauthenticated();
       }
@@ -17308,30 +17319,34 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/workspace.ts
+  var MAX_READ_BYTES = 8 * 1024 * 1024;
   var WebLoginsNamespace = class {
     constructor(http) {
       __publicField(this, "http", http);
     }
-    list() {
-      return this.http.request("GET", "/web-logins");
+    /**
+     * Every site the browser is signed in to.
+     *
+     * Not paged: this is what one browser is holding, not a table that grows.
+     * `wake` is off by default so that rendering the list is never what starts
+     * somebody's computer — a paused one answers `sleeping`.
+     */
+    list(options = {}) {
+      const params = {};
+      if (options.wake) params.wake = "true";
+      return this.http.request("GET", "/web-logins", { params });
     }
     /**
-     * Forget a site.
+     * Sign the browser out of a site.
      *
-     * Revokes Lemma's copy and nothing else: the session stays valid at the site
-     * until it expires or the person logs out there.
+     * Really signs it out, which its predecessor did not: that removed Lemma's
+     * encrypted copy and left the browser as it was. Needs the computer
+     * running, and says so rather than reporting a success it did not achieve.
      */
     remove(origin) {
       return this.http.request("DELETE", "/web-logins", {
         params: { origin }
       });
-    }
-    history(limit = 100) {
-      return this.http.request(
-        "GET",
-        "/web-logins/history",
-        { params: { limit } }
-      );
     }
     /** What a sign-in link is asking for, addressed by the pause it is for.
      *
@@ -17348,15 +17363,15 @@ var LemmaClient = (() => {
     /**
      * Say whether you signed in, so the waiting run can carry on.
      *
-     * One call for both answers because it is one answer. `force` saves whatever
-     * the browser holds even when it does not look signed in, for sites the check
-     * reads wrongly.
+     * One call for both answers because it is one answer. Nothing is stored:
+     * the browser holds the session, so finishing is the person finishing. The
+     * reply says whether the site stopped asking, which the agent is told.
      */
     answerSignIn(conversationId, toolCallId, options) {
       return this.http.request(
         "POST",
         `/web-logins/sign-ins/${encodeURIComponent(conversationId)}/${encodeURIComponent(toolCallId)}/answer`,
-        { body: { signed_in: options.signedIn, force: Boolean(options.force) } }
+        { body: { signed_in: options.signedIn } }
       );
     }
   };
@@ -17416,16 +17431,96 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Fit the workspace display to the pane showing it.
+     *
+     * The pane is a box of an arbitrary shape and the display is a real screen
+     * with a fixed size, so one of them has to move. Scaling the picture is
+     * what made the browser a small letterboxed rectangle; resizing the display
+     * means the pixels sent are the pixels shown, and a narrow pane gets a
+     * narrow *viewport* — so sites serve their mobile layout on a phone.
+     *
+     * `size` is what the display actually became, which may be smaller than
+     * asked for: the sandbox's framebuffer is a ceiling. `null` when nothing
+     * could be resized (a sleeping computer, an older image), which is not an
+     * error — the pane keeps the picture it had.
+     */
+    browserResizeDisplay(width, height) {
+      return this.http.request("POST", "/workspace/browser/display-size", {
+        body: { width, height }
+      });
+    }
+    /**
      * Raw bytes of one file, from `offset`, at most `length` bytes.
      *
      * The query is built into the path because `requestBytes` takes no options —
      * it is the byte-returning sibling of `request`, not a full request builder.
      */
+    /**
+     * A file, or a slice of one.
+     *
+     * `range` sends an HTTP `Range` header and gets a 206 back. That is how a
+     * file larger than the server's single-read ceiling is reachable at all:
+     * ask for it a piece at a time. See `readWholeFile`, which does that for
+     * you.
+     */
     readFile(path, options = {}) {
       const query = new URLSearchParams({ path });
       if (options.offset) query.set("offset", String(options.offset));
       if (options.length) query.set("length", String(options.length));
-      return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`);
+      return this.http.requestBytes("GET", `/workspace/files:content?${query.toString()}`, {
+        headers: options.range ? { Range: `bytes=${options.range.start}-${options.range.end}` } : void 0
+      });
+    }
+    /**
+     * A whole file, however big, in as many requests as that takes.
+     *
+     * The server caps one read at 8 MiB, which used to mean a larger file
+     * could be listed and never opened — the pane offered a download that
+     * silently returned the first 8 MiB under the full name. Ranges are
+     * requested in order and stitched, so what a person saves is the file.
+     *
+     * **The size is discovered, not trusted.** This took a `sizeBytes` and
+     * stopped there, which made the caller's bookkeeping load-bearing for
+     * whether a download was complete. The explorer's was wrong on the case
+     * that matters: the open file lives in the URL and its size lived in React
+     * state, so a reload restored the path with a size of 0 and every download
+     * after it truncated at 8 MiB, under the whole file's name. Reading until
+     * the server returns a short slice needs nobody to have remembered
+     * anything. `sizeBytes` survives only as a hint that lets a small file skip
+     * straight to a single unranged read; passing 0 or nothing is correct.
+     *
+     * `chunk` is clamped to the server's ceiling rather than trusted either.
+     * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
+     * eighths of the file was skipped and the result was a corrupt download of
+     * roughly the right length — the same failure, reintroduced by the
+     * parameter meant to tune it.
+     */
+    async readWholeFile(path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
+      const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
+      const parts = [];
+      let start = 0;
+      if (sizeBytes > 0 && sizeBytes <= step) {
+        const only = await this.readFile(path);
+        if (only.size < MAX_READ_BYTES) return only;
+        parts.push(only);
+        start = only.size;
+      }
+      for (; ; ) {
+        let part;
+        try {
+          part = await this.readFile(path, {
+            range: { start, end: start + step - 1 }
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.statusCode === 416) break;
+          throw error;
+        }
+        if (part.size === 0) break;
+        parts.push(part);
+        start += part.size;
+        if (part.size < step) break;
+      }
+      return new Blob(parts);
     }
   };
 

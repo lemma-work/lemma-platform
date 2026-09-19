@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent.domain.entities import Conversation
-from app.modules.agent.domain.value_objects import HarnessOptions, JsonObject
+from app.modules.agent.domain.harness_options import HarnessOptions
+from app.modules.agent.domain.value_objects import JsonObject
 
 
 @dataclass(frozen=True, slots=True)

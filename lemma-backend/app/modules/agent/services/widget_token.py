@@ -88,5 +88,13 @@ def verify_widget_token(
         return UUID(str(data["u"]))
     except InvalidWidgetToken:
         raise
-    except Exception as exc:  # malformed b64/json
+    # Named rather than caught broadly, because "malformed token" is a 4xx and
+    # the set of ways this body can be malformed is short and knowable: the
+    # split and `UUID(...)` and `int(...)` raise ValueError (`binascii.Error`
+    # and `JSONDecodeError` are both subclasses), a payload that decodes to
+    # something other than an object gives TypeError or AttributeError, and a
+    # missing claim gives KeyError. Anything else is a bug in signing or in
+    # this function, and reporting it as somebody else's bad token is how it
+    # would stay hidden.
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
         raise InvalidWidgetToken("malformed token") from exc

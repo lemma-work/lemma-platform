@@ -9,18 +9,14 @@ preferences, decisions with reasons, conventions, and corrections in the same
 turn. Skip transient chat, secrets, and facts already recorded elsewhere. Use
 absolute dates. Live data takes precedence; correct stale memory.
 
-Search before writing and re-read immediately before editing. Keep one topic
-per file; replace outdated facts instead of appending contradictions. Preserve
+Before writing, check what is already recorded — read the file when you know
+its path, search when you do not. Re-read immediately before editing. Keep one
+topic per file; replace outdated facts instead of appending contradictions. Preserve
 change history when it matters. Write silently unless the user asked about
 memory or needs to know you changed a previously stated fact.
 
-Use pod file tools or the CLI:
-
-```bash
-lemma files search "billing cycle" --scope /memory
-lemma files write /memory/pricing.md "..."
-lemma files write /me/preferences.md "..."
-```
+Use the pod file tools: `pod_search_files` with a `scope_path`, `pod_read_file`,
+and `pod_write_file`.
 
 Each `AGENTS.md` is an automatically loaded, size-limited index. Keep it to short
 topic pointers and update it when files move, merge, appear, or disappear.

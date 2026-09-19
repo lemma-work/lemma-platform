@@ -1,78 +1,42 @@
-"""What a saved web login is, and what a request to create one is.
+"""What a browser login is, now that the browser is the one keeping it.
 
-One person's own way back in to a site Lemma has no connector for. The same idea
-as a connector account with a different mechanism, which is why the authorization
-model copies `CONNECTOR_ACCOUNT` rather than inventing a parallel one.
+One person's own way back in to a site Lemma has no connector for. The same
+idea as a connector account with a different mechanism, which is why the
+authorization model copies `CONNECTOR_ACCOUNT` rather than inventing a
+parallel one.
 
-**Only a session is ever kept.** The cookies and local storage a browser holds
-after somebody has signed in: the same class of secret Lemma already keeps for
-connectors, usually weaker, and revocable by the person simply logging out at
-the site. Never a password. `connectors-and-accounts.md` promises the system
-"shall never ask them for their provider password", and a stored password is a
-different and worse class of secret -- reused across sites, not revocable
-without changing it everywhere. An earlier draft of this feature carried a
-password field "for unattended runs"; the answer to that case is a longer-lived
-session or a real connector, not a vault nobody promised.
+**Nothing here is a secret, because nothing is stored.** There used to be a
+`WebLoginSecret` -- the cookies and local storage read back out of a browser,
+encrypted, and rebuilt in a different browser later. The sandbox's browser
+keeps its own profile in the durable home now, so the session lives where the
+session has always belonged and these types describe it rather than hold it.
+
+Never a password, then or now. `connectors-and-accounts.md` promises the
+system "shall never ask them for their provider password", and a stored
+password is a different and worse class of secret -- reused across sites, not
+revocable without changing it everywhere.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
-from uuid import UUID
-
-from app.modules.web_login.services.scope import BrowserCookie, BrowserOrigin
-
-
-class WebLoginStatus(StrEnum):
-    """Whether the stored session is believed to still work.
-
-    `DEAD` is set when an injection produced a page that still wanted a login.
-    It exists so a person is asked to sign in again *before* a run fails on it,
-    which is the promise `PS-CONN-022` makes for connector credentials.
-    """
-
-    ACTIVE = "ACTIVE"
-    DEAD = "DEAD"
-
-
-@dataclass(frozen=True, slots=True)
-class WebLoginSecret:
-    """The part that is encrypted at rest and never leaves the backend.
-
-    Nothing here is ever returned to a caller, put in a tool result, or written
-    to a log. `WebLogin` deliberately has no field for it: a type that cannot
-    carry the secret cannot leak it by accident.
-    """
-
-    #: Cookies the site would receive, and local storage for exactly its origin.
-    #: Narrowed by `services/scope.py` before it ever reaches this shape.
-    cookies: list[BrowserCookie]
-    origins: list[BrowserOrigin]
-
-    def is_empty(self) -> bool:
-        return not self.cookies and not self.origins
 
 
 @dataclass(frozen=True, slots=True)
 class WebLogin:
-    """A saved login, without its secret.
+    """A site the browser is signed in to.
 
-    This is the shape that gets listed, returned from the API and logged.
+    Read from the browser each time it is asked for, not from a table. `since`
+    is the oldest cookie the site has, which is the closest thing to "when did
+    I sign in" that a browser can honestly answer, and `expires` the soonest
+    one to lapse.
     """
 
-    id: UUID
-    user_id: UUID
-    origin: str
-    status: WebLoginStatus
-    created_at: datetime
-    updated_at: datetime
-    last_used_at: datetime | None = None
-
-    @property
-    def is_usable(self) -> bool:
-        return self.status is WebLoginStatus.ACTIVE
+    site: str
+    cookie_count: int
+    since: datetime | None = None
+    expires: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +52,10 @@ class PendingSignIn:
     tool_call_id: str
     origin: str
     reason: str
+    #: The protected page the agent was blocked on, when it named one.
+    #: Verified instead of the origin root, both before asking and after
+    #: answering -- see `SignInService.already_signed_in`.
+    page_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,18 +64,20 @@ class SignInOutcome:
 
     Returned to the page so it can say what happened, and carried to the agent
     on the approval's own payload. Not stored: the decision row is the record.
+
+    `working` is what the site looked like straight afterwards -- whether it
+    stopped asking for a login. Reported rather than enforced: the person has
+    already done what was asked, and telling the agent "they say they signed
+    in but the page still shows a form" is more use than refusing them.
     """
 
     origin: str
     signed_in: bool
-    saved: bool
-    saved_detail: str | None = None
+    working: bool = False
 
 
 __all__ = [
     "PendingSignIn",
     "SignInOutcome",
     "WebLogin",
-    "WebLoginSecret",
-    "WebLoginStatus",
 ]

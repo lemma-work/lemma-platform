@@ -85,7 +85,7 @@ RUN uv sync \
         --no-dev \
         --no-editable \
     && printf '%s\n' \
-        'import sys; p="/workspace/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+        'import sys; p="/home/user/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
         > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-overlay.pth \
     && uv cache clean
 
@@ -93,35 +93,39 @@ FROM ${PYTHON_IMAGE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_PREFIX=/workspace/.python \
-    HOME=/home/appuser \
+    PIP_PREFIX=/home/user/.python \
+    HOME=/home/user \
     DISPLAY=:99 \
     XDG_RUNTIME_DIR=/tmp/lemma-browser/runtime \
     WORKSPACE_XVFB_SCREEN=1440x960x24 \
     AGENT_BROWSER_CONFIG=/tmp/lemma-browser/config.json \
-    AGENT_BROWSER_DASHBOARD_PORT=4848 \
-    AGENT_BROWSER_DASHBOARD_INTERNAL_PORT=4849 \
     AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/workspace-chrome \
-    AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile \
+    # In the home, which is the durable root, so a person signs in to a site
+    # once rather than once per conversation. See `sandbox_runtime/paths.py`;
+    # the two must agree, and the quiescer knows to keep it.
+    AGENT_BROWSER_PROFILE=/home/user/.lemma/browser/profile \
     AGENT_BROWSER_SESSION=workspace \
     AGENT_BROWSER_HEADED=true \
     # A browser nobody is using stops being one. The agent-browser daemon
     # closes Chrome and exits after this long without a command, which is the
     # only thing that reclaims the browser's whole footprint -- Chrome keeps a
     # process per site-instance, and a headed session carries a GPU process and
-    # browser UI on top. Two minutes is well inside the 180s idle-release
-    # window that retires the sandbox itself, so a workspace that goes quiet
-    # sheds the browser before anything else decides what to do with it, and a
-    # research batch mid-flight never sees it: every capture is a command.
-    AGENT_BROWSER_IDLE_TIMEOUT_MS=120000 \
-    # What the live view costs on the wire. The stream server caps frames at
-    # these before they leave the sandbox, so a phone is not sent a 1600px
-    # picture to draw into a 400px pane -- the saving is in pixels never
-    # encoded, not in bytes dropped later. A viewer can ask for fewer frames
-    # still with a `config` message; it cannot ask for more than this.
-    AGENT_BROWSER_STREAM_QUALITY=60 \
-    AGENT_BROWSER_STREAM_MAX_WIDTH=1280 \
-    AGENT_BROWSER_STREAM_MAX_HEIGHT=800 \
+    # browser UI on top.
+    #
+    # Five minutes, not two. The old value was chosen to sit "well inside the
+    # 180s idle-release window", and that window is now 900s
+    # (`WORKSPACE_IDLE_RELEASE_SECONDS`), so two minutes had quietly become far
+    # more aggressive than anyone picked. It is also shorter than a real
+    # sign-in: a person reading an OAuth consent screen and fetching a code
+    # from their phone can spend most of two minutes without issuing a single
+    # command, and the browser retiring underneath them is what they see.
+    # Shedding a browser late costs memory the guard will reclaim; shedding it
+    # early costs the person their login.
+    AGENT_BROWSER_IDLE_TIMEOUT_MS=300000 \
+    # The largest framebuffer a viewer's `/display:resize` may ask for. RandR
+    # cannot grow a screen past what Xvfb allocated at startup, so this is the
+    # ceiling and `WORKSPACE_XVFB_SCREEN` is only where the display begins.
+    WORKSPACE_XVFB_MAX_SCREEN=1920x1200x24 \
     # Loopback-only ports for the VNC view of `:99`. `LEMMA_BROWSER_VNC_PORT`
     # is x11vnc's own raw VNC socket; `LEMMA_BROWSER_VNC_WS_PORT` is
     # websockify's WebSocket front door onto it. The relay is the only thing
@@ -138,11 +142,11 @@ ENV PYTHONUNBUFFERED=1 \
     # being recreated — and, less obviously, the only place pnpm can do its job.
     # pnpm links packages into node_modules from its store, and a hard link
     # cannot cross a filesystem: with the store on the container layer and the
-    # project on /workspace, every install silently fell back to copying. So the
+    # project on the durable root, every install silently fell back to copying. So the
     # store was neither faster nor smaller than npm's. Here it is both, and it
     # survives to the next conversation.
-    PNPM_HOME=/workspace/.pnpm \
-    UV_CACHE_DIR=/workspace/.uv-cache \
+    PNPM_HOME=/home/user/.local/share/pnpm \
+    UV_CACHE_DIR=/home/user/.uv-cache \
     # `/usr/local/bin` before the npm bin directory, because that is where the
     # `lemma-node-tool` wrappers live and being found is the whole of their job.
     # With the npm directory first, a bare `agent-browser` resolved to the raw
@@ -157,7 +161,7 @@ ENV PYTHONUNBUFFERED=1 \
     # trap in a comment and works around it by spelling the path absolutely;
     # the shell an agent gets had no such workaround, and reported both errors
     # in a real transcript.
-    PATH=/workspace/.python/bin:/workspace/.pnpm:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/home/user/.python/bin:/home/user/.local/share/pnpm:/home/user/.local/bin:/opt/lemma-python/bin:/usr/local/bin:/opt/lemma-node/node_modules/.bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \
@@ -192,6 +196,12 @@ RUN apt-get update \
         ripgrep \
         socat \
         tini \
+        # Somebody has to place the windows. Chrome is told its own size, but
+        # the OAuth popup a real sign-in opens is placed by the X server's
+        # default -- possibly off-screen, where the person watching sees
+        # nothing happen. matchbox is the smallest window manager that fixes
+        # it: one window at a time, filling the screen, no decoration.
+        matchbox-window-manager \
         # The human-facing view of the same Xvfb display. `x11vnc` shares
         # `:99` with Chromium rather than opening a second one; `websockify`
         # is what turns its raw VNC socket into something a browser can open
@@ -199,6 +209,10 @@ RUN apt-get update \
         # reached only through the relay, the same treatment raw CDP gets and
         # for the same reason (see `browser_relay/app.py`).
         websockify \
+        # `xrandr`, for resizing the display to match the pane somebody is
+        # watching it in. Xvfb carries the RandR extension either way; this is
+        # the client that drives it.
+        x11-xserver-utils \
         x11vnc \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
@@ -225,9 +239,25 @@ COPY --from=gh-runtime /usr/local/bin/gh /usr/local/bin/gh
 # came first. A .pth file is read only by the interpreter that owns the
 # site-packages holding it, so the shared environment stays available to
 # `execute_python` and invisible to a venv. Missing directories are skipped, so
-# this is safe before /workspace/.python exists.
-RUN printf '/app\n/workspace/.python/lib/python3.14/site-packages\n' \
+# this is safe before /home/user/.python exists.
+RUN printf '/app\n/home/user/.python/lib/python3.14/site-packages\n' \
       > /opt/lemma-python/lib/python3.14/site-packages/lemma-workspace-paths.pth
+
+# Where the backend installs first-party code into a running sandbox. The copy
+# this image already carries is a floor, not the shipped version: the overlay
+# supersedes it, so a Lemma code change needs no new image -- which matters far
+# more on E2B, where the sandbox is the disk and publishing an image meant
+# destroying workspaces, but the mechanism is one so that the Docker lane can
+# actually exercise it.
+#
+# `lemma-runtime-` sorts before `lemma-workspace-overlay.pth` and both insert at
+# position 0, so the later one lands in front and a package the user installed
+# themselves stays ahead of ours. Naming `current` rather than a version keeps
+# an upgrade a symlink flip. Pointing at a directory that does not exist yet is
+# harmless; sys.path tolerates it.
+RUN printf '%s\n' \
+      'import sys; p="/opt/lemma-runtime/current/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+      > /opt/lemma-python/lib/python3.14/site-packages/lemma-runtime-overlay.pth
 
 COPY lemma-backend/sandbox-images/scripts/lemma-node-tool /usr/local/lib/lemma-node-tool
 COPY lemma-backend/sandbox-images/scripts/lemma-uv /usr/local/bin/uv
@@ -243,19 +273,22 @@ RUN chmod 0755 /usr/local/bin/uv /usr/local/lib/lemma-uv-bin \
     && ln -sf /usr/local/lib/lemma-node-tool /usr/local/bin/pnpm
 
 RUN groupadd --gid 10001 appuser \
-    && useradd --uid 10001 --gid 10001 --home-dir /home/appuser --create-home appuser \
+    && useradd --uid 10001 --gid 10001 --home-dir /home/user --create-home appuser \
     && mkdir -p \
         /app/sandbox_runtime/api \
         /app/sandbox_runtime/workspace \
-        /workspace \
+        /home/user \
+        /home/user/lemma \
+        /home/user/.lemma/browser \
+        /opt/lemma-runtime \
         /run/lemma-bootstrap \
         /tmp/.X11-unix \
         /tmp/lemma-browser/runtime \
     && chmod 1777 /tmp/.X11-unix \
     && chown -R 10001:10001 \
         /app \
-        /workspace \
-        /home/appuser \
+        /home/user \
+        /opt/lemma-runtime \
         /run/lemma-bootstrap \
         /tmp/lemma-browser \
     && chmod 0700 /run/lemma-bootstrap
@@ -270,28 +303,38 @@ COPY lemma-backend/sandbox-images/templates/workspace-github/lemma-profile.sh /e
 RUN chmod -R a+rX /sdk
 
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_runtime/__init__.py
+# `paths` before the packages that import it: `contracts` and the whole
+# workspace runtime read the filesystem roots from it, and a missing module
+# here does not fail the build -- the container starts, exits 1 on import,
+# and every sandbox operation then waits for a runtime that is never coming.
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/paths.py /app/sandbox_runtime/paths.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_runtime/protocol.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/contracts.py /app/sandbox_runtime/contracts.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/workspace /app/sandbox_runtime/workspace
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/browser_relay /app/sandbox_runtime/browser_relay
 COPY lemma-backend/sandbox-images/scripts/start-workspace-runtime.sh /usr/local/bin/start-workspace-runtime
-COPY lemma-backend/sandbox-images/scripts/start-browser.sh /usr/local/bin/start-browser
+COPY lemma-backend/sandbox-images/scripts/set-display-size.sh /usr/local/bin/set-display-size
+COPY lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh /usr/local/bin/lemma-ensure-display
 COPY lemma-backend/sandbox-images/scripts/start-browser-relay.sh /usr/local/bin/start-browser-relay
 COPY lemma-backend/sandbox-images/scripts/save-webpage.sh /usr/local/bin/save-webpage
 COPY lemma-backend/sandbox-images/scripts/webpage-to-markdown.mjs /opt/lemma-node/webpage-to-markdown.mjs
 RUN ln -sf /opt/lemma-node/webpage-to-markdown.mjs /usr/local/lib/webpage-to-markdown.mjs
 RUN chmod 0755 \
         /usr/local/bin/start-workspace-runtime \
-        /usr/local/bin/start-browser \
+        /usr/local/bin/lemma-ensure-display \
         /usr/local/bin/start-browser-relay \
         /usr/local/bin/save-webpage \
         /usr/local/lib/webpage-to-markdown.mjs \
     && python -m compileall -q /app/sandbox_runtime
 
-WORKDIR /workspace
+# The project root, which the image must create: Docker pre-populates an empty
+# volume from the image, so a directory baked here arrives in the volume owned
+# by the sandbox user. Left to Docker to create as a missing WorkingDir it would
+# be owned by root, and uid 10001 could not write to its own working directory.
+WORKDIR /home/user/lemma
 USER 10001:10001
-EXPOSE 8080 4848 4850
+EXPOSE 8080 4850
 
 ENTRYPOINT ["tini", "--"]
 CMD ["start-workspace-runtime"]

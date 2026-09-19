@@ -12,6 +12,8 @@ idempotent and there is no per-sandbox secret to keep in a table and rotate.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import asyncio
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
@@ -21,6 +23,7 @@ from urllib.parse import quote
 
 import httpx
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.log.log import get_logger
 from app.modules.workspace.config import workspace_settings
 from app.modules.workspace.providers.base import (
@@ -69,16 +72,52 @@ def relay_token(provider_id: str) -> str:
     ).hexdigest()
 
 
-def _state_target(*, domain: str, session: str | None) -> dict[str, str]:
-    """Which browser a capture is read from or written into.
+class ProfileCookie(TypedDict):
+    """One cookie, as much of it as ever leaves the sandbox.
 
-    The relay has always accepted either; this client only ever sent `domain`,
-    so every load went into the site's *login* session -- including the loads
-    meant for the browser the agent actually works in. That is the whole of the
-    bug where a person signed in, the state was kept, and the next run browsed
-    signed out: the cookies were in a Chrome nothing else opened.
+    Host and expiry. Deliberately not the name and emphatically not the
+    value: this is enough to say "you are signed in to example.com" and
+    enough to delete it, and not enough to be anybody anywhere.
     """
-    return {"session": session} if session else {"domain": domain}
+
+    domain: str
+    expires: float | None
+
+
+class ProfileCookies(TypedDict):
+    """What the browser is holding, or that it is not running to be asked.
+
+    `signed_in` is the set of sites somebody answered "yes, I signed in" to.
+    It comes from a file beside the profile rather than from the cookies,
+    because no flag on a cookie distinguishes a session from visitor
+    tracking -- see `sandbox_runtime/browser_relay/marks.py`. Present even
+    when the browser is not running, since reading it costs no browser.
+    """
+
+    running: bool
+    cookies: list[ProfileCookie]
+    signed_in: list[str]
+
+
+#: Bring the display stack up, on this image or on the one before it.
+#:
+#: `lemma-ensure-display` is `start-browser` renamed. The rename ships in the
+#: image and the image rollout is deliberately deferred, so for as long as
+#: that gap is open a backend that only knew the new name would fail to start
+#: the browser at all on every sandbox still running the old one -- not
+#: degrade, fail: the command does not exist, the relay never comes up, and
+#: the viewer gets "the browser relay did not start".
+#:
+#: Falling back costs one `command -v`. It comes out when the images are
+#: rolled, and until then this is the difference between a deploy that is
+#: safe in either order and one that is not.
+_ENSURE_DISPLAY = (
+    "if command -v lemma-ensure-display >/dev/null 2>&1; then "
+    "  lemma-ensure-display; "
+    "else "
+    "  start-browser; "
+    "fi"
+)
 
 
 class BrowserRelayClient:
@@ -120,6 +159,7 @@ class BrowserRelayClient:
         path: str,
         *,
         json_body: dict[str, object] | None = None,
+        params: dict[str, str] | None = None,
         timeout: float = _QUICK_TIMEOUT_SECONDS,
     ) -> httpx.Response:
         endpoint = await self._endpoint(deadline_seconds=timeout)
@@ -130,6 +170,7 @@ class BrowserRelayClient:
                     method,
                     f"{endpoint.url.rstrip('/')}{path}",
                     headers=headers,
+                    params=params,
                     json=json_body,
                 )
         except httpx.HTTPError as exc:
@@ -174,12 +215,41 @@ class BrowserRelayClient:
             )
         return str(response.json().get("chrome", "stopped"))
 
+    async def viewers(self) -> int | None:
+        """How many sockets this sandbox's relay is serving, or None.
+
+        None when the relay cannot say -- an older image, or one that is not
+        answering. The caller treats that as "cannot tell" rather than as
+        zero, because acting on a guess here resizes a display somebody is
+        looking at.
+        """
+        response = await self._request("GET", "/health", timeout=10.0)
+        if response.status_code != 200:
+            return None
+        body = response.json()
+        count = body.get("viewers") if isinstance(body, dict) else None
+        return count if isinstance(count, int) else None
+
     async def ensure_running(self) -> None:
-        """Start the relay process, and wait for it to answer.
+        """Bring up everything a viewer needs, and wait for it to answer.
 
         Started on demand rather than with the sandbox because it is only
         wanted by somebody looking at a browser, and a workspace that never
-        opens a page should not carry the process.
+        opens a page should not carry Xvfb, x11vnc, websockify and a relay
+        for the life of the container.
+
+        `lemma-ensure-display` rather than the relay's own start script: the
+        relay answering has never meant a viewer would get a picture. That
+        is `x11vnc` in front of Xvfb with `websockify` in front of it, none
+        of which is the relay, and all of which used to arrive as a side
+        effect of whatever browser command happened to run first. So a
+        viewer's own path asks for them, and the wait below is not satisfied
+        until the relay says they are listening -- which is how a display
+        that failed to come up reports itself as that, rather than as "the
+        browser is not running".
+
+        Idempotent throughout: every piece is guarded by a `pgrep`, so this
+        is a check on a warm sandbox and a start on a cold one.
         """
         from uuid import uuid4
 
@@ -190,9 +260,9 @@ class BrowserRelayClient:
             self._instance,
             StartProcessRequest(
                 operation_id=uuid4(),
-                shell_command="start-browser-relay",
+                shell_command=_ENSURE_DISPLAY,
                 argv=None,
-                cwd="/workspace",
+                cwd=WORKSPACE_ROOT,
                 environment=(),
                 tty=None,
                 output_limit_bytes=4096,
@@ -202,13 +272,29 @@ class BrowserRelayClient:
         )
 
         # uvicorn binds in well under a second; this bound is for a container
-        # still finding its feet, not for a healthy start.
-        for _ in range(40):
+        # still finding its feet, not for a healthy start. Xvfb and x11vnc
+        # are slower on a cold E2B sandbox, which is what the second half of
+        # this budget is for.
+        answered = False
+        for _ in range(80):
             await asyncio.sleep(0.25)
             with suppress(BrowserRelayUnavailable):
                 response = await self._request("GET", "/health")
-                if response.status_code == 200:
+                if response.status_code != 200:
+                    continue
+                answered = True
+                body = response.json()
+                vnc = body.get("vnc") if isinstance(body, dict) else None
+                # `None` is an older image's relay, which reports no `vnc` at
+                # all. Taking its silence as failure would wait out the whole
+                # budget and then refuse a sandbox that works.
+                if vnc != "down":
                     return
+        if answered:
+            raise BrowserRelayUnavailable(
+                "the display came up but nothing is serving it: "
+                "x11vnc or websockify did not start"
+            )
         raise BrowserRelayUnavailable("the browser relay did not start")
 
     async def ensure_browser(
@@ -243,38 +329,88 @@ class BrowserRelayClient:
             )
         return response.json()
 
-    async def save_state(
-        self, *, domain: str, session: str | None = None
-    ) -> dict[str, object]:
-        """Read a browser session out, by name or by the site it belongs to.
+    async def reset_display(self) -> str:
+        """Put the display back to the size the image starts it at."""
+        response = await self._request("POST", "/display:reset", timeout=30.0)
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        return str(response.json().get("size") or "")
 
-        `session` names one exactly; `domain` lets the relay name the site's own
-        login session. Both, because reading and writing are not symmetrical
-        here: a capture is taken from the browser the person signed in to, and
-        loaded into the browser the agent works in.
+    async def profile_cookies(self, *, start: bool = False) -> ProfileCookies:
+        """Which hosts the browser holds cookies for, with no values.
+
+        Never starts a browser: a sandbox that is asleep answers
+        `running: False`, which is a state a settings page can render rather
+        than an error it has to explain.
         """
         response = await self._request(
-            "POST",
-            "/state:save",
-            json_body=_state_target(domain=domain, session=session),
-            timeout=120.0,
+            "GET",
+            "/profile:cookies",
+            params={"start": "true"} if start else None,
+            # Long enough to cover a cold Chrome, which `start` may have to
+            # wait for.
+            timeout=120.0 if start else 30.0,
         )
         if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
-        state = response.json().get("state")
-        return state if isinstance(state, dict) else {}
+        body = response.json()
+        if not isinstance(body, dict):
+            return {"running": False, "cookies": [], "signed_in": []}
+        return {
+            "running": bool(body.get("running")),
+            "signed_in": [
+                str(site)
+                for site in body.get("signed_in") or []
+                if isinstance(site, str)
+            ],
+            "cookies": [
+                {
+                    "domain": str(cookie.get("domain") or ""),
+                    "expires": (
+                        float(cookie["expires"])
+                        if isinstance(cookie.get("expires"), (int, float))
+                        else None
+                    ),
+                }
+                for cookie in body.get("cookies") or []
+                if isinstance(cookie, dict) and cookie.get("domain")
+            ],
+        }
 
-    async def load_state(
-        self, state: dict[str, object], *, domain: str, session: str | None = None
-    ) -> None:
+    async def mark_signed_in(self, *, site: str) -> None:
+        """Record that somebody said they signed in to this site.
+
+        Best effort by the caller's choosing, not by this method's: it
+        raises like everything else here, and the sign-in flow decides that
+        a lost label must not fail a sign-in that worked.
+        """
         response = await self._request(
             "POST",
-            "/state:load",
-            json_body={"state": state, **_state_target(domain=domain, session=session)},
-            timeout=120.0,
+            "/profile:signed-in",
+            json_body={"site": site},
+            timeout=30.0,
         )
-        if response.status_code not in (200, 204):
+        if response.status_code != 200:
             raise BrowserRelayUnavailable(_detail(response))
+
+    async def forget_cookies(self, *, domains: list[str], sites: list[str]) -> int:
+        """Drop every cookie set for these hosts. Returns how many went.
+
+        `sites` are the registrable domains those hosts roll up to, so the
+        "they signed in here" marks go in the same call. Passed rather than
+        derived: grouping is a public-suffix question and that list lives on
+        this side of the boundary.
+        """
+        response = await self._request(
+            "POST",
+            "/profile:forget",
+            json_body={"domains": domains, "sites": sites},
+            timeout=60.0,
+        )
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        dropped = response.json().get("dropped")
+        return int(dropped) if isinstance(dropped, int) else 0
 
     async def vnc_socket_url(
         self, *, mode: str, session: str | None = None
@@ -313,6 +449,21 @@ class BrowserRelayClient:
             raise BrowserRelayUnavailable(_detail(response))
         found = response.json().get("targets")
         return found if isinstance(found, list) else []
+
+    async def resize_display(self, *, width: int, height: int) -> str:
+        """Make the sandbox display the shape of the pane watching it.
+
+        Returns the size it settled on, which is not always the size asked
+        for: the framebuffer Xvfb allocated at startup is a ceiling RandR
+        cannot raise, so a large request is clamped rather than refused.
+        """
+        response = await self._request(
+            "POST", "/display:resize", json_body={"width": width, "height": height}
+        )
+        if response.status_code != 200:
+            raise BrowserRelayUnavailable(_detail(response))
+        size = response.json().get("size")
+        return str(size) if size else ""
 
     async def endpoint_is_public(self) -> bool:
         """Whether this sandbox's ports are on the internet behind only a token."""

@@ -46,6 +46,18 @@ def normalize_terminal_output(text: str) -> str:
     return "\n".join(lines)
 
 
+def _requested_chars(max_output_tokens: int | None) -> int:
+    """A token budget as characters, or "no opinion" as a very large number.
+
+    Four characters to the token is the same rough conversion `exec_command`
+    already uses when it sizes the sandbox's own output buffer, so a caller
+    passing the same number twice gets the same answer twice.
+    """
+    if not max_output_tokens or max_output_tokens <= 0:
+        return 1 << 30
+    return max_output_tokens * 4
+
+
 def tail_truncate(text: str | None, limit: int) -> str | None:
     """Keep the end of the text rather than the beginning.
 
@@ -106,7 +118,7 @@ def trim_python_result(result: PythonExecutionResult) -> PythonExecutionResult:
 
 
 def render_terminal_result(
-    result: dict[str, Any], *, tty: bool
+    result: dict[str, Any], *, tty: bool, max_output_tokens: int | None = None
 ) -> tuple[str | None, str | None]:
     """Make command output readable, keeping the end rather than the start.
 
@@ -121,14 +133,20 @@ def render_terminal_result(
 
     stdout = result.get("stdout")
     stderr = result.get("stderr")
+    # A caller asking for less gets less. The constants stay the ceiling:
+    # they exist because one `npm ci` landing whole in a conversation is
+    # replayed on every later turn of it, and a caller cannot opt out of
+    # that — only under it.
+    stdout_limit = min(CHARACTER_LIMIT_STDOUT, _requested_chars(max_output_tokens))
+    stderr_limit = min(CHARACTER_LIMIT_STDERR, _requested_chars(max_output_tokens))
     if tty:
         # Escape sequences are noise a PTY emits constantly; strip before
         # measuring so the cap is spent on text rather than colour codes.
         stdout = normalize_terminal_output(stdout or "")
         stderr = normalize_terminal_output(stderr or "")
     return (
-        tail_truncate(stdout, CHARACTER_LIMIT_STDOUT),
+        tail_truncate(stdout, stdout_limit),
         # stderr has always had its own, smaller limit; this path was passing
         # the stdout one.
-        tail_truncate(stderr, CHARACTER_LIMIT_STDERR),
+        tail_truncate(stderr, stderr_limit),
     )

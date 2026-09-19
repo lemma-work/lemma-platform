@@ -3,7 +3,9 @@
 A live, drivable view of it is not this module's job any more. Two earlier
 designs lived here in turn: driving CDP's `Page.startScreencast` and
 `Input.dispatch*` directly, then proxying `agent-browser`'s own session-scoped
-stream server (`stream_port`, `stream_proxy.py` -- both gone). What replaced
+stream server (`stream_port`, and the JPEG frame protocol -- both gone;
+`stream_proxy.py` survives under its old name, now carrying RFB bytes for
+`app.py`'s `/vnc` route rather than frames). What replaced
 both is `x11vnc` and `websockify` in front of the Xvfb display Chrome already
 runs on: a real screen rather than a translated one, so there is no frame
 protocol, no viewport measurement and no coordinate space for this module to
@@ -18,7 +20,7 @@ instead does not work: ``agent-browser`` waits for that file and a forced port
 stops it appearing, which breaks every other browser tool in the process.
 
 **That file outlives the browser.** Chrome does not remove it on the way out,
-and the browser leaves often -- ``agent-browser`` retires it after two idle
+and the browser leaves often -- ``agent-browser`` retires it after five idle
 minutes, and the memory guard SIGKILLs it under pressure. So the file is a
 record of where Chrome *was*, and reading it alone reports a port that nothing
 is listening on. It cost a long debugging session: a viewer that asked to watch
@@ -45,13 +47,22 @@ import re
 
 import httpx
 
+from sandbox_runtime.paths import BROWSER_PROFILE
+
+#: The browser, and the person's logins. Durable -- see ``paths.py``.
+_DEFAULT_PROFILE = BROWSER_PROFILE
+
 #: Chrome writes the port here on launch; the second line is the browser's own
 #: WebSocket path, which is not what a page-level client wants.
-_ACTIVE_PORT_FILE = Path("/tmp/lemma-browser/profile/DevToolsActivePort")
+_ACTIVE_PORT_FILE = Path(_DEFAULT_PROFILE) / "DevToolsActivePort"
 
-#: Where the image points every browser by default. One directory, so two
-#: browsers cannot both use it.
-_DEFAULT_PROFILE = "/tmp/lemma-browser/profile"
+#: Where an explicitly-named session's profile goes, and it is deliberately not
+#: the durable one. Naming a session is how an agent asks for a *second*,
+#: separate browser -- two signed-in users side by side, say -- and that is a
+#: scratch thing by construction. Under ``/tmp`` so it dies with the sandbox
+#: rather than accumulating profiles in the person's home, one per name anyone
+#: ever passed.
+_SCRATCH_PROFILE_BASE = "/tmp/lemma-browser/profile"
 
 #: The session the image's own tooling uses, and the one that owns the default
 #: profile directory.
@@ -122,7 +133,7 @@ def profile_for_session(session: str | None) -> str | None:  # noqa: D401
     # Nobody reads this directory's name: the *session* keeps the readable
     # `login-app.example.com`, and that is what appears in commands and logs.
     fingerprint = hashlib.sha256(session.encode()).hexdigest()[:32]
-    return f"{_DEFAULT_PROFILE}-{fingerprint}"
+    return f"{_SCRATCH_PROFILE_BASE}-{fingerprint}"
 
 
 def active_port_file(session: str | None = None) -> Path:
@@ -452,10 +463,79 @@ async def open_url(url: str, *, session: str | None = None) -> None:
             process.stdout.feed_eof()
 
 
+#: The script that owns the RandR dance -- creating a mode before it can be
+#: chosen, and clamping to the framebuffer Xvfb allocated at startup. Spelled
+#: absolutely for the same reason `_AGENT_BROWSER` is: this process's PATH is
+#: not an agent shell's.
+_SET_DISPLAY_SIZE = "/usr/local/bin/set-display-size"
+
+
+#: The size the display starts at, and returns to when nobody is watching.
+#:
+#: Read from the image's own `WORKSPACE_XVFB_SCREEN` rather than repeated
+#: here, because the image is what actually starts Xvfb at it. A default is
+#: kept for a sandbox that predates the variable, and it matches the image's.
+_FALLBACK_SCREEN = (1440, 960)
+
+
+def default_display_size() -> tuple[int, int]:
+    """What `WORKSPACE_XVFB_SCREEN` says, as width and height."""
+    raw = os.environ.get("WORKSPACE_XVFB_SCREEN", "")
+    parts = raw.lower().split("x")
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+        width, height = int(parts[0]), int(parts[1])
+        if width > 0 and height > 0:
+            return width, height
+    return _FALLBACK_SCREEN
+
+
+async def set_display_size(width: int, height: int) -> str | None:
+    """Resize the shared display, returning the size it settled on.
+
+    `None` when it could not be done -- an image without the script, or an X
+    server that refused. The caller turns that into a refusal; the viewer
+    keeps the display it already had, which is a worse fit rather than a
+    broken one.
+
+    One display serves every session in the sandbox, so this is deliberately
+    not session-scoped: whoever asks last wins. That is the honest trade for
+    now, and `app.py`'s `/vnc` docstring records per-session displays as the
+    real fix.
+    """
+    if not Path(_SET_DISPLAY_SIZE).exists():
+        return None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            _SET_DISPLAY_SIZE,
+            str(width),
+            str(height),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except OSError as exc:
+        logging.getLogger(__name__).warning("could not resize the display: %r", exc)
+        return None
+    try:
+        stdout, _ = await asyncio.wait_for(
+            process.communicate(), timeout=_REAP_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        with suppress(ProcessLookupError):
+            process.kill()
+        return None
+    if process.returncode != 0:
+        logging.getLogger(__name__).warning(
+            "the display refused to resize: %s",
+            stdout.decode("utf-8", "replace").strip()[:200],
+        )
+        return None
+    return stdout.decode("utf-8", "replace").strip() or None
+
+
 async def keepalive(*, session: str | None = None) -> None:
     """Touch the browser so its idle timer does not retire it.
 
-    `agent-browser` closes Chrome after two minutes without a *command*, and
+    `agent-browser` closes Chrome after five minutes without a *command*, and
     watching is not a command. So a person reading a page, or typing a password
     slowly, is idle by that measure and would have the browser shut under them.
     Any command resets the timer; asking for the URL is the cheapest one that

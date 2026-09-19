@@ -10,6 +10,7 @@ import { Check, CheckCircle2, ChevronDown, ChevronUp, MessageCircleQuestion, Pen
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useRemoveWebLogin } from "@/lib/hooks/use-web-logins";
 import {
   asRecord,
   asString,
@@ -800,9 +801,29 @@ export function ComposerAskUserPanel({
 export function SignInCard({
   invocation,
   conversationId,
+  onNavigateResource,
+  onResolveUserApproval,
 }: {
   invocation: AssistantToolInvocation;
   conversationId: string | null;
+  /** Opens the computer panel in place. Absent only where this card is
+   *  rendered outside the conversation shell, which is what the `href`
+   *  fallback below is for. */
+  onNavigateResource?: (
+    resourceType: string,
+    resourceId: string,
+    meta?: Record<string, unknown>,
+  ) => void;
+  /** Answers the pause, through the same path `ask_user` answers through.
+   *  That is not a detail: what the transcript shows and whether the composer
+   *  unlocks are both read off this tool call, so a resolution made anywhere
+   *  else is one this screen never learns about — the card kept saying "sign
+   *  in to continue" over a run that had already carried on. */
+  onResolveUserApproval?: (
+    approvalId: string,
+    decision: UserApprovalDecision,
+    response?: Record<string, unknown> | null,
+  ) => Promise<void>;
 }) {
   const args = (invocation.args || {}) as ToolCardArgs;
   const origin = asString(args.origin) || "";
@@ -815,7 +836,13 @@ export function SignInCard({
   // See `_browser_sign_in_return`.
   const body = asRecord(resultData.output ?? resultData);
   const signedIn = asString(body.outcome) === "signed_in";
-  const kept = body.saved === true;
+  // `source` is "saved" when the browser was already signed in and nobody was
+  // asked, and "person" when somebody actually signed in just now. The card
+  // used to read the same either way, so a run that quietly reused a login
+  // was indistinguishable from one the person had just answered -- which is
+  // how three "Signed in to asur.work" cards appeared in a row that nobody
+  // had clicked.
+  const fromSaved = signedIn && asString(body.source) === "saved";
 
   // `new URL` throws on anything that is not absolute, and the origin comes
   // from the agent.
@@ -825,6 +852,18 @@ export function SignInCard({
   } catch {
     host = origin;
   }
+
+  const forget = useRemoveWebLogin();
+  const forgotten = forget.isSuccess;
+
+  const {
+    pendingDecision,
+    submittedDecision,
+    error: answerError,
+    resolve,
+  } = useApprovalSubmission(invocation, onResolveUserApproval);
+  const canAnswer =
+    !!onResolveUserApproval && !isResolved && !pendingDecision && !submittedDecision;
 
   // Both are needed to name the pause, and a card that cannot name it cannot
   // resolve it -- so it says so rather than offering a link that 404s.
@@ -840,13 +879,15 @@ export function SignInCard({
         <span className="text-sm text-[var(--text-primary)]">
           {isResolved
             ? signedIn
-              ? `Signed in to ${host}`
+              ? fromSaved
+                ? `Used your saved login for ${host}`
+                : `Signed in to ${host}`
               : `Not signed in to ${host}`
             : `Sign in to ${host}`}
         </span>
         {isResolved ? (
           <Badge variant={signedIn ? "success" : "warning"}>
-            {signedIn ? (kept ? "kept for next time" : "signed in") : "skipped"}
+            {signedIn ? "signed in" : "skipped"}
           </Badge>
         ) : null}
       </div>
@@ -855,15 +896,95 @@ export function SignInCard({
         <p className="mt-2 max-w-prose text-sm text-[var(--text-tertiary)]">{reason}</p>
       ) : null}
 
-      {isResolved ? null : href ? (
+      {fromSaved ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button asChild size="sm">
-            <a href={href}>Sign in to {host}</a>
+          {/* The way out of a login the site no longer accepts, from inside
+              the conversation. It does not re-ask on the spot -- this run has
+              already been told it is signed in -- it signs the browser out,
+              so the next `browser_sign_in` meets the wall and asks. Without
+              it the remedy lived on a settings page somebody had to know to
+              go and find. */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => forget.mutate(origin)}
+            disabled={forget.isPending || forgotten}
+          >
+            {forgotten
+              ? "Signed out"
+              : forget.isPending
+                ? "Signing out…"
+                : "That didn’t work — sign out"}
           </Button>
           <span className="text-xs text-[var(--text-tertiary)]">
-            Opens {host} in the agent&rsquo;s browser. Your password is never sent
-            to Lemma.
+            {forgotten
+              ? "The next attempt will ask you to sign in."
+              : "Signs the agent’s browser out, so it asks again."}
           </span>
+        </div>
+      ) : null}
+
+      {isResolved ? null : href ? (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Opens the computer panel beside the conversation when there is
+                one to open, and only falls back to the standalone page when
+                there is not — a link that replaces the whole page is the right
+                answer from an email, and the wrong one from a chat the person
+                is in the middle of. */}
+            {onNavigateResource && conversationId ? (
+              <Button
+                size="sm"
+                onClick={() =>
+                  onNavigateResource("sign_in", invocation.toolCallId, {
+                    conversationId,
+                  })
+                }
+              >
+                Open {host}
+              </Button>
+            ) : (
+              <Button asChild size="sm">
+                <a href={href}>Open {host}</a>
+              </Button>
+            )}
+            <span className="text-xs text-[var(--text-tertiary)]">
+              Opens {host} in the agent&rsquo;s browser. Your password is never
+              sent to Lemma.
+            </span>
+          </div>
+
+          {/* Answering lives here rather than under the picture. The panel
+              shows the browser and nothing else, and this is the one place
+              that can both unlock the composer and tell the run to carry on. */}
+          {canAnswer ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => resolve("APPROVE_ONCE")}
+                disabled={!!pendingDecision}
+              >
+                {pendingDecision === "APPROVE_ONCE" ? "Checking…" : "I’m signed in"}
+              </Button>
+              <Button
+                variant="quiet"
+                size="sm"
+                onClick={() => resolve("DENY")}
+                disabled={!!pendingDecision}
+              >
+                Can’t right now
+              </Button>
+              {submittedDecision ? (
+                <span className="text-xs text-[var(--text-tertiary)]">
+                  {approvalSubmittedNote(submittedDecision)}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          {answerError ? (
+            <p className="text-xs text-[var(--state-error)]">{answerError}</p>
+          ) : null}
         </div>
       ) : (
         <p className="mt-3 text-xs text-[var(--text-tertiary)]">

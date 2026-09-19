@@ -9,8 +9,11 @@ from app.modules.agent.tools.context import BaseAgentContext
 from app.modules.agent.tools.speech.models import (
     ListenRequest,
     ListenResponse,
+    ListVoicesRequest,
+    ListVoicesResponse,
     SayRequest,
     SayResponse,
+    VoiceSummary,
 )
 from app.modules.agent.tools.speech.speech import listen_internal, say_internal
 
@@ -63,4 +66,55 @@ async def say(ctx: RunContext[BaseAgentContext], request: SayRequest) -> SayResp
         return SayResponse(success=False, error=safe_error_text(exc))
 
 
-speech_toolset = FunctionToolset[BaseAgentContext](tools=[listen, say])
+async def list_voices(
+    ctx: RunContext[BaseAgentContext], request: ListVoicesRequest
+) -> ListVoicesResponse:
+    """What `say` can sound like: the voices this deployment can actually use.
+
+    Read from the provider rather than a list kept here, so it is the whole
+    range and cannot go stale. Filter by `language` when you know it; each
+    voice carries an accent and use-case tags, which is usually what decides
+    between two that speak the same language.
+
+    A language with no voices is a real answer: say so rather than speaking it
+    with a voice that does not.
+    """
+    del ctx
+    from app.modules.agent.tools.speech.voice_catalogue import load_voices
+
+    voices = await load_voices()
+    if not voices:
+        return ListVoicesResponse(
+            success=False,
+            error=(
+                "The voice catalogue could not be read — no speech credentials, "
+                "or the provider is unreachable. `say` still works and will "
+                "pick a voice for the language."
+            ),
+        )
+    matching = [v for v in voices if not request.language or v.speaks(request.language)]
+    if not matching:
+        return ListVoicesResponse(
+            success=True,
+            total=0,
+            message=(
+                f"No voice speaks '{request.language}'. Say so rather than "
+                "reading that language aloud in another accent."
+            ),
+        )
+    return ListVoicesResponse(
+        success=True,
+        total=len(matching),
+        voices=[
+            VoiceSummary(
+                name=v.name,
+                languages=list(v.languages),
+                accent=v.accent or None,
+                tags=list(v.tags),
+            )
+            for v in matching[: request.limit]
+        ],
+    )
+
+
+speech_toolset = FunctionToolset[BaseAgentContext](tools=[listen, say, list_voices])

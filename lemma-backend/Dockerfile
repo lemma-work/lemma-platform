@@ -36,8 +36,48 @@ COPY lemma-backend/ ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra local
 
+# The first-party Python this backend installs into its workspace sandboxes:
+# the CLI, the SDK, the skills and the browser relay, built from the same source
+# tree as the backend itself.
+#
+# That coupling is the whole point. On E2B the sandbox is the disk, so a sandbox
+# cannot be replaced to give it newer code -- it is sent the code instead, and
+# what it is sent has to be what this server expects to talk to. Shipping the
+# bundle *inside this image* makes that a property of the build rather than
+# something an operator has to remember: a deploy moves both together, and a
+# rollback rolls both back. Publishing it separately would reintroduce exactly
+# the two-artifact promotion this change exists to remove.
+#
+# Built from `/` rather than the repository's own shape: `lemma-cli/setup.py`
+# vendors `../lemma-skills` and `../lemma-pod-bundle` at build time, so the
+# first-party projects have to sit beside each other.
+COPY lemma-python /lemma-python
+COPY lemma-cli /lemma-cli
+COPY lemma-skills /lemma-skills
+RUN --mount=type=cache,target=/root/.cache/uv \
+    python scripts/build_runtime_bundle.py \
+        --out-dir /runtime-bundle \
+        --repo-root / \
+        --backend-root /app
+
 # Stage 2: Runtime stage
 FROM python:3.14-slim-bookworm
+
+# Take the base image's security updates. `python:3.14-slim-bookworm` is
+# rebuilt on its own schedule, so a Debian advisory published between rebuilds
+# lands in this image and fails the vulnerability scan on a PR that did not
+# touch it -- which is how three pcre2 CVEs (CVE-2026-86145, -89157, -89161,
+# all fixed in 10.42-1+deb12u1) arrived here.
+#
+# `upgrade`, not a pinned version: pinning means editing this line for every
+# future advisory, and the pin is stale the moment it is written. The base
+# already lists `bookworm-security` in its deb822 sources, so nothing is added
+# here -- writing a legacy `.list` beside those conflicts on `Signed-By` and
+# fails the build.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -112,6 +152,13 @@ RUN rm -rf /app/load_tests /app/docs /app/sandbox-images /app/manifests \
 RUN python -m compileall -q --invalidation-mode unchecked-hash \
         /app/app /app/sandbox_runtime \
     && chown -R appuser:appuser /app/app /app/sandbox_runtime
+
+# What the backend installs into a workspace sandbox, built in the stage above
+# from this image's own sources. Absent, `runtime_bundle()` returns None and
+# sandboxes simply keep the copy baked into their own image -- which is what
+# every sandbox ran before this existed, so a broken build here degrades rather
+# than breaks.
+COPY --from=builder --chown=appuser:appuser /runtime-bundle /app/runtime-bundle
 
 # Browser SDK bundle served at /public/sdk/lemma-client.js for no-build apps.
 # settings.resolve_browser_sdk_path() looks here first in the container.

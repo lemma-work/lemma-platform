@@ -12,7 +12,11 @@ import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { PodWelcome, type PodWelcomeChoice } from '@/components/pod/pod-welcome';
 import { PodConversationSkeleton } from '@/components/pod/route-skeletons';
 import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
-import { ComputerPanel } from '@/components/workspace/computer-panel';
+import {
+    ComputerPanel,
+    computerHref,
+    useComputerTab,
+} from '@/components/workspace/computer-panel';
 import { Monitor } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import {
@@ -114,6 +118,15 @@ function PodConversationSurface({
     // the conversation that has been using it, so a URL you could navigate to
     // cold would be a page that cannot say whose files it is showing.
     const isComputerOpen = searchParams.get('computer') === '1';
+    // A sign-in card in the transcript opens the panel already pointed at its
+    // pause (see `navigateToResource`'s `sign_in` branch). The tool call id
+    // travels, never the origin: an origin in the URL survives reload and back,
+    // and would re-steer the shared sandbox browser at a site the person may
+    // already have finished with.
+    const signInToolCallId = searchParams.get('signInCall');
+    // Held here rather than inside the panel, because the stage's link to
+    // the full-size page has to open on the half that is showing.
+    const [computerTab, setComputerTab] = useComputerTab(signInToolCallId);
     const conversationInstructions = searchParams.get('conversationInstructions');
     const conversationMetadata = useMemo(
         () => parseConversationMetadataParam(searchParams.get('conversationMetadata')),
@@ -251,6 +264,11 @@ function PodConversationSurface({
             params.set('computer', '1');
         } else {
             params.delete('computer');
+            // A spent sign-in must not come back with the panel. Without this,
+            // reopening "Your computer" later lands on a pause that has since
+            // been answered rather than on the person's files.
+            params.delete('computerTab');
+            params.delete('signInCall');
         }
         const query = params.toString();
         router.replace(
@@ -383,16 +401,21 @@ function PodConversationSurface({
                     one: compute is released after fifteen minutes idle but the
                     files outlive it, so hiding this when the machine sleeps
                     would take the affordance away exactly when somebody comes
-                    back to look at what the agent made. */}
-                {isRouteConversationSelected && !isNewConversation ? (
+                    back to look at what the agent made.
+
+                    Gone while the panel is open, because the panel's own
+                    header carries the close. Two controls for one thing, a
+                    few hundred pixels apart and drawn differently -- a
+                    pressed icon here, an ✕ there -- is one more than the
+                    question deserves. */}
+                {isRouteConversationSelected && !isNewConversation && !isComputerOpen ? (
                     <Button
                         type="button"
                         variant="quiet"
                         size="icon"
-                        onClick={() => setComputerOpen(!isComputerOpen)}
-                        aria-pressed={isComputerOpen}
-                        aria-label={isComputerOpen ? 'Hide your computer' : 'Show your computer'}
-                        title={isComputerOpen ? 'Hide your computer' : 'Show your computer'}
+                        onClick={() => setComputerOpen(true)}
+                        aria-label="Show your computer"
+                        title="Show your computer"
                         className="absolute right-3 top-2 z-10 size-8"
                     >
                         <Monitor className="size-4" />
@@ -441,10 +464,21 @@ function PodConversationSurface({
                 podId={podId}
                 resourceHref=""
                 stageTitle="Your computer"
+                // The full-size view of the same machine. Carries the
+                // conversation's own directory, so opening it lands where
+                // the pane was rather than at the root.
+                stageStandaloneHref={computerHref(podId, {
+                    workspaceCwd: activeConversation?.workspace_cwd,
+                    tab: computerTab,
+                    conversationId: activeConversation?.id,
+                })}
                 stageBodyOverride={
                     <ComputerPanel
                         workspaceCwd={activeConversation?.workspace_cwd}
                         conversationId={activeConversation?.id}
+                        signInToolCallId={signInToolCallId}
+                        tab={computerTab}
+                        onTabChange={setComputerTab}
                     />
                 }
                 onClose={() => setComputerOpen(false)}

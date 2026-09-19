@@ -269,8 +269,9 @@ class FilesystemManager:
         if not candidate.is_absolute():
             raise ValueError("filesystem path must be absolute")
         # Creating an allowed root is an idempotent operation. Requiring its
-        # parent to be allowed would incorrectly reject "/workspace" because
-        # "/" is intentionally outside the runtime's filesystem capability.
+        # parent to be allowed would incorrectly reject a root like
+        # "/home/user", because "/" is intentionally outside the runtime's
+        # filesystem capability.
         if candidate in self._roots:
             return candidate
         parent = candidate.parent

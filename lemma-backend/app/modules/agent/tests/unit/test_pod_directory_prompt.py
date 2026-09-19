@@ -25,6 +25,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.domain.entities import Agent, Conversation
 from app.modules.agent.domain.prompt_directories import _pod_cwd, _workspace_cwd
 from app.modules.agent.domain.prompts import build_agent_instructions
@@ -33,7 +34,7 @@ from app.modules.agent.services.workspace_location import resolve_workspace_loca
 pytestmark = pytest.mark.unit
 
 POD_CWD = "/me/c/2026-08-30/ab12cd34"
-WORKSPACE_CWD = "/workspace/c/2026-08-30/ab12cd34"
+WORKSPACE_CWD = f"{WORKSPACE_ROOT}/c/2026-08-30/ab12cd34"
 
 
 def _conversation() -> Conversation:
@@ -110,12 +111,23 @@ class TestTheAgentIsToldWhereAttachmentsAre:
 class TestAnEmptySearchIsNotAnAbsentFile:
     def test_the_agent_is_told_search_lags_the_write(self) -> None:
         text = _instructions(["POD"])
-        assert "not indexed yet" in text
-        assert "never *not there*" in text
+        assert "index built after a file is stored" in text.replace("\n", " ")
+        assert "still returns nothing for it" in text.replace("\n", " ")
 
     def test_and_is_told_what_does_answer_the_question(self) -> None:
         text = _instructions(["POD"])
-        assert "listing the directory or reading the path" in text.replace("\n", " ")
+        assert "list the directory or read the path" in text.replace("\n", " ")
+
+    def test_the_lag_is_not_stated_as_a_ban_on_searching(self) -> None:
+        """It read as "never search", and two other fragments say to search.
+
+        The rule is about one question — does this specific file exist — and
+        overreached into a general prohibition, leaving the same prompt telling
+        the agent both things.
+        """
+        text = _instructions(["POD"]).replace("\n", " ")
+        assert "Do not go looking for it with search" not in text
+        assert "Search is the right tool" in text
 
 
 class TestTheDirectoryFallsBackToWhereTheAgentActuallyIs:
@@ -148,24 +160,30 @@ class TestTheDirectoryFallsBackToWhereTheAgentActuallyIs:
 
     def test_the_workspace_fallback_is_not_the_retired_path_shape(self):
         conversation = self._conversation()
-        assert "/workspace/conversations/" not in _workspace_cwd(
+        assert f"{WORKSPACE_ROOT}/conversations/" not in _workspace_cwd(
             SimpleNamespace(), conversation
         )
 
     def test_a_persisted_cwd_wins_over_any_default(self):
         """The common case: creation stamps the directory into metadata."""
-        conversation = self._conversation({"cwd": "/workspace/c/2026-09-15/ly827dnk"})
+        conversation = self._conversation(
+            {"cwd": f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"}
+        )
         assert (
             _workspace_cwd(SimpleNamespace(), conversation)
-            == "/workspace/c/2026-09-15/ly827dnk"
+            == f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"
         )
 
     def test_the_pod_fallback_shares_the_workspace_suffix(self):
         """The two filesystems mirror each other; a second derivation drifts."""
-        conversation = self._conversation({"cwd": "/workspace/c/2026-09-15/ly827dnk"})
+        conversation = self._conversation(
+            {"cwd": f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"}
+        )
         assert _pod_cwd(SimpleNamespace(), conversation) == "/me/c/2026-09-15/ly827dnk"
 
     def test_the_context_still_wins_when_it_carries_one(self):
-        conversation = self._conversation({"cwd": "/workspace/c/2026-09-15/ly827dnk"})
-        ctx = SimpleNamespace(workspace_cwd="/workspace/somewhere/else")
-        assert _workspace_cwd(ctx, conversation) == "/workspace/somewhere/else"
+        conversation = self._conversation(
+            {"cwd": f"{WORKSPACE_ROOT}/c/2026-09-15/ly827dnk"}
+        )
+        ctx = SimpleNamespace(workspace_cwd=f"{WORKSPACE_ROOT}/somewhere/else")
+        assert _workspace_cwd(ctx, conversation) == f"{WORKSPACE_ROOT}/somewhere/else"

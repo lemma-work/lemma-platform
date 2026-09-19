@@ -9,12 +9,12 @@ are mostly about what happened rather than about what came back.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
 
-from sandbox_runtime.browser_relay import chrome, state
+from sandbox_runtime.browser_relay import chrome
+from sandbox_runtime.paths import HOME_ROOT
 from sandbox_runtime.browser_relay.app import TOKEN_PATH, create_app
 from sandbox_runtime.browser_relay.stream_proxy import CONTROL, VIEW
 
@@ -185,73 +185,48 @@ def test_the_token_file_is_not_where_quiesce_looks() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Session state
+# The profile, and what leaves the sandbox
 # ---------------------------------------------------------------------------
 
 
-def test_a_login_session_is_named_for_its_site() -> None:
-    """Scoping by construction: a capture from this session can only contain
-    what was signed in to in it."""
-    assert state.session_for_domain("example.com") == "login-example.com"
-    assert state.session_for_domain("EXAMPLE.com") == "login-example.com"
-    # A hostile domain cannot escape into a shell argument or a path.
-    assert "/" not in state.session_for_domain("a/../../etc/passwd")
-    assert ";" not in state.session_for_domain("a;rm -rf /")
+def test_the_profile_is_on_the_durable_disk() -> None:
+    """A login that does not survive a suspend is a login the person is asked
+    for again next conversation, which is the whole complaint this answers."""
+    assert chrome._DEFAULT_PROFILE == f"{HOME_ROOT}/.lemma/browser/profile"
+    assert not chrome._DEFAULT_PROFILE.startswith("/tmp/")
 
 
-def test_the_state_directory_is_never_the_durable_volume() -> None:
-    """A saved session under /workspace would outlive the run that captured it
-    and be waiting for whatever ran next."""
-    assert not str(state._STATE_DIR).startswith("/workspace")
-    assert str(state._STATE_DIR).startswith("/tmp/")
+def test_a_named_session_stays_scratch() -> None:
+    """Naming a session is how an agent asks for a *second* browser -- two
+    accounts side by side -- and that is a throwaway by construction. Letting
+    those accumulate in the home would grow a profile per name anyone ever
+    passed."""
+    profile = chrome.profile_for_session("compare-b")
+    assert profile is not None and profile.startswith("/tmp/")
+    assert chrome.profile_for_session(chrome.DEFAULT_SESSION) is None
 
 
-async def test_a_saved_session_leaves_no_file_behind(monkeypatch, tmp_path) -> None:
-    written: dict[str, Path] = {}
-
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
-        path = Path(argv[-1])
-        written["path"] = path
-        path.write_text(json.dumps({"cookies": [{"name": "s", "value": "v"}]}))
-        return 0, ""
-
-    monkeypatch.setattr(state, "_STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(state, "_run", fake_run)
-
-    saved = await state.save_session(session="login-example.com")
-    assert saved == {"cookies": [{"name": "s", "value": "v"}]}
-    assert not written["path"].exists(), "the plaintext session must not persist"
+def test_a_hostile_session_name_cannot_escape_into_a_path() -> None:
+    for hostile in ("a/../../etc/passwd", "a;rm -rf /", ".."):
+        assert not chrome.is_safe_session(hostile)
+        with pytest.raises(chrome.UnsafeSessionName):
+            chrome.profile_for_session(hostile)
 
 
-async def test_an_oversized_session_is_refused(monkeypatch, tmp_path) -> None:
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
-        Path(argv[-1]).write_text(json.dumps({"junk": "x" * (3 * 1024 * 1024)}))
-        return 0, ""
+def test_no_cookie_value_can_leave_the_sandbox() -> None:
+    """The relay reports hosts and expiries, never values.
 
-    monkeypatch.setattr(state, "_STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(state, "_run", fake_run)
+    The design this replaced had to carry values out by construction -- the
+    backend encrypted them and put them back later. This one does not, so the
+    guarantee is the shape of the function rather than a rule about who may
+    call it.
+    """
+    import inspect
 
-    with pytest.raises(state.StateOperationFailed, match="larger than"):
-        await state.save_session(session="login-example.com")
+    from sandbox_runtime.browser_relay import cookies
 
-
-async def test_a_loaded_session_is_staged_and_removed(monkeypatch, tmp_path) -> None:
-    seen: dict[str, object] = {}
-
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
-        path = Path(argv[-1])
-        seen["path"] = path
-        seen["content"] = json.loads(path.read_text())
-        seen["mode"] = path.stat().st_mode & 0o777
-        return 0, ""
-
-    monkeypatch.setattr(state, "_STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(state, "_run", fake_run)
-
-    await state.load_session({"cookies": []}, session="login-example.com")
-    assert seen["content"] == {"cookies": []}
-    assert seen["mode"] == 0o600, "readable by its owner and nobody else"
-    assert not Path(seen["path"]).exists()  # type: ignore[arg-type]
+    source = inspect.getsource(cookies.list_cookie_domains)
+    assert '"value"' not in source and "'value'" not in source
 
 
 def test_the_relay_serves_only_what_it_means_to() -> None:
@@ -263,18 +238,33 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/health",
         "/targets",
         "/browser:ensure",
-        "/state:save",
-        "/state:load",
+        "/display:resize",
+        "/display:reset",
+        "/profile:cookies",
+        "/profile:forget",
+        "/profile:signed-in",
         "/vnc",
     } <= served
-    # Asserted as an equality on the state routes, not a subset: `/state:clear`
-    # was here and nothing ever called it, all the way down through the client
-    # and the service to `clear_session`. A route into a signed-in browser that
-    # no product path uses is surface for free.
-    assert {p for p in served if p.startswith("/state")} == {
-        "/state:save",
-        "/state:load",
+    # Asserted as an equality, not a subset: `/state:clear` was once here and
+    # nothing ever called it, all the way down through the client and the
+    # service. A route into a signed-in browser that no product path uses is
+    # surface for free. `/state:save` and `/state:load` are gone for a larger
+    # reason -- nothing lifts a session out of the sandbox any more.
+    assert {p for p in served if p.startswith("/profile")} == {
+        "/profile:cookies",
+        "/profile:forget",
+        # Names only, never a cookie: the set of sites somebody said they
+        # signed in to, which is the one thing the cookie store cannot say.
+        "/profile:signed-in",
     }
+    # Equality here too, for the reason above. Both were absent from this
+    # file while it claimed to assert the served surface, so a display route
+    # could have come or gone without anything noticing.
+    assert {p for p in served if p.startswith("/display")} == {
+        "/display:resize",
+        "/display:reset",
+    }
+    assert not {p for p in served if p.startswith("/state")}
     assert not {p for p in served if p.startswith("/cdp")}
     # `/session` proxied `agent-browser`'s own JSON/JPEG stream server. VNC
     # replaced it outright rather than living beside it, so a route this
@@ -310,11 +300,17 @@ def _client(monkeypatch, tmp_path, token: str = "token-abc"):
 def test_health_needs_no_token_and_says_when_chrome_is_down(
     monkeypatch, tmp_path
 ) -> None:
-    """A paused workspace has no browser, and that is not a fault."""
+    """A paused workspace has no browser, and that is not a fault.
+
+    `vnc` rides alongside because they fail separately and the remedies
+    differ: a viewer that got no picture used to close 4409, "the browser is
+    not running", which was the same answer for a browser that was down, a
+    display that never came up, and a websockify that had died.
+    """
     client = _client(monkeypatch, tmp_path)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"chrome": "stopped"}
+    assert response.json() == {"chrome": "stopped", "vnc": "down", "viewers": 0}
 
 
 def test_a_guarded_route_without_a_token_is_refused_as_unauthorised(
@@ -341,15 +337,15 @@ def test_the_right_token_reaches_the_route(monkeypatch, tmp_path) -> None:
     assert response.status_code == 409
 
 
-def test_every_state_route_is_behind_the_token(monkeypatch, tmp_path) -> None:
-    """These read and write signed-in sessions; none may be reachable openly."""
+def test_every_profile_route_is_behind_the_token(monkeypatch, tmp_path) -> None:
+    """These read and change a signed-in browser; none may be open."""
     client = _client(monkeypatch, tmp_path)
     for path, body in (
         ("/browser:ensure", {}),
-        ("/state:save", {}),
-        ("/state:load", {"state": {}}),
+        ("/profile:forget", {"domains": ["example.com"]}),
     ):
         assert client.post(path, json=body).status_code == 401, path
+    assert client.get("/profile:cookies").status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -369,12 +365,6 @@ def test_a_session_name_cannot_escape_the_profile_directory() -> None:
 def test_the_names_this_actually_uses_are_allowed() -> None:
     for good in ("login-app.example.com", "workspace", "login-site", "a_b-1.2"):
         assert chrome.is_safe_session(good) is True, good
-
-
-def test_a_derived_name_is_safe_by_construction() -> None:
-    """`session_for_domain` already strips; this is belt to that brace."""
-    for hostile in ("a/../../etc/passwd", "a;rm -rf /", "../..", "x\x00y"):
-        assert chrome.is_safe_session(state.session_for_domain(hostile)) is True
 
 
 def test_the_default_session_needs_no_profile_of_its_own() -> None:
@@ -567,6 +557,70 @@ def test_a_vnc_viewer_is_checked_against_its_own_session_not_the_default(
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_text()
     assert closed.value.code == CLOSE_UPSTREAM_GONE
+
+
+def test_the_vnc_keepalive_touches_the_session_being_watched(
+    monkeypatch, tmp_path
+) -> None:
+    """The bug this pins: the route kept the *default* session warm whatever
+    the viewer was actually looking at.
+
+    Watching is not a command, and `agent-browser` retires a browser after two
+    idle minutes -- which is the entire reason this loop exists. Pointed at the
+    default session, it let the browser actually on screen idle out from under
+    the person reading it: a sign-in's `login-<host>`, or a conversation's own
+    session. For a sign-in that is worse than a blank panel, because releasing
+    runs quiesce and takes the profile -- and the half-finished sign-in -- with
+    it. It also kept a browser nobody was watching alive, in a sandbox whose
+    memory guard kills on ~220 MB free.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+
+    async def fake_live_port(session=None):
+        return 12345
+
+    kept_warm: list[str] = []
+
+    async def _never_finishes() -> None:
+        await asyncio.Event().wait()
+
+    def fake_keepalive_loop(session: str):
+        # Recorded where the loop is *created*, not where it first runs: the
+        # real one sleeps for a minute before its first touch and this socket
+        # is over long before that. Which session it is handed is the whole of
+        # what regressed.
+        kept_warm.append(session)
+        return _never_finishes()
+
+    class _RefusingConnect:
+        # Same stand-in as the liveness test above: failing at websockify with
+        # its own close code proves the route got past the checks and reached
+        # the point where the keepalive has already been started.
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            raise OSError("no websockify in this test")
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app, "_keepalive_loop", fake_keepalive_loop)
+    monkeypatch.setattr(relay_app.websockets, "connect", _RefusingConnect)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?session=login-example.com",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+
+    assert closed.value.code == CLOSE_UPSTREAM_GONE
+    assert kept_warm == ["login-example.com"]
 
 
 #: Correctly-sized fake RFB client messages, by the protocol's own fixed and
@@ -789,29 +843,89 @@ def test_the_cli_is_told_its_session_in_the_environment_too(monkeypatch) -> None
     assert "PATH" in env
 
 
-def test_one_viewer_leaving_does_not_release_another_viewers_wheel(
+# ---------------------------------------------------------------------------
+# The display, and who is allowed to make it big
+# ---------------------------------------------------------------------------
+
+
+def test_the_starting_size_comes_from_the_image(monkeypatch) -> None:
+    """One definition, in the thing that actually starts Xvfb at it."""
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1280x800x24")
+    assert chrome.default_display_size() == (1280, 800)
+    monkeypatch.delenv("WORKSPACE_XVFB_SCREEN")
+    assert chrome.default_display_size() == (1440, 960)
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "nonsense")
+    assert chrome.default_display_size() == (1440, 960)
+
+
+def test_a_viewer_cannot_push_the_display_past_its_starting_size(
     monkeypatch, tmp_path
 ) -> None:
-    """The lease says who holds it, not merely that somebody does.
+    """A maximised pane on a large monitor is not a reason to run a 2 GB
+    sandbox at 1920x1200 for the rest of its life.
 
-    Two people can have the same session open -- a second tab, a phone
-    alongside a laptop, a reconnect that overlaps its own close. The lease was
-    a file whose existence was the whole signal, so whichever socket closed
-    first deleted it, and the one still driving lost the wheel without being
-    told. The agent's script reads that file to decide whether to yield, so
-    what followed was a command typed into a page somebody was using.
+    That was measured to lose an `agent-browser record` part-way through on a
+    loaded runner -- 1.67x the pixels for x11vnc to encode and for ffmpeg to
+    grab. The framebuffer ceiling is still reachable, but only by an agent
+    asking for it on purpose with `set-display-size`.
     """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    asked: list[tuple[int, int]] = []
+
+    async def fake_resize(width: int, height: int) -> str:
+        asked.append((width, height))
+        return f"{width}x{height}"
+
     from sandbox_runtime.browser_relay import app as relay_app
 
-    monkeypatch.setattr(relay_app, "_WHEEL_DIR", tmp_path / "wheel")
+    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    client = _client(monkeypatch, tmp_path)
 
-    first = relay_app._take_the_wheel("conv-abc")
-    second = relay_app._take_the_wheel("conv-abc")
-    assert first is not None and second is not None
-    assert first.token != second.token
+    response = client.post(
+        "/display:resize",
+        json={"width": 1900, "height": 1180},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
 
-    relay_app._release_the_wheel(first)
-    assert relay_app.wheel_path("conv-abc").exists(), "the second viewer still holds it"
+    assert response.status_code == 200
+    assert asked == [(1440, 960)]
+    # A pane smaller than the cap is passed through untouched.
+    client.post(
+        "/display:resize",
+        json={"width": 900, "height": 700},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+    assert asked[-1] == (900, 700)
 
-    relay_app._release_the_wheel(second)
-    assert not relay_app.wheel_path("conv-abc").exists()
+
+def test_the_display_can_be_put_back(monkeypatch, tmp_path) -> None:
+    """What the last viewer leaving triggers.
+
+    Without it the sandbox kept whichever shape the last pane happened to be
+    for the rest of its life, so an agent screenshotting afterwards inherited
+    the dimensions of a sidebar it could not see.
+    """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    asked: list[tuple[int, int]] = []
+
+    async def fake_resize(width: int, height: int) -> str:
+        asked.append((width, height))
+        return f"{width}x{height}"
+
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:reset", headers={"X-Lemma-Relay-Token": "token-abc"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["size"] == "1440x960"
+    assert asked == [(1440, 960)]
+
+
+def test_resetting_the_display_is_behind_the_token(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    assert client.post("/display:reset").status_code == 401

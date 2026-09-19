@@ -39,6 +39,8 @@ export class WorkspaceService {
      * @param path
      * @param offset
      * @param length
+     * @param range
+     * @param ifNoneMatch
      * @returns any Successful Response
      * @throws ApiError
      */
@@ -46,10 +48,16 @@ export class WorkspaceService {
         path: string,
         offset?: number,
         length?: (number | null),
+        range?: (string | null),
+        ifNoneMatch?: (string | null),
     ): CancelablePromise<any> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/workspace/files:content',
+            headers: {
+                'Range': range,
+                'If-None-Match': ifNoneMatch,
+            },
             query: {
                 'path': path,
                 'offset': offset,

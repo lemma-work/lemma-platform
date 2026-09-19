@@ -428,7 +428,10 @@ async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatc
     monkeypatch.setattr(
         brief_mod.agent_settings, "agent_context_brief_cache_ttl_seconds", 60
     )
-    rendered = ["\n## Your Memory\nfirst"]
+    # Distinctive sentinels: the brief is prose now, and a memory
+    # marker like "first" also appears in ordinary framing text, so a
+    # generic one turns this into a test of the wording around it.
+    rendered = ["\n## Your Memory\nMEMORY-BEFORE"]
 
     class _StubMemoryBuilder:
         def __init__(self, uow_factory):
@@ -447,14 +450,14 @@ async def test_memory_is_not_baked_into_the_cached_inventory(stubbed, monkeypatc
         "toolsets": [AgentToolset.MEMORY, AgentToolset.POD],
     }
     first = await builder.build(**kwargs)
-    assert "first" in first
+    assert "MEMORY-BEFORE" in first
 
     # Second run: the inventory is served from cache, the memory is rebuilt.
-    rendered[0] = "\n## Your Memory\nsecond"
+    rendered[0] = "\n## Your Memory\nMEMORY-AFTER"
     second = await builder.build(**kwargs)
 
-    assert "second" in second
-    assert "first" not in second
+    assert "MEMORY-AFTER" in second
+    assert "MEMORY-BEFORE" not in second
 
 
 class TestEveryCapSaysWhatItLeftOut:

@@ -1,35 +1,29 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { FileTypeIcon } from '@/components/documents/file-type-icon';
-import { getDocumentPreviewType } from '@/components/documents/preview-renderers';
 import { Button } from '@/components/ui/button';
 import { ChevronRight, Folder, RefreshCw } from '@/components/ui/icons';
-import {
-    WORKSPACE_ROOT,
-    useWorkspaceFile,
-    useWorkspaceFiles,
-} from '@/lib/hooks/use-workspace-files';
-import { cn } from '@/lib/utils';
+import { HOME_ROOT, useWorkspaceFiles } from '@/lib/hooks/use-workspace-files';
+import { FileBody, formatSize, orderedEntries } from './file-preview';
 
-const formatSize = (bytes: number): string => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-};
-
-const parentOf = (path: string): string | null => {
-    if (path === WORKSPACE_ROOT) return null;
+/** The next directory up, stopping at the ceiling rather than climbing past it. */
+const parentOf = (path: string, ceiling: string): string | null => {
+    if (path === ceiling) return null;
     const cut = path.lastIndexOf('/');
-    return cut <= WORKSPACE_ROOT.length - 1 ? WORKSPACE_ROOT : path.slice(0, cut);
+    return cut <= ceiling.length - 1 ? ceiling : path.slice(0, cut);
 };
 
 /** Segments between `from` and `path`, for the breadcrumb. */
-const segmentsOf = (path: string, from: string): { name: string; path: string }[] => {
+const segmentsOf = (
+    path: string,
+    from: string,
+    ceiling: string,
+): { name: string; path: string }[] => {
     if (path === from) return [];
     const inside = path.startsWith(`${from}/`);
-    const base = inside ? from : WORKSPACE_ROOT;
+    const base = inside ? from : ceiling;
     if (path === base) return [];
     return path
         .slice(base.length + 1)
@@ -40,88 +34,7 @@ const segmentsOf = (path: string, from: string): { name: string; path: string }[
             return acc;
         }, []);
 };
-
-/**
- * Save a workspace file to the reader's own machine.
- *
- * The blob is already here — the hook fetched it to decide whether it could be
- * shown — so this costs nothing extra and is the only way out for the files the
- * pane refuses to render: an archive, a binary, anything past the text ceiling.
- * Without it those files could be listed and never opened.
- */
-function DownloadLink({ blob, path }: { blob: Blob; path: string }) {
-    const href = useMemo(() => URL.createObjectURL(blob), [blob]);
-    useEffect(() => () => URL.revokeObjectURL(href), [href]);
-
-    return (
-        <a
-            href={href}
-            download={path.slice(path.lastIndexOf('/') + 1)}
-            className="text-xs underline text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-        >
-            Download
-        </a>
-    );
-}
-
-function FileBody({ path }: { path: string }) {
-    const isImage = getDocumentPreviewType(path) === 'image';
-    const { data, isPending, error } = useWorkspaceFile(path, isImage);
-
-    const imageUrl = useMemo(() => {
-        if (!data || !isImage) return null;
-        return URL.createObjectURL(data.blob);
-    }, [data, isImage]);
-
-    useEffect(() => {
-        return () => {
-            if (imageUrl) URL.revokeObjectURL(imageUrl);
-        };
-    }, [imageUrl]);
-
-    if (isPending) {
-        return <p className="p-4 text-sm text-[var(--text-tertiary)]">Reading…</p>;
-    }
-    if (error) {
-        return (
-            <p className="p-4 text-sm text-[var(--text-tertiary)]">
-                This file could not be read. It may have been removed since the list was taken.
-            </p>
-        );
-    }
-    if (data?.tooLarge) {
-        return (
-            <div className="flex flex-col items-start gap-2 p-4">
-                <p className="text-sm text-[var(--text-tertiary)]">
-                    {formatSize(data.sizeBytes)} is too large to show here. Download it, ask
-                    the agent to summarise it, or open the part you need.
-                </p>
-                <DownloadLink blob={data.blob} path={path} />
-            </div>
-        );
-    }
-    if (imageUrl) {
-        return (
-            <div className="flex flex-col items-start gap-2 p-4">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={imageUrl} alt={path} className="max-w-full" />
-                <DownloadLink blob={data!.blob} path={path} />
-            </div>
-        );
-    }
-    if (!data?.text) return null;
-
-    return (
-        <div className="flex min-h-0 flex-col">
-            <pre className="overflow-x-auto p-4 text-xs leading-5 text-[var(--text-secondary)]">
-                {data.text}
-            </pre>
-            <div className="px-4 pb-4">
-                <DownloadLink blob={data.blob} path={path} />
-            </div>
-        </div>
-    );
-}
+import { cn } from '@/lib/utils';
 
 /**
  * The conversation's sandbox files, read-only.
@@ -154,7 +67,11 @@ export function WorkspaceFilesPane({
     //
     // Until the record arrives there is no honest conversation directory to
     // show, so the whole machine is the fallback rather than a guess.
-    const home = workspaceCwd ?? WORKSPACE_ROOT;
+    // The machine, not the project root: with no conversation directory to
+    // show there is nothing to be specific about, and the crumb above already
+    // says "Whole computer". These were the same path until the durable root
+    // moved into the home, which is what made the label wrong here.
+    const home = workspaceCwd ?? HOME_ROOT;
     const [directory, setDirectory] = useState(home);
     const [wake, setWake] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
@@ -197,11 +114,17 @@ export function WorkspaceFilesPane({
         setSelected(path);
     }, []);
 
-    const parent = parentOf(directory);
+    // The ceiling is the durable home, which is as far up as the files route
+    // will answer -- and it is a level above where projects live, so "whole
+    // computer" now really is the machine rather than the project root. Taken
+    // from the listing when there is one: the constant is only a first guess,
+    // and the last time this value moved the hardcoded copy stayed behind.
+    const ceiling = data?.home_root ?? HOME_ROOT;
+    const parent = parentOf(directory, ceiling);
     // Above the conversation's own directory the crumb is the whole machine,
     // because that is what the person is actually looking at up there.
     const inHome = directory === home || directory.startsWith(`${home}/`);
-    const segments = segmentsOf(directory, home);
+    const segments = segmentsOf(directory, home, ceiling);
 
     if (data?.sleeping) {
         return (
@@ -223,7 +146,7 @@ export function WorkspaceFilesPane({
                     variant="quiet"
                     size="xs"
                     onClick={() => {
-                        setDirectory(inHome ? home : WORKSPACE_ROOT);
+                        setDirectory(inHome ? home : ceiling);
                         setSelected(null);
                         setAfter(undefined);
                     }}
@@ -279,7 +202,7 @@ export function WorkspaceFilesPane({
                                     </Button>
                                 </li>
                             ) : null}
-                            {(data?.entries ?? []).map((entry) => {
+                            {orderedEntries(data?.entries ?? []).map((entry) => {
                                 const isDirectory = entry.kind === 'directory';
                                 return (
                                     <li
@@ -296,12 +219,14 @@ export function WorkspaceFilesPane({
                                             onClick={() => open(entry.path, isDirectory)}
                                             className="w-full justify-start gap-2 rounded-none px-3 font-normal"
                                         >
-                                            {isDirectory ? (
-                                                <Folder className="size-3.5 text-[var(--text-tertiary)]" />
-                                            ) : (
-                                                <FileTypeIcon filename={entry.name} size="sm" />
-                                            )}
-                                            <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
+                                            <span className="flex size-4 shrink-0 items-center justify-center">
+                                                {isDirectory ? (
+                                                    <Folder className="size-4 text-[var(--text-secondary)]" />
+                                                ) : (
+                                                    <FileTypeIcon filename={entry.name} size="sm" />
+                                                )}
+                                            </span>
+                                            <span className="min-w-0 flex-1 truncate text-left text-[var(--text-secondary)]">
                                                 {entry.name}
                                             </span>
                                             {!isDirectory ? (
@@ -346,7 +271,13 @@ export function WorkspaceFilesPane({
 
                 <div className="min-w-0 flex-1 overflow-auto">
                     {selected ? (
-                        <FileBody path={selected} />
+                        <FileBody
+                            path={selected}
+                            sizeBytes={
+                                data?.entries.find((entry) => entry.path === selected)
+                                    ?.size_bytes ?? 0
+                            }
+                        />
                     ) : (
                         <p className="p-4 text-sm text-[var(--text-tertiary)]">
                             Pick a file to read it.

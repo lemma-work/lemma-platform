@@ -12,13 +12,13 @@ from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Mes
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.tools.toolset_selection import AgentGrantSummary
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentToolset,
     ConnectorAccessConfig,
     ConnectorMode,
     ConversationType,
-    HarnessOptions,
     MessageKind,
     MessageRole,
 )
@@ -59,6 +59,7 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli import workspace_cli_toolset
 from app.modules.function.domain.entities import FunctionEntity, FunctionType
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 
 def _agent_run_with_messages(run_index: int, message_count: int = 5) -> AgentRun:
@@ -473,7 +474,7 @@ def test_display_resource_validates_widget_form_and_table_payloads():
     )
     # A workspace path is still nobody else's to read, widget or file.
     assert "sandbox path" in _payload_error(
-        type=DisplayResourceType.WIDGET, path="/workspace/c/pulse.html"
+        type=DisplayResourceType.WIDGET, path=f"{WORKSPACE_ROOT}/c/pulse.html"
     )
     # Still exactly one source, now of three.
     assert "exactly one of path, content, or public_url" in _payload_error(
@@ -539,13 +540,15 @@ def test_display_resource_rejects_the_agents_own_sandbox_paths():
     """
     error = _payload_error(
         type=DisplayResourceType.FILE,
-        path="/workspace/c/2026-08-23/93utvspz/lemma-aug-2026-shiplog.pdf",
+        path=f"{WORKSPACE_ROOT}/c/2026-08-23/93utvspz/lemma-aug-2026-shiplog.pdf",
     )
     assert "sandbox path" in error
     # The message has to carry the fix, or the model retries the same call.
+    # The fix here really is the shell: the file is in the sandbox, which is
+    # where the CLI runs, and no pod tool reaches across that line.
     assert "lemma files upload" in error
 
-    for private_root in ("/tmp/out.pdf", "/private/x", "/Users/me/x", "/workspace"):
+    for private_root in ("/tmp/out.pdf", "/private/x", "/Users/me/x", WORKSPACE_ROOT):
         assert _payload_error(type=DisplayResourceType.FILE, path=private_root)
 
     # A pod path is still a pod path, including one that merely starts with the
@@ -959,11 +962,11 @@ def test_workspace_agent_prompt_states_working_directory():
         agent=agent,
         conversation=conversation,
         ctx=SimpleNamespace(
-            workspace_cwd="/workspace/conversations/abc", surface_platform=None
+            workspace_cwd=f"{WORKSPACE_ROOT}/conversations/abc", surface_platform=None
         ),
     )
     assert "# Working Directory" in prompt
-    assert "/workspace/conversations/abc" in prompt
+    assert f"{WORKSPACE_ROOT}/conversations/abc" in prompt
     assert "/tmp" in prompt  # warns against scratch dirs
     assert "/me/" in prompt  # artifact delivery guidance
     assert "pip install" in prompt  # on-demand package guidance
@@ -1064,7 +1067,9 @@ def test_an_agent_without_the_todo_toolset_is_never_shown_a_task_list():
     prompt = build_agent_instructions(
         agent=agent,
         conversation=conversation,
-        ctx=SimpleNamespace(workspace_cwd="/workspace/c/x/y", surface_platform=None),
+        ctx=SimpleNamespace(
+            workspace_cwd=f"{WORKSPACE_ROOT}/c/x/y", surface_platform=None
+        ),
     )
 
     assert "# Task list" not in prompt
@@ -1114,13 +1119,13 @@ def test_project_agent_prompt_describes_the_checkout_not_the_scratchpad():
         agent=agent,
         conversation=conversation,
         ctx=SimpleNamespace(
-            workspace_cwd="/workspace/repos/acme/web",
+            workspace_cwd=f"{WORKSPACE_ROOT}/repos/acme/web",
             workspace_repo=ProjectRepo(owner="acme", repo="web", ref="main"),
             surface_platform=None,
         ),
     )
 
-    assert "/workspace/repos/acme/web" in prompt
+    assert f"{WORKSPACE_ROOT}/repos/acme/web" in prompt
     assert "acme/web" in prompt
     assert "`main`" in prompt
     # It must not go on to configure what the credential bridge already set.
@@ -1157,7 +1162,7 @@ def test_workspace_directory_falls_back_to_the_resolved_location():
         agent=agent, conversation=conversation, ctx=SimpleNamespace()
     )
     assert resolve_workspace_location(conversation).cwd in prompt
-    assert "/workspace/conversations/" not in prompt
+    assert f"{WORKSPACE_ROOT}/conversations/" not in prompt
 
 
 def test_pod_assistant_prompt_states_working_directory():
@@ -1174,10 +1179,10 @@ def test_pod_assistant_prompt_states_working_directory():
     prompt = build_agent_instructions(
         agent=agent,
         conversation=conversation,
-        ctx=SimpleNamespace(workspace_cwd="/workspace/conversations/xyz"),
+        ctx=SimpleNamespace(workspace_cwd=f"{WORKSPACE_ROOT}/conversations/xyz"),
     )
     assert "# Working Directory" in prompt
-    assert "/workspace/conversations/xyz" in prompt
+    assert f"{WORKSPACE_ROOT}/conversations/xyz" in prompt
 
 
 def test_non_workspace_agent_prompt_omits_working_directory():
@@ -1193,7 +1198,7 @@ def test_non_workspace_agent_prompt_omits_working_directory():
     prompt = build_agent_instructions(
         agent=agent,
         conversation=conversation,
-        ctx=SimpleNamespace(workspace_cwd="/workspace/conversations/abc"),
+        ctx=SimpleNamespace(workspace_cwd=f"{WORKSPACE_ROOT}/conversations/abc"),
     )
     assert "# Working Directory" not in prompt
 
@@ -1655,7 +1660,7 @@ async def test_project_child_conversation_keeps_subagents_toolset():
         user_id=agent.user_id,
         agent_id=agent.id,
         parent_id=uuid4(),  # pinned under a project, but not spawned as a sub-agent
-        metadata={"cwd": "/workspace/projects/foo"},
+        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/foo"},
     )
 
     child_ts = await runner.tool_assembler.assemble(
@@ -1685,7 +1690,7 @@ async def test_child_conversation_inherits_parent_cwd_and_workspace():
         id=parent_id,
         pod_id=uuid4(),
         user_id=uuid4(),
-        metadata={"cwd": "/workspace/projects/alpha", "workspace_id": "ws-1"},
+        metadata={"cwd": f"{WORKSPACE_ROOT}/projects/alpha", "workspace_id": "ws-1"},
     )
 
     class _Repo:
@@ -1698,7 +1703,7 @@ async def test_child_conversation_inherits_parent_cwd_and_workspace():
     )
     await service._apply_inherited_cwd(child, parent_id=parent_id)
 
-    assert child.metadata["cwd"] == "/workspace/projects/alpha"
+    assert child.metadata["cwd"] == f"{WORKSPACE_ROOT}/projects/alpha"
     assert child.metadata["workspace_id"] == "ws-1"
 
 
@@ -1715,8 +1720,9 @@ async def test_root_conversation_gets_own_cwd():
     # A root gets its own pretty c/{date}/{slug} cwd stamped into metadata.
     date = convo.created_at.date().isoformat()
     cwd = convo.metadata["cwd"]
-    assert cwd.startswith(f"/workspace/c/{date}/")
-    assert cwd.count("/") == 4  # /workspace/c/{date}/{slug}
+    assert cwd.startswith(f"{WORKSPACE_ROOT}/c/{date}/")
+    # <root>/c/{date}/{slug}: one segment past the root, whatever the root is.
+    assert cwd.count("/") == WORKSPACE_ROOT.count("/") + 3
 
 
 @pytest.mark.asyncio
@@ -1730,11 +1736,11 @@ async def test_explicit_cwd_in_metadata_is_not_overridden():
         pod_id=uuid4(),
         user_id=uuid4(),
         parent_id=uuid4(),
-        metadata={"cwd": "/workspace/custom"},
+        metadata={"cwd": f"{WORKSPACE_ROOT}/custom"},
     )
     await service._apply_inherited_cwd(convo, parent_id=convo.parent_id)
 
-    assert convo.metadata["cwd"] == "/workspace/custom"
+    assert convo.metadata["cwd"] == f"{WORKSPACE_ROOT}/custom"
 
 
 def test_runner_uses_final_answer_tool_for_structured_output_agents():
@@ -2000,7 +2006,10 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     assert "lemma-user" in prompt
     assert "other conversations\nshare the workspace" in prompt
     assert "/me/<topic>/" in prompt
-    assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
+    # Reading a converted document is a pod-tool job now; the CLI fragment used
+    # to teach `lemma files cat --pages` for it and competed with `pod_read_file`.
+    assert "`pod_read_file` takes a page range" in prompt
+    assert "not the `lemma` CLI" in prompt
     # Shared folders are top-level. The prompt used to teach a `/pod` prefix that
     # does not exist, so guard the whole composed prompt against it coming back.
     assert "/pod/" not in prompt
@@ -2440,7 +2449,7 @@ def test_a_pending_approval_is_not_reported_to_the_model_as_a_failure():
     failure would tell the model its question failed while the user is still
     being asked it."""
     conversation_id = uuid4()
-    for tool_name in ("ask_user", "request_approval", "snooze"):
+    for tool_name in ("ask_user", "request_approval", "wait_for"):
         pending = _tool_call_message(
             conversation_id=conversation_id,
             sequence=0,

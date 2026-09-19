@@ -1133,54 +1133,35 @@ function ListenDetails({ args, state, result }: { args: ToolCardArgs; state: str
   );
 }
 
-function BrowserToolDetails({
-  normalizedName,
+function SignInToolDetails({
   args,
   state,
   result,
 }: {
-  normalizedName: string;
   args: ToolCardArgs;
   state: string;
   result: ToolCardResult;
 }) {
-  const url = firstRecordString(result, ["url"]) || firstToolArgString(args, ["url"]);
-  const title = firstRecordString(result, ["title"]);
-  const action = (firstToolArgString(args, ["action"]) || "").toLowerCase();
-  const what = (firstToolArgString(args, ["what"]) || "").toLowerCase();
-  const target = firstToolArgString(args, ["target"]);
-  const snapshot = resultText(result, ["snapshot"]);
-  const output = resultText(result, ["output"]);
-  const error = resultText(result, ["error"]);
-  const truncated = payloadValue(result, ["truncated"]) === true;
-
-  // The verb the person watching cares about, not the tool name. `browser_act`
-  // and `browser_read` both dispatch, so their own argument is the verb.
-  const heading = normalizedName === "browser_open"
-    ? "Opened page"
-    : normalizedName === "browser_snapshot"
-      ? "Read page"
-      : normalizedName === "browser_screenshot"
-        ? "Screenshot"
-        : normalizedName === "browser_act"
-          ? `Browser ${action || "action"}`
-          : `Browser read ${what}`.trim();
+  // Only reached when the interaction card declined to render -- a sign-in
+  // whose result carries `interaction_fallback`, which is what a surface that
+  // could not show buttons leaves behind. The card above is the normal view.
+  const origin = firstRecordString(result, ["origin"]) || firstToolArgString(args, ["origin"]);
+  const outcome = firstRecordString(result, ["outcome"]);
 
   return (
-    <ToolBlock icon={<AppWindow className="size-3.5" />} title={heading} status={toolStatusLabel(state, result)}>
+    <ToolBlock
+      icon={<AppWindow className="size-3.5" />}
+      title="Sign in"
+      status={toolStatusLabel(state, result)}
+    >
       <MetaRow
         entries={[
-          { label: "Page", value: title },
-          { label: "URL", value: url },
-          { label: "Element", value: target },
-          // Only worth saying when it happened: a truncated snapshot is why an
-          // element the person can see may be missing from what the agent read.
-          { label: "Truncated", value: truncated ? "yes" : undefined },
+          { label: "Site", value: origin },
+          { label: "Outcome", value: outcome },
+          { label: "Why", value: firstToolArgString(args, ["reason"]) },
         ]}
       />
-      <CodeBlock label="Page elements" value={snapshot} />
-      {!snapshot ? <CodeBlock label="Result" value={output} /> : null}
-      <CodeBlock label="Error" value={error} tone="error" />
+      <CodeBlock label="Error" value={resultText(result, ["error"])} tone="error" />
     </ToolBlock>
   );
 }
@@ -1202,8 +1183,10 @@ export function contextualToolDetails({
     return <CommandToolDetails normalizedName={normalizedName} args={args} state={state} result={result} />;
   }
 
+  // `browser_sign_in` is the only browser tool; the browsing itself is
+  // `agent-browser` in the shell, so it arrives as a command card.
   if (normalizedName.startsWith("browser_")) {
-    return <BrowserToolDetails normalizedName={normalizedName} args={args} state={state} result={result} />;
+    return <SignInToolDetails args={args} state={state} result={result} />;
   }
 
   if (normalizedName === "execute_python") {

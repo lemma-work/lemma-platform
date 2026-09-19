@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.services import (
@@ -273,7 +274,7 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     assert session.sandbox_id == str(user_id)
     assert session.client is manager_client
     assert session.env_vars == {"LEMMA_TOKEN": "dynamic"}
-    assert manager_client.directories == [(user_id, "/workspace")]
+    assert manager_client.directories == [(user_id, f"{WORKSPACE_ROOT}")]
 
 
 @pytest.mark.asyncio
@@ -313,7 +314,7 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     # re-running the mkdir round trip -- a real sandbox round trip, on a
     # directory created by the first command of the run.
     await service.get_session(user_id=user_id, pod_id=None, session_id="third")
-    assert manager_client.directories == [(user_id, "/workspace")]
+    assert manager_client.directories == [(user_id, f"{WORKSPACE_ROOT}")]
 
     # It is a window, not a permanent answer: the check comes back afterwards.
     # The window is compared against the loop clock on every read
@@ -326,8 +327,8 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
 
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]
 
     # A container recreate keeps the disk, and /workspace IS the disk -- so the
@@ -341,8 +342,8 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     )
     await service.get_session(user_id=user_id, pod_id=None, session_id="fifth")
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]
 
     # A storage reset is the case where the files really are gone, so the
@@ -356,9 +357,9 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     await service.get_session(user_id=user_id, pod_id=None, session_id="sixth")
 
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]
 
 
@@ -391,8 +392,20 @@ async def test_get_session_reensures_after_missing_provider_allocation(
     async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
         return {"LEMMA_TOKEN": "dynamic"}
 
+    # Yields once rather than returning outright, and that one `await` is
+    # load-bearing. `async def no_wait(_): return None` never reaches the
+    # event loop, so the retry loop it stands in for -- `while now <
+    # deadline: ... await asyncio.sleep(delay)` -- stops being cooperative
+    # and becomes a wall-clock spin that starves the very task it is waiting
+    # for. Measured on this interpreter: 2,127,213 iterations in 200ms with
+    # the concurrent task never once scheduled, against one iteration and the
+    # task running when the sleep yields. That is the shape of a CI run where
+    # this test took 1341 seconds -- about four turns of the 300s directory
+    # deadline -- while the rest of the suite finished in its usual 233.
+    real_sleep = asyncio.sleep
+
     async def no_wait(_seconds: float) -> None:
-        return None
+        await real_sleep(0)
 
     monkeypatch.setattr(service, "get_env_vars", environment)
     monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
@@ -407,6 +420,6 @@ async def test_get_session_reensures_after_missing_provider_allocation(
     assert session.sandbox_id == str(user_id)
     assert len(sandbox.ensure_calls) == 2
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]

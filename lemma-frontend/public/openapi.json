@@ -2499,7 +2499,7 @@
           "SUBAGENTS",
           "TODO",
           "CONNECTORS",
-          "SNOOZE",
+          "WAIT",
           "MESSAGING",
           "MEMORY",
           "VIEW_IMAGE"
@@ -2509,12 +2509,6 @@
       },
       "AnswerSignInRequest": {
         "properties": {
-          "force": {
-            "default": false,
-            "description": "Save whatever the browser holds even though it does not look signed in. For sites the check reads wrongly.",
-            "title": "Force",
-            "type": "boolean"
-          },
           "signed_in": {
             "description": "True when the person says they have signed in; false when they cannot right now.",
             "title": "Signed In",
@@ -3582,7 +3576,7 @@
         "type": "object"
       },
       "BrowserStatusResponse": {
-        "description": "What the pane can say without waking anything.\n\n`asleep` the computer is paused or was never started; `stopped` it is up but\nthe browser is not (the resting state after two idle minutes); `running` a\nbrowser is there now; `unavailable` the relay did not answer, which on an\nolder image is permanent until it is replaced; `unsupported` this fabric\ncannot reach a port at all.",
+        "description": "What the pane can say without waking anything.\n\n`asleep` the computer is paused or was never started; `stopped` it is up but\nthe browser is not (the resting state after five idle minutes); `running` a\nbrowser is there now; `unavailable` the relay did not answer, which on an\nolder image is permanent until it is replaced; `unsupported` this fabric\ncannot reach a port at all.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -5966,6 +5960,46 @@
         "title": "DirectoryTreeResponse",
         "type": "object"
       },
+      "DisplaySizeRequest": {
+        "description": "The size the pane wants its picture to be, in CSS pixels.\n\nBounded here because these numbers come from a browser window and decide\nhow much memory a framebuffer takes. The sandbox clamps again against the\nframebuffer it actually allocated, which is the limit that cannot be\nargued with.",
+        "properties": {
+          "height": {
+            "maximum": 4096,
+            "minimum": 240,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "maximum": 4096,
+            "minimum": 320,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "DisplaySizeRequest",
+        "type": "object"
+      },
+      "DisplaySizeResponse": {
+        "properties": {
+          "size": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          }
+        },
+        "title": "DisplaySizeResponse",
+        "type": "object"
+      },
       "EndNode": {
         "description": "End node. Completes the run.",
         "properties": {
@@ -7092,6 +7126,25 @@
           "references"
         ],
         "title": "ForeignKeySpec",
+        "type": "object"
+      },
+      "ForgetResponse": {
+        "properties": {
+          "forgotten": {
+            "description": "False when the browser was holding nothing for this site.",
+            "title": "Forgotten",
+            "type": "boolean"
+          },
+          "site": {
+            "title": "Site",
+            "type": "string"
+          }
+        },
+        "required": [
+          "site",
+          "forgotten"
+        ],
+        "title": "ForgetResponse",
         "type": "object"
       },
       "FormNode": {
@@ -13634,26 +13687,14 @@
             "title": "Origin",
             "type": "string"
           },
-          "saved": {
-            "default": false,
-            "description": "Whether the login was kept for next time.",
-            "title": "Saved",
-            "type": "boolean"
-          },
-          "saved_detail": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Why it was not kept, in words, when it was not.",
-            "title": "Saved Detail"
-          },
           "signed_in": {
             "title": "Signed In",
+            "type": "boolean"
+          },
+          "working": {
+            "default": false,
+            "description": "Whether the site stopped asking for a login straight afterwards. Reported, not enforced: the person has already done what was asked, and a site that shows a form at the same address under a neutral title reads as still asking.",
+            "title": "Working",
             "type": "boolean"
           }
         },
@@ -16011,34 +16052,14 @@
         "type": "object"
       },
       "UsageLimitScopeResponse": {
+        "description": "One spend window, as a caller outside the deployment may see it.\n\n**The cap is expressed as a percentage, never as an amount.** This used to\ncarry `limit_usd` and `remaining_usd`, which state a dollar allowance —\nand a dollar allowance is a promise the product does not make. What a plan\nincludes is set per plan and may be retuned; what a given request costs\ndepends on the model it routes to. Publishing \"$12.40 remaining\" invites a\ncustomer to plan against a number that is neither fixed nor ours to\nguarantee, and turns any retune into a broken promise.\n\nWhat is published instead is how much of the window is gone. That is the\nfact a caller can act on — show a meter, warn at 80%, stop starting new\nwork — and it stays true however the underlying allowance is set.\n\n`used_usd` and `reserved_usd` remain, and deliberately: those are what the\ncustomer has actually spent, which is theirs to know. It is the *boundary*\nthat is percentage-only, not the consumption.\n\nThe internal `UsageLimitScope` keeps its dollar fields — enforcement is done\nin dollars, and `usage_service` reserves against them. This is the API\nboundary, and the boundary is where the promise is made.",
         "properties": {
           "allowed": {
             "title": "Allowed",
             "type": "boolean"
           },
-          "limit_usd": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Limit Usd"
-          },
-          "remaining_usd": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Remaining Usd"
-          },
           "reserved_usd": {
+            "description": "Spend held against this window for work in flight. A reservation is released if the work does not happen, and moves into `used_usd` when it settles, so this is not a second charge.",
             "title": "Reserved Usd",
             "type": "number"
           },
@@ -16051,7 +16072,20 @@
             "title": "Scope",
             "type": "string"
           },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How much of this window is consumed, as a percentage of its cap, counting `used_usd` and `reserved_usd` together — a meter that ignored reservations would read low exactly while a burst was landing. Null means the window is uncapped, which is a different statement from 0% used. May exceed 100: a reservation can settle above what it reserved, and a caller wanting a meter should clamp it itself rather than be handed a number that has already lost the overage.",
+            "title": "Used Percent"
+          },
           "used_usd": {
+            "description": "Settled spend in this window: work that has finished and been charged. Does not include reservations still held for work in flight — those are `reserved_usd`.",
             "title": "Used Usd",
             "type": "number"
           },
@@ -16065,6 +16099,7 @@
           "scope",
           "used_usd",
           "reserved_usd",
+          "used_percent",
           "allowed",
           "reset_at",
           "window_start"
@@ -17240,78 +17275,6 @@
         "title": "WaitUntilNodeResponse",
         "type": "object"
       },
-      "WebLoginAuditEntry": {
-        "description": "One thing that was done with one saved login.\n\n`detail` is why, when the outcome was not plain \"ok\" — \"session rejected\",\n\"nothing for this site was in the browser\". It is the platform's own words\nrather than an agent's paraphrase, which is the point of reading it here.",
-        "properties": {
-          "action": {
-            "title": "Action",
-            "type": "string"
-          },
-          "conversation_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "The run that did it, or null for something the person did themselves from the saved-logins screen.",
-            "title": "Conversation Id"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "detail": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Detail"
-          },
-          "origin": {
-            "title": "Origin",
-            "type": "string"
-          },
-          "outcome": {
-            "title": "Outcome",
-            "type": "string"
-          }
-        },
-        "required": [
-          "origin",
-          "action",
-          "outcome",
-          "detail",
-          "conversation_id",
-          "created_at"
-        ],
-        "title": "WebLoginAuditEntry",
-        "type": "object"
-      },
-      "WebLoginAuditResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/WebLoginAuditEntry"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "WebLoginAuditResponse",
-        "type": "object"
-      },
       "WebLoginListResponse": {
         "properties": {
           "items": {
@@ -17320,6 +17283,12 @@
             },
             "title": "Items",
             "type": "array"
+          },
+          "sleeping": {
+            "default": false,
+            "description": "True when the computer is paused and was not woken to answer. Items are empty; its browser still holds whatever it held.",
+            "title": "Sleeping",
+            "type": "boolean"
           }
         },
         "required": [
@@ -17330,17 +17299,12 @@
       },
       "WebLoginResponse": {
         "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+          "cookie_count": {
+            "description": "How many cookies this site has. A rough sense of scale.",
+            "title": "Cookie Count",
+            "type": "integer"
           },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "last_used_at": {
+          "expires": {
             "anyOf": [
               {
                 "format": "date-time",
@@ -17350,30 +17314,24 @@
                 "type": "null"
               }
             ],
-            "title": "Last Used At"
+            "description": "When the soonest of them lapses, which is the closest thing to 'when will I have to sign in again'. Null when they are all session cookies, which go when the browser does.",
+            "title": "Expires"
           },
-          "origin": {
-            "title": "Origin",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          },
-          "working": {
-            "description": "Whether the stored session still signs you in. False means it stopped working and the next run will ask you again.",
-            "title": "Working",
+          "signed_in": {
+            "default": false,
+            "description": "True when somebody answered 'yes, I signed in' to a sign-in request for this site. The cookies cannot say this on their own: a real profile held two session cookies for a site that was signed in and six for one that merely had a video played on it, identical on every flag. False means only 'nobody said so' -- the browser may still have a usable session.",
+            "title": "Signed In",
             "type": "boolean"
+          },
+          "site": {
+            "description": "The site, as a person would name it. Cookies are grouped by registrable domain, so `asur.work` and `api.asur.work` are one login rather than two -- the second being the half nobody visited on purpose.",
+            "title": "Site",
+            "type": "string"
           }
         },
         "required": [
-          "id",
-          "origin",
-          "created_at",
-          "updated_at",
-          "last_used_at",
-          "working"
+          "site",
+          "cookie_count"
         ],
         "title": "WebLoginResponse",
         "type": "object"
@@ -18792,6 +18750,18 @@
             "title": "Kind",
             "type": "string"
           },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "POSIX permission bits, when the fabric reports them. A viewer showing a file it cannot write should be able to say so.",
+            "title": "Mode"
+          },
           "modified_at": {
             "description": "Last modification time.",
             "format": "date-time",
@@ -18807,6 +18777,18 @@
             "description": "Absolute path inside the workspace.",
             "title": "Path",
             "type": "string"
+          },
+          "sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Content hash, when the fabric computes one. Doubles as the `ETag` on a read, so re-opening a file a viewer already has is a 304 rather than the bytes again.",
+            "title": "Sha256"
           },
           "size_bytes": {
             "description": "Size in bytes; 0 for a directory.",
@@ -18839,6 +18821,12 @@
             "title": "Exists",
             "type": "boolean"
           },
+          "home_root": {
+            "default": "/home/user",
+            "description": "The durable root, and the furthest up a caller may browse. Served rather than assumed: this path has moved once already, and the clients that had hardcoded the old one went on asking for a directory that no longer existed.",
+            "title": "Home Root",
+            "type": "string"
+          },
           "next_after": {
             "anyOf": [
               {
@@ -18867,6 +18855,12 @@
             "description": "True when the directory holds more entries than were returned.",
             "title": "Truncated",
             "type": "boolean"
+          },
+          "workspace_root": {
+            "default": "/home/user/lemma",
+            "description": "Where projects and conversation directories live. Inside `home_root`, and the sensible place for a file browser to open.",
+            "title": "Workspace Root",
+            "type": "string"
           }
         },
         "required": [
@@ -36876,16 +36870,15 @@
     },
     "/web-logins": {
       "delete": {
-        "description": "Forget a site.\n\nRemoving the row is the whole revocation from Lemma's side. It does **not**\nsign the person out at the site, and the response says so — a saved session\nthat has been deleted here is still a valid session there until they log out\nor it expires, and implying otherwise would be the more dangerous lie.",
         "operationId": "web_login.delete",
         "parameters": [
           {
+            "description": "The site to forget, as an origin or a host.",
             "in": "query",
             "name": "origin",
             "required": true,
             "schema": {
-              "maxLength": 255,
-              "minLength": 1,
+              "description": "The site to forget, as an origin or a host.",
               "title": "Origin",
               "type": "string"
             }
@@ -36896,7 +36889,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebLoginResponse"
+                  "$ref": "#/components/schemas/ForgetResponse"
                 }
               }
             },
@@ -36913,7 +36906,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Remove a saved site login",
+        "summary": "Sign your browser out of a site",
         "tags": [
           "Web Logins"
         ],
@@ -36930,45 +36923,17 @@
       },
       "get": {
         "operationId": "web_login.list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WebLoginListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "List saved site logins",
-        "tags": [
-          "Web Logins"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "web_login",
-          "result": "collection",
-          "verb": "list"
-        }
-      }
-    },
-    "/web-logins/history": {
-      "get": {
-        "operationId": "web_login.history",
         "parameters": [
           {
+            "description": "Start the computer if it is paused. Off by default so that rendering this list is never what wakes one.",
             "in": "query",
-            "name": "limit",
+            "name": "wake",
             "required": false,
             "schema": {
-              "default": 100,
-              "maximum": 500,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
+              "default": false,
+              "description": "Start the computer if it is paused. Off by default so that rendering this list is never what wakes one.",
+              "title": "Wake",
+              "type": "boolean"
             }
           }
         ],
@@ -36977,7 +36942,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebLoginAuditResponse"
+                  "$ref": "#/components/schemas/WebLoginListResponse"
                 }
               }
             },
@@ -36994,16 +36959,16 @@
             "description": "Validation Error"
           }
         },
-        "summary": "What has been done with your saved logins",
+        "summary": "List the sites your browser is signed in to",
         "tags": [
           "Web Logins"
         ],
         "x-lemma": {
           "kind": "query",
-          "paginates": true,
+          "paginates": false,
           "resource": "web_login",
-          "result": "entity",
-          "verb": "history"
+          "result": "collection",
+          "verb": "list"
         }
       }
     },
@@ -37068,7 +37033,7 @@
     },
     "/web-logins/sign-ins/{conversation_id}/{tool_call_id}/answer": {
       "post": {
-        "description": "Capture what the browser now holds, and let the waiting run carry on.\n\nThe capture happens here, while the person is still present, rather than\nlater in the resumed run -- so that \"it did not work\" is something they can\nbe told at the moment they can still fix it.\n\nOne route for both answers because it is one answer. Two routes meant two\nstatus writes with two different guards, and the weaker one let a stale tab\noverwrite a decision the agent had already been given.",
+        "description": "Let the waiting run carry on, and check the site while they are here.\n\nNothing is captured: the browser keeps its own profile, so finishing a\nsign-in is the person finishing it. What this does do is look at the site\nstraight afterwards, while they are still present -- so \"it still wants a\nlogin\" is something they hear now rather than the agent discovering it.\n\nOne route for both answers because it is one answer. Two routes meant two\nstatus writes with two different guards, and the weaker one let a stale tab\noverwrite a decision the agent had already been given.",
         "operationId": "web_login.sign_in.answer",
         "parameters": [
           {
@@ -37240,6 +37205,58 @@
         }
       }
     },
+    "/workspace/browser/display-size": {
+      "post": {
+        "description": "Resize the sandbox display so the picture matches the pane.\n\nThe alternative, and what this replaces, is one fixed display scaled to\nfit: a 3:2 screen letterboxed into whatever box it lands in, small and\nringed with dead space. Resizing the display itself means the pixels sent\nare the pixels shown -- and a narrow pane gets a narrow *viewport*, so a\nsite serves its mobile layout to somebody signing in on a phone.\n\nA failure here is not an error for the person: they keep the display they\nhad. So an unreachable or sleeping sandbox answers with no size rather\nthan a status code the pane would have to special-case.",
+        "operationId": "workspace.browser.resize_display",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplaySizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplaySizeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fit the workspace display to the pane showing it",
+        "tags": [
+          "Workspace Apps"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "workspace.browser"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "workspace.browser",
+          "result": "entity",
+          "verb": "resize_display"
+        }
+      }
+    },
     "/workspace/browser/status": {
       "get": {
         "operationId": "workspace.browser.status",
@@ -37398,6 +37415,38 @@
                 }
               ],
               "title": "Length"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
             }
           }
         ],

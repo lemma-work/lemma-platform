@@ -44,9 +44,11 @@ async def web_fetch(
     a short preview, not the page text: twenty articles inline would bury the
     task you are working on.
 
-    Then work with the files: `exec_command` to grep or read them,
-    `view_image` for a screenshot, `pod_view_document_pages` for a captured
-    PDF. This is the right way to read anything longer than a search snippet.
+    Then work with the files: `exec_command` to grep or read them, and
+    `view_image` for a screenshot. Both take the workspace path you were given.
+    `pod_view_document_pages` takes a path *in the pod*, so it only works on a
+    captured PDF after you have uploaded it. This is the right way to read
+    anything longer than a search snippet.
     """
     try:
         return await web_fetch_internal(ctx.deps, request)

@@ -54,15 +54,22 @@ def _deferring_model(model_fn) -> FunctionModel:
     )
 
 
-def test_partition_core_extra_splits_pod_into_extra_for_pod_default():
+def test_the_pod_tools_are_visible_rather_than_deferred():
+    """The pod's own data is not an "extra" the agent should have to find.
+
+    They were deferred, and then went almost unused while the shell rebuilt the
+    same operations through the CLI. Deferral is right for surfaces that are
+    large (connectors), niche (browser) or deliberately harder to reach
+    (messaging) — not for the thing the pod is.
+    """
     core, extra = _partition_core_extra(
         [workspace_cli_toolset, pod_toolset, web_search_toolset],
         is_pod_default=True,
     )
-    assert pod_toolset in extra
+    assert pod_toolset in core
+    assert pod_toolset not in extra
     assert workspace_cli_toolset in core
     assert web_search_toolset in core
-    assert pod_toolset not in core
 
 
 def test_partition_core_extra_keeps_everything_core_for_user_created_agent():
@@ -772,15 +779,35 @@ _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS = {
     "request_approval",
     "ask_user",
     "write_todos",
-    "say",
-    "listen",
+    # The pod's own data and files. Visible on purpose, and it is the one entry
+    # here that costs real prefix budget: ten schemas in every pod-default
+    # prompt. Deferred, they went almost unused — most conversations that
+    # touched pod files did it through the `lemma` CLI in a shell, and paid for
+    # it in CLI usage errors. A tool that has to be found first, competing with
+    # a command the prompt already showed, loses.
+    "pod_tables",
+    "pod_get_records",
+    "pod_write_record",
+    "pod_query",
+    "pod_list_files",
+    "pod_read_file",
+    "pod_write_file",
+    "pod_search_files",
+    "pod_get_file_url",
+    "pod_view_document_pages",
 }
 
 
 @pytest.mark.anyio
 async def test_pod_default_visible_toolset_is_slim(monkeypatch):
-    """The pod-default agent must expose only the slim visible set (13 function
-    tools + search_tools = 14); POD and subagents are deferred behind search_tools."""
+    """The pod-default agent's visible set is exactly this, and no wider.
+
+    The set is a budget, not an inventory: everything in it is paid for in
+    every prompt. `_EXPECTED_VISIBLE_POD_DEFAULT_TOOLS` records what each entry
+    bought, and the pod tools are the expensive ones — added deliberately, with
+    the measured bypass that justified them written down beside them. Anything
+    new here should have to make the same argument.
+    """
     from app.modules.agent.capabilities import todo_storage as storage_mod
     from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
     from app.modules.agent.tools.context import BaseAgentContext
@@ -824,20 +851,18 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     assert captured["visible"] == _EXPECTED_VISIBLE_POD_DEFAULT_TOOLS
     # ToolSearch is wired (provides search_tools — the 14th visible tool live).
     assert any(isinstance(c, ToolSearch) for c in capabilities)
-    # Subagents + POD are deferred, not in the visible prefix.
+    # Subagents stay deferred: delegating is a deliberate step, and a sub-agent
+    # run is withheld them entirely anyway.
     assert {"spawn_subagent", "interact_subagent", "query_subagents"} <= captured[
         "deferred"
     ]
-    assert any(name.startswith("pod_") for name in captured["deferred"])
+    # The pod tools are not. See `_EXPECTED_VISIBLE_POD_DEFAULT_TOOLS`.
+    assert not any(name.startswith("pod_") for name in captured["deferred"])
     # The browser is deferred for the same reason: `web_fetch` covers ordinary
-    # research in the prefix, and driving a page is the deliberate step past it.
-    assert {
-        "browser_open",
-        "browser_snapshot",
-        "browser_act",
-        "browser_read",
-        "browser_screenshot",
-    } <= captured["deferred"]
+    # research in the prefix, and driving a page is the deliberate step past
+    # it. One tool, not six -- the browsing itself is `agent-browser` through
+    # `exec_command`, so what is deferred here is only the ask for a login.
+    assert "browser_sign_in" in captured["deferred"]
     # A static awareness hint tells the model the deferred tools exist + how to
     # reach them — names listed, schemas not (so the model can search for them).
     from app.modules.agent.capabilities.deferred_hint import (
@@ -847,13 +872,17 @@ async def test_pod_default_visible_toolset_is_slim(monkeypatch):
     hint_caps = [c for c in capabilities if isinstance(c, DeferredToolsHintCapability)]
     assert len(hint_caps) == 1
     hint = hint_caps[0].get_instructions()
-    assert "pod_tables" in hint and "spawn_subagent" in hint
+    assert "spawn_subagent" in hint
     # Each name carries a one-line description: a bare name says a tool exists
     # but not when to reach for it.
-    assert "Render PDF pages as images" in hint
-    # Speech is a visible toolset (not deferred) and is not advertised in the hint.
-    assert "say" not in captured["deferred"] and "listen" not in captured["deferred"]
-    assert "Speech" not in hint
+    assert "Start a pod agent as a linked child conversation" in hint
+    # The hint advertises what is deferred and nothing else. A visible toolset
+    # listed here would send the model searching for a tool it already has —
+    # which is why this is asserted for both a toolset that was always visible
+    # (speech) and one that just became visible (pod).
+    assert {"say", "listen", "list_voices"} <= captured["deferred"]
+    assert "Speaking and transcribing" in hint
+    assert "pod_tables" not in hint
 
 
 @pytest.mark.anyio
@@ -1022,10 +1051,13 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
 
     # Hidden from the prefix — an interactive assistant should not reach for
     # "message a colleague" or "go to sleep" without going looking first.
-    assert {"message_user", "check_messages", "list_pod_members", "snooze"} <= captured[
-        "deferred"
-    ]
-    assert not ({"message_user", "snooze"} & captured["visible"])
+    assert {
+        "message_user",
+        "check_messages",
+        "list_pod_members",
+        "wait_for",
+    } <= captured["deferred"]
+    assert not ({"message_user", "wait_for"} & captured["visible"])
 
     # ...but the contract still rides in the prefix.
     messaging = [
@@ -1035,8 +1067,122 @@ async def test_pod_default_messaging_is_deferred_but_keeps_its_contract(monkeypa
     ]
     assert len(messaging) == 1, "deferring messaging dropped its instructions"
     instructions = messaging[0].get_instructions()
-    assert "snooze" in instructions
+    assert "wait_for" in instructions
     assert "background_instruction" in instructions
+
+
+@pytest.mark.anyio
+async def test_pod_is_visible_and_names_itself_the_default_for_pod_data(monkeypatch):
+    """The pod toolset is in the prefix, and still says it beats the CLI there.
+
+    Two separate things, and the second outlives the first. POD is unlike every
+    other optional toolset: if the model never searches for
+    `run_connector_operation` the operation simply does not happen, whereas POD
+    competes with `exec_command`, which is visible and once carried a `lemma`
+    cookbook for the same tables and files. Runs split on nothing but whether
+    the model happened to call `search_tools` first, and the ones that did not
+    put every table and file read through `lemma ... | head`, losing rows to
+    truncation.
+
+    That was first addressed by naming the default in the prefix while leaving
+    the tools deferred. They are now visible as well, for the pod-default agent
+    whose main job is this pod's data -- it should not have to find the tools
+    for its own job first. User-created agents never defer at all
+    (`_partition_core_extra`): a toolset somebody deliberately gave an agent is
+    a statement it will be used.
+
+    The prefix wording stays regardless. Visible tool schemas say what each tool
+    does, not which of two working paths to prefer, and preferring the wrong one
+    is the failure being prevented.
+    """
+    from app.modules.agent.capabilities import todo_storage as storage_mod
+    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.capabilities.instructed_toolset import (
+        InstructedToolsetCapability,
+    )
+    from app.modules.agent.tools.context import BaseAgentContext
+    from app.modules.agent.tools.tool_assembler import RunToolAssembler
+
+    monkeypatch.setattr(
+        storage_mod, "ConversationRepository", lambda _uow: _FakeRepo({})
+    )
+
+    deps = BaseAgentContext(
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        conversation_id=uuid4(),
+        is_pod_default_agent=True,
+    )
+    full_toolsets = await RunToolAssembler(lambda: _FakeUoW()).assemble(
+        agent=None,
+        conversation=SimpleNamespace(id=deps.conversation_id, metadata={}),
+    )
+    capabilities = await build_lemma_harness_tooling(
+        ctx=deps,
+        full_toolsets=full_toolsets,
+        enable_prompt_caching=False,
+    )
+
+    captured: dict = {}
+
+    def model_fn(messages, info: AgentInfo):
+        captured["visible"] = {
+            t.name for t in info.function_tools if not t.defer_loading
+        }
+        captured["deferred"] = {t.name for t in info.function_tools if t.defer_loading}
+        return ModelResponse(parts=[TextPart("done")])
+
+    agent = Agent(_deferring_model(model_fn), capabilities=capabilities)
+    await agent.run("hi", deps=deps)
+
+    # In the prefix, and not behind a search.
+    assert {"pod_query", "pod_read_file", "pod_tables"} <= captured["visible"]
+    assert not any(name.startswith("pod_") for name in captured["deferred"])
+
+    pod = [
+        c
+        for c in capabilities
+        if isinstance(c, InstructedToolsetCapability) and c.name == "pod"
+    ]
+    assert len(pod) == 1, "pod lost its instructions"
+    instructions = pod[0].get_instructions()
+    # The preference has to be stated, not implied by a list of tool names.
+    assert "not the `lemma` CLI" in instructions
+    assert "pod_query" in instructions and "pod_read_file" in instructions
+
+    # ...and the reason to build code in the workspace is the editing loop, not
+    # the destination. `PodWriteFileRequest` is (path, content, overwrite): no
+    # append, no patch, no line range, so a one-line change to a long file costs
+    # the whole file. The workspace applies a diff, which is the whole argument.
+    assert "applies a diff" in instructions
+    assert "replaces the file" in instructions
+    assert "lemma pods import" in instructions
+
+    # An earlier draft of this fragment led with the fact that `text/html` is on
+    # the indexable-document allow-list, which reads as a warning and steered
+    # agents off writing an app's markup to the pod at all. Writing a finished
+    # file there is fine and often the point; only the iteration belongs
+    # elsewhere. Guard the fragment against acquiring a prohibition again.
+    assert "not the destination" in instructions
+    for scary in ("does not go in pod files", "slips through", "Nothing warns you"):
+        assert scary not in instructions, (
+            f"fragment discourages a valid write: {scary!r}"
+        )
+
+    # And the CLI fragment must not still teach the operations it just lost.
+    from app.modules.agent.domain.prompts import load_workspace_cli_prompt
+
+    cli = load_workspace_cli_prompt()
+    for duplicated in (
+        "lemma tables list",
+        "lemma records list",
+        "lemma query run",
+        "lemma files ls",
+        "lemma files cat",
+        "lemma files write",
+        "lemma files search",
+    ):
+        assert duplicated not in cli, f"{duplicated!r} competes with a pod_* tool"
 
 
 @pytest.mark.anyio

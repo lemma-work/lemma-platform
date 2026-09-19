@@ -66,7 +66,7 @@ def service(monkeypatch):
 
     monkeypatch.setattr(module, "ConversationRepository", _Conversations)
     monkeypatch.setattr(module, "AgentConversationWaitRepository", _Waits)
-    monkeypatch.setattr(module, "SnoozeWakeService", _Wake)
+    monkeypatch.setattr(module, "AgentWaitService", _Wake)
     monkeypatch.setattr(
         module,
         "create_authorization_data_service",

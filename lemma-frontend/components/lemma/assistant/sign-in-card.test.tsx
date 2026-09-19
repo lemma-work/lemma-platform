@@ -1,8 +1,19 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
 import { isSignInToolName, isUserInteractionToolName } from 'lemma-sdk';
 import { SignInCard } from './assistant-approval-cards';
+
+// The card can forget a saved login, which is a mutation, so it needs a client.
+const withQuery = (ui: ReactElement) => (
+    <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+        {ui}
+    </QueryClientProvider>
+);
 
 afterEach(cleanup);
 
@@ -24,18 +35,80 @@ describe('a waiting sign-in', () => {
         expect(isUserInteractionToolName('browser_sign_in')).toBe(true);
     });
 
-    it('offers a link to the page that can actually resolve it', () => {
-        render(<SignInCard invocation={paused} conversationId="conv-1" />);
+    it('opens the computer panel in place rather than leaving the conversation', () => {
+        // The bug this pins: the card was a bare `<a href>`, so answering a
+        // sign-in threw the whole page away and replaced the conversation the
+        // person was reading with a standalone route. The panel is already
+        // beside them; the card now asks for it.
+        const navigations: Array<[string, string, Record<string, unknown> | undefined]> = [];
+        render(
+            withQuery(<SignInCard
+                invocation={paused}
+                conversationId="conv-1"
+                onNavigateResource={(type, id, meta) => navigations.push([type, id, meta])}
+            />),
+        );
 
-        const link = screen.getByRole('link', { name: /Sign in to asur\.work/ });
-        // The same destination the Slack and Telegram links use, so the two
-        // paths are one page rather than two implementations.
+        screen.getByRole('button', { name: /Open asur\.work/ }).click();
+
+        expect(navigations).toEqual([
+            ['sign_in', 'call_abc123', { conversationId: 'conv-1' }],
+        ]);
+        // No link at all: a click that also navigated would take the page away
+        // a moment after opening the panel.
+        expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('falls back to the standalone page where there is no panel to open', () => {
+        render(withQuery(<SignInCard invocation={paused} conversationId="conv-1" />));
+
+        const link = screen.getByRole('link', { name: /Open asur\.work/ });
+        // The same destination the Slack and Telegram links use, so somebody
+        // outside the app shell still reaches a page that can resolve it.
         expect(link.getAttribute('href')).toBe('/sign-in-to-site/conv-1/call_abc123');
         expect(screen.getByText('reading your pods')).toBeTruthy();
     });
 
+    it('is answered from the card, the way a question is', () => {
+        // The bug this pins: answering used to happen on the panel, through
+        // an endpoint of its own. The server resolved the pause and the run
+        // carried on, but this screen never heard about it -- the card sat
+        // there and the composer stayed locked on "Sign in to continue" over
+        // a conversation that had already moved on. Answering through the
+        // approval path is what the transcript actually watches.
+        const calls: Array<[string, string]> = [];
+        render(
+            withQuery(<SignInCard
+                invocation={paused}
+                conversationId="conv-1"
+                onResolveUserApproval={async (id, decision) => {
+                    calls.push([id, decision]);
+                }}
+            />),
+        );
+
+        screen.getByRole('button', { name: /I’m signed in/ }).click();
+        expect(calls).toEqual([['call_abc123', 'APPROVE_ONCE']]);
+    });
+
+    it('can say the sign-in did not happen', () => {
+        const calls: Array<[string, string]> = [];
+        render(
+            withQuery(<SignInCard
+                invocation={paused}
+                conversationId="conv-1"
+                onResolveUserApproval={async (id, decision) => {
+                    calls.push([id, decision]);
+                }}
+            />),
+        );
+
+        screen.getByRole('button', { name: /Can’t right now/ }).click();
+        expect(calls).toEqual([['call_abc123', 'DENY']]);
+    });
+
     it('says so rather than offering a link it cannot build', () => {
-        render(<SignInCard invocation={paused} conversationId={null} />);
+        render(withQuery(<SignInCard invocation={paused} conversationId={null} />));
 
         expect(screen.queryByRole('link')).toBeNull();
         expect(screen.getByText(/cannot be opened from here/)).toBeTruthy();
@@ -46,34 +119,86 @@ describe('a waiting sign-in', () => {
         // string, and there is no `signed_in` key and no `decision` key. Read
         // wrongly, every completed sign-in renders as "skipped".
         render(
-            <SignInCard
+            withQuery(<SignInCard
                 invocation={{
                     ...paused,
                     state: 'result',
-                    result: { success: true, outcome: 'signed_in', origin: 'https://asur.work', saved: true },
+                    result: { success: true, outcome: 'signed_in', origin: 'https://asur.work' },
                 }}
                 conversationId="conv-1"
-            />,
+            />),
         );
 
         expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
-        expect(screen.getByText('kept for next time')).toBeTruthy();
+        // There is no "kept for next time" any more, because nothing is kept
+        // on Lemma's side to be. The browser holds the session; it either is
+        // signed in or it is not.
+        expect(screen.getByText('signed in')).toBeTruthy();
         expect(screen.queryByRole('link')).toBeNull();
     });
 
     it('says when the person declined rather than calling it done', () => {
         render(
-            <SignInCard
+            withQuery(<SignInCard
                 invocation={{
                     ...paused,
                     state: 'result',
                     result: { success: true, outcome: 'declined', origin: 'https://asur.work' },
                 }}
                 conversationId="conv-1"
-            />,
+            />),
         );
 
         expect(screen.getByText('Not signed in to asur.work')).toBeTruthy();
         expect(screen.getByText('skipped')).toBeTruthy();
+    });
+
+    it('says when the browser was already signed in, and offers to sign out', () => {
+        // The three identical "Signed in to asur.work" cards nobody clicked.
+        // The tool returns signed_in without asking when the browser is
+        // already signed in, and the card read exactly like one the person
+        // had just answered -- so a session the site had stopped accepting,
+        // reported as working run after run, was indistinguishable from a
+        // real sign-in. The only remedy lived on a settings page they had to
+        // know to go and find.
+        render(
+            withQuery(<SignInCard
+                invocation={{
+                    ...paused,
+                    state: 'result',
+                    result: {
+                        success: true,
+                        outcome: 'signed_in',
+                        source: 'saved',
+                        origin: 'https://asur.work',
+                    },
+                }}
+                conversationId="conv-1"
+            />),
+        );
+
+        expect(screen.getByText('Used your saved login for asur.work')).toBeTruthy();
+        expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy();
+    });
+
+    it('does not offer to sign out of a login the person just made', () => {
+        render(
+            withQuery(<SignInCard
+                invocation={{
+                    ...paused,
+                    state: 'result',
+                    result: {
+                        success: true,
+                        outcome: 'signed_in',
+                        source: 'person',
+                        origin: 'https://asur.work',
+                    },
+                }}
+                conversationId="conv-1"
+            />),
+        );
+
+        expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /sign out/i })).toBeNull();
     });
 });

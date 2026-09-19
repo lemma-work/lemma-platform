@@ -1,26 +1,36 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { WebLogin, WebLoginAuditEntry } from 'lemma-sdk';
+import type { WebLogin } from 'lemma-sdk';
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
-export const webLoginsQueryKey = () => ['web-logins'] as const;
-export const webLoginHistoryQueryKey = () => ['web-logins', 'history'] as const;
+export const webLoginsQueryKey = (wake: boolean) => ['web-logins', wake] as const;
 
-export const useWebLogins = () =>
-    useQuery<{ items: WebLogin[] }>({
-        queryKey: webLoginsQueryKey(),
-        queryFn: () => getLemmaClient().webLogins.list(),
+/**
+ * The sites this person's sandbox browser is signed in to.
+ *
+ * Read from the browser, not from a table, so there is nothing to page
+ * through: it is what one browser is holding. The helper that followed
+ * `next_page_token` to exhaustion went with the table -- along with the
+ * history listing, which had nothing left to record once no server-side copy
+ * of a login existed to do anything to.
+ *
+ * `wake` is off until somebody asks. A paused computer answers `sleeping`
+ * rather than being started, because opening a settings page should not be
+ * what spins one up -- and unlike the old table read, this one costs a round
+ * trip into the sandbox.
+ *
+ * `enabled` is the same argument one step earlier. The card that opens this
+ * list sits on a page of eighty connectors, and asking a sandbox anything to
+ * render a door nobody has opened is a round trip spent on nothing.
+ */
+export const useWebLogins = (wake = false, enabled = true) =>
+    useQuery<{ items: WebLogin[]; sleeping: boolean }>({
+        queryKey: webLoginsQueryKey(wake),
+        queryFn: () => getLemmaClient().webLogins.list({ wake }),
         staleTime: 10_000,
-    });
-
-export const useWebLoginHistory = (enabled: boolean) =>
-    useQuery<{ items: WebLoginAuditEntry[] }>({
-        queryKey: webLoginHistoryQueryKey(),
-        queryFn: () => getLemmaClient().webLogins.history(50),
         enabled,
-        staleTime: 10_000,
     });
 
 export const useRemoveWebLogin = () => {
@@ -28,8 +38,9 @@ export const useRemoveWebLogin = () => {
     return useMutation({
         mutationFn: (origin: string) => getLemmaClient().webLogins.remove(origin),
         onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: webLoginsQueryKey() });
-            void queryClient.invalidateQueries({ queryKey: webLoginHistoryQueryKey() });
+            // Both keys: forgetting is done from the woken list, and the
+            // sleeping one is what the page renders on the next visit.
+            void queryClient.invalidateQueries({ queryKey: ['web-logins'] });
         },
     });
 };

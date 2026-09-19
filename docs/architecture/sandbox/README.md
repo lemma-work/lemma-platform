@@ -39,7 +39,7 @@ The design intentionally uses different lifecycle policies for the two workloads
 
 | Workload | Logical owner | Durable state | Idle action | Physical isolation |
 | --- | --- | --- | --- | --- |
-| Workspace | User | `/workspace` files | Quiesce and release | One sandbox per user |
+| Workspace | User | home-directory files | Quiesce and release | One sandbox per user |
 | Function | Pod | None | Destroy after five minutes | One sandbox per pod |
 
 The logical identity is a composite key. A UUID is never interpreted without its
@@ -250,7 +250,7 @@ Initial profiles:
 - Node 24 LTS and browser/application tooling locked with `pnpm`;
 - stateful Python support;
 - reconnectable commands and PTYs;
-- `/workspace` as the only durable project root;
+- `/home/user/lemma` as the only project root, inside a durable home;
 - public internet egress with private, link-local, metadata, and provider control
   destinations denied;
 - provider-specific persistent workspace storage.
@@ -306,6 +306,85 @@ format dependencies, and it would remove OCR, bounding boxes, page structure, an
 page screenshots needed by workspace document tools. Replacing LiteParse therefore
 increases this image and weakens the capability contract.
 
+### 6.4 The filesystem contract
+
+What a workspace sandbox guarantees about its own disk. Stated here because it is
+the thing agents, tools and operators all reason about, and because getting it
+wrong is silent: files land somewhere real, and simply are not there next time.
+
+#### Two roots, answering different questions
+
+| Path | What it is | Guarantee |
+|---|---|---|
+| `/home/user` | the sandbox user's home, and **the durable root** | everything under it survives for the life of the workspace |
+| `/home/user/lemma` | the **project root**, inside that home | where conversations and repositories are created |
+
+**The whole home persists, not just the project root.** That is the contract, and
+it is deliberately wider than the directory Lemma itself writes to. Tools put
+their state in `~` whether or not anyone planned for it — `~/.npm`, `~/.cargo`,
+`~/.local/share/pnpm`, `~/.cache`, `~/.python` (the `pip` prefix), `~/.gitconfig`,
+shell history — and every one of those is a cache or a setting whose whole value
+is that it is still there next time. Persisting only the project root would keep
+the work and throw away everything that made the work cheap, and would put the
+platform back to redirecting one tool at a time by hand, which is how `PNPM_HOME`
+and `UV_CACHE_DIR` came to disagree between fabrics.
+
+So: an agent installing a package, a language toolchain writing a cache, or a user
+leaving a credential helper in `~` all behave the way they would on a machine.
+
+#### `/tmp` is the opposite, and on purpose
+
+`/tmp` does **not** persist and must not be relied on. Session-scoped credentials
+are staged there precisely so they die with the sandbox — the GitHub token, the
+browser relay token, the browser profile. It is reachable from a shell, and
+deliberately **not** reachable through the HTTP files route, which is a narrower
+surface than a shell and is exposed to page script.
+
+#### How each fabric keeps the promise
+
+- **E2B** — the sandbox *is* the disk. A filesystem-only pause snapshots the whole
+  rootfs, so `/home/user` persists, and so does `/opt`.
+- **Docker and `lemma_local`** — a named volume is the only durable object, and it
+  is mounted at `/home/user`. Anything outside it is the container layer and is
+  gone when the container is replaced. This is why the mount is the home and not
+  the project root.
+
+#### Why the runtime overlay is not in the home
+
+The first-party Lemma code the backend installs lives in `/opt/lemma-runtime`,
+outside the durable root, and that is deliberate. `/opt` is where add-on software
+belongs; it keeps what the platform installed out of the directory the user
+browses; and it keeps the copy set a later disk migration works from as *the
+user's files*, since an overlay installed `--no-deps` against one base image has
+no business being carried onto another.
+
+The cost is an asymmetry worth stating plainly: the overlay is durable on E2B,
+where the sandbox is the disk, and is **not** durable on Docker or
+`lemma_local`, where `/opt` is the container layer and replacing a container
+discards it. The next use reinstalls it — about 650 ms, on the fabric where
+replacing a container is cheap — so this is a cost, not a correctness problem.
+
+Installing needs no elevation on either fabric: the images create the directory
+owned by the sandbox user and bake the `.pth` with exactly the bytes the
+installer would write, so the one step that would need root is never taken.
+
+It does place one requirement on the code. Whatever decides to reinstall must key
+on the sandbox *incarnation*, not on the logical sandbox: a replaced container
+keeps every file and keeps its storage generation while losing `/opt` entirely,
+and a check that missed that would report the overlay installed while the sandbox
+served the image's older copy.
+
+#### What is not promised
+
+- **Durability across workspace deletion.** The disk belongs to the workspace, not
+  to the user's account; deleting the workspace deletes it.
+- **Backup.** Nothing snapshots this disk. Work that must outlive the sandbox
+  belongs in pod files, which is what they are for.
+- **The base image.** A workspace keeps the image it was created from until it is
+  recreated. First-party Lemma code is delivered into the running sandbox instead
+  as a content-addressed overlay, so a code change does not require a new
+  image.
+
 ## 7. Lifecycle principles
 
 ### 7.1 Workspace lifecycle
@@ -335,7 +414,7 @@ stateDiagram-v2
 - Release first blocks new work, drains active operations, terminates managed
   sessions/processes, clears ephemeral credentials and browser state, then invokes
   the provider release primitive.
-- `/workspace` files survive release.
+- home-directory files survive release.
 - Session and process continuity is not portable across release.
 - Suspended retention is configurable (currently seven days by default) and is
   measured from the last accepted activity; activity before that deadline resumes
@@ -431,7 +510,7 @@ invariants, and the acceptance gates together.
 | --- | --- |
 | Logical sandbox | Stable `(workload_kind, logical_id)` requested by a caller |
 | Physical allocation | One provider-created container, Pod, or E2B sandbox |
-| Workspace storage | Durable `/workspace` content owned by one logical workspace, independent of a replaceable allocation where the provider permits |
+| Workspace storage | Durable home-directory content owned by one logical workspace, independent of a replaceable allocation where the provider permits |
 | Allocation token | sandbox-runtime-generated unique identifier for one create attempt |
 | Allocation epoch | Monotonic logical incarnation used to fence sessions/processes |
 | Profile | Immutable workload image/template, capabilities, and policies |

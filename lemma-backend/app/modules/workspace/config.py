@@ -40,6 +40,33 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("FUNCTION_IMAGE"),
         description="Container image backing function runtime sandboxes",
     )
+    owner_tag: str = Field(
+        default="",
+        description=(
+            "Marks sandboxes as belonging to this stack, so a sweep here "
+            "cannot reach another stack's on the same Docker daemon. Set it "
+            "wherever one machine runs two stacks at once -- the e2e harness "
+            "sets its own. Empty means unstamped and unscoped, which is what "
+            "every container created before this label existed looks like."
+        ),
+    )
+    runtime_bundle_dir: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("WORKSPACE_RUNTIME_BUNDLE_DIR"),
+        description=(
+            "Directory holding the first-party runtime bundle this backend "
+            "installs into workspace sandboxes. Normally unset: the bundle "
+            "ships inside the backend image at /app/runtime-bundle, so a "
+            "rollback of the backend is a rollback of the bundle. In "
+            "development, `make runtime-bundle` builds one and prints the "
+            "export line for this setting. Unset and with no bundle in the "
+            "image there is simply nothing to install, and a sandbox keeps "
+            "running the copy baked into its own image — which is what every "
+            "sandbox does today. Point it elsewhere only to test a bundle you "
+            "built by hand: decoupling the two is how a backend and its "
+            "sandboxes come to disagree about the code they are running."
+        ),
+    )
     workspace_profile_name: str = Field(
         default="workspace-python-v1",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_NAME"),

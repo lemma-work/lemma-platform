@@ -5,6 +5,17 @@ tools are unnecessary. Work in the supplied directory; other conversations
 share the workspace. Keep scratch files there, not in `/tmp` or another root.
 `localhost` is the container, not the Lemma backend.
 
+**Your whole home directory persists.** Conversations live under `~/lemma`, but
+anything you leave anywhere in `~` is still there next time — installed packages,
+`~/.npm` and other tool caches, `~/.gitconfig`, shell history. Install what you
+need and let the caches build up; you are not paying for it twice.
+
+`/tmp` does **not** persist and is where short-lived credentials are staged.
+Never keep work there, and never move a credential out of it.
+
+Neither survives the workspace itself being deleted, and nothing here is backed
+up — anything the user should keep belongs in pod files.
+
 ## Lemma CLI
 
 `lemma` is authenticated. Default output includes schemas; `--full` expands
@@ -12,16 +23,14 @@ folded fields, and `--output json` is for piping or saving. Use `--data '<json>'
 or `--file <path.json>` for payloads. `--pod <id>` targets a pod.
 `lemma orgs select` and `lemma pods select` switch context.
 
+Pod tables and files are the `pod_*` tools' job, not the CLI's. Use the CLI for
+the resources those tools do not reach:
+
 ```bash
 lemma pods describe                       # inventory except apps
 lemma apps list
 lemma pods members
 lemma chat <agent> "message"
-lemma tables list
-lemma tables get <table>
-lemma records list <table> --limit 20
-lemma records create <table> --data '{"title":"New"}'
-lemma query run "select status, count(*) from <table> group by status"
 lemma functions run <fn> --data '{}'
 lemma workflows run <wf> --data '{}'       # waits by default
 lemma connectors operations search <auth-config> "send email"
@@ -38,27 +47,23 @@ grants. Load `lemma-user` for approvals, workflow forms, links, and access issue
 and `/memory`, are shared. There is no `/pod` prefix. Save deliverables under
 `/me/<topic>/...` and present their pod paths.
 
+Read, write, list, and search them with the `pod_*` file tools. Build and revise
+code here first, where an edit is a diff rather than a whole-file rewrite, then
+write or import the finished result. The CLI covers what the pod tools do not:
+uploading a local file, and reaching a document's derived artifacts.
+
 ```bash
-lemma files ls /me
-lemma files tree /knowledge
-lemma files write /me/reports/note.md "draft..."
-lemma files search "refund policy" --scope /knowledge
 lemma files upload ./report.pdf /me/reports/report.pdf
-```
-
-Uploaded documents are auto-converted to page-marked markdown and page images;
-`has_markdown` reports availability. Read converted documents in place:
-
-```bash
-lemma files cat /knowledge/policy.pdf --pages 3-7   # 1-based, capped near 50k chars
-lemma files children /knowledge/policy.pdf
+lemma files children /knowledge/policy.pdf          # list derived artifacts
 lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg
 ```
 
-Search returns page numbers. Use `cat --pages` for text and inspect page images
-for layout, tables, charts, or scans. `view_image` takes exactly one of
-`pod_file_path` or `workspace_file_path`; pod images need no download.
-`pod_view_document_pages` displays document pages.
+Uploaded documents are auto-converted to page-marked markdown and page images;
+`has_markdown` reports availability. `pod_read_file` takes a page range on a
+converted document, and `pod_search_files` returns the page numbers to ask for.
+Inspect page images for layout, tables, charts, or scans: `view_image` takes
+exactly one of `pod_file_path` or `workspace_file_path`, and pod images need no
+download. `pod_view_document_pages` displays document pages.
 
 LiteParse is a fallback for local files or missing pod conversion:
 
@@ -70,15 +75,16 @@ lit screenshot input.pdf --target-pages "1-3" --dpi 200 -o shots
 ## Long-running commands
 
 `exec_command` returns `completed: false` and `process_id` when work continues.
-Poll that process; do not start it again:
+Wait for it; do not start it again and do not check it in a loop:
 
 ```
-manage_process(action="input", process_id="<id>")
+wait_for(reason="the test suite", process_id="<id>")
 ```
 
-Read `exit_code` after `completed: true`. Recover lost IDs with
-`manage_process(action="list")`. Start dev servers with `tty=true` and leave
-them running while needed.
+Your turn ends there and you get a new one when the process exits, with its
+`exit_code`. The sandbox stays alive while it runs. Recover lost IDs with
+`manage_process(action="list")`; use `action="input"` to send input or read
+output so far. Start dev servers with `tty=true` and leave them running.
 
 ## Toolchains
 
@@ -91,4 +97,6 @@ Python variables persist between calls. Add packages with `pip install` or
 tabulate are installed. For pinned projects, use `uv sync` or `uv venv` and
 the virtualenv interpreter; `execute_python` stays on the shared interpreter.
 
-SDK sources: `/sdk/lemma-python` and `/sdk/lemma-typescript`.
+SDK sources ship at `/sdk/` on some workspace images and not others — check
+before relying on them (`ls /sdk`), and read the installed packages instead
+when they are absent.

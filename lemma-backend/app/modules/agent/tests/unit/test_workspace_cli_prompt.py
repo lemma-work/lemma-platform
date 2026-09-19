@@ -15,10 +15,13 @@ from app.modules.agent.domain.prompts import load_workspace_cli_prompt
 def test_prompt_documents_in_place_pod_document_reading():
     """The fast path (read converted markdown in place) is documented."""
     prompt = load_workspace_cli_prompt()
-    # Page- and line-scoped reading of pod documents, plus the derived-artifact
-    # commands, must be present so "read a few pages" maps to the cheap path.
-    assert "files cat" in prompt
-    assert "--pages" in prompt
+    # "Read a few pages" must still map to the cheap path. Page-scoped reading
+    # moved to `pod_read_file` -- the CLI's `files cat --pages` duplicated it and
+    # was the recipe runs reached for instead of the tool -- so the fragment has
+    # to hand that job over explicitly rather than just dropping it.
+    assert "`pod_read_file` takes a page range" in prompt
+    assert "files cat" not in prompt
+    # The derived-artifact commands have no pod_* equivalent and stay here.
     assert "files children" in prompt
     assert "files child" in prompt
     # Shared folders are top-level; there is no `/pod` prefix (see files.md).

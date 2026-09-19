@@ -25,7 +25,7 @@ import httpx
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -36,6 +36,10 @@ from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
+)
+from app.modules.workspace.api.controllers.browser_view_watchers import (
+    watch_begun,
+    watch_ended,
 )
 from app.modules.workspace.services.browser_view_service import (
     MODE_CONTROL,
@@ -91,7 +95,7 @@ class BrowserStatusResponse(BaseModel):
     """What the pane can say without waking anything.
 
     `asleep` the computer is paused or was never started; `stopped` it is up but
-    the browser is not (the resting state after two idle minutes); `running` a
+    the browser is not (the resting state after five idle minutes); `running` a
     browser is there now; `unavailable` the relay did not answer, which on an
     older image is permanent until it is replaced; `unsupported` this fabric
     cannot reach a port at all.
@@ -175,6 +179,91 @@ async def current_page_url(
     finally:
         await service.close()
     return CurrentPageUrlResponse(url=url)
+
+
+class DisplaySizeRequest(BaseModel):
+    """The size the pane wants its picture to be, in CSS pixels.
+
+    Bounded here because these numbers come from a browser window and decide
+    how much memory a framebuffer takes. The sandbox clamps again against the
+    framebuffer it actually allocated, which is the limit that cannot be
+    argued with.
+    """
+
+    width: int = Field(ge=320, le=4096)
+    height: int = Field(ge=240, le=4096)
+
+
+class DisplaySizeResponse(BaseModel):
+    #: What the display ended up as. Not always what was asked for, and the
+    #: pane is told so rather than left to assume.
+    size: str | None = None
+
+
+@router.post(
+    "/display-size",
+    response_model=DisplaySizeResponse,
+    operation_id="workspace.browser.resize_display",
+    summary="Fit the workspace display to the pane showing it",
+)
+async def resize_display(
+    user: CurrentUser,
+    service: Annotated[BrowserViewService, Depends(browser_view_service)],
+    request: DisplaySizeRequest,
+) -> DisplaySizeResponse:
+    """Resize the sandbox display so the picture matches the pane.
+
+    The alternative, and what this replaces, is one fixed display scaled to
+    fit: a 3:2 screen letterboxed into whatever box it lands in, small and
+    ringed with dead space. Resizing the display itself means the pixels sent
+    are the pixels shown -- and a narrow pane gets a narrow *viewport*, so a
+    site serves its mobile layout to somebody signing in on a phone.
+
+    A failure here is not an error for the person: they keep the display they
+    had. So an unreachable or sleeping sandbox answers with no size rather
+    than a status code the pane would have to special-case.
+    """
+    # Every branch below logs. Answering the viewer with "no size" is right --
+    # they keep a working picture either way -- but answering *silently* meant
+    # a display that never resized looked exactly like one that had nothing to
+    # resize, and the pane letterboxed a 1920x1200 screen for days with no
+    # trace anywhere of why. A degraded path still has to say it degraded.
+    try:
+        size = await service.resize_display(
+            user.id, width=request.width, height=request.height
+        )
+    except SandboxCapabilityUnsupported:
+        logger.warning(
+            "workspace.browser_view.resize_unsupported.degraded",
+            width=request.width,
+            height=request.height,
+        )
+        return DisplaySizeResponse()
+    except BrowserRelayUnavailable as exc:
+        logger.warning(
+            "workspace.browser_view.resize_no_relay.degraded",
+            width=request.width,
+            height=request.height,
+            error_type=type(exc).__name__,
+        )
+        return DisplaySizeResponse()
+    except (OSError, httpx.HTTPError, _engine_error()) as exc:
+        logger.warning(
+            "workspace.browser_view.resize_failed.degraded",
+            error_type=type(exc).__name__,
+        )
+        return DisplaySizeResponse()
+    finally:
+        await service.close()
+    if not size:
+        # The relay answered and still changed nothing, which is its own
+        # outcome and not the same as any failure above.
+        logger.warning(
+            "workspace.browser_view.resize_had_no_effect.degraded",
+            width=request.width,
+            height=request.height,
+        )
+    return DisplaySizeResponse(size=size or None)
 
 
 async def _resolve_user_id(websocket: WebSocket):
@@ -422,8 +511,10 @@ async def browser_view(
     # counted as idle and had their computer stopped underneath them. Releasing
     # runs quiesce, which deletes the browser profile, so what a slow sign-in
     # lost was the sign-in.
+    watcher = UUID(user_id)
+    watch_begun(watcher)
     awake = create_inherited_task(
-        _keep_awake(service, UUID(user_id)), name="workspace.browser_view.keep_awake"
+        _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
@@ -447,6 +538,7 @@ async def browser_view(
         await _hang_up(websocket, status.WS_1011_INTERNAL_ERROR, doing="failing")
     finally:
         await _collect(awake)
+        watch_ended(watcher)
         await service.close()
 
 

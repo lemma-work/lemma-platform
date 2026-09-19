@@ -125,6 +125,12 @@ class AgentConversationWaitRepository:
         model.spec = dict(wait.spec or {})
         model.completed_at = wait.completed_at
         model.wake_attempts = wait.wake_attempts
+        # `scheduled_at` moves, now that a polled wait re-arms itself between
+        # checks rather than waking. The lease has to be dropped with it: the
+        # claim that is re-arming this row holds it for FIRE_LEASE_SECONDS (60),
+        # which would swallow every check of a wait that re-arms in ten.
+        model.scheduled_at = wait.scheduled_at
+        model.fire_lease_until = None
         await self.session.flush()
         return model.to_entity()
 

@@ -24,6 +24,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from sandbox_runtime.protocol import ByteRange, ProcessState
 from sandbox_runtime.tasks import create_inherited_task
 
@@ -91,7 +92,7 @@ def _load_token(explicit_token: str | None) -> str:
 def create_app(
     *,
     token: str | None = None,
-    allowed_roots: tuple[str, ...] = ("/workspace", "/tmp"),
+    allowed_roots: tuple[str, ...] = RUNTIME_FILESYSTEM_ROOTS,
     max_file_transfer_bytes: int | None = None,
 ) -> FastAPI:
     runtime_token = _load_token(token)
@@ -123,9 +124,9 @@ def create_app(
                     # One bad sweep must not end the loop; the next tick retries.
                     await manager.reap_expired()
                 with suppress(Exception):
-                    _shed_browser_under_pressure()
+                    await _shed_browser_under_pressure()
 
-        def _shed_browser_under_pressure() -> None:
+        async def _shed_browser_under_pressure() -> None:
             """Take the browser back when the sandbox has nothing left.
 
             Runs on the same tick as the deadline sweep because it needs no
@@ -138,15 +139,15 @@ def create_app(
             repaired itself would leave whoever reads these logs with the same
             unexplained `exit_code: 124` this was built from.
             """
-            outcome = shed_browser_if_starved()
+            outcome = await shed_browser_if_starved()
             if outcome is None:
                 return
-            available_mb, killed = outcome
+            available_mb, closed = outcome
             logging.getLogger(__name__).warning(
                 "workspace runtime shed the browser: %s MB available, "
-                "%s processes killed. It will start again on the next capture.",
+                "closed=%s. It will start again on the next capture.",
                 available_mb,
-                killed,
+                closed,
             )
 
         reaper = create_inherited_task(_reap_forever(), name="process-deadline-reaper")
