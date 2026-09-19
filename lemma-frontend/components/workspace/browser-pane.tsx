@@ -122,6 +122,7 @@ export function BrowserPane({
     conversationId,
     accessToken,
     onNavigated,
+    autoResize = true,
 }: {
     /** A site to steer the browser to before attaching, and the session that
      *  steer lands in: naming one means a sign-in. Without it this shows
@@ -129,10 +130,8 @@ export function BrowserPane({
      *  shared display, not a session-scoped tab, so there is nothing else to
      *  ask for. */
     origin?: string;
-    /** Which conversation's agent browser to check for "is it up" -- ignored
-     *  alongside `origin`, which names its own session. Without either this
-     *  checks the bare shared session, which is never what `run_browser_script`
-     *  actually used -- see `vncSocketUrl`. */
+    /** Carried for the keepalive and the logs. It no longer picks a browser:
+     *  there is one per sandbox and everything shares it. */
     conversationId?: string;
     accessToken?: string;
     /** Called with the page the browser is actually showing, polled rather
@@ -140,6 +139,17 @@ export function BrowserPane({
      *  `origin`: nothing here knows the current page without one to ask the
      *  relay's `/targets` about. */
     onNavigated?: (url: string) => void;
+    /**
+     * Whether this viewer may reshape the sandbox display to its own box.
+     *
+     * One display serves the sandbox, so two viewers of different shapes
+     * both asking for a fit would fight, last writer wins, and each would
+     * keep seeing the other's size. A second viewer therefore watches at
+     * whatever size the first has chosen and lets noVNC scale it to fit --
+     * which is what `scaleViewport` is already doing for the gap between
+     * asking and the resize landing.
+     */
+    autoResize?: boolean;
 }) {
     const containerRef = useRef<HTMLDivElement>(null);
     const rfbRef = useRef<NoVncClient | null>(null);
@@ -365,7 +375,7 @@ export function BrowserPane({
     // cleared at the same moment so the guard cannot veto that.
     useEffect(() => {
         const container = containerRef.current;
-        if (!container || state !== 'live') return;
+        if (!container || state !== 'live' || !autoResize) return;
         let cancelled = false;
         let timer: ReturnType<typeof setTimeout> | null = null;
         askedSize.current = '';
@@ -402,7 +412,7 @@ export function BrowserPane({
             if (timer) clearTimeout(timer);
             observer.disconnect();
         };
-    }, [state]);
+    }, [state, autoResize]);
 
     // ⌘C on a Mac reaches a Linux browser as Super+c, which copies nothing.
     // The keystroke that works over there is Ctrl+c, so the native gesture is

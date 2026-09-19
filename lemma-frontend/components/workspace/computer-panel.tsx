@@ -3,8 +3,12 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
+import { createPortal } from 'react-dom';
+
 import { BrowserPane } from '@/components/workspace/browser-pane';
 import { Button } from '@/components/ui/button';
+import { AppWindow } from '@/components/ui/icons';
+import { usePictureInPicture } from '@/lib/hooks/use-picture-in-picture';
 import { WorkspaceFilesPane } from '@/components/workspace/workspace-files-pane';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { cn } from '@/lib/utils';
@@ -63,6 +67,7 @@ export function ComputerPanel({
         retry: false,
     });
     const steerTo = signInRequest.data?.origin;
+    const pip = usePictureInPicture();
 
     return (
         <div className="flex h-full min-h-0 flex-col gap-2">
@@ -83,27 +88,59 @@ export function ComputerPanel({
                         {name === 'files' ? 'Files' : 'Browser'}
                     </Button>
                 ))}
+                {tab === 'browser' && pip.supported ? (
+                    <Button
+                        variant="quiet"
+                        size="xs"
+                        className="ml-auto text-[var(--text-tertiary)]"
+                        onClick={() => (pip.pipWindow ? pip.close() : void pip.open())}
+                    >
+                        <AppWindow className="size-3.5" />
+                        {pip.pipWindow ? 'Bring it back' : 'Pop out'}
+                    </Button>
+                ) : null}
             </div>
 
             <div className="min-h-0 flex-1">
                 {tab === 'files' ? (
                     <WorkspaceFilesPane workspaceCwd={workspaceCwd} />
+                ) : pip.pipWindow ? (
+                    // The picture is in the floating window; saying so beats
+                    // a second live connection to the same display drawn
+                    // behind it, which costs a socket and an encode for a
+                    // view nobody is looking at.
+                    <div className="flex h-full items-center justify-center p-8 text-center text-sm text-[var(--text-tertiary)]">
+                        The browser is in its own window. Close that window, or
+                        press “Bring it back”, to watch it here again.
+                    </div>
                 ) : (
-                    // VNC shows this person's whole sandbox display, shared by
-                    // every conversation's agent -- but *whether a browser is
-                    // even running* is checked per session, and this
-                    // conversation's own agent commands run in a session named
-                    // for it (`run_browser_script`), not the shared default.
-                    // Without this the pane checked the wrong session and
-                    // refused forever with "no browser running" while the
-                    // agent's browser was live the whole time.
-                    //
-                    // `origin` steers it at the site a sign-in named; the
-                    // answering happens on the card in the conversation, so
-                    // nothing but the browser is drawn here.
+                    // VNC shows this person's whole sandbox display. There is
+                    // one browser per sandbox now, so nothing here picks
+                    // between sessions: `origin` only steers it at the site a
+                    // sign-in named, and the answering happens on the card in
+                    // the conversation.
                     <BrowserPane conversationId={conversationId} origin={steerTo} />
                 )}
             </div>
+
+            {/* A second viewer of the same display, in a window that floats
+                above everything. `autoResize` off: one display serves the
+                sandbox, so two viewers of different shapes both asking for a
+                fit would fight and each would keep seeing the other's size.
+                This one takes whatever shape the display already has and lets
+                noVNC scale it. */}
+            {pip.pipWindow
+                ? createPortal(
+                      <div className="h-full w-full bg-[var(--bg-canvas)]">
+                          <BrowserPane
+                              conversationId={conversationId}
+                              origin={steerTo}
+                              autoResize={false}
+                          />
+                      </div>,
+                      pip.pipWindow.document.body,
+                  )
+                : null}
         </div>
     );
 }
