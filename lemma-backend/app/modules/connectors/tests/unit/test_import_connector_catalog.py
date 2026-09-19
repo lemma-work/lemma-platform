@@ -2006,7 +2006,9 @@ def test_an_unmanaged_toolkit_prefers_a_pasted_key_to_an_oauth_app():
     below. The rule itself is unchanged, which is what this still guards.
     """
     capability = _composio_catalog_row(
-        _toolkit("freshservice", auth_schemes=["OAUTH2", "API_KEY"], managed_schemes=[]),
+        _toolkit(
+            "freshservice", auth_schemes=["OAUTH2", "API_KEY"], managed_schemes=[]
+        ),
         _toolkit_detail(
             mode="API_KEY",
             connected_account_initiation=SimpleNamespace(
