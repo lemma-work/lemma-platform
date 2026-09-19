@@ -7,8 +7,8 @@ Revises: 0035_saved_site_logins
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0036_email_challenges"
-down_revision = "0035_saved_site_logins"
+revision = "0037_email_challenges"
+down_revision = "0036_drop_saved_site_logins"
 branch_labels = None
 depends_on = None
 
