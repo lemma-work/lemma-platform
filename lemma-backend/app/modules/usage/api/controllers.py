@@ -17,7 +17,9 @@ from app.modules.identity.contracts import (
 )
 from app.modules.identity.contracts.organizations import organization_member_role
 from app.modules.usage.api.dependencies import UsageServiceDep
+from app.modules.usage.domain.query_types import UsageLimitScope
 from app.modules.usage.api.schemas import (
+    UsageLimitScopeResponse,
     UsageLimitsResponse,
     UsageListResponse,
     UsageQueryParams,
@@ -248,6 +250,32 @@ async def get_usage_stats(
     )
 
 
+def _limit_scope_response(scope: UsageLimitScope) -> UsageLimitScopeResponse:
+    """One window, with the cap rendered as a percentage rather than an amount.
+
+    Consumption counts reservations as well as settled spend — work that is
+    in flight has already been charged against the window, and a meter that
+    ignored it would read low exactly while a burst was landing. This is the
+    same arithmetic `/usage/me/limits` does.
+    """
+    cap = scope["limit_usd"]
+    used_percent: float | None = None
+    if cap is not None:
+        consumed = scope["used_usd"] + scope["reserved_usd"]
+        # A zero cap is a window nothing fits in, which reads as fully consumed
+        # rather than as a division by zero.
+        used_percent = min(100.0, 100 * consumed / cap) if cap > 0 else 100.0
+    return UsageLimitScopeResponse(
+        scope=scope["scope"],
+        used_usd=scope["used_usd"],
+        reserved_usd=scope["reserved_usd"],
+        used_percent=used_percent,
+        allowed=scope["allowed"],
+        reset_at=scope["reset_at"],
+        window_start=scope["window_start"],
+    )
+
+
 @router.get(
     "/organizations/{organization_id}/limits",
     response_model=UsageLimitsResponse,
@@ -266,7 +294,18 @@ async def get_usage_limits(
         organization_id=organization_id,
         user_id=user.id,
     )
-    return UsageLimitsResponse.model_validate(limits)
+    # Mapped field by field rather than `model_validate(limits)`. The internal
+    # scope carries `limit_usd` and `remaining_usd`, which enforcement needs and
+    # this response must not publish; a structural validate would have silently
+    # started passing them through again the moment either name reappeared.
+    return UsageLimitsResponse(
+        organization_id=limits["organization_id"],
+        user_id=limits["user_id"],
+        org_monthly=_limit_scope_response(limits["org_monthly"]),
+        user_weekly=_limit_scope_response(limits["user_weekly"]),
+        user_monthly=_limit_scope_response(limits["user_monthly"]),
+        allowed=limits["allowed"],
+    )
 
 
 @router.get(

@@ -16051,32 +16051,11 @@
         "type": "object"
       },
       "UsageLimitScopeResponse": {
+        "description": "One spend window, as a caller outside the deployment may see it.\n\n**The cap is expressed as a percentage, never as an amount.** This used to\ncarry `limit_usd` and `remaining_usd`, which state a dollar allowance —\nand a dollar allowance is a promise the product does not make. What a plan\nincludes is set per plan and may be retuned; what a given request costs\ndepends on the model it routes to. Publishing \"$12.40 remaining\" invites a\ncustomer to plan against a number that is neither fixed nor ours to\nguarantee, and turns any retune into a broken promise.\n\nWhat is published instead is how much of the window is gone. That is the\nfact a caller can act on — show a meter, warn at 80%, stop starting new\nwork — and it stays true however the underlying allowance is set.\n\n`used_usd` and `reserved_usd` remain, and deliberately: those are what the\ncustomer has actually spent, which is theirs to know. It is the *boundary*\nthat is percentage-only, not the consumption.\n\nThe internal `UsageLimitScope` keeps its dollar fields — enforcement is done\nin dollars, and `usage_service` reserves against them. This is the API\nboundary, and the boundary is where the promise is made.",
         "properties": {
           "allowed": {
             "title": "Allowed",
             "type": "boolean"
-          },
-          "limit_usd": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Limit Usd"
-          },
-          "remaining_usd": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Remaining Usd"
           },
           "reserved_usd": {
             "title": "Reserved Usd",
@@ -16090,6 +16069,17 @@
           "scope": {
             "title": "Scope",
             "type": "string"
+          },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Percent"
           },
           "used_usd": {
             "title": "Used Usd",

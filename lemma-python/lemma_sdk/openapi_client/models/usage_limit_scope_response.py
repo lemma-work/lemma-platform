@@ -15,16 +15,36 @@ T = TypeVar("T", bound="UsageLimitScopeResponse")
 
 @_attrs_define
 class UsageLimitScopeResponse:
-    """
-    Attributes:
-        allowed (bool):
-        reserved_usd (float):
-        reset_at (datetime.datetime):
-        scope (str):
-        used_usd (float):
-        window_start (datetime.datetime):
-        limit_usd (float | None | Unset):
-        remaining_usd (float | None | Unset):
+    """One spend window, as a caller outside the deployment may see it.
+
+    **The cap is expressed as a percentage, never as an amount.** This used to
+    carry `limit_usd` and `remaining_usd`, which state a dollar allowance —
+    and a dollar allowance is a promise the product does not make. What a plan
+    includes is set per plan and may be retuned; what a given request costs
+    depends on the model it routes to. Publishing "$12.40 remaining" invites a
+    customer to plan against a number that is neither fixed nor ours to
+    guarantee, and turns any retune into a broken promise.
+
+    What is published instead is how much of the window is gone. That is the
+    fact a caller can act on — show a meter, warn at 80%, stop starting new
+    work — and it stays true however the underlying allowance is set.
+
+    `used_usd` and `reserved_usd` remain, and deliberately: those are what the
+    customer has actually spent, which is theirs to know. It is the *boundary*
+    that is percentage-only, not the consumption.
+
+    The internal `UsageLimitScope` keeps its dollar fields — enforcement is done
+    in dollars, and `usage_service` reserves against them. This is the API
+    boundary, and the boundary is where the promise is made.
+
+        Attributes:
+            allowed (bool):
+            reserved_usd (float):
+            reset_at (datetime.datetime):
+            scope (str):
+            used_usd (float):
+            window_start (datetime.datetime):
+            used_percent (float | None | Unset):
     """
 
     allowed: bool
@@ -33,8 +53,7 @@ class UsageLimitScopeResponse:
     scope: str
     used_usd: float
     window_start: datetime.datetime
-    limit_usd: float | None | Unset = UNSET
-    remaining_usd: float | None | Unset = UNSET
+    used_percent: float | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -50,17 +69,11 @@ class UsageLimitScopeResponse:
 
         window_start = self.window_start.isoformat()
 
-        limit_usd: float | None | Unset
-        if isinstance(self.limit_usd, Unset):
-            limit_usd = UNSET
+        used_percent: float | None | Unset
+        if isinstance(self.used_percent, Unset):
+            used_percent = UNSET
         else:
-            limit_usd = self.limit_usd
-
-        remaining_usd: float | None | Unset
-        if isinstance(self.remaining_usd, Unset):
-            remaining_usd = UNSET
-        else:
-            remaining_usd = self.remaining_usd
+            used_percent = self.used_percent
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -74,10 +87,8 @@ class UsageLimitScopeResponse:
                 "window_start": window_start,
             }
         )
-        if limit_usd is not UNSET:
-            field_dict["limit_usd"] = limit_usd
-        if remaining_usd is not UNSET:
-            field_dict["remaining_usd"] = remaining_usd
+        if used_percent is not UNSET:
+            field_dict["used_percent"] = used_percent
 
         return field_dict
 
@@ -96,23 +107,14 @@ class UsageLimitScopeResponse:
 
         window_start = isoparse(d.pop("window_start"))
 
-        def _parse_limit_usd(data: object) -> float | None | Unset:
+        def _parse_used_percent(data: object) -> float | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             return cast(float | None | Unset, data)
 
-        limit_usd = _parse_limit_usd(d.pop("limit_usd", UNSET))
-
-        def _parse_remaining_usd(data: object) -> float | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(float | None | Unset, data)
-
-        remaining_usd = _parse_remaining_usd(d.pop("remaining_usd", UNSET))
+        used_percent = _parse_used_percent(d.pop("used_percent", UNSET))
 
         usage_limit_scope_response = cls(
             allowed=allowed,
@@ -121,8 +123,7 @@ class UsageLimitScopeResponse:
             scope=scope,
             used_usd=used_usd,
             window_start=window_start,
-            limit_usd=limit_usd,
-            remaining_usd=remaining_usd,
+            used_percent=used_percent,
         )
 
         usage_limit_scope_response.additional_properties = d
