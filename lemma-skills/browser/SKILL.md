@@ -67,6 +67,14 @@ What is different about this browser:
 - **A file the page downloads goes to `~/Downloads`**, not your working
   directory -- that is Chrome's, and one browser serves every conversation.
   Move it if you want it beside your other output.
+- **One browser serves every conversation, and it has one active tab.**
+  `agent-browser tab new` binds the session to the tab it opens, and every
+  command after it acts on that binding -- so a run in another conversation
+  that opens a tab takes the binding from you, and your next `get html` or
+  `screenshot` is of their page. Nothing fails; you just save the wrong page.
+  `save-webpage` takes a lock and is safe. Driving the CLI directly over
+  several steps is not, so keep such a sequence short, and re-check `get url`
+  before you trust what you are reading.
 - Local apps: browse `http://127.0.0.1:<port>`, never the public preview URL.
 - Everything is preinstalled. Never install Playwright or a browser.
 

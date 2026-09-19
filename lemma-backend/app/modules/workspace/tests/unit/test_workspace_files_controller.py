@@ -495,7 +495,9 @@ class TestSuffixRangesObeyTheSameRules:
             _requested_range,
         )
 
-        start, length = _requested_range("bytes=-999999999", total=_MAX_CONTENT_BYTES * 4)
+        start, length = _requested_range(
+            "bytes=-999999999", total=_MAX_CONTENT_BYTES * 4
+        )
 
         assert length == _MAX_CONTENT_BYTES, (
             "a suffix range could read far more in one response than "

@@ -88,6 +88,20 @@ describe("readWholeFile", () => {
     expect(asked).toEqual([]);
   });
 
+  it("does not truncate when the size it was given is stale", async () => {
+    // The hint lets a small file skip straight to one unranged read. A file
+    // that grew since the listing that measured it would then come back
+    // capped at the server's ceiling, under the whole file's name -- the
+    // exact failure the ranged path exists to prevent, reached through the
+    // shortcut past it.
+    const total = MAX_READ_BYTES * 2 + 77;
+    const { workspace } = serving(total);
+
+    const blob = await workspace.readWholeFile("/home/user/grew.bin", 4096);
+
+    expect(blob.size).toBe(total);
+  });
+
   it("does not swallow a real failure as an end of file", async () => {
     const http = {
       async requestBytes(): Promise<Blob> {

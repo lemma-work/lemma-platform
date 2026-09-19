@@ -12,9 +12,10 @@ is what a browser keeps — the session that exists *after* somebody has signed
 in — and the person signs in themselves, in the agent's browser, exactly as they
 would anywhere.
 
-The promise is the same one: a person's way in is theirs. It is encrypted, it is
-never shown back to anyone including them, and nothing uses it except on their
-behalf.
+The promise is the same one: a person's way in is theirs, and nothing uses it
+except on their behalf. The mechanism is now the plainest one available — the
+session stays in the browser that was signed in, in that person's own computer,
+and never leaves it. Lemma keeps no copy to encrypt, show or lose.
 
 Two things follow from that, and they are load-bearing rather than incidental.
 
@@ -22,12 +23,15 @@ Two things follow from that, and they are load-bearing rather than incidental.
 promises the system will never ask somebody for their provider password, and
 that promise does not become weaker because the site has no consent screen. The
 person types their password into the site, in a browser, the way they always do.
-What is kept afterwards is the session — weaker than a password, revocable by
+What remains afterwards is the session — weaker than a password, revocable by
 logging out, and useless anywhere but that site.
 
-**The session is scoped to the site it belongs to.** An agent's browser visits
-many places. What is kept from a sign-in is only what that site would receive:
-the cookies a browser would send back to it, and the storage it wrote itself.
+**The session is scoped the way a browser scopes it.** An agent's browser
+visits many places, and each site sees only what it set: its own cookies, its
+own storage, under the origin rules every browser enforces. Nothing here
+re-implements that scoping, which is the point — the previous design read a
+session out of the browser and had to decide for itself what belonged to whom,
+and that decision was where it went wrong.
 
 ---
 
@@ -46,7 +50,7 @@ the cookies a browser would send back to it, and the storage it wrote itself.
 > stays `gap` until a scenario proves it, rather than being marked covered by a
 > test that does not.
 
-- When an agent needs a site it has no working saved login for, the system shall
+- When an agent needs a site whose browser is not signed in, the system shall
   ask the person to sign in themselves and shall put that site in front of them.
 - The system shall never ask a person for a site password, and an agent shall
   never type one.

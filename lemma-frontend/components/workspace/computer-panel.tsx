@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import { createPortal } from 'react-dom';
 
@@ -13,7 +13,72 @@ import { WorkspaceFilesPane } from '@/components/workspace/workspace-files-pane'
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { cn } from '@/lib/utils';
 
-type Tab = 'files' | 'browser';
+export type ComputerTab = 'files' | 'browser';
+
+/**
+ * Which half of the computer is showing, and who decided.
+ *
+ * Derived, not stored-and-synced. The panel is one long-lived instance: it is
+ * usually already mounted, and often sitting on Files, when somebody clicks
+ * "Sign in to ..." — so lazy initial state would miss every click after the
+ * first, and an effect that called `setTab` would be a state write during
+ * render's shadow (and is what `react-hooks/set-state-in-effect` exists to
+ * stop). Instead the sign-in decides the tab, and a person's own click
+ * overrides it only for as long as that same sign-in is on screen: when a
+ * *different* pause arrives the override stops matching and the browser tab
+ * comes back.
+ *
+ * A hook rather than state inside the panel because the answer is wanted in
+ * two places. The stage around the panel offers a link to the full-size page,
+ * and that link has to open on the half the person is actually looking at —
+ * it used to always open on Files, so switching to the browser and then going
+ * full-screen put you back where you started.
+ */
+export function useComputerTab(
+    signInKey: string | null,
+): [ComputerTab, (tab: ComputerTab) => void] {
+    const [override, setOverride] = useState<{
+        tab: ComputerTab;
+        forSignIn: string | null;
+    } | null>(null);
+    const tab: ComputerTab =
+        override && override.forSignIn === signInKey
+            ? override.tab
+            : signInKey
+              ? 'browser'
+              : 'files';
+    const choose = useCallback(
+        (next: ComputerTab) => setOverride({ tab: next, forSignIn: signInKey }),
+        [signInKey],
+    );
+    return [tab, choose];
+}
+
+/**
+ * The full-size page, opened where the pane already is.
+ *
+ * Everything a reader would expect to survive the jump: the conversation's
+ * own directory, the half that is showing, and which conversation's browser
+ * to attach to. It used to carry only the directory, so switching to the
+ * browser and then going full-screen put you back on Files -- and the page
+ * attached to no conversation at all.
+ */
+export function computerHref(
+    podId: string,
+    {
+        workspaceCwd,
+        tab,
+        conversationId,
+    }: { workspaceCwd?: string; tab: ComputerTab; conversationId?: string },
+): string {
+    const params = new URLSearchParams();
+    if (workspaceCwd) params.set('path', workspaceCwd);
+    // Only when it is not the default, so the ordinary link stays readable.
+    if (tab === 'browser') params.set('view', 'browser');
+    if (conversationId) params.set('conversation', conversationId);
+    const query = params.toString();
+    return `/pod/${podId}/computer${query ? `?${query}` : ''}`;
+}
 
 /**
  * The agent's computer, in one panel.
@@ -26,6 +91,8 @@ export function ComputerPanel({
     workspaceCwd,
     conversationId,
     signInToolCallId,
+    tab,
+    onTabChange,
 }: {
     workspaceCwd?: string;
     conversationId?: string;
@@ -33,27 +100,10 @@ export function ComputerPanel({
      *  URL. When set, the browser tab shows that sign-in — steered at the site
      *  and answerable — rather than a plain watch of this conversation. */
     signInToolCallId?: string | null;
+    /** From `useComputerTab`, held by whatever also needs to link to this. */
+    tab: ComputerTab;
+    onTabChange: (tab: ComputerTab) => void;
 }) {
-    // Derived, not stored-and-synced. This panel is one long-lived instance:
-    // it is usually already mounted, and often sitting on Files, when somebody
-    // clicks "Sign in to ..." — so lazy initial state would miss every click
-    // after the first, and an effect that called `setTab` would be a state
-    // write during render's shadow (and is what `react-hooks/set-state-in-effect`
-    // exists to stop). Instead the sign-in decides the tab, and a person's own
-    // click overrides it only for as long as that same sign-in is on screen:
-    // when a *different* pause arrives the override stops matching and the
-    // browser tab comes back.
-    const signInKey = signInToolCallId ?? null;
-    const [override, setOverride] = useState<{ tab: Tab; forSignIn: string | null } | null>(
-        null,
-    );
-    const tab: Tab =
-        override && override.forSignIn === signInKey
-            ? override.tab
-            : signInKey
-              ? 'browser'
-              : 'files';
-
     // A sign-in names a site, and the browser has to be pointed at it. The id
     // travels in the URL rather than the origin (an origin there survives
     // reload and would re-steer a shared browser at a site the person has
@@ -77,7 +127,7 @@ export function ComputerPanel({
                         key={name}
                         variant="quiet"
                         size="xs"
-                        onClick={() => setOverride({ tab: name, forSignIn: signInKey })}
+                        onClick={() => onTabChange(name)}
                         aria-pressed={tab === name}
                         className={cn(
                             tab === name

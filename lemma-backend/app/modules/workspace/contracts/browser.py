@@ -69,6 +69,7 @@ def browser_view_service():
 
 from app.modules.workspace.services.browser_relay_client import (  # noqa: E402
     ProfileCookie,
+    ProfileCookies,
 )
 
 
@@ -84,6 +85,7 @@ def browser_unavailable() -> type[Exception]:
 __all__ = [
     "BrowserCookie",
     "ProfileCookie",
+    "ProfileCookies",
     "BrowserOrigin",
     "BrowserState",
     "browser_unavailable",

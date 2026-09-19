@@ -392,8 +392,20 @@ async def test_get_session_reensures_after_missing_provider_allocation(
     async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
         return {"LEMMA_TOKEN": "dynamic"}
 
+    # Yields once rather than returning outright, and that one `await` is
+    # load-bearing. `async def no_wait(_): return None` never reaches the
+    # event loop, so the retry loop it stands in for -- `while now <
+    # deadline: ... await asyncio.sleep(delay)` -- stops being cooperative
+    # and becomes a wall-clock spin that starves the very task it is waiting
+    # for. Measured on this interpreter: 2,127,213 iterations in 200ms with
+    # the concurrent task never once scheduled, against one iteration and the
+    # task running when the sleep yields. That is the shape of a CI run where
+    # this test took 1341 seconds -- about four turns of the 300s directory
+    # deadline -- while the rest of the suite finished in its usual 233.
+    real_sleep = asyncio.sleep
+
     async def no_wait(_seconds: float) -> None:
-        return None
+        await real_sleep(0)
 
     monkeypatch.setattr(service, "get_env_vars", environment)
     monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)

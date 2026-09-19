@@ -324,9 +324,19 @@ export class WorkspaceNamespace {
     chunk = MAX_READ_BYTES,
   ): Promise<Blob> {
     const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
-    if (sizeBytes > 0 && sizeBytes <= step) return this.readFile(path);
     const parts: Blob[] = [];
     let start = 0;
+    if (sizeBytes > 0 && sizeBytes <= step) {
+      const only = await this.readFile(path);
+      // Short of the server's ceiling means that was the whole file. Exactly
+      // the ceiling means the hint was stale -- the file grew after the
+      // listing that measured it -- and returning here would truncate at
+      // 8 MiB, which is the failure this method exists to prevent. So keep
+      // what arrived and carry on reading from where it stopped.
+      if (only.size < MAX_READ_BYTES) return only;
+      parts.push(only);
+      start = only.size;
+    }
     for (;;) {
       let part: Blob;
       try {

@@ -31,18 +31,19 @@ class _User:
     id = uuid4()
 
 
-@pytest.fixture
-def browser(monkeypatch):
-    def _install(**kwargs) -> _Browser:
-        made = _Browser(**kwargs)
-        monkeypatch.setattr(controller, "_browser", lambda: made)
-        return made
+def browser(**kwargs) -> _Browser:
+    """The collaborator, handed over rather than patched in.
 
-    return _install
+    The route takes its browser as a dependency, so a test hands one in the
+    same way FastAPI does. Patching the controller's own factory would be a
+    double inside the unit under test: it certifies the half nobody wrote,
+    and it stays green through a rename that should have failed.
+    """
+    return _Browser(**kwargs)
 
 
 @pytest.mark.asyncio
-async def test_a_retired_browser_refuses_rather_than_reporting_nothing(browser) -> None:
+async def test_a_retired_browser_refuses_rather_than_reporting_nothing() -> None:
     """An awake sandbox whose Chrome has retired for idleness.
 
     No exception is raised -- the relay answers, it just says the browser is
@@ -51,30 +52,32 @@ async def test_a_retired_browser_refuses_rather_than_reporting_nothing(browser) 
     sits untouched on the durable disk. Cookies are read and cleared over
     CDP; a browser that is not running cannot be changed.
     """
-    browser(running=False)
-
     with pytest.raises(HTTPException) as raised:
-        await controller.forget_web_login(_User(), origin="https://app.example.com")
+        await controller.forget_web_login(
+            _User(), browser=browser(running=False), origin="https://app.example.com"
+        )
 
     assert raised.value.status_code == status.HTTP_409_CONFLICT
 
 
 @pytest.mark.asyncio
-async def test_a_site_the_browser_never_held_is_not_an_error(browser) -> None:
+async def test_a_site_the_browser_never_held_is_not_an_error() -> None:
     """Different from the above, and must stay different: the browser is up
     and simply has nothing for this site. Nothing to do, nothing went
     wrong."""
-    browser(running=True, cookies=[{"domain": "other.test", "expires": None}])
-
     answer = await controller.forget_web_login(
-        _User(), origin="https://app.example.com"
+        _User(),
+        browser=browser(
+            running=True, cookies=[{"domain": "other.test", "expires": None}]
+        ),
+        origin="https://app.example.com",
     )
 
     assert answer.forgotten is False
 
 
 @pytest.mark.asyncio
-async def test_a_running_browser_clears_the_hosts_of_that_site(browser) -> None:
+async def test_a_running_browser_clears_the_hosts_of_that_site() -> None:
     made = browser(
         running=True,
         cookies=[
@@ -85,7 +88,7 @@ async def test_a_running_browser_clears_the_hosts_of_that_site(browser) -> None:
     )
 
     answer = await controller.forget_web_login(
-        _User(), origin="https://app.example.com"
+        _User(), browser=made, origin="https://app.example.com"
     )
 
     assert answer.forgotten is True

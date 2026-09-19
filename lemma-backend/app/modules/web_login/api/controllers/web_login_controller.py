@@ -24,8 +24,10 @@ somebody opened a settings page.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Annotated, Protocol
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.core.api.dependencies import CurrentUser
@@ -36,7 +38,7 @@ from app.modules.web_login.services.sites import (
     site_from_origin,
     site_of,
 )
-from app.modules.workspace.contracts.browser import ProfileCookie
+from app.modules.workspace.contracts.browser import ProfileCookie, ProfileCookies
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
 router = APIRouter(prefix="/web-logins", tags=["Web Logins"])
@@ -95,7 +97,31 @@ class ForgetResponse(BaseModel):
     )
 
 
-def _browser():
+class BrowserView(Protocol):
+    """The two things these routes ask a browser for.
+
+    Named, rather than left as whatever `browser_view_service()` returns, so
+    that the routes can take it as a dependency. They used to call a
+    module-level factory, which meant a test could only reach them by
+    patching that factory -- a double placed inside the unit under test,
+    which certifies the half you did not write and survives a rename that
+    should have failed.
+    """
+
+    async def signed_in_sites(
+        self, user_id: UUID, *, wake: bool = False
+    ) -> ProfileCookies:
+        """Every cookie host the browser holds, and whether it is running."""
+        ...
+
+    async def forget_sites(
+        self, user_id: UUID, *, domains: list[str], sites: list[str]
+    ) -> int:
+        """Clear these hosts, for these sites. Returns cookies dropped."""
+        ...
+
+
+def _browser() -> BrowserView:
     """The browser service, imported at call time.
 
     Naming it at module scope pulls the whole provider stack -- Docker, the
@@ -105,6 +131,10 @@ def _browser():
     from app.modules.workspace.contracts.browser import browser_view_service
 
     return browser_view_service()()
+
+
+#: The live browser, or whatever a caller passes instead.
+Browser = Annotated[BrowserView, Depends(_browser)]
 
 
 def _as_sites(
@@ -160,6 +190,7 @@ def _as_sites(
 )
 async def list_web_logins(
     current_user: CurrentUser,
+    browser: Browser,
     wake: bool = Query(
         default=False,
         description=(
@@ -168,7 +199,6 @@ async def list_web_logins(
         ),
     ),
 ) -> WebLoginListResponse:
-    browser = _browser()
     try:
         answer = await browser.signed_in_sites(current_user.id, wake=wake)
     except SandboxCapabilityUnsupported:
@@ -204,6 +234,7 @@ async def list_web_logins(
 )
 async def forget_web_login(
     current_user: CurrentUser,
+    browser: Browser,
     origin: str = Query(description="The site to forget, as an origin or a host."),
 ) -> ForgetResponse:
     try:
@@ -213,7 +244,6 @@ async def forget_web_login(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
-    browser = _browser()
     try:
         answer = await browser.signed_in_sites(current_user.id)
     except (SandboxCapabilityUnsupported, _relay_unavailable()) as exc:

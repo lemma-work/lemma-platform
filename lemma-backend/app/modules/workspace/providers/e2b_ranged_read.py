@@ -24,7 +24,7 @@ from datetime import datetime
 
 import httpx
 
-from app.modules.workspace.providers.e2b_common import classify_path
+from app.modules.workspace.providers.e2b_common import classify_path, sdk_errors
 from app.modules.workspace.providers.e2b_process_lifetime import seconds_until
 from sandbox_runtime.errors import SandboxPathNotFound
 from sandbox_runtime.protocol import ByteRange
@@ -74,7 +74,8 @@ async def read_range(
     if byte_range.length == 0:
         return
 
-    url = sandbox.download_url(path)
+    with sdk_errors(path):
+        url = sandbox.download_url(path)
     timeout = max(seconds_until(deadline_at), MIN_TIMEOUT_SECONDS)
     headers = _header(byte_range)
 
@@ -108,12 +109,12 @@ async def read_range(
                             return
                         remaining -= len(chunk)
                     yield chunk
-    except SandboxPathNotFound:
-        raise
-    except Exception as exc:
+    except (httpx.HTTPError, OSError) as exc:
         # Same treatment the SDK calls get: the transport's own exception
         # types are not this module's vocabulary, and a caller cannot act on
-        # `httpx.ReadTimeout`.
+        # `httpx.ReadTimeout`. Named rather than caught broadly -- a
+        # `NameError` in the loop above is this module's bug and must not be
+        # reported as a sandbox that could not be reached.
         raise classify_path(exc, path) from exc
 
 

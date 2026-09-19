@@ -117,6 +117,36 @@ mkdir -p "$OUT_DIR"
 # that) and the jpeg into conversation A's directory. Measured exactly that.
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
+# One capture at a time in a sandbox.
+#
+# `tab new` binds the session to the tab it opens, and every command after it
+# -- `wait`, `eval`, `get url`, `get html`, `screenshot`, `pdf` -- acts on
+# whatever the session is bound to *now*. One browser serves every
+# conversation in a sandbox, so two captures running at once rebind the same
+# session: the second `tab new` steals the binding and the first capture then
+# reads, screenshots and saves the second one's page, under the first one's
+# name. Nothing fails; the file is just of the wrong page.
+#
+# A lock rather than per-command tab addressing, because tab addressing is
+# still a select followed by a command and the race lives in the gap. And it
+# costs nothing: the sandbox has one vCPU, and three captures run in parallel
+# measured 75.4s against 11.0s for the same three run one after another. The
+# serialisation was already the faster arrangement.
+#
+# The wait sits just under `_BROWSER_TIMEOUT_SECONDS` (75s), which is what
+# `web_fetch` gives one capture. Longer would be moot -- the caller kills us
+# first, and the agent gets a bare timeout instead of a sentence saying the
+# browser was busy. A typical capture is 4-12s, so this covers a queue of
+# several.
+CAPTURE_LOCK="${AGENT_BROWSER_CAPTURE_LOCK:-/tmp/lemma-capture.lock}"
+CAPTURE_LOCK_WAIT="${AGENT_BROWSER_CAPTURE_LOCK_WAIT:-70}"
+exec 9>"$CAPTURE_LOCK"
+if ! flock -w "$CAPTURE_LOCK_WAIT" 9; then
+  echo "save-webpage: another capture in this sandbox has held the browser for" \
+       "more than ${CAPTURE_LOCK_WAIT}s. Try again, or capture fewer pages at once." >&2
+  exit 75
+fi
+
 # A capture gets its own tab, and gives it back.
 #
 # Every captured page used to land in the one shared tab and stay there. The

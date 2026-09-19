@@ -12,7 +12,11 @@ import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { PodWelcome, type PodWelcomeChoice } from '@/components/pod/pod-welcome';
 import { PodConversationSkeleton } from '@/components/pod/route-skeletons';
 import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
-import { ComputerPanel } from '@/components/workspace/computer-panel';
+import {
+    ComputerPanel,
+    computerHref,
+    useComputerTab,
+} from '@/components/workspace/computer-panel';
 import { Monitor } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import {
@@ -120,6 +124,9 @@ function PodConversationSurface({
     // and would re-steer the shared sandbox browser at a site the person may
     // already have finished with.
     const signInToolCallId = searchParams.get('signInCall');
+    // Held here rather than inside the panel, because the stage's link to
+    // the full-size page has to open on the half that is showing.
+    const [computerTab, setComputerTab] = useComputerTab(signInToolCallId);
     const conversationInstructions = searchParams.get('conversationInstructions');
     const conversationMetadata = useMemo(
         () => parseConversationMetadataParam(searchParams.get('conversationMetadata')),
@@ -460,16 +467,18 @@ function PodConversationSurface({
                 // The full-size view of the same machine. Carries the
                 // conversation's own directory, so opening it lands where
                 // the pane was rather than at the root.
-                stageStandaloneHref={`/pod/${podId}/computer${
-                    activeConversation?.workspace_cwd
-                        ? `?path=${encodeURIComponent(activeConversation.workspace_cwd)}`
-                        : ''
-                }`}
+                stageStandaloneHref={computerHref(podId, {
+                    workspaceCwd: activeConversation?.workspace_cwd,
+                    tab: computerTab,
+                    conversationId: activeConversation?.id,
+                })}
                 stageBodyOverride={
                     <ComputerPanel
                         workspaceCwd={activeConversation?.workspace_cwd}
                         conversationId={activeConversation?.id}
                         signInToolCallId={signInToolCallId}
+                        tab={computerTab}
+                        onTabChange={setComputerTab}
                     />
                 }
                 onClose={() => setComputerOpen(false)}

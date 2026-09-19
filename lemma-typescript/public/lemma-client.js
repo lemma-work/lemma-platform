@@ -17319,6 +17319,7 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/workspace.ts
+  var MAX_READ_BYTES = 8 * 1024 * 1024;
   var WebLoginsNamespace = class {
     constructor(http) {
       __publicField(this, "http", http);
@@ -17478,17 +17479,46 @@ var LemmaClient = (() => {
      * silently returned the first 8 MiB under the full name. Ranges are
      * requested in order and stitched, so what a person saves is the file.
      *
-     * `chunk` matches the server's ceiling. Asking for more gets 8 MiB anyway.
+     * **The size is discovered, not trusted.** This took a `sizeBytes` and
+     * stopped there, which made the caller's bookkeeping load-bearing for
+     * whether a download was complete. The explorer's was wrong on the case
+     * that matters: the open file lives in the URL and its size lived in React
+     * state, so a reload restored the path with a size of 0 and every download
+     * after it truncated at 8 MiB, under the whole file's name. Reading until
+     * the server returns a short slice needs nobody to have remembered
+     * anything. `sizeBytes` survives only as a hint that lets a small file skip
+     * straight to a single unranged read; passing 0 or nothing is correct.
+     *
+     * `chunk` is clamped to the server's ceiling rather than trusted either.
+     * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
+     * eighths of the file was skipped and the result was a corrupt download of
+     * roughly the right length — the same failure, reintroduced by the
+     * parameter meant to tune it.
      */
-    async readWholeFile(path, sizeBytes, chunk = 8 * 1024 * 1024) {
-      if (sizeBytes <= chunk) return this.readFile(path);
+    async readWholeFile(path, sizeBytes = 0, chunk = MAX_READ_BYTES) {
+      const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
       const parts = [];
-      for (let start = 0; start < sizeBytes; start += chunk) {
-        parts.push(
-          await this.readFile(path, {
-            range: { start, end: Math.min(start + chunk, sizeBytes) - 1 }
-          })
-        );
+      let start = 0;
+      if (sizeBytes > 0 && sizeBytes <= step) {
+        const only = await this.readFile(path);
+        if (only.size < MAX_READ_BYTES) return only;
+        parts.push(only);
+        start = only.size;
+      }
+      for (; ; ) {
+        let part;
+        try {
+          part = await this.readFile(path, {
+            range: { start, end: start + step - 1 }
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.statusCode === 416) break;
+          throw error;
+        }
+        if (part.size === 0) break;
+        parts.push(part);
+        start += part.size;
+        if (part.size < step) break;
       }
       return new Blob(parts);
     }

@@ -9,41 +9,58 @@ workspace UI shelves the two together rather than adding a second noun.
 
 ## What it owns
 
-- `web_logins`: one row per person per origin, with the secret encrypted through
-  `app/core/crypto` and registered for rotation.
-- `web_login_audit`: a durable record of every use, capture, ask and removal.
-- Turning a saved session into a signed-in sandbox browser, and the reverse.
-- Six-digit TOTP codes, generated here so the seed never enters the sandbox.
+- Asking a person to sign in, and pausing the agent's run until they answer.
+- Saying which sites the person's sandbox browser is signed in to, and signing
+  it out of one.
+- Deciding what counts as one site: `api.example.com` and `example.com` are one
+  login, which is a public-suffix question and is answered here.
+
+It owns **no storage**. There is no table, no secret, no encryption and no
+rotation entry, because there is nothing kept: the browser's profile is durable
+and the session simply stays in it.
 
 ## What it does not own
 
-Driving the browser (`agent/tools/browser`), the takeover a person signs in
-through (`workspace`), and the encryption itself (`core/crypto`). It reaches the
-first two through their public surfaces and is reached through
-`web_login/contracts`.
+Driving the browser (`agent/tools/browser`) and the takeover a person signs in
+through (`workspace`). It reaches both through their public surfaces and is
+reached through `web_login/contracts`.
 
-## Two kinds, in order
+## The shape this used to be, and why it is not
 
-**`SESSION`** is the primary one: the cookies and local storage a browser holds
-after somebody has signed in themselves. It is the class of secret the platform
-already keeps for connectors — an OAuth refresh token — usually weaker, and
-always revocable by the person logging out.
+It captured the browser's state after a sign-in, guessed whether the capture
+"was a login", encrypted it, stored it, and injected it back later. Both
+guesses were vacuous in practice — an origin with any local-storage entry at
+all looked signed in, so a dismissed cookie banner was saved as a session; and
+a saved login was validated by opening the origin's root, which on a marketing
+homepage looks nothing like a login wall, so a dead session passed. Three
+commits in that module's history are the same bug class rediscovered.
 
-**`CREDENTIAL`** is a password, and it is a new class: reused across sites, not
-revocable without changing it. It exists for the one case a session cannot
-serve — an unattended run when nobody is awake to be asked — and is opt-in per
-site for that reason.
+Reconstructing a browser's state from outside is the wrong shape for the
+problem. The browser already keeps sessions, correctly, and has for thirty
+years. So there is one place that answers "is this signed in", and it is the
+browser.
 
 ## The rules that shape the code
 
-- **Nothing returns a secret.** `WebLogin` has no field for one, so listing,
-  auditing and the API are structurally unable to leak it. Exactly one method
-  decrypts, and `web_login/contracts` does not export it.
-- **The file, not the argument list.** A session reaches the sandbox as a file
-  written over the runtime file API, under `/tmp`, `chmod 600`, removed
-  afterwards. Argv is world-readable through `/proc`; the environment is worse.
-- **One origin at a time.** The session for the site the agent is going to, not
-  every session the person owns.
-- **Removing a login is not signing out.** Deleting the row revokes Lemma's copy
-  and nothing else; the session stays valid at the site until it expires or the
-  person logs out there.
+- **No cookie value crosses the sandbox boundary.** The relay reports a host
+  and an expiry; that is enough to say "you are signed in to example.com" and
+  enough to delete it, and deliberately not enough to sign in as them
+  somewhere else. The old capture had to carry values by construction.
+- **The browser is asked every time.** Nothing is mirrored into a table, so
+  there is no cache to go stale and no second answer to disagree with.
+- **Signing out really signs out.** `web_login.delete` clears the site's data
+  in the browser. Its predecessor deleted Lemma's own copy and left the browser
+  exactly as it was, which is why every caller carried a disclaimer saying so.
+- **The relay decides nothing about sites.** It reports hosts and deletes the
+  hosts it is given; whether two hosts are one login is answered here, where
+  the public-suffix list lives. A policy that can be answered in two places is
+  a policy that will be answered differently.
+
+## What the person gives up for it
+
+One browser profile per person means a later conversation inherits an earlier
+conversation's logins. That is how a browser works and it is the deliberate
+trade: per-conversation cookie isolation is gone. The session also sits in the
+sandbox's own filesystem, readable by the agent's shell — which changes less
+than it sounds, since an agent that can drive the browser can already use every
+session in it.
