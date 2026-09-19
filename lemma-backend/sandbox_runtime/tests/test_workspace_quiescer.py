@@ -113,10 +113,19 @@ async def test_a_shared_namespace_still_sheds_the_browser(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_an_isolated_namespace_does_not_shed_twice(monkeypatch) -> None:
-    """Docker's sweep already covers the browser; doing both would double count.
+async def test_an_isolated_namespace_still_closes_the_browser(monkeypatch) -> None:
+    """Docker's sweep does not cover the browser, whatever it looks like.
 
-    The real sweep signals every pid it can see, so it is stubbed rather than
+    This test used to assert the opposite -- "the sweep already covers it,
+    doing both would double count" -- and that premise is what made Docker
+    the one fabric where a suspend lost the login. The sweep signals; a
+    signal does not flush Chrome's cookie store. Measured on this image, one
+    second after a login: a graceful close keeps the session, SIGTERM to all
+    eleven Chrome processes does not, and nor does SIGTERM to the browser
+    process alone even when it exits cleanly in half a second.
+
+    So the close runs first on every fabric and the sweep still follows. The
+    real sweep signals every pid it can see, so it is stubbed rather than
     run: a unit test that SIGTERMs the machine it runs on is not a test.
     """
     sheds = []
@@ -131,4 +140,4 @@ async def test_an_isolated_namespace_does_not_shed_twice(monkeypatch) -> None:
         shed_browser_processes=lambda: sheds.append(1) or 1,
     ).quiesce()
 
-    assert sheds == []
+    assert sheds == [1], "the browser must be closed before the sweep signals it"

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.asyncio
+
 from sandbox_runtime.workspace import browser_guard
 from sandbox_runtime.workspace.browser_guard import (
     LOW_MEMORY_MB,
@@ -48,7 +50,7 @@ def sandbox(monkeypatch, tmp_path: Path):
                 return int(line.split()[1]) // 1024
         return None
 
-    def _close() -> bool:
+    async def _close() -> bool:
         state["closes"] += 1
         return bool(state["closed"])
 
@@ -57,29 +59,31 @@ def sandbox(monkeypatch, tmp_path: Path):
     return state
 
 
-def test_a_healthy_sandbox_is_left_alone(sandbox) -> None:
+async def test_a_healthy_sandbox_is_left_alone(sandbox) -> None:
     """A workspace at rest sits near 1485 MB available, and a browser holding
     three rendered pages still leaves about 1155 MB. Neither may trip this."""
     for available_mb in (1485, 1155, LOW_MEMORY_MB + 1):
         sandbox["available_kb"] = available_mb * 1024
 
-        assert shed_browser_if_starved() is None, available_mb
+        assert await shed_browser_if_starved() is None, available_mb
 
     assert sandbox["closes"] == 0
 
 
-def test_a_starved_sandbox_has_its_browser_closed(sandbox) -> None:
+async def test_a_starved_sandbox_has_its_browser_closed(sandbox) -> None:
     """The states this was built from: 14 MB, 19 MB and 21 MB available, with
     every unrelated tool call in the sandbox degrading alongside."""
     sandbox["available_kb"] = 14 * 1024
 
-    outcome = shed_browser_if_starved()
+    outcome = await shed_browser_if_starved()
 
     assert outcome == (14, True)
     assert sandbox["closes"] == 1
 
 
-def test_a_close_that_could_not_run_is_reported_rather_than_retried(sandbox) -> None:
+async def test_a_close_that_could_not_run_is_reported_rather_than_retried(
+    sandbox,
+) -> None:
     """A sandbox with nothing left may not manage to spawn a Node CLI, and
     there is deliberately no escalation to a signal behind it: signals are
     what this did before, and they neither matched the browser nor flushed
@@ -88,18 +92,25 @@ def test_a_close_that_could_not_run_is_reported_rather_than_retried(sandbox) -> 
     sandbox["available_kb"] = 14 * 1024
     sandbox["closed"] = False
 
-    assert shed_browser_if_starved() == (14, False)
+    assert await shed_browser_if_starved() == (14, False)
 
 
-def test_memory_that_cannot_be_read_is_not_treated_as_pressure(monkeypatch) -> None:
+async def test_memory_that_cannot_be_read_is_not_treated_as_pressure(
+    monkeypatch,
+) -> None:
     """No `/proc/meminfo` is a fabric this does not understand, not a sandbox
     in trouble -- and closing somebody's browser on a guess is worse than not
     closing it."""
     monkeypatch.setattr(browser_guard, "available_memory_mb", lambda: None)
     closes: list[int] = []
-    monkeypatch.setattr(browser_guard, "shed_browser", lambda: closes.append(1))
 
-    assert shed_browser_if_starved() is None
+    async def _close() -> bool:
+        closes.append(1)
+        return True
+
+    monkeypatch.setattr(browser_guard, "shed_browser", _close)
+
+    assert await shed_browser_if_starved() is None
     assert closes == []
 
 
@@ -122,7 +133,9 @@ def test_available_memory_is_what_the_kernel_says_is_available(
     assert available_memory_mb() == 1484
 
 
-def test_the_close_goes_through_the_cli_that_owns_the_browser(monkeypatch) -> None:
+async def test_the_close_goes_through_the_cli_that_owns_the_browser(
+    monkeypatch,
+) -> None:
     """`agent-browser close --all`, and nothing else. The argv is worth
     pinning because the last version of this named processes instead, and
     those names went stale without anything noticing."""
@@ -138,12 +151,14 @@ def test_the_close_goes_through_the_cli_that_owns_the_browser(monkeypatch) -> No
 
     monkeypatch.setattr(browser_guard.subprocess, "run", _run)
 
-    assert browser_guard.shed_browser() is True
+    assert await browser_guard.shed_browser() is True
     assert seen["argv"] == [browser_guard.AGENT_BROWSER, "close", "--all"]
     assert seen["timeout"] == browser_guard.CLOSE_TIMEOUT_SECONDS
 
 
-def test_a_cli_that_is_not_there_is_a_false_rather_than_a_crash(monkeypatch) -> None:
+async def test_a_cli_that_is_not_there_is_a_false_rather_than_a_crash(
+    monkeypatch,
+) -> None:
     """This runs from the reaper loop of a sandbox that is already in
     trouble. Whatever happens, it must not be the thing that ends that loop."""
 
@@ -152,4 +167,4 @@ def test_a_cli_that_is_not_there_is_a_false_rather_than_a_crash(monkeypatch) -> 
 
     monkeypatch.setattr(browser_guard.subprocess, "run", _run)
 
-    assert browser_guard.shed_browser() is False
+    assert await browser_guard.shed_browser() is False

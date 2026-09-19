@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import dataclass
 import os
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import shutil
 import signal
 
@@ -58,7 +59,7 @@ class WorkspaceQuiescer:
         # Injected so a test never signals a real process. The patterns this
         # matches -- agent-browser, Xvfb -- are things a developer plausibly
         # has running, and a unit test that kills their browser is not a test.
-        shed_browser_processes: Callable[[], object] = shed_browser,
+        shed_browser_processes: Callable[[], Awaitable[object] | object] = shed_browser,
     ) -> None:
         self._shed_browser_processes = shed_browser_processes
         self._directories = (
@@ -76,27 +77,37 @@ class WorkspaceQuiescer:
         )
 
     async def quiesce(self) -> QuiesceResult:
+        # The browser closes first, on every fabric, before anything is
+        # signalled or swept.
+        #
+        # This used to be in the `else` -- so Docker, which sets
+        # `LEMMA_SANDBOX_PROCESS_NAMESPACE=isolated` and takes the branch
+        # above, never closed the browser at all. It went straight to a
+        # blanket SIGTERM/SIGKILL of every process. Measured on this image,
+        # one second after a login: a graceful close keeps the session and a
+        # signal does not, whether SIGTERM to all eleven Chrome processes or
+        # to the browser process alone. So the fabric most people develop on
+        # was losing exactly the logins this branch exists to preserve, and
+        # the suspend/resume story was only ever true on E2B.
+        #
+        # Ordering, not duplication: the sweep below still runs and still
+        # ends anything the close left behind.
+        closed = self._shed_browser_processes()
+        if inspect.isawaitable(closed):
+            closed = await closed
+        closed = bool(closed)
+
         terminated = 0
         if self._isolated_process_namespace:
             terminated = await self._terminate_unmanaged_processes()
         else:
-            # The blanket sweep above is only safe where the PID namespace
-            # holds nothing but us, which is the Docker image -- it is the only
+            # The blanket sweep is only safe where the PID namespace holds
+            # nothing but us, which is the Docker image -- it is the only
             # runtime that sets the flag. On E2B the namespace also holds
-            # envd and E2B's own services, so signalling everything would take
-            # the sandbox down with the browser.
-            #
-            # That left the runtime carrying production with no process
-            # cleanup at all: deleting the profile directory does nothing to a
-            # Chrome that is still running and still holding 2 GB. Closing the
-            # browser is the part that is safe everywhere, and it is the part
-            # that mattered.
-            #
-            # `int(...)` because it now answers "did it close" rather than
-            # "how many did I signal". The old count was of processes matched
-            # by a pattern list that had gone stale and matched almost none
-            # of them, so it was reporting a number about nothing.
-            terminated = int(bool(self._shed_browser_processes()))
+            # envd and E2B's own services, so signalling everything would
+            # take the sandbox down with the browser. There, the close above
+            # is the whole of the cleanup, which is why it reports itself.
+            terminated = int(closed)
         for path in self._directories:
             shutil.rmtree(path, ignore_errors=True)
         for path in self._files:

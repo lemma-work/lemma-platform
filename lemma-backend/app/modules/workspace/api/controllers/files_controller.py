@@ -37,7 +37,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT, is_inside_home
+from sandbox_runtime.paths import (
+    HOME_ROOT,
+    WORKSPACE_ROOT,
+    is_browser_private,
+    is_inside_home,
+)
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.workspace.providers.runtime_client import WorkspaceRuntimeError
@@ -184,7 +189,25 @@ def _workspace_path(path: str | None) -> str:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Path must stay inside {HOME_ROOT}",
         )
+    _refuse_browser_profile(normalized)
     return normalized
+
+
+def _refuse_browser_profile(path: str) -> None:
+    """The one thing under the home these routes will not serve.
+
+    See `is_browser_private`: the profile is a live credential store, and
+    the listing endpoint's care not to return cookie *values* would be
+    theatre if the file holding them could be downloaded.
+    """
+    if is_browser_private(path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The browser's profile holds live sessions and is not served "
+                "over the file API. Manage sign-ins through /web-logins."
+            ),
+        )
 
 
 def _inside_workspace(stat) -> None:
@@ -221,6 +244,10 @@ def _inside_workspace(stat) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Path must stay inside {HOME_ROOT}",
         )
+    # Against the *reported* path too, so a symlink whose parent resolves
+    # into the profile is refused rather than followed.
+    if reported:
+        _refuse_browser_profile(reported)
 
 
 #: What the runtime can report an entry as. Narrowed here rather than trusted,

@@ -488,7 +488,18 @@ async def _finish(
         title = text.splitlines()[0].lstrip("# ").strip() or None
         preview = text[:_PREVIEW_CHARS]
 
-    if len(_body_of(text)) < _THIN_CONTENT_CHARS:
+    # Thin text is reported, not treated as total failure -- and the files
+    # that *were* produced are still handed back.
+    #
+    # The first version of this returned `success=False` with no `files` at
+    # all, which threw away a perfectly good screenshot or PDF whenever the
+    # page's text was short. A chart, a diagram, an image-led page and a
+    # one-line status page are all legitimate captures; "few characters" is
+    # a fact about the markdown, not a verdict on the request. It is only a
+    # failure when markdown was the whole of what was asked for.
+    thin = len(_body_of(text)) < _THIN_CONTENT_CHARS
+    visual = [fmt for fmt in files if fmt != "markdown"]
+    if thin and not visual:
         return WebFetchPage(
             url=url,
             success=False,
@@ -503,6 +514,13 @@ async def _finish(
         )
 
     return WebFetchPage(
+        notice=(
+            "This page rendered with almost no text. The "
+            f"{', '.join(sorted(visual))} capture is here and may be what you "
+            "want; the markdown is nearly empty."
+            if thin
+            else None
+        ),
         url=url,
         success=True,
         title=title,

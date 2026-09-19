@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 
 from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
 
@@ -431,3 +431,55 @@ def test_content_a_caller_already_holds_is_not_sent_again() -> None:
     assert _matches('W/"abc"', '"abc"')
     assert _matches('"zzz", "abc"', '"abc"'), "a list is comma-separated"
     assert not _matches('"zzz"', '"abc"')
+
+
+class TestTheBrowserProfileIsNotServed:
+    """The one thing under the durable home these routes refuse.
+
+    Moving the browser profile out of `/tmp` and into `~/.lemma/browser` is
+    what put it in range: `is_inside_home` is the only gate, and it says yes
+    to anything under `/home/user`. So the cookie database and the
+    local-storage LevelDB -- the live sessions of every site somebody has
+    signed in to -- became downloadable over ordinary HTTP.
+
+    That would have made a promise elsewhere in this feature into theatre:
+    the listing endpoint reports hosts and expiries and deliberately never a
+    cookie *value*, while the file endpoint next door served the file they
+    live in. The shell inside the sandbox can still read it, which was
+    accepted and written down; reachable by anything holding a URL was not.
+    """
+
+    def test_the_cookie_database_is_refused(self) -> None:
+        from sandbox_runtime.paths import BROWSER_PROFILE
+
+        with pytest.raises(HTTPException) as raised:
+            controller._workspace_path(f"{BROWSER_PROFILE}/Default/Cookies")
+
+        assert raised.value.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_the_profile_directory_itself_is_refused(self) -> None:
+        from sandbox_runtime.paths import BROWSER_PROFILE_ROOT
+
+        with pytest.raises(HTTPException) as raised:
+            controller._workspace_path(BROWSER_PROFILE_ROOT)
+
+        assert raised.value.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_traversal_back_into_the_profile_is_refused(self) -> None:
+        """Normalised before it is judged, so `..` cannot walk in."""
+        with pytest.raises(HTTPException) as raised:
+            controller._workspace_path("/home/user/lemma/../.lemma/browser/profile")
+
+        assert raised.value.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_an_ordinary_workspace_file_is_still_served(self) -> None:
+        assert (
+            controller._workspace_path("/home/user/lemma/notes.md")
+            == "/home/user/lemma/notes.md"
+        )
+
+    def test_a_similarly_named_directory_is_not_caught(self) -> None:
+        """`browserfoo` is not `browser/`."""
+        assert controller._workspace_path("/home/user/.lemma/browserfoo/x") == (
+            "/home/user/.lemma/browserfoo/x"
+        )

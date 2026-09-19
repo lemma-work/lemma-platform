@@ -75,11 +75,34 @@ def is_inside_home(path: str) -> bool:
     return path == HOME_ROOT or path.startswith(f"{HOME_ROOT}/")
 
 
+def is_browser_private(path: str) -> bool:
+    """Whether this path is inside the browser's own profile.
+
+    Refused by the HTTP file routes even though it sits under the durable
+    root, which is the one exception to "the shell can read it anyway, so
+    the file API may too".
+
+    The profile holds the cookie database and the local-storage LevelDB --
+    the live sessions of every site a person has signed in to. The listing
+    endpoint goes to some trouble never to return a cookie *value*; serving
+    the file it lives in would make that ceremony. Moving the profile from
+    `/tmp` into the home is what put it in range, so the exclusion arrives
+    with it.
+
+    The shell inside the sandbox can still read it. That was accepted
+    deliberately and written down: the agent can already *use* every session
+    by driving the browser. What is not accepted is a credential store
+    reachable over ordinary HTTP by anything holding a file path.
+    """
+    return path == BROWSER_PROFILE_ROOT or path.startswith(f"{BROWSER_PROFILE_ROOT}/")
+
+
 __all__ = [
     "BROWSER_PROFILE",
     "BROWSER_PROFILE_ROOT",
     "HOME_ROOT",
     "RUNTIME_FILESYSTEM_ROOTS",
     "WORKSPACE_ROOT",
+    "is_browser_private",
     "is_inside_home",
 ]

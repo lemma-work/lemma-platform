@@ -44,6 +44,7 @@ browser by itself five minutes after anything stops driving it.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import subprocess
 
@@ -80,26 +81,36 @@ def available_memory_mb() -> int | None:
     return None
 
 
-def shed_browser() -> bool:
+async def shed_browser() -> bool:
     """Ask the daemon to close the browser. True if it says it did.
+
+    On a thread, because the caller is the runtime's reaper loop and this
+    spawns a Node CLI that can take seconds against a wedged browser.
+    Blocking the loop there would freeze process-output handling and every
+    other runtime request at exactly the moment the sandbox is struggling --
+    which is the state this exists to get out of.
 
     False covers both "there was nothing to close" and "the CLI could not
     run", and the caller need not tell those apart: neither is something this
     module can do anything further about.
     """
-    try:
-        done = subprocess.run(  # noqa: S603
-            [AGENT_BROWSER, "close", "--all"],
-            capture_output=True,
-            timeout=CLOSE_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except OSError, subprocess.SubprocessError:
-        return False
-    return done.returncode == 0
+
+    def _close() -> bool:
+        try:
+            done = subprocess.run(  # noqa: S603
+                [AGENT_BROWSER, "close", "--all"],
+                capture_output=True,
+                timeout=CLOSE_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except OSError, subprocess.SubprocessError:
+            return False
+        return done.returncode == 0
+
+    return await asyncio.to_thread(_close)
 
 
-def shed_browser_if_starved(
+async def shed_browser_if_starved(
     *, threshold_mb: int = LOW_MEMORY_MB
 ) -> tuple[int, bool] | None:
     """Close the browser when memory is short. None when nothing was due.
@@ -111,4 +122,4 @@ def shed_browser_if_starved(
     available = available_memory_mb()
     if available is None or available >= threshold_mb:
         return None
-    return available, shed_browser()
+    return available, await shed_browser()

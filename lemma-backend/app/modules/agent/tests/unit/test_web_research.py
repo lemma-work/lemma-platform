@@ -982,7 +982,7 @@ class TestAnEmptyBrowserCapture:
     """
 
     @pytest.mark.asyncio
-    async def test_a_page_with_only_a_header_is_reported_as_empty(
+    async def test_a_text_only_request_that_rendered_nothing_is_a_failure(
         self, monkeypatch
     ) -> None:
         session = _FakeSession()
@@ -991,13 +991,38 @@ class TestAnEmptyBrowserCapture:
 
         result = await web_fetch_module.web_fetch_internal(
             SimpleNamespace(),
-            WebFetchRequest(
-                urls=["https://example.com/shell"], formats=["markdown", "jpeg"]
-            ),
+            WebFetchRequest(urls=["https://example.com/shell"], formats=["markdown"]),
         )
 
         assert result.pages[0].success is False
         assert "nothing to read" in (result.pages[0].error or "")
+
+    @pytest.mark.asyncio
+    async def test_a_thin_page_keeps_the_picture_it_was_asked_for(
+        self, monkeypatch
+    ) -> None:
+        """Thin text is a fact about the markdown, not a verdict on the call.
+
+        A chart, a diagram, an image-led page and a one-line status page are
+        all legitimate captures. The first version of this check returned
+        `success=False` with no files at all, throwing away a screenshot
+        that was exactly what somebody asked for.
+        """
+        session = _FakeSession()
+        session.header_only = True
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["https://example.com/chart"], formats=["markdown", "jpeg"]
+            ),
+        )
+
+        page = result.pages[0]
+        assert page.success is True
+        assert page.files.get("jpeg"), "the capture that was wanted must survive"
+        assert "almost no text" in (page.notice or "")
 
     @pytest.mark.asyncio
     async def test_a_page_with_real_text_is_still_a_success(self, monkeypatch) -> None:

@@ -124,9 +124,9 @@ def create_app(
                     # One bad sweep must not end the loop; the next tick retries.
                     await manager.reap_expired()
                 with suppress(Exception):
-                    _shed_browser_under_pressure()
+                    await _shed_browser_under_pressure()
 
-        def _shed_browser_under_pressure() -> None:
+        async def _shed_browser_under_pressure() -> None:
             """Take the browser back when the sandbox has nothing left.
 
             Runs on the same tick as the deadline sweep because it needs no
@@ -139,7 +139,7 @@ def create_app(
             repaired itself would leave whoever reads these logs with the same
             unexplained `exit_code: 124` this was built from.
             """
-            outcome = shed_browser_if_starved()
+            outcome = await shed_browser_if_starved()
             if outcome is None:
                 return
             available_mb, closed = outcome
