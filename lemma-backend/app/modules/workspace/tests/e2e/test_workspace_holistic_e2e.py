@@ -752,11 +752,13 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     opened = await exec_command_internal(
         ctx,
         ExecCommandRequest(
-            cmd=(
-                "AGENT_BROWSER_SESSION=workspace "
-                "AGENT_BROWSER_PROFILE=/tmp/lemma-browser/profile "
-                f"start-browser {VIEW_SITE}/"
-            ),
+            # No profile override. There is one browser profile now and it
+            # is the durable one, so pinning `/tmp/lemma-browser/profile`
+            # here started a browser the relay was not looking at -- and the
+            # view socket, finding no browser on the profile it *does* use,
+            # started a second Chrome whose blank window covered the page
+            # this test then failed to find on screen.
+            cmd=f"start-browser {VIEW_SITE}/",
             timeout_seconds=60,
             comment="Open a page in the shared default session VNC watches",
         ),

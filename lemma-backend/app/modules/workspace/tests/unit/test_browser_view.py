@@ -7,6 +7,7 @@ open sockets.
 
 from __future__ import annotations
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -424,55 +425,102 @@ class _ResettableService:
             raise RuntimeError("the relay went away")
         return "1440x960"
 
+    async def close(self) -> None:
+        return None
 
-async def test_the_last_viewer_leaving_puts_the_display_back() -> None:
+
+@pytest.fixture
+def watching(monkeypatch):
+    """The viewer bookkeeping, with the settle window collapsed.
+
+    `_reset_after_settling` builds its own service because it outlives the
+    socket that scheduled it, so the double goes in through the module rather
+    than being passed.
+    """
+    from app.modules.workspace.api.controllers import browser_view_controller as mod
+
+    service = _ResettableService()
+    monkeypatch.setattr(mod, "BrowserViewService", lambda *a, **k: service)
+    monkeypatch.setattr(mod, "_SETTLE_SECONDS", 0.01)
+    watcher = uuid4()
+    try:
+        yield mod, watcher, service
+    finally:
+        mod._watchers.pop(watcher, None)
+
+
+async def _settle() -> None:
+    """Let the detached reset run."""
+    await asyncio.sleep(0.05)
+
+
+async def test_the_last_viewer_leaving_puts_the_display_back(watching) -> None:
     """Counted server-side, because a pane often never runs its cleanup.
 
     A closed tab, a killed renderer or a dropped network fires no unmount.
     The socket closing is the only signal that is always there, which is why
     this does not live in the React effect it would be tidier in.
     """
-    from app.modules.workspace.api.controllers import browser_view_controller as mod
-
-    watcher = uuid4()
-    service = _ResettableService()
+    mod, watcher, service = watching
     mod._watchers[watcher] = 1
-    try:
-        await mod._watch_ended(service, watcher)
-    finally:
-        mod._watchers.pop(watcher, None)
+
+    mod._watch_ended(watcher)
+    await _settle()
 
     assert service.resets == 1
     assert watcher not in mod._watchers
 
 
-async def test_a_second_viewer_leaving_does_not_resize_under_the_first() -> None:
+async def test_a_second_viewer_leaving_does_not_resize_under_the_first(
+    watching,
+) -> None:
     """Two people can watch one display. The first to close must not take the
     other's picture back to the default shape underneath them."""
-    from app.modules.workspace.api.controllers import browser_view_controller as mod
-
-    watcher = uuid4()
-    service = _ResettableService()
+    mod, watcher, service = watching
     mod._watchers[watcher] = 2
-    try:
-        await mod._watch_ended(service, watcher)
-        assert service.resets == 0, "somebody is still watching"
-        assert mod._watchers[watcher] == 1
 
-        await mod._watch_ended(service, watcher)
-        assert service.resets == 1
-    finally:
-        mod._watchers.pop(watcher, None)
+    mod._watch_ended(watcher)
+    await _settle()
+    assert service.resets == 0, "somebody is still watching"
+    assert mod._watchers[watcher] == 1
+
+    mod._watch_ended(watcher)
+    await _settle()
+    assert service.resets == 1
 
 
-async def test_a_reset_that_fails_does_not_fail_the_socket() -> None:
+async def test_somebody_reconnecting_keeps_their_shape(watching) -> None:
+    """The reason the reset waits at all.
+
+    A socket closing is not a person leaving: a dropped network, a reload,
+    and the pane's own retry after `CLOSE_NO_BROWSER` each close one and open
+    another a moment later. Resetting on the close resized the display under
+    the handshake that followed -- which the browser e2e caught as a
+    framebuffer that never painted, having agreed its dimensions just before
+    they changed.
+    """
+    mod, watcher, service = watching
+    mod._watchers[watcher] = 1
+
+    mod._watch_ended(watcher)
+    # Arrives while the reset is still settling, as a reconnect does.
+    mod._watchers[watcher] = 1
+    await _settle()
+
+    assert service.resets == 0
+
+
+async def test_a_reset_that_fails_does_not_fail_the_socket(
+    watching, monkeypatch
+) -> None:
     """Tidying up is best effort. The socket has already done its job, and a
     sandbox that went away between the last frame and the close is ordinary."""
-    from app.modules.workspace.api.controllers import browser_view_controller as mod
-
-    watcher = uuid4()
+    mod, watcher, _ = watching
+    broken = _ResettableService(fails=True)
+    monkeypatch.setattr(mod, "BrowserViewService", lambda *a, **k: broken)
     mod._watchers[watcher] = 1
-    try:
-        await mod._watch_ended(_ResettableService(fails=True), watcher)
-    finally:
-        mod._watchers.pop(watcher, None)
+
+    mod._watch_ended(watcher)
+    await _settle()
+
+    assert broken.resets == 1

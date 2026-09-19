@@ -311,24 +311,59 @@ _KEEP_AWAKE_SECONDS = 60.0
 _watchers: dict[UUID, int] = {}
 
 
-async def _watch_ended(service: BrowserViewService, user_id: UUID) -> None:
-    """Drop this viewer, and reset the display if they were the last.
+#: How long "nobody is watching" has to hold before the display is put back.
+#:
+#: Not zero, which is what this was, and the difference is a resize landing
+#: in the middle of somebody's reconnect. A socket closing is not the same
+#: as a person leaving: a dropped network, a reload, and the pane's own
+#: retry after `CLOSE_NO_BROWSER` all close one and open another a moment
+#: later. Resetting on the close resized the display under the handshake
+#: that followed it -- which the browser e2e caught as a framebuffer that
+#: never painted, having agreed its dimensions a moment before they changed.
+_SETTLE_SECONDS = 5.0
+
+
+async def _reset_after_settling(user_id: UUID) -> None:
+    """Put the display back, once nobody has been watching for a moment.
+
+    Its own service, because this outlives the socket that scheduled it and
+    the one that socket held is closed on the way out.
+
+    Best effort throughout. Failing to tidy up a display is not worth a log
+    line on every network blip, let alone an error.
+    """
+    await asyncio.sleep(_SETTLE_SECONDS)
+    if _watchers.get(user_id):
+        return
+    service = BrowserViewService()
+    try:
+        with contextlib.suppress(Exception):
+            await service.reset_display(user_id)
+    finally:
+        with contextlib.suppress(Exception):
+            await service.close()
+
+
+def _watch_ended(user_id: UUID) -> None:
+    """Drop this viewer, and schedule a reset if they were the last.
 
     Server-side, not in the pane's cleanup, because the pane often does not
     get to run one: a closed tab, a killed renderer or a dropped network
     never fires an unmount. The socket closing is the only signal that is
     always there.
 
-    Best effort. Failing to tidy up a display must not turn into an error on
-    a socket that has already finished doing its job.
+    Scheduled rather than awaited: this runs in the socket's teardown, and
+    holding that open for the settle window would keep a connection and a
+    service alive for five seconds after the person had gone.
     """
     remaining = _watchers.get(user_id, 1) - 1
     if remaining > 0:
         _watchers[user_id] = remaining
         return
     _watchers.pop(user_id, None)
-    with contextlib.suppress(Exception):
-        await service.reset_display(user_id)
+    create_inherited_task(
+        _reset_after_settling(user_id), name="workspace.browser_view.reset_display"
+    )
 
 
 async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
@@ -565,10 +600,7 @@ async def browser_view(
         await _hang_up(websocket, status.WS_1011_INTERNAL_ERROR, doing="failing")
     finally:
         await _collect(awake)
-        # Before `service.close()`: resetting needs the relay this service
-        # holds, and closing it first would make the tidy-up a no-op that
-        # looked like it had run.
-        await _watch_ended(service, watcher)
+        _watch_ended(watcher)
         await service.close()
 
 
