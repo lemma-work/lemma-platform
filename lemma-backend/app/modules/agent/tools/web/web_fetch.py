@@ -47,6 +47,7 @@ during the handshake, long before they read a `User-Agent`.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import shlex
 from urllib.parse import urlparse
 
@@ -354,6 +355,16 @@ async def _capture_batch(
             if page is None:
                 needs_browser.append(url)
                 return
+            if isinstance(page, _Refusal):
+                pages[url] = WebFetchPage(
+                    url=url,
+                    success=False,
+                    error=page.message,
+                    fetched_with="http",
+                    status=page.status,
+                    blocked_by=page.blocked_by,
+                )
+                return
             async with writing:
                 written = await _write_extracted(
                     session, url=url, page=page, out_dir=out_dir
@@ -411,8 +422,51 @@ async def _capture_with_browser(
     )
 
 
-async def _clean_or_none(url: str) -> ExtractedPage | None:
-    """Fetch and clean in-process, or None when the browser is needed.
+@dataclass(frozen=True, slots=True)
+class _Refusal:
+    """A "do not try the browser" answer, with the reason for the agent.
+
+    The third outcome the cheap path needed and did not have. It used to
+    collapse every failure to `None`, which means "escalate" -- so a site
+    that refuses our address was retried through a browser it refuses
+    identically, at seven seconds and one of only five render slots.
+    """
+
+    message: str
+    status: int | None
+    blocked_by: str | None
+
+
+def _refusal_for(url: str, exc: PageFetchError) -> _Refusal | None:
+    """What to tell the agent, when the browser would not help."""
+    verdict = exc.verdict
+    if verdict is not None and verdict.blocked:
+        if verdict.browser_may_help:
+            return None
+        return _Refusal(
+            message=(
+                f"{url} was refused by a bot defence ({verdict.vendor}). The "
+                "sandbox browser reaches the site from the same address and "
+                "was measured to be refused identically, so it was not tried. "
+                "Use a different source, or ask the person for the page."
+            ),
+            status=exc.status,
+            blocked_by=verdict.vendor,
+        )
+    if exc.status in (404, 410):
+        return _Refusal(
+            message=(
+                f"The page is not there (HTTP {exc.status}). The browser was "
+                "not tried -- it would get the same answer."
+            ),
+            status=exc.status,
+            blocked_by=None,
+        )
+    return None
+
+
+async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
+    """Fetch and clean in-process. `None` means "try the browser".
 
     Cheap path: no browser start-up and no container round-trip to fetch, so raw
     HTML never leaves this process. Touches no workspace state, which is what
@@ -421,15 +475,18 @@ async def _clean_or_none(url: str) -> ExtractedPage | None:
     try:
         page = await fetch_and_clean(url)
     except PageFetchError as exc:
-        # Most often "renders with JavaScript", sometimes a 403 at a site that
-        # refuses scripted clients. Escalate rather than reporting an empty
-        # article as a success.
+        # Three different things wearing one costume until now: a page that
+        # renders with JavaScript, a site that refused us, and a page that is
+        # simply not there. Only the first is worth a browser.
         logger.warning(
             "agent.web_fetch.http_path_failed.degraded",
             error_type=type(exc).__name__,
+            status=exc.status,
+            vendor=exc.verdict.vendor if exc.verdict else None,
+            signal=exc.verdict.signal if exc.verdict else None,
             exc_info=True,
         )
-        return None
+        return _refusal_for(url, exc)
     except Exception as exc:  # noqa: BLE001 - one URL must not sink the batch
         # These run under `gather`, so anything unhandled here fails every other
         # page in the call too. A malformed charset or an extractor crash is one
@@ -443,6 +500,12 @@ async def _clean_or_none(url: str) -> ExtractedPage | None:
 
     # Measured on the extracted article, not the rendered document — the
     # provenance header would otherwise mask an empty extraction.
+    #
+    # This is an emptiness test and no longer doubles as a block test: a
+    # 120-character floor flagged a genuine 117-character answer and missed
+    # a 3,670-character block page. `classify` ran before this and owns that
+    # question; what reaches here is "there was nothing to read", which a
+    # browser genuinely can fix.
     if len(page.markdown) < _THIN_CONTENT_CHARS:
         return None
     return page
@@ -475,4 +538,21 @@ async def _write_extracted(
         preview=document[:_PREVIEW_CHARS],
         characters=len(document),
         fetched_with="http",
+        status=page.status,
+        notice=_status_notice(page),
+    )
+
+
+def _status_notice(page: ExtractedPage) -> str | None:
+    """Said only when the status and the page disagree.
+
+    Measured: reuters.com/technology/ answered 429 and served the whole
+    article. Throwing that away because of the number would cost a browser
+    render for a page we already had.
+    """
+    if page.status < 400:
+        return None
+    return (
+        f"The site answered HTTP {page.status} but served the article anyway, "
+        "so it was saved. Re-request with `render=true` if it looks short."
     )

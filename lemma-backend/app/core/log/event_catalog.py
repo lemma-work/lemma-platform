@@ -143,7 +143,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.web_fetch.batch_deadline_reached.degraded': EventSpec('warning', frozenset({'captured', 'requested'})),
     'agent.web_fetch.failed.degraded': EventSpec('warning', frozenset()),
     'agent.web_fetch.http_path_crashed.degraded': EventSpec('warning', frozenset({'error_type'})),
-    'agent.web_fetch.http_path_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
+    'agent.web_fetch.http_path_failed.degraded': EventSpec('warning', frozenset({'error_type', 'signal', 'status', 'vendor'})),
     'agent.web_fetch.session_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
     'agent.web_fetch.url_refused.refused': EventSpec('warning', frozenset({'reason'})),
     'agent.web_fetch.workspace_write_failed.degraded': EventSpec('warning', frozenset({'characters'})),
