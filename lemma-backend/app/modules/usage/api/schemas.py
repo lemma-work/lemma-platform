@@ -134,17 +134,31 @@ class UsageLimitScopeResponse(BaseModel):
     """
 
     scope: str
-    used_usd: float
-    reserved_usd: float
-    used_percent: float | None = Field(
-        default=None,
+    used_usd: float = Field(
         description=(
-            "How much of this window is consumed, as a percentage. Null means "
-            "the window is uncapped, which is a different statement from 0% "
-            "used. May exceed 100: a reservation can settle above what it "
-            "reserved, and a caller wanting a meter should clamp it itself "
-            "rather than be handed a number that has already lost the overage."
-        ),
+            "Settled spend in this window: work that has finished and been "
+            "charged. Does not include reservations still held for work in "
+            "flight — those are `reserved_usd`."
+        )
+    )
+    reserved_usd: float = Field(
+        description=(
+            "Spend held against this window for work in flight. A reservation "
+            "is released if the work does not happen, and moves into "
+            "`used_usd` when it settles, so this is not a second charge."
+        )
+    )
+    used_percent: float | None = Field(
+        description=(
+            "How much of this window is consumed, as a percentage of its cap, "
+            "counting `used_usd` and `reserved_usd` together — a meter that "
+            "ignored reservations would read low exactly while a burst was "
+            "landing. Null means the window is uncapped, which is a different "
+            "statement from 0% used. May exceed 100: a reservation can settle "
+            "above what it reserved, and a caller wanting a meter should clamp "
+            "it itself rather than be handed a number that has already lost "
+            "the overage."
+        )
     )
     allowed: bool
     reset_at: datetime

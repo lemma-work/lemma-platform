@@ -27,13 +27,19 @@
  */
 export type UsageLimitScopeResponse = {
     allowed: boolean;
+    /**
+     * Spend held against this window for work in flight. A reservation is released if the work does not happen, and moves into `used_usd` when it settles, so this is not a second charge.
+     */
     reserved_usd: number;
     reset_at: string;
     scope: string;
     /**
-     * How much of this window is consumed, as a percentage. Null means the window is uncapped, which is a different statement from 0% used. May exceed 100: a reservation can settle above what it reserved, and a caller wanting a meter should clamp it itself rather than be handed a number that has already lost the overage.
+     * How much of this window is consumed, as a percentage of its cap, counting `used_usd` and `reserved_usd` together — a meter that ignored reservations would read low exactly while a burst was landing. Null means the window is uncapped, which is a different statement from 0% used. May exceed 100: a reservation can settle above what it reserved, and a caller wanting a meter should clamp it itself rather than be handed a number that has already lost the overage.
      */
-    used_percent?: (number | null);
+    used_percent: (number | null);
+    /**
+     * Settled spend in this window: work that has finished and been charged. Does not include reservations still held for work in flight — those are `reserved_usd`.
+     */
     used_usd: number;
     window_start: string;
 };
