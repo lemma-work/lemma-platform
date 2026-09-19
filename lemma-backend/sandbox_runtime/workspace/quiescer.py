@@ -9,7 +9,7 @@ import shutil
 import signal
 
 from .browser_guard import shed_browser
-from sandbox_runtime.paths import BROWSER_PROFILE, HOME_ROOT
+from sandbox_runtime.paths import HOME_ROOT
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,24 +48,17 @@ class WorkspaceQuiescer:
     # guard's SIGKILL does not cost a login. Deleting the whole directory was
     # over-broad for this class's own purpose, and it is the reason a sign-in
     # used to last exactly as long as the sandbox did.
-    _stale_profile_locks = (
-        "SingletonLock",
-        "SingletonSocket",
-        "SingletonCookie",
-        "DevToolsActivePort",
-    )
 
     def __init__(
         self,
         *,
         ephemeral_directories: tuple[Path, ...] | None = None,
         ephemeral_files: tuple[Path, ...] | None = None,
-        browser_profile: Path | None = None,
         isolated_process_namespace: bool | None = None,
         # Injected so a test never signals a real process. The patterns this
         # matches -- agent-browser, Xvfb -- are things a developer plausibly
         # has running, and a unit test that kills their browser is not a test.
-        shed_browser_processes: Callable[[], int] = shed_browser,
+        shed_browser_processes: Callable[[], object] = shed_browser,
     ) -> None:
         self._shed_browser_processes = shed_browser_processes
         self._directories = (
@@ -75,9 +68,6 @@ class WorkspaceQuiescer:
         )
         self._files = (
             self._ephemeral_files if ephemeral_files is None else ephemeral_files
-        )
-        self._browser_profile = (
-            Path(BROWSER_PROFILE) if browser_profile is None else browser_profile
         )
         self._isolated_process_namespace = (
             os.getenv("LEMMA_SANDBOX_PROCESS_NAMESPACE") == "isolated"
@@ -98,20 +88,30 @@ class WorkspaceQuiescer:
             #
             # That left the runtime carrying production with no process
             # cleanup at all: deleting the profile directory does nothing to a
-            # Chrome that is still running and still holding 2 GB. Shedding the
-            # browser by name is the part that is safe everywhere, and it is
-            # the part that mattered.
-            terminated = self._shed_browser_processes()
+            # Chrome that is still running and still holding 2 GB. Closing the
+            # browser is the part that is safe everywhere, and it is the part
+            # that mattered.
+            #
+            # `int(...)` because it now answers "did it close" rather than
+            # "how many did I signal". The old count was of processes matched
+            # by a pattern list that had gone stale and matched almost none
+            # of them, so it was reporting a number about nothing.
+            terminated = int(bool(self._shed_browser_processes()))
         for path in self._directories:
             shutil.rmtree(path, ignore_errors=True)
         for path in self._files:
             path.unlink(missing_ok=True)
-        for name in self._stale_profile_locks:
-            # `missing_ok` rather than a guard: the common case is that the
-            # profile does not exist yet, and every one of these is absent
-            # after a clean shutdown anyway. Two of them are symlinks, which
-            # `unlink` removes without following.
-            (self._browser_profile / name).unlink(missing_ok=True)
+        # No lock-file cleanup. This removed `SingletonLock`,
+        # `SingletonSocket`, `SingletonCookie` and `DevToolsActivePort` on the
+        # theory that a file naming a dead process would stop the next Chrome
+        # starting. Measured on a real sandbox instead: `kill -9` the browser,
+        # leave all four behind, and `agent-browser open` starts a browser and
+        # rewrites them. Chrome checks whether the pid a lock names is alive.
+        #
+        # Deleting them was not free either. `DevToolsActivePort` is the only
+        # record of a running browser's port, so removing it while one was up
+        # left a browser nothing could find -- which is exactly what happened
+        # when `start-browser` did the same thing on every call.
         return QuiesceResult(terminated_unmanaged_processes=terminated)
 
     @staticmethod

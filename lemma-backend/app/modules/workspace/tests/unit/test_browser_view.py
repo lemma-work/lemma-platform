@@ -437,7 +437,7 @@ def watching(monkeypatch):
     socket that scheduled it, so the double goes in through the module rather
     than being passed.
     """
-    from app.modules.workspace.api.controllers import browser_view_controller as mod
+    from app.modules.workspace.api.controllers import browser_view_watchers as mod
 
     service = _ResettableService()
     monkeypatch.setattr(mod, "BrowserViewService", lambda *a, **k: service)
@@ -464,7 +464,7 @@ async def test_the_last_viewer_leaving_puts_the_display_back(watching) -> None:
     mod, watcher, service = watching
     mod._watchers[watcher] = 1
 
-    mod._watch_ended(watcher)
+    mod.watch_ended(watcher)
     await _settle()
 
     assert service.resets == 1
@@ -479,12 +479,12 @@ async def test_a_second_viewer_leaving_does_not_resize_under_the_first(
     mod, watcher, service = watching
     mod._watchers[watcher] = 2
 
-    mod._watch_ended(watcher)
+    mod.watch_ended(watcher)
     await _settle()
     assert service.resets == 0, "somebody is still watching"
     assert mod._watchers[watcher] == 1
 
-    mod._watch_ended(watcher)
+    mod.watch_ended(watcher)
     await _settle()
     assert service.resets == 1
 
@@ -502,7 +502,7 @@ async def test_somebody_reconnecting_keeps_their_shape(watching) -> None:
     mod, watcher, service = watching
     mod._watchers[watcher] = 1
 
-    mod._watch_ended(watcher)
+    mod.watch_ended(watcher)
     # Arrives while the reset is still settling, as a reconnect does.
     mod._watchers[watcher] = 1
     await _settle()
@@ -520,7 +520,7 @@ async def test_a_reset_that_fails_does_not_fail_the_socket(
     monkeypatch.setattr(mod, "BrowserViewService", lambda *a, **k: broken)
     mod._watchers[watcher] = 1
 
-    mod._watch_ended(watcher)
+    mod.watch_ended(watcher)
     await _settle()
 
     assert broken.resets == 1

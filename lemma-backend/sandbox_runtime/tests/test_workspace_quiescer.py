@@ -35,22 +35,26 @@ async def test_quiescer_removes_only_declared_ephemeral_state(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_a_suspend_keeps_the_login_and_drops_only_the_dead_locks(
-    tmp_path: Path,
-) -> None:
-    """The profile survives a pause; the files naming a dead process do not.
+async def test_a_suspend_leaves_the_whole_profile_alone(tmp_path: Path) -> None:
+    """A pause touches nothing in the browser's profile. Not the login, and
+    not the lock files either.
 
-    This class removes *nonportable compute state*, and it used to read that
-    as "the whole browser profile". The distinction it was missing is the one
-    that matters to a person: `SingletonLock` names a process that a suspend
-    has already ended, so Chrome refuses to start against it and it has to go.
-    `Cookies` names nothing -- it is the login, and deleting it is why signing
-    in lasted exactly as long as the sandbox did.
+    This began by deleting the whole profile, which is why signing in lasted
+    exactly as long as the sandbox did. It was then narrowed to the four
+    files naming a dead process -- `SingletonLock`, `SingletonSocket`,
+    `SingletonCookie`, `DevToolsActivePort` -- on the theory that Chrome
+    would refuse to start against them.
+
+    Measured on a real sandbox, it does not: `kill -9` the browser, leave all
+    four behind, and `agent-browser open` starts one and rewrites them, because
+    Chrome checks whether the pid a lock names is still alive. And deleting
+    them was never free -- `DevToolsActivePort` is the only record of a
+    running browser's port, so removing it under a live browser left one that
+    nothing could find.
     """
     profile = tmp_path / "profile"
     profile.mkdir()
     (profile / "Cookies").write_text("the session")
-    (profile / "Preferences").write_text("{}")
     (profile / "Local Storage").mkdir()
     (profile / "SingletonLock").symlink_to("hostname-1234")
     (profile / "DevToolsActivePort").write_text("41337\n/devtools/browser/x")
@@ -58,18 +62,16 @@ async def test_a_suspend_keeps_the_login_and_drops_only_the_dead_locks(
     await WorkspaceQuiescer(
         ephemeral_directories=(),
         ephemeral_files=(),
-        browser_profile=profile,
         isolated_process_namespace=False,
         shed_browser_processes=lambda: 0,
     ).quiesce()
 
     assert (profile / "Cookies").read_text() == "the session"
-    assert (profile / "Preferences").exists()
     assert (profile / "Local Storage").is_dir()
     # `is_symlink` rather than `exists`: the target never existed, so a
-    # dangling link reports `exists() is False` while still being in the way.
-    assert not (profile / "SingletonLock").is_symlink()
-    assert not (profile / "DevToolsActivePort").exists()
+    # dangling link reports `exists() is False` while still being present.
+    assert (profile / "SingletonLock").is_symlink()
+    assert (profile / "DevToolsActivePort").exists()
 
 
 @pytest.mark.asyncio
@@ -78,7 +80,6 @@ async def test_a_missing_profile_is_not_an_error(tmp_path: Path) -> None:
     await WorkspaceQuiescer(
         ephemeral_directories=(),
         ephemeral_files=(),
-        browser_profile=tmp_path / "never-created",
         isolated_process_namespace=False,
         shed_browser_processes=lambda: 0,
     ).quiesce()
@@ -101,11 +102,14 @@ async def test_a_shared_namespace_still_sheds_the_browser(tmp_path: Path) -> Non
         ephemeral_directories=(),
         ephemeral_files=(),
         isolated_process_namespace=False,
-        shed_browser_processes=lambda: sheds.append(1) or 7,
+        shed_browser_processes=lambda: sheds.append(1) or True,
     ).quiesce()
 
     assert sheds == [1], "the browser must be ended, not just its profile deleted"
-    assert result.terminated_unmanaged_processes == 7
+    # One, not a process count. Shedding is a single close through the daemon
+    # now; the number this used to carry was of processes matched by a
+    # pattern list that had gone stale and matched almost none of them.
+    assert result.terminated_unmanaged_processes == 1
 
 
 @pytest.mark.asyncio

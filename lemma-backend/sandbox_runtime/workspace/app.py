@@ -142,12 +142,12 @@ def create_app(
             outcome = shed_browser_if_starved()
             if outcome is None:
                 return
-            available_mb, killed = outcome
+            available_mb, closed = outcome
             logging.getLogger(__name__).warning(
                 "workspace runtime shed the browser: %s MB available, "
-                "%s processes killed. It will start again on the next capture.",
+                "closed=%s. It will start again on the next capture.",
                 available_mb,
-                killed,
+                closed,
             )
 
         reaper = create_inherited_task(_reap_forever(), name="process-deadline-reaper")

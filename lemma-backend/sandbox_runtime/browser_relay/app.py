@@ -39,7 +39,6 @@ from .chrome import (
     BrowserNotRunning,
     DEFAULT_SESSION,
     is_safe_session,
-    ensure_port,
     keepalive,
     default_display_size,
     ensure_port,
