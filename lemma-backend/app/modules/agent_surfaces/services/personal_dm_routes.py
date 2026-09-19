@@ -58,17 +58,13 @@ async def validate_personal_dm_route(
     # nullable columns and a property cannot tell the type checker which of them
     # it looked at. It is also the honest reading -- a row missing any one of
     # them has nowhere to send a message.
-    pod_id, agent_id, surface_id = (
-        route.pod_id,
-        route.assistant_id,
-        route.installation_surface_id,
-    )
-    if pod_id is None or agent_id is None or surface_id is None:
+    pod_id, surface_id = route.pod_id, route.installation_surface_id
+    if pod_id is None or surface_id is None:
         raise PersonalRouteUnavailable(
             "The personal conversation is no longer available"
         )
     await _require_usable_installation(uow, route, event, surface_id, pod_id)
-    await _require_live_access(uow, route, pod_id, agent_id)
+    await _require_live_access(uow, route, pod_id)
     return route
 
 
@@ -105,7 +101,6 @@ async def _require_live_access(
     uow: SqlAlchemyUnitOfWork,
     route: VerifiedSurfaceIdentity,
     pod_id: UUID,
-    agent_id: UUID,
 ) -> None:
     """The account can still chat, is still in the pod, and the agent is there.
 
@@ -121,7 +116,9 @@ async def _require_live_access(
         is None
     ):
         raise PersonalRouteUnavailable("Ask your team administrator for access")
-    if agent_id != pod_id or not await pod_default_agent_exists(uow, pod_id=pod_id):
+    # The assistant is the pod's own, whose row id is the pod's id -- so there
+    # is nothing to compare, only to check is still there.
+    if not await pod_default_agent_exists(uow, pod_id=pod_id):
         raise PersonalRouteUnavailable("The personal assistant is unavailable")
 
 
@@ -155,14 +152,14 @@ async def prepare_personal_dm_context(
     # `validate_personal_dm_route` refuses a row missing any of these; the
     # assert is what tells the type checker so.
     assert route.installation_surface_id is not None
-    assert route.pod_id is not None and route.assistant_id is not None
+    assert route.pod_id is not None
     installation = await SurfaceRepository(uow).get(route.installation_surface_id)
     user = await active_chat_user(uow, route.user_id)
     assert installation is not None and user is not None
     # This is a conversation-building snapshot only. The stored installation,
     # its credentials and every channel route remain owned by the source pod.
     destination = installation.model_copy(
-        update={"pod_id": route.pod_id, "agent_id": route.assistant_id}
+        update={"pod_id": route.pod_id, "agent_id": route.pod_id}
     )
     resolved = ResolvedSurfaceUser(
         internal_user_id=user.id,
@@ -172,7 +169,7 @@ async def prepare_personal_dm_context(
         display_name=user.first_name,
     )
     assistant = ResolvedSurfaceRoute(
-        agent_id=route.assistant_id,
+        agent_id=route.pod_id,
         agent_name=DEFAULT_POD_AGENT_NAME,
         agent_display_name="Assistant",
         conversation_kind="DM",

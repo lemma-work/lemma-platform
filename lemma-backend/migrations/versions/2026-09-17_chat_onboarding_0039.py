@@ -30,22 +30,20 @@ def upgrade() -> None:
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         # Where this identity talks. Null until a workspace is chosen: being
         # recognised and having somewhere to talk are different things.
+        # SET NULL, not CASCADE: removing a company's Slack app should cost its
+        # people a destination, not the proof of who they are. PS-SURF-005
+        # promises they resume without another email code while their verified
+        # identity holds, and a cascade here deletes the row holding it.
         sa.Column(
             "installation_surface_id",
             sa.Uuid(),
-            sa.ForeignKey("agent_surfaces.id", ondelete="CASCADE"),
+            sa.ForeignKey("agent_surfaces.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column(
             "pod_id",
             sa.Uuid(),
-            sa.ForeignKey("pods.id", ondelete="CASCADE"),
-            nullable=True,
-        ),
-        sa.Column(
-            "assistant_id",
-            sa.Uuid(),
-            sa.ForeignKey("agents.id", ondelete="CASCADE"),
+            sa.ForeignKey("pods.id", ondelete="SET NULL"),
             nullable=True,
         ),
         # A revoked identity cannot keep a destination. This was two tables
@@ -54,8 +52,7 @@ def upgrade() -> None:
         # hand. Here it is a row the database will not accept.
         sa.CheckConstraint(
             "revoked_at IS NULL OR ("
-            "installation_surface_id IS NULL AND pod_id IS NULL "
-            "AND assistant_id IS NULL)",
+            "installation_surface_id IS NULL AND pod_id IS NULL)",
             name="ck_surface_identity_route_is_live",
         ),
     )
@@ -72,6 +69,15 @@ def upgrade() -> None:
         sa.Column("binding_key", sa.String(64), nullable=False, unique=True),
         sa.Column("platform", sa.String(32), nullable=False),
         sa.Column("step", sa.String(32), nullable=False),
+        # `OnboardingStep` says in its own docstring that a typo here "is not an
+        # error, it is a state the dispatcher silently has no branch for". This
+        # makes it an error. Safe to pin, unlike `agent_surfaces.surface_type`,
+        # because these rows are short-lived and internal -- no retired value
+        # has to survive in one.
+        sa.CheckConstraint(
+            "step IN ('handoff', 'awaiting_phone', 'awaiting_email', 'awaiting_code', 'verified', 'awaiting_pod', 'organization_access_required', 'ready', 'cancelled', 'expired')",
+            name="ck_pending_onboarding_step",
+        ),
         sa.Column("challenge_id", sa.Uuid(), nullable=True),
         sa.Column(
             "user_id",
@@ -94,6 +100,11 @@ def upgrade() -> None:
         sa.Column("handed_off_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("message_committed_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.create_index(
+        "ix_surface_pending_onboarding_expires_at",
+        "surface_pending_onboarding",
+        ["expires_at"],
+    )
     op.create_table(
         "surface_onboarding_input_tokens",
         sa.Column("id", sa.Uuid(), primary_key=True),
@@ -109,6 +120,13 @@ def upgrade() -> None:
         ),
         sa.Column("step", sa.String(32), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    # Both sweeps run every sixty seconds, forever. Without these they are two
+    # sequential scans a minute for the life of the deployment.
+    op.create_index(
+        "ix_surface_onboarding_input_tokens_expires_at",
+        "surface_onboarding_input_tokens",
+        ["expires_at"],
     )
 
 

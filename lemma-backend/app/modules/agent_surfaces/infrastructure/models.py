@@ -215,12 +215,18 @@ class AgentSurface(UUIDAuditBase):
 class AgentSurfaceExternalUser(UUIDAuditBase):
     __tablename__ = "agent_surface_external_users"
     __table_args__ = (
+        # NULLS NOT DISTINCT, mirroring migration 0041: Telegram writes no
+        # tenant, and by default Postgres would treat every one of those NULLs
+        # as a different value -- so the uniqueness this index exists for never
+        # applied to it. Declared here too so a schema built from metadata
+        # carries the same guarantee.
         Index(
             "ix_agent_surface_external_user_platform_tenant_external",
             "platform",
             "tenant_id",
             "external_user_id",
             unique=True,
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

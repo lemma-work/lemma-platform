@@ -96,7 +96,6 @@ async def complete_onboarding_workspace(
                 # outlive a revocation.
                 identity.installation_surface_id = transport.surface.id
                 identity.pod_id = workspace.pod_id
-                identity.assistant_id = workspace.assistant_id
             else:
                 await _ensure_shared_surface(
                     uow,
@@ -212,7 +211,6 @@ async def attach_chosen_workspace(
                 return "That account needs to verify again before it can chat."
             identity.installation_surface_id = transport.surface.id
             identity.pod_id = pod_id
-            identity.assistant_id = assistant_id
         else:
             await _ensure_shared_surface(
                 uow,

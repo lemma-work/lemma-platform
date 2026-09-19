@@ -32,8 +32,7 @@ class VerifiedSurfaceIdentity(UUIDAuditBase):
     __table_args__ = (
         CheckConstraint(
             "revoked_at IS NULL OR ("
-            "installation_surface_id IS NULL AND pod_id IS NULL "
-            "AND assistant_id IS NULL)",
+            "installation_surface_id IS NULL AND pod_id IS NULL)",
             name="ck_surface_identity_route_is_live",
         ),
     )
@@ -51,20 +50,33 @@ class VerifiedSurfaceIdentity(UUIDAuditBase):
     # workspace is chosen or provisioned -- being recognised and having a
     # destination are different things, and the gap between them is a real
     # state a person can sit in.
+    #
+    # SET NULL rather than CASCADE: removing and re-adding a company's Slack
+    # app should cost its people a destination, not their proof of identity.
+    # PS-SURF-005 promises they resume "without asking for another email code,
+    # while their verified identity holds", and a cascade here would delete the
+    # row that holds it. Clearing one column leaves exactly the state above --
+    # recognised, nowhere to talk -- which the workspace-choice step answers.
     installation_surface_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_surfaces.id", ondelete="CASCADE")
+        ForeignKey("agent_surfaces.id", ondelete="SET NULL")
     )
     pod_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE")
-    )
-    assistant_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE")
+        ForeignKey("pods.id", ondelete="SET NULL")
     )
 
     @property
     def is_routable(self) -> bool:
-        """Live, and with somewhere to send a message."""
-        return self.revoked_at is None and self.pod_id is not None
+        """Live, and with somewhere to send a message.
+
+        Both destination columns, not just the pod: a surface deleted out from
+        under this row clears one and leaves the other, and a pod with no
+        installation to reach it through is not somewhere a message can go.
+        """
+        return (
+            self.revoked_at is None
+            and self.pod_id is not None
+            and self.installation_surface_id is not None
+        )
 
 
 class PendingChatOnboarding(UUIDAuditBase):
