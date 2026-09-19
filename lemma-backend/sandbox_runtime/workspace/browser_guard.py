@@ -57,17 +57,49 @@ browser by itself five minutes after anything stops driving it.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from dataclasses import dataclass
 import subprocess
 
-#: Below this, the sandbox is close enough to unusable that a browser is no
-#: longer worth what it costs. Chosen from measurement rather than taste: a
-#: workspace at rest with no browser sits near 1485 MB available of 1983 MB,
-#: and a browser session holding three rendered pages still leaves about
-#: 1155 MB. Both are an order of magnitude clear of this, while the degraded
-#: sandboxes observed in production -- 14 MB, 19 MB, 21 MB available -- are
-#: all far below it.
+from sandbox_runtime.sandbox_memory import (
+    SandboxMemory,
+    available_memory_mb,
+    read_memory,
+)
+
+#: The fallback threshold, against `/proc/meminfo`'s `MemAvailable`, used
+#: only where there is no cgroup to read. Chosen from measurement rather
+#: than taste: a workspace at rest with no browser sits near 1485 MB
+#: available of 1983 MB, and a browser session holding three rendered pages
+#: still leaves about 1155 MB, while the degraded sandboxes observed in
+#: production -- 14 MB, 19 MB, 21 MB -- are all far below this.
 LOW_MEMORY_MB = 220
+
+#: How much room must remain between what cannot be reclaimed and the hard
+#: limit. 256 MB on a 2048 MB box, and the claim it makes is "the rest of
+#: the sandbox can still work": the display stack measured ~100 MB, plus the
+#: workspace runtime, the relay, the Node daemon and whatever shell the
+#: agent is holding.
+#:
+#: Deliberately not the 1.2 GB ceiling on `anon + shmem` that the research
+#: suggested. The same research measured twelve concurrent heavy tabs
+#: sitting at `anon` 1188 MB with `memory.events` all zero and the sandbox
+#: healthy -- a threshold that fires on a measured-healthy state would shed
+#: the browser out from under working sessions. And no static floor can be
+#: both quiet there and safe against the largest single page measured
+#: (cnn.com, +963 MB in one capture): those two requirements are
+#: arithmetically incompatible, which is the reason the first signal below
+#: is a symptom rather than a prediction.
+HEADROOM_FLOOR_MB = 256
+
+#: `memory.pressure`'s `full avg10`: the share of a ten-second window in
+#: which *every* task was stalled on memory. This is the only signal that
+#: measures the harm the guard exists for -- `python -c pass` taking 61
+#: seconds is by definition a memory stall.
+#:
+#: Two ticks, because one sample of a ten-second average is not a trend.
+#: And optional, because it is not everywhere: measured absent on Docker
+#: Desktop's kernel, which has no `memory.pressure` at all.
+PRESSURE_FULL_AVG10 = 10.0
 
 #: The CLI that owns the browser's lifecycle.
 AGENT_BROWSER = "/usr/local/bin/agent-browser"
@@ -77,19 +109,53 @@ AGENT_BROWSER = "/usr/local/bin/agent-browser"
 CLOSE_TIMEOUT_SECONDS = 8.0
 
 
-def available_memory_mb() -> int | None:
-    """Free memory as the kernel reckons it, or None where that is unknowable.
+@dataclass(frozen=True, slots=True)
+class Shed:
+    """Why the browser was ended, so the log can say."""
 
-    `MemAvailable` rather than `MemFree`: reclaimable page cache is not
-    pressure, and treating it as pressure would shed the browser on a sandbox
-    that had merely read a large file.
+    signal: str
+    closed: bool
+    headroom_mb: int | None = None
+    anon_mb: int | None = None
+    oom_kill: int | None = None
+    available_mb: int | None = None
+
+
+def _pressure_is_sustained(now: float | None, previous: float | None) -> bool:
+    if now is None or previous is None:
+        return False
+    return now >= PRESSURE_FULL_AVG10 and previous >= PRESSURE_FULL_AVG10
+
+
+def _reason(memory: SandboxMemory, *, last: _Last) -> str | None:
+    """Which signal says the browser has to go, if any.
+
+    Order is confidence. Never `memory.current` or `memory.peak`: reading
+    3 GB of file data through the cgroup drove `peak` to exactly the limit
+    with `oom_kill 0` and `anon` falling, and acting on that would shed a
+    browser because somebody read a file.
     """
-    try:
-        for line in Path("/proc/meminfo").read_text().splitlines():
-            if line.startswith("MemAvailable:"):
-                return int(line.split()[1]) // 1024
-    except OSError, ValueError, IndexError:
-        return None
+    if (
+        memory.oom_kill is not None
+        and last.oom_kill is not None
+        and memory.oom_kill > last.oom_kill
+    ):
+        # Zero false positives by construction. A cgroup OOM kill takes the
+        # largest resident task, which is essentially always a renderer --
+        # so the first is the bulkhead working and this is the second.
+        return "oom_kill"
+    if _pressure_is_sustained(memory.pressure_full_avg10, last.pressure_full_avg10):
+        return "memory_stall"
+    headroom = memory.headroom_mb
+    if headroom is not None and headroom <= HEADROOM_FLOOR_MB:
+        return "headroom"
+    if memory.limit_mb is None:
+        # No cgroup to read. `MemAvailable` is the host's number on Docker
+        # and the guest's on Firecracker, so this is honest on E2B and the
+        # best available elsewhere.
+        available = memory.available_mb
+        if available is not None and available < LOW_MEMORY_MB:
+            return "available"
     return None
 
 
@@ -122,16 +188,47 @@ async def shed_browser() -> bool:
     return await asyncio.to_thread(_close)
 
 
-async def shed_browser_if_starved(
-    *, threshold_mb: int = LOW_MEMORY_MB
-) -> tuple[int, bool] | None:
-    """Close the browser when memory is short. None when nothing was due.
+@dataclass
+class _Last:
+    """What the previous tick saw. Counters only mean something as a delta."""
 
-    Returns (available_mb, closed) so the caller can say what it did and why
-    -- a sandbox that silently repaired itself would leave the next person
-    reading these logs with the same mystery this was built from.
+    oom_kill: int | None = None
+    pressure_full_avg10: float | None = None
+
+
+#: Module-level because the reaper is a single loop in a single process, and
+#: because seeding it from the first reading is the point: a resumed sandbox
+#: whose `oom_kill` is already non-zero must not shed on its first tick for
+#: a kill that happened before it woke up.
+_last = _Last()
+
+
+async def shed_browser_if_starved() -> Shed | None:
+    """Close the browser when the *sandbox* is in trouble. None if not.
+
+    Reads the cgroup rather than `/proc/meminfo`, which is not namespaced:
+    measured inside a 2 GiB container, `MemTotal` reported 8.8 GiB and
+    `nproc` 8, so the old threshold was comparing a host-wide figure against
+    a per-sandbox number. On a roomy host it could never fire; on a busy one
+    it would fire for something else's reasons.
+
+    Returns which signal fired so the caller can say, because a sandbox that
+    silently repaired itself leaves the next person reading these logs with
+    the mystery this was built from.
     """
-    available = available_memory_mb()
-    if available is None or available >= threshold_mb:
+    memory = read_memory()
+    reason = _reason(memory, last=_last)
+    # Seeded from what was observed rather than reset to zero, on every tick
+    # including the first.
+    _last.oom_kill = memory.oom_kill
+    _last.pressure_full_avg10 = memory.pressure_full_avg10
+    if reason is None:
         return None
-    return available, await shed_browser()
+    return Shed(
+        signal=reason,
+        closed=await shed_browser(),
+        headroom_mb=memory.headroom_mb,
+        anon_mb=memory.anon_mb,
+        oom_kill=memory.oom_kill,
+        available_mb=memory.available_mb,
+    )

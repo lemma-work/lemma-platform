@@ -273,6 +273,10 @@ def workspace_template():
             "/app/sandbox_runtime/paths.py",
         )
         .copy(
+            "lemma-backend/sandbox_runtime/sandbox_memory.py",
+            "/app/sandbox_runtime/sandbox_memory.py",
+        )
+        .copy(
             "lemma-backend/sandbox_runtime/browser_relay",
             "/app/sandbox_runtime/browser_relay",
         )

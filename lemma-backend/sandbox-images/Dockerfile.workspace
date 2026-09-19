@@ -308,6 +308,7 @@ COPY --chown=10001:10001 lemma-backend/sandbox_runtime/__init__.py /app/sandbox_
 # here does not fail the build -- the container starts, exits 1 on import,
 # and every sandbox operation then waits for a runtime that is never coming.
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/paths.py /app/sandbox_runtime/paths.py
+COPY --chown=10001:10001 lemma-backend/sandbox_runtime/sandbox_memory.py /app/sandbox_runtime/sandbox_memory.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/protocol.py /app/sandbox_runtime/protocol.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/tasks.py /app/sandbox_runtime/tasks.py
 COPY --chown=10001:10001 lemma-backend/sandbox_runtime/contracts.py /app/sandbox_runtime/contracts.py
