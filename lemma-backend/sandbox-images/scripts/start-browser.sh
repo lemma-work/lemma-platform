@@ -44,11 +44,30 @@ export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-workspace}"
 unset AGENT_BROWSER_SESSION_NAME
 
 mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
-rm -f \
-  "$PROFILE_DIR/SingletonCookie" \
-  "$PROFILE_DIR/SingletonLock" \
-  "$PROFILE_DIR/SingletonSocket" \
-  "$PROFILE_DIR/DevToolsActivePort"
+# Only when they are actually stale, which means: nothing is using this
+# profile. These four files exist to say "a browser owns this directory", so
+# deleting them while one does is not cleanup, it is losing the browser.
+#
+# This was unconditional, and harmless while the profile lived in /tmp and
+# this script ran once per sandbox with nothing up. The profile is durable
+# now and this script is the "make the browser work" entry point, called
+# again on every take-control, every sign-in and every relay health start --
+# and the rest of it is idempotent by `pgrep`, so a second run skips Xvfb,
+# skips x11vnc, and leaves the existing Chrome alone. Chrome writes
+# `DevToolsActivePort` only at startup, so that second run deleted the one
+# record of which port the live browser is on and nothing rewrote it.
+# `live_port` then reported "the browser is not running" -- close code 4409,
+# "The browser is not running" in the pane -- about a browser that was up
+# the whole time, for as long as the sandbox lived.
+if pgrep -f -- "--user-data-dir=${PROFILE_DIR}" >/dev/null 2>&1; then
+  echo "[start-browser] a browser already owns ${PROFILE_DIR}; keeping its lock files"
+else
+  rm -f \
+    "$PROFILE_DIR/SingletonCookie" \
+    "$PROFILE_DIR/SingletonLock" \
+    "$PROFILE_DIR/SingletonSocket" \
+    "$PROFILE_DIR/DevToolsActivePort"
+fi
 # `--disable-blink-features=AutomationControlled` is the one that matters for
 # the journey this feature exists for. Chrome otherwise sets
 # `navigator.webdriver` and turns on the AutomationControlled blink feature,
