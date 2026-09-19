@@ -77,7 +77,16 @@ DATED_PROSE = re.compile(
     rf"(?:\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTHS})|(?:{_MONTHS})\s+\d{{1,2}})\b"
 )
 
-SUFFIXES = (".py", ".ts", ".tsx", ".js", ".mjs", ".sh", ".rs", ".sql", ".md")
+#: Every tracked file is read, and the exclusions below are named rather
+#: than an allowlist of extensions being named instead. That was the first
+#: shape of this and it was wrong: a hostname in a `Makefile`, a workflow,
+#: a `Caddyfile` or an `.env.example` is exactly as public as one in a
+#: docstring, and those are the files a deployment name is *most* likely to
+#: be written into. Probed -- an internal host appended to the repository
+#: `Makefile` passed the suffix-gated version without comment.
+#:
+#: Binary files need no rule of their own: they fail to decode, which is a
+#: better "is this text" test than an extension list or a magic-byte sniff.
 #: Generated clients and specs carry whatever the source said. Flagging them
 #: reports one fault twice and points the fixer at a file they must not edit.
 SKIP_PARTS = (
@@ -88,7 +97,19 @@ SKIP_PARTS = (
     "/dist/",
     ".venv",
 )
-SKIP_NAMES = ("openapi_spec.json", "openapi.json")
+#: Locks and committed bundles are vendored bulk with no prose in them.
+SKIP_NAMES = (
+    "openapi_spec.json",
+    "openapi.json",
+    ".lock",
+    "lock.json",
+    "lock.yaml",
+    "lemma-client.js",
+    "lemma-ui.js",
+)
+#: Big enough for any file a person writes by hand, small enough that a
+#: checked-in dataset is not read line by line on every `make quality`.
+MAX_BYTES = 2 * 1024 * 1024
 SELF = "check_public_prose.py"
 ALLOW_FILE = Path(__file__).with_name("public-prose-allow.txt")
 
@@ -119,7 +140,7 @@ def tracked_files(root: Path) -> list[Path]:
     ).stdout
     found = []
     for name in listed.split("\0"):
-        if not name or not name.endswith(SUFFIXES) or name.endswith(SKIP_NAMES):
+        if not name or name.endswith(SKIP_NAMES):
             continue
         if any(part in f"/{name}" for part in SKIP_PARTS) or name.endswith(SELF):
             continue
@@ -194,8 +215,10 @@ def _prose_lines(path: Path, text: str) -> set[int] | None:
 
 def offences(path: Path, root: Path, allowed: set[str]) -> list[str]:
     try:
+        if path.stat().st_size > MAX_BYTES:
+            return []
         text = path.read_text(encoding="utf-8")
-    except OSError, UnicodeDecodeError:
+    except OSError, UnicodeDecodeError, ValueError:
         return []
     where = str(path.relative_to(root))
     prose = _prose_lines(path, text)
