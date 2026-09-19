@@ -300,11 +300,17 @@ def _client(monkeypatch, tmp_path, token: str = "token-abc"):
 def test_health_needs_no_token_and_says_when_chrome_is_down(
     monkeypatch, tmp_path
 ) -> None:
-    """A paused workspace has no browser, and that is not a fault."""
+    """A paused workspace has no browser, and that is not a fault.
+
+    `vnc` rides alongside because they fail separately and the remedies
+    differ: a viewer that got no picture used to close 4409, "the browser is
+    not running", which was the same answer for a browser that was down, a
+    display that never came up, and a websockify that had died.
+    """
     client = _client(monkeypatch, tmp_path)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"chrome": "stopped"}
+    assert response.json() == {"chrome": "stopped", "vnc": "down"}
 
 
 def test_a_guarded_route_without_a_token_is_refused_as_unauthorised(

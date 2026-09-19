@@ -1,20 +1,20 @@
-"""`agent-browser` has to work whether or not `start-browser` ran first.
+"""`agent-browser` has to work whether or not `lemma-ensure-display` ran first.
 
-The browser skill says to call `start-browser` once before anything else, and
+The browser skill says to call `lemma-ensure-display` once before anything else, and
 that is the flow that was tested. An agent that goes straight for
 `agent-browser` -- the obvious thing to type -- got one of two errors instead:
 
     ⚠ config file not found: /tmp/lemma-browser/config.json
     Missing X server or $DISPLAY
 
-Both mean "start-browser has not run yet". Neither says so. From inside the
+Both mean "lemma-ensure-display has not run yet". Neither says so. From inside the
 sandbox the reasonable conclusion is that the browser tooling is broken, and the
 fallback a model reaches for is installing Playwright and downloading its own
 Chromium -- into a 2 GB sandbox, to do what the browser already sitting there
 does. That happened in a real transcript.
 
 The wrapper on `PATH` now brings the browser up itself. These tests drive that
-wrapper directly with a stub `start-browser` on `PATH`, because what has to be
+wrapper directly with a stub `lemma-ensure-display` on `PATH`, because what has to be
 right is the decision -- when to bootstrap, and just as importantly when not to.
 """
 
@@ -67,15 +67,15 @@ SCRIPT = Path(__file__).resolve().parents[2] / "sandbox-images/scripts/lemma-nod
 def _workspace(
     tmp_path: Path, *, config: bool, display: bool, stale_socket: bool = False
 ) -> dict[str, str]:
-    """A sandbox in a given state, with `start-browser` stubbed to leave a mark."""
+    """A sandbox in a given state, with `lemma-ensure-display` stubbed to leave a mark."""
     binaries = tmp_path / "bin"
     binaries.mkdir()
-    marker = tmp_path / "start-browser-ran"
-    start_browser = binaries / "start-browser"
-    start_browser.write_text(
+    marker = tmp_path / "lemma-ensure-display-ran"
+    ensure_display = binaries / "lemma-ensure-display"
+    ensure_display.write_text(
         f'#!/bin/sh\necho "$LEMMA_BROWSER_BOOTSTRAP" > "{marker}"\n'
     )
-    start_browser.chmod(0o755)
+    ensure_display.chmod(0o755)
 
     # The entrypoint the wrapper execs. Present so the wrapper reaches its own
     # exit rather than the "not installed" path, and echoing its arguments so a
@@ -206,7 +206,7 @@ def test_a_socket_left_by_a_dead_x_server_does_not_count_as_a_display(
     which pauses without quiescing and keeps `/tmp`. The process does not.
 
     Reading that file as "a display is up" meant this returned early and
-    `start-browser` -- the one thing that would have started Xvfb -- was never
+    `lemma-ensure-display` -- the one thing that would have started Xvfb -- was never
     called, so every browser command in the sandbox failed with "Missing X
     server or $DISPLAY" for the life of the container, with nothing inside able
     to clear it. The test above passed throughout, because it built its "already
@@ -230,8 +230,8 @@ def test_version_never_starts_an_x_server(tmp_path: Path) -> None:
     assert result.returncode == 0
 
 
-def test_start_browser_own_calls_do_not_recurse(tmp_path: Path) -> None:
-    """`start-browser` runs `agent-browser` itself; without the guard that is a
+def test_ensure_display_own_calls_do_not_recurse(tmp_path: Path) -> None:
+    """`lemma-ensure-display` runs `agent-browser` itself; without the guard that is a
     fork bomb rather than a bootstrap."""
     environment = _workspace(tmp_path, config=False, display=False)
     environment["LEMMA_BROWSER_BOOTSTRAP"] = "1"

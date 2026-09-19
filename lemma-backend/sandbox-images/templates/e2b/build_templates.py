@@ -225,8 +225,8 @@ def workspace_template():
             mode=0o755,
         )
         .copy(
-            "lemma-backend/sandbox-images/scripts/start-browser.sh",
-            "/usr/local/bin/start-browser",
+            "lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh",
+            "/usr/local/bin/lemma-ensure-display",
             mode=0o755,
         )
         .copy(

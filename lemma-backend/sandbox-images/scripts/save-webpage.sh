@@ -114,7 +114,7 @@ trap close_capture_tab EXIT
 if [[ "$OPEN_PAGE" == "1" ]]; then
   # Brings up the daemon, Xvfb and the dashboard if they are not up yet,
   # without navigating the caller's active tab.
-  start-browser >/dev/null
+  lemma-ensure-display >/dev/null
   CAPTURE_TAB="lemma-capture-$$"
   agent-browser tab new --label "$CAPTURE_TAB" "$URL" >/dev/null
   # Bounded, because networkidle is a condition an ad-funded page never

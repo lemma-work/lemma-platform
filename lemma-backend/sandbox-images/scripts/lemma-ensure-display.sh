@@ -44,30 +44,19 @@ export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-workspace}"
 unset AGENT_BROWSER_SESSION_NAME
 
 mkdir -p "$PROFILE_DIR" /tmp/.X11-unix
-# Only when they are actually stale, which means: nothing is using this
-# profile. These four files exist to say "a browser owns this directory", so
-# deleting them while one does is not cleanup, it is losing the browser.
+# No lock-file cleanup here, and none in quiesce either.
 #
-# This was unconditional, and harmless while the profile lived in /tmp and
-# this script ran once per sandbox with nothing up. The profile is durable
-# now and this script is the "make the browser work" entry point, called
-# again on every take-control, every sign-in and every relay health start --
-# and the rest of it is idempotent by `pgrep`, so a second run skips Xvfb,
-# skips x11vnc, and leaves the existing Chrome alone. Chrome writes
-# `DevToolsActivePort` only at startup, so that second run deleted the one
-# record of which port the live browser is on and nothing rewrote it.
-# `live_port` then reported "the browser is not running" -- close code 4409,
-# "The browser is not running" in the pane -- about a browser that was up
-# the whole time, for as long as the sandbox lived.
-if pgrep -f -- "--user-data-dir=${PROFILE_DIR}" >/dev/null 2>&1; then
-  echo "[start-browser] a browser already owns ${PROFILE_DIR}; keeping its lock files"
-else
-  rm -f \
-    "$PROFILE_DIR/SingletonCookie" \
-    "$PROFILE_DIR/SingletonLock" \
-    "$PROFILE_DIR/SingletonSocket" \
-    "$PROFILE_DIR/DevToolsActivePort"
-fi
+# This removed `SingletonCookie`, `SingletonLock`, `SingletonSocket` and
+# `DevToolsActivePort` before every launch, on the theory that a file naming
+# a dead process would stop the next Chrome starting. Measured on a real
+# sandbox instead: `kill -9` the browser, leave all four behind, and
+# `agent-browser open` starts one and rewrites them, because Chrome checks
+# whether the pid a lock names is still alive.
+#
+# It was never free, either. `DevToolsActivePort` is the only record of a
+# running browser's port, and this script is idempotent by `pgrep` -- a
+# second run leaves the existing Chrome alone -- so deleting it here left a
+# browser that nothing could find, for as long as the sandbox lived.
 # `--disable-blink-features=AutomationControlled` is the one that matters for
 # the journey this feature exists for. Chrome otherwise sets
 # `navigator.webdriver` and turns on the AutomationControlled blink feature,
@@ -174,7 +163,7 @@ if ! pgrep -f "Xvfb ${DISPLAY_VALUE} " >/dev/null 2>&1; then
   # This script is usually reached from an `exec_command` the backend makes, and
   # an exec's process group is torn down when the operation that owns it
   # finishes. `nohup` blocks SIGHUP; it does nothing about the group being
-  # killed. So a merely-backgrounded Xvfb dies moments after start-browser
+  # killed. So a merely-backgrounded Xvfb dies moments after lemma-ensure-display
   # returns "done", and the *next* command in the same sandbox reports "Missing
   # X server or $DISPLAY" -- which reads like a broken image rather than like a
   # server that was killed for being in the wrong process group.
@@ -307,7 +296,7 @@ if [ "$START_SCREEN" != "$SCREEN" ] && command -v set-display-size >/dev/null 2>
   start_h="${start_rest%%x*}"
   if ! DISPLAY="$DISPLAY_VALUE" set-display-size "$start_w" "$start_h" \
     >/tmp/lemma-initial-size.log 2>&1; then
-    echo "[start-browser] could not size the display to ${start_w}x${start_h}" >&2
+    echo "[lemma-ensure-display] could not size the display to ${start_w}x${start_h}" >&2
   fi
 fi
 

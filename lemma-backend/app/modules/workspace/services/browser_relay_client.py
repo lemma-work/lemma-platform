@@ -195,11 +195,25 @@ class BrowserRelayClient:
         return str(response.json().get("chrome", "stopped"))
 
     async def ensure_running(self) -> None:
-        """Start the relay process, and wait for it to answer.
+        """Bring up everything a viewer needs, and wait for it to answer.
 
         Started on demand rather than with the sandbox because it is only
         wanted by somebody looking at a browser, and a workspace that never
-        opens a page should not carry the process.
+        opens a page should not carry Xvfb, x11vnc, websockify and a relay
+        for the life of the container.
+
+        `lemma-ensure-display` rather than the relay's own start script: the
+        relay answering has never meant a viewer would get a picture. That
+        is `x11vnc` in front of Xvfb with `websockify` in front of it, none
+        of which is the relay, and all of which used to arrive as a side
+        effect of whatever browser command happened to run first. So a
+        viewer's own path asks for them, and the wait below is not satisfied
+        until the relay says they are listening -- which is how a display
+        that failed to come up reports itself as that, rather than as "the
+        browser is not running".
+
+        Idempotent throughout: every piece is guarded by a `pgrep`, so this
+        is a check on a warm sandbox and a start on a cold one.
         """
         from uuid import uuid4
 
@@ -210,7 +224,7 @@ class BrowserRelayClient:
             self._instance,
             StartProcessRequest(
                 operation_id=uuid4(),
-                shell_command="start-browser-relay",
+                shell_command="lemma-ensure-display",
                 argv=None,
                 cwd=WORKSPACE_ROOT,
                 environment=(),
@@ -222,13 +236,29 @@ class BrowserRelayClient:
         )
 
         # uvicorn binds in well under a second; this bound is for a container
-        # still finding its feet, not for a healthy start.
-        for _ in range(40):
+        # still finding its feet, not for a healthy start. Xvfb and x11vnc
+        # are slower on a cold E2B sandbox, which is what the second half of
+        # this budget is for.
+        answered = False
+        for _ in range(80):
             await asyncio.sleep(0.25)
             with suppress(BrowserRelayUnavailable):
                 response = await self._request("GET", "/health")
-                if response.status_code == 200:
+                if response.status_code != 200:
+                    continue
+                answered = True
+                body = response.json()
+                vnc = body.get("vnc") if isinstance(body, dict) else None
+                # `None` is an older image's relay, which reports no `vnc` at
+                # all. Taking its silence as failure would wait out the whole
+                # budget and then refuse a sandbox that works.
+                if vnc != "down":
                     return
+        if answered:
+            raise BrowserRelayUnavailable(
+                "the display came up but nothing is serving it: "
+                "x11vnc or websockify did not start"
+            )
         raise BrowserRelayUnavailable("the browser relay did not start")
 
     async def ensure_browser(

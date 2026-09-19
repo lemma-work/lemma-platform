@@ -23,6 +23,7 @@ handed a fresh one without restarting anything.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from contextlib import suppress
 import hmac
 import logging
@@ -249,19 +250,46 @@ def _session_name(session: str | None, domain: str | None) -> str:
 def create_app() -> FastAPI:
     app = FastAPI(title="Lemma browser relay", docs_url=None, redoc_url=None)
 
+    async def _vnc_is_listening() -> bool:
+        """Whether websockify is accepting connections on its port.
+
+        The picture is `x11vnc` in front of Xvfb with `websockify` in front
+        of that, and none of it is this process -- so "the relay answered"
+        has never meant "a viewer will get a picture". Probing the socket is
+        the only thing that does.
+        """
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", VNC_WS_PORT), timeout=2.0
+            )
+        except OSError, asyncio.TimeoutError:
+            return False
+        writer.close()
+        with contextlib.suppress(OSError):
+            await writer.wait_closed()
+        return True
+
     @app.get("/health")
     async def health() -> dict:
-        """Whether Chrome is up, without starting it.
+        """Whether Chrome is up, and whether a viewer could see it.
 
         A paused or idle workspace has no browser, and that is its resting
         state rather than a fault -- so this reports it as one and never
         conjures a browser to answer a health check.
+
+        `vnc` is separate from `chrome` because they fail separately and the
+        remedies differ. A viewer that could not get a picture used to close
+        with 4409, "the browser is not running", which was the same answer
+        for a browser that was down, a display that never came up, and a
+        websockify that had died -- three faults, one sentence, and no way
+        to tell them apart from outside the sandbox.
         """
+        vnc = "listening" if await _vnc_is_listening() else "down"
         try:
             await live_port()
         except BrowserNotRunning:
-            return {"chrome": "stopped"}
-        return {"chrome": "running"}
+            return {"chrome": "stopped", "vnc": vnc}
+        return {"chrome": "running", "vnc": vnc}
 
     @app.get("/targets", dependencies=[Depends(require_token)])
     async def targets(
