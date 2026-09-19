@@ -112,7 +112,18 @@ CHROME_ARGS="--no-sandbox,--test-type,--disable-dev-shm-usage,--no-first-run,--n
 PROXY_DECISION_FILE="${LEMMA_BROWSER_PROXY_FILE:-/tmp/lemma-browser-policy/proxy}"
 BROWSER_PROXY=""
 if [ -r "$PROXY_DECISION_FILE" ]; then
-  IFS= read -r BROWSER_PROXY < "$PROXY_DECISION_FILE" || BROWSER_PROXY=""
+  # `|| true`, and never `|| BROWSER_PROXY=""`. `read` returns non-zero when
+  # it reaches end-of-file without a trailing newline -- and it has already
+  # assigned the line by then. The server writes the bare URL with no
+  # newline (`decision_bytes`), so that branch was taken on *every* delivered
+  # proxy and cleared it again: measured on the image, a decision file
+  # holding a real URL produced a `config.json` with no `proxy` key and a
+  # stamp of the empty string. The whole mechanism was inert.
+  #
+  # A genuinely empty file still reads as empty, which is the "the server
+  # says no proxy" case and has to stay distinguishable from the file being
+  # absent.
+  IFS= read -r BROWSER_PROXY < "$PROXY_DECISION_FILE" || true
 fi
 unset AGENT_BROWSER_PROXY
 if [ -n "$BROWSER_PROXY" ]; then

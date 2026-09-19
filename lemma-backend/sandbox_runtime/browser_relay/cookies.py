@@ -154,8 +154,21 @@ async def _page_socket(port: int) -> str:
     showing. Verified against a site with no tab open at all: cookies and
     local storage both went, and the site asked for a login again.
 
-    So this needs a page, any page, and Chrome always has one while it is
-    running: a fresh browser sits on `chrome://newtab/`.
+    So this needs a page, any page -- and what supplies one is now a
+    decision rather than an accident. This used to say "a fresh browser
+    sits on `chrome://newtab/`", which stopped being true when the cold
+    open was changed to `about:blank` and the new-tab page closed behind
+    it: `chrome://newtab/` brought a `one-google-bar` renderer, two
+    omnibox WebUI renderers and a request to Google from a signed-in
+    sandbox, for a page nobody asked for.
+
+    The `about:blank` opened at cold start is the anchor that replaces it,
+    and it is load-bearing for exactly this function. Measured on the
+    image after a cold `lemma-ensure-display`: one page target, `about:blank`,
+    and no new-tab page. `BrowserNotRunning` below is still raised rather
+    than assumed away, because a browser with no page at all is reachable
+    -- someone closing the last tab -- and a wrong endpoint here silently
+    clears nothing.
     """
     found = await page_targets(port=port)
     if not found:

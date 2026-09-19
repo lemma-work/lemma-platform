@@ -270,6 +270,32 @@ class TestTheProxyIsTheServersDecision:
         assert "proxy" not in config
         assert "stale.test" not in Path(environment["AGENT_BROWSER_CONFIG"]).read_text()
 
+    def test_a_decision_written_the_way_the_server_writes_it_reaches_the_config(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """No trailing newline -- and this is not a nicety, it is the bug.
+
+        `browser_proxy.decision_bytes` returns the bare URL, unterminated,
+        and that is what `write_file` puts in the sandbox. `read` returns
+        non-zero when it reaches end-of-file without a newline, *after*
+        assigning the line, and the script cleared the variable on that
+        branch. So the branch was taken on every proxy the server ever
+        delivered: measured on the image, a decision file holding a real URL
+        produced a `config.json` with no `proxy` key and a stamp of the
+        empty string. The mechanism was inert in production.
+
+        Every other case in this class writes `"...\n"`, which is why none
+        of them caught it -- the test wrote the file in a shape the thing
+        that really writes it never produces.
+        """
+        environment, _ = _workspace(tmp_path, browser_live=False, vnc_port=vnc_port)
+        Path(environment["LEMMA_BROWSER_PROXY_FILE"]).write_bytes(
+            b"http://user:pw@proxy.test:8080"
+        )
+
+        assert _run(environment).returncode == 0
+        assert self._config(environment)["proxy"] == "http://user:pw@proxy.test:8080"
+
     def test_the_config_is_not_world_readable_when_it_holds_a_credential(
         self, tmp_path: Path, vnc_port: int
     ) -> None:
