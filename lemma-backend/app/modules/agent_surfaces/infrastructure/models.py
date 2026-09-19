@@ -58,20 +58,14 @@ class AgentSurface(UUIDAuditBase):
     __tablename__ = "agent_surfaces"
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_agent_surface_pod_name"),
-        # One pooled WhatsApp number per agent. Mirrors migration 0040; declared
+        # One agent reaches a platform in exactly one place: one Slack app, one
+        # WhatsApp number, one Telegram bot. Mirrors migration 0040; declared
         # here too so a schema built from metadata carries the same guarantee,
-        # and so autogenerate does not emit a DROP for an index it cannot see.
-        # Partial rather than a plain unique on (agent_id, surface_type): one
-        # agent may legitimately hold several SYSTEM Slack surfaces in different
-        # workspaces, and a system bot alongside a customer's own bot. Neither
-        # spends a pooled number twice, which is the only thing at stake here.
-        Index(
-            "uq_agent_pooled_whatsapp_number",
-            "agent_id",
-            unique=True,
-            postgresql_where=text(
-                "surface_type = 'WHATSAPP' AND credential_mode = 'SYSTEM'"
-            ),
+        # and so autogenerate does not emit a DROP for a constraint it cannot
+        # see. The WhatsApp numbers come from a pool and each surface takes one,
+        # so without this an agent could quietly hold two of a scarce thing.
+        UniqueConstraint(
+            "agent_id", "surface_type", name="uq_agent_surface_agent_type"
         ),
         # Mirrors migration 0016. Declared here too so a schema built from
         # metadata (tests, a fresh non-Alembic environment) carries the same

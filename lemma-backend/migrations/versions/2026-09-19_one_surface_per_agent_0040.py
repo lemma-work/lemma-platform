@@ -1,25 +1,21 @@
-"""One pooled number per agent.
+"""One surface per agent per platform.
 
-The WhatsApp numbers are about to come from a pool -- a handful at first, more
-later -- and each surface that uses one takes one. Nothing stopped a single
-agent from holding two of those surfaces and quietly taking two numbers out of
-a scarce pool, so this makes "one agent, one pooled number" something the
-database keeps rather than something the allocation code has to remember.
+An agent reaches a platform in exactly one place: one Slack app, one WhatsApp
+number, one Telegram bot. Nothing said so before, and the rule that was enforced
+is a different one -- a connected account or Lemma-managed identity is claimable
+once per organization -- which happens to permit an agent holding several.
 
-Deliberately narrower than "one surface per agent per platform", which is what
-it looks like it should be. That broader rule contradicts two arrangements the
-product already supports and tests:
+It matters most for WhatsApp, where the numbers are about to come from a small
+pool and each surface takes one: without this an agent could quietly hold two
+of a scarce thing. It is the same rule everywhere else because the reason is the
+same everywhere else -- two doors onto one platform for one agent is an
+ambiguity, not a feature, and whoever is on the other side has no way to tell
+which one they are talking to.
 
-- One agent can be reachable in **several Slack workspaces**, as SYSTEM
-  surfaces that differ only by `external_workspace_id`; routing narrows by team
-  id (`test_slack_workspace_narrowing_e2e`).
-- One agent can hold a **system bot and a customer's own bot** on the same
-  platform at once, and their threads are kept apart on purpose
-  (`test_custom_bot_scope_and_system_bot_threads_do_not_cross`).
-
-Neither of those spends a pooled number twice, so neither is what the pool
-needs protecting from. A CUSTOM WhatsApp surface is the customer's own number
-and is excluded for the same reason.
+Two arrangements in the tree predate this rule and are being changed to match
+it rather than exempted: surfaces for several Slack workspaces, and a system bot
+running beside a customer's own bot. Both stay possible across *different*
+agents, which is where they belong.
 
 Revision ID: 0040_one_surface_per_agent
 Revises: 0039_chat_onboarding
@@ -33,8 +29,7 @@ down_revision = "0039_chat_onboarding"
 branch_labels = None
 depends_on = None
 
-_INDEX = "uq_agent_pooled_whatsapp_number"
-_SCOPE = "surface_type = 'WHATSAPP' AND credential_mode = 'SYSTEM'"
+_CONSTRAINT = "uq_agent_surface_agent_type"
 
 
 def upgrade() -> None:
@@ -45,32 +40,29 @@ def upgrade() -> None:
         op.get_bind()
         .execute(
             sa.text(
-                "SELECT agent_id, count(*) AS rows FROM agent_surfaces "
-                f"WHERE {_SCOPE} GROUP BY agent_id HAVING count(*) > 1 "
-                "ORDER BY rows DESC"
+                "SELECT agent_id, surface_type, count(*) AS rows "
+                "FROM agent_surfaces GROUP BY agent_id, surface_type "
+                "HAVING count(*) > 1 ORDER BY rows DESC"
             )
         )
         .fetchall()
     )
     if offenders:
         listed = ", ".join(
-            f"agent {row.agent_id} holds {row.rows}" for row in offenders[:10]
+            f"agent {row.agent_id} holds {row.rows} {row.surface_type} surfaces"
+            for row in offenders[:10]
         )
         raise RuntimeError(
-            "Cannot enforce one pooled WhatsApp number per agent while "
+            "Cannot enforce one surface per agent per platform while "
             f"duplicates exist: {listed}"
             + (f" (and {len(offenders) - 10} more)" if len(offenders) > 10 else "")
             + ". Delete the surfaces that should not have been created, then "
             "run this migration again."
         )
-    op.create_index(
-        _INDEX,
-        "agent_surfaces",
-        ["agent_id"],
-        unique=True,
-        postgresql_where=sa.text(_SCOPE),
+    op.create_unique_constraint(
+        _CONSTRAINT, "agent_surfaces", ["agent_id", "surface_type"]
     )
 
 
 def downgrade() -> None:
-    op.drop_index(_INDEX, table_name="agent_surfaces")
+    op.drop_constraint(_CONSTRAINT, "agent_surfaces", type_="unique")

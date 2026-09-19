@@ -43,17 +43,43 @@ class _Uow:
         self.session = session
 
 
+async def _sibling_agent(db_session, template_id):
+    """Another agent in the same pod, taking its pod and owner from that one.
+
+    An agent holds one surface per platform, so several Slack surfaces means
+    several agents. A plain `USER` agent rather than a copy of the template:
+    the template is the pod default, and `ck_agents_pod_default_is_pod_id`
+    requires that one's id to *be* the pod id, so there can only ever be the
+    one of it.
+    """
+    template = await db_session.get(AgentModel, template_id)
+    sibling = AgentModel(
+        id=uuid7(),
+        pod_id=template.pod_id,
+        user_id=template.user_id,
+        name=f"agent-{uuid4().hex[:8]}",
+        visibility=template.visibility,
+        instruction="",
+        toolsets=[],
+        kind="USER",
+    )
+    db_session.add(sibling)
+    await db_session.commit()
+    return sibling.id
+
+
 async def _slack_surface(db_session, pod_id, agent_id, *, workspace: str | None):
-    """Insert one ACTIVE Slack surface directly.
+    """Insert one ACTIVE Slack surface directly, on an agent of its own.
 
     Through the model rather than the API because creating a Slack surface there
     needs a wired platform and credentials, none of which this question involves:
-    what is under test is which rows a `team_id` selects.
+    what is under test is which rows a `team_id` selects, and that does not
+    depend on who owns them.
     """
     surface = AgentSurface(
         id=uuid7(),
         pod_id=UUID(str(pod_id)),
-        agent_id=agent_id,
+        agent_id=await _sibling_agent(db_session, agent_id),
         name=f"slack-{uuid4().hex[:8]}",
         surface_type=SurfacePlatform.SLACK.value,
         mode="DM",
