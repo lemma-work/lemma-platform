@@ -394,16 +394,21 @@ function PodConversationSurface({
                     one: compute is released after fifteen minutes idle but the
                     files outlive it, so hiding this when the machine sleeps
                     would take the affordance away exactly when somebody comes
-                    back to look at what the agent made. */}
-                {isRouteConversationSelected && !isNewConversation ? (
+                    back to look at what the agent made.
+
+                    Gone while the panel is open, because the panel's own
+                    header carries the close. Two controls for one thing, a
+                    few hundred pixels apart and drawn differently -- a
+                    pressed icon here, an ✕ there -- is one more than the
+                    question deserves. */}
+                {isRouteConversationSelected && !isNewConversation && !isComputerOpen ? (
                     <Button
                         type="button"
                         variant="quiet"
                         size="icon"
-                        onClick={() => setComputerOpen(!isComputerOpen)}
-                        aria-pressed={isComputerOpen}
-                        aria-label={isComputerOpen ? 'Hide your computer' : 'Show your computer'}
-                        title={isComputerOpen ? 'Hide your computer' : 'Show your computer'}
+                        onClick={() => setComputerOpen(true)}
+                        aria-label="Show your computer"
+                        title="Show your computer"
                         className="absolute right-3 top-2 z-10 size-8"
                     >
                         <Monitor className="size-4" />

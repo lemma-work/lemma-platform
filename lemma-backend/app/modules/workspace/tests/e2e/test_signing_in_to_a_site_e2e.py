@@ -275,12 +275,43 @@ async def test_a_person_signs_in_once_and_the_next_run_does_not_ask(
         )
         assert finished.working is True
 
-        # 5. The load-bearing one. Kill Chrome outright -- which is what the
-        #    memory guard does, and near enough what an idle retirement and a
-        #    suspend do -- and the login survives, because it is in a profile
-        #    on the durable disk rather than in a capture somebody has to
-        #    read back correctly.
-        await _run(ctx, "pkill -x Xvfb || true ; pkill -f workspace-chrome || true")
+        # 5. The load-bearing one. End the browser the way production ends
+        #    it, and the login survives -- because it is in a profile on the
+        #    durable disk rather than in a capture somebody has to read back
+        #    correctly.
+        #
+        #    "The way production ends it" is doing the work, and it took
+        #    three measurements on a real sandbox to get right. Chrome
+        #    batches its cookie store to disk on a 30 second timer, so how
+        #    the browser stops decides whether a login made a second ago is
+        #    still there:
+        #
+        #        agent-browser close --all   keeps it
+        #        SIGTERM to all 11 processes loses it
+        #        SIGTERM to the browser process alone, exiting cleanly in
+        #                                    half a second -- loses it
+        #        SIGKILL                     loses it
+        #
+        #    A signal does not flush the queue; a shutdown through CDP does.
+        #    So every path that stops this browser closes it first --
+        #    `shed_browser` before it signals, and an E2B release before it
+        #    pauses -- and this asserts the guarantee that is actually
+        #    shipped rather than one that sounded right.
+        #
+        #    Then Xvfb, to prove the display is rebuilt too: `agent-browser`
+        #    brings its own back, which is why nothing here runs
+        #    `start-browser` to recover.
+        closed = await _run(ctx, "agent-browser close --all ; pkill -x Xvfb || true")
+        assert "Closed" in (closed.stdout or ""), closed.stdout
+
+        # Diagnose before asserting. `already_signed_in` answers one bool for
+        # two very different failures -- the cookie went, or the browser did
+        # not come back -- and the bool alone sent this round three wrong
+        # fixes.
+        reopened = await _run(
+            ctx, f"agent-browser open {SITE}/ && agent-browser get title", timeout=240
+        )
+        assert "Account" in (reopened.stdout or ""), reopened.stdout
         assert await service.already_signed_in(origin=SITE, auth_ctx=auth)
 
         # 6. Forgetting it really signs the browser out, over the route the

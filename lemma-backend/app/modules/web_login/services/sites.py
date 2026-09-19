@@ -89,3 +89,28 @@ def page_looks_like_a_login_wall(text: str) -> bool:
 
 
 __all__ = ["page_looks_like_a_login_wall", "same_site", "site_of"]
+
+
+def site_from_origin(origin: str) -> str:
+    """The site an origin belongs to, as the cookie list names it.
+
+    An origin carries a scheme and often a port; a cookie's domain carries
+    neither. Both have to reduce to the same string or forgetting a site
+    matches none of its cookies -- which is exactly what happened for
+    `http://127.0.0.1:18099`: `site_of` is empty for a bare IP, the caller
+    fell back to the whole origin, and `same_site("127.0.0.1", "http://
+    127.0.0.1:18099")` is false. The delete reported "nothing to forget"
+    about a site the browser was plainly signed in to.
+
+    The port goes because a cookie is not scoped by port -- one is set for a
+    host and every port on it sees it -- so `:18099` names nothing a person
+    could forget separately.
+    """
+    host = origin.split("://", 1)[-1].split("/", 1)[0].strip().lower()
+    if host.startswith("["):
+        # IPv6 literal: the brackets hold the colons that are part of the
+        # address rather than a port separator.
+        host = host.partition("]")[0].lstrip("[")
+    elif host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return site_of(host) or host

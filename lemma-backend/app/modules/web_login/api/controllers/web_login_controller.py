@@ -31,7 +31,11 @@ from pydantic import BaseModel, Field
 from app.core.api.dependencies import CurrentUser
 from app.core.log.log import get_logger
 from app.modules.web_login.services.origin import InvalidOrigin, normalize_origin
-from app.modules.web_login.services.sites import same_site, site_of
+from app.modules.web_login.services.sites import (
+    same_site,
+    site_from_origin,
+    site_of,
+)
 from app.modules.workspace.contracts.browser import ProfileCookie
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
@@ -203,7 +207,7 @@ async def forget_web_login(
     origin: str = Query(description="The site to forget, as an origin or a host."),
 ) -> ForgetResponse:
     try:
-        site = site_of(normalize_origin(origin).split("://", 1)[-1]) or origin
+        site = site_from_origin(normalize_origin(origin))
     except InvalidOrigin as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)

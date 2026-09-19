@@ -11,12 +11,37 @@ from pathlib import Path
 
 import pytest
 
+from sandbox_runtime.paths import BROWSER_PROFILE
 from sandbox_runtime.workspace import browser_guard
 from sandbox_runtime.workspace.browser_guard import (
     LOW_MEMORY_MB,
     available_memory_mb,
     shed_browser_if_starved,
 )
+
+
+def _write_proc(monkeypatch, tmp_path: Path, processes: dict[int, str]) -> None:
+    """A fake /proc holding exactly these command lines.
+
+    `browser_process_ids` reads the real one, and a test that asserted on
+    that would depend on whatever the developer running it has open.
+    """
+    for process_id, command in processes.items():
+        entry = tmp_path / str(process_id)
+        entry.mkdir()
+        (entry / "cmdline").write_bytes(command.replace(" ", "\0").encode())
+
+    real = browser_guard.Path
+
+    def _path(argument):
+        text = str(argument)
+        if text == "/proc":
+            return tmp_path
+        if text.startswith("/proc/"):
+            return tmp_path / text[len("/proc/") :]
+        return real(argument)
+
+    monkeypatch.setattr(browser_guard, "Path", _path)
 
 
 def _meminfo(available_kb: int) -> str:
@@ -131,6 +156,7 @@ class _Signals:
 
     def __init__(self, *, dies_on_term: bool) -> None:
         self.sent: list[tuple[int, int]] = []
+        self.closed: list[int] = []
         self.alive = {101, 102, 103}
         self._dies_on_term = dies_on_term
 
@@ -152,6 +178,12 @@ class _Signals:
 def signals(monkeypatch):
     def _install(*, dies_on_term: bool) -> _Signals:
         table = _Signals(dies_on_term=dies_on_term)
+        # No real CLI in a unit test. What the close *achieves* is measured
+        # on a sandbox, not here; what matters here is that it is attempted
+        # before anything is signalled.
+        monkeypatch.setattr(
+            browser_guard, "_close_through_the_daemon", lambda: table.closed.append(1)
+        )
         monkeypatch.setattr(browser_guard.os, "kill", table.kill)
         monkeypatch.setattr(
             browser_guard, "browser_process_ids", lambda: tuple(sorted(table.alive))
@@ -163,16 +195,21 @@ def signals(monkeypatch):
 
 
 def test_the_browser_is_asked_before_it_is_killed(signals) -> None:
-    """Measured, not assumed: Chrome's cookie store batches to disk on a 30
-    second timer, so a SIGKILL two seconds after somebody signs in to a site
-    loses the session outright. A graceful exit commits it. This mattered
-    less when the profile was scratch in `/tmp`; it is the durable store
-    now."""
+    """Measured, not assumed, and the measurement corrected an earlier guess.
+
+    Chrome batches cookies to disk on a 30 second timer, so a kill seconds
+    after somebody signs in loses the session. A *signal* does not flush the
+    queue -- not SIGTERM to all eleven processes and not SIGTERM to the
+    browser process alone, even exiting cleanly in half a second. Only the
+    daemon's own close does. So the close comes first and the signals are
+    the fallback for when it cannot run."""
     import signal as _signal
 
     table = signals(dies_on_term=True)
 
     assert browser_guard.shed_browser() == 3
+
+    assert table.closed, "the daemon's close is the only step that flushes"
 
     assert {number for _, number in table.sent} == {_signal.SIGTERM}
     assert not table.alive
@@ -192,3 +229,42 @@ def test_a_browser_that_will_not_go_is_killed_anyway(signals) -> None:
     assert (101, _signal.SIGTERM) in table.sent
     assert (101, _signal.SIGKILL) in table.sent
     assert not table.alive
+
+
+def test_the_browser_this_sandbox_actually_runs_is_matched(
+    monkeypatch, tmp_path
+) -> None:
+    """The guard has to match Chromium as this image launches it.
+
+    Counted on a real sandbox: 14 Chromium processes, 13 matched by nothing
+    in the pattern list. `agent-browser`, `workspace-chrome` and
+    `.agent-browser/browsers/` were written when agent-browser installed its
+    own Chromium and the image launched it through a wrapper; the image uses
+    Debian's chromium now, and a launched process reports
+    `/usr/lib/chromium/chromium`, which carries none of them. So this guard
+    was shedding the display and the daemon and leaving every process that
+    held the memory -- which is the one thing it exists to do.
+    """
+    launched = (
+        "/usr/lib/chromium/chromium --type=renderer --crashpad-handler-pid=690 "
+        f"--user-data-dir={BROWSER_PROFILE} --enable-crash-reporter"
+    )
+    _write_proc(monkeypatch, tmp_path, {4242: launched})
+
+    assert browser_guard.browser_process_ids() == (4242,)
+
+
+def test_an_agents_own_headless_chromium_is_left_alone(monkeypatch, tmp_path) -> None:
+    """Matching on the profile rather than on "chrome" is what keeps this
+    true, and it is why the profile path is the right pattern: an agent
+    building a frame-capture harness runs its own `chromium --headless=new`,
+    which takes Chromium's default user-data-dir. That is the agent's work,
+    not this sandbox's browser, and the module's whole rule is that only the
+    browser is ever touched."""
+    theirs = (
+        "/usr/lib/chromium/chromium --headless=new --no-sandbox "
+        "--remote-debugging-port=9333 --window-size=1920,1080"
+    )
+    _write_proc(monkeypatch, tmp_path, {4243: theirs})
+
+    assert browser_guard.browser_process_ids() == ()

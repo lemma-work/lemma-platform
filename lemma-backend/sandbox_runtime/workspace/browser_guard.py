@@ -33,7 +33,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import signal
+import subprocess
 import time
+
+from sandbox_runtime.paths import BROWSER_PROFILE
 
 # Below this, the sandbox is close enough to unusable that a browser is no
 # longer worth what it costs. Chosen from measurement rather than taste: a
@@ -44,14 +47,30 @@ import time
 # 19 MB, 21 MB available -- are all far below it.
 LOW_MEMORY_MB = 220
 
-# What the browser is, as processes. `workspace-chrome` is the wrapper the
-# image installs; the renderers exec the real binary out of the agent-browser
-# profile directory, so they are matched on that path rather than on "chrome",
-# which would also catch an agent's own chromium script.
+# What the browser is, as processes.
+#
+# The profile path is the one that matters, and it was missing. The other
+# three were written when agent-browser installed its own Chromium under
+# `~/.agent-browser/browsers/` and the image launched it through a
+# `workspace-chrome` wrapper -- so the browser's processes carried one of
+# those strings. The image points `AGENT_BROWSER_EXECUTABLE_PATH` at Debian's
+# chromium now, and a launched process reports `/usr/lib/chromium/chromium`,
+# which carries neither. Counted on a real sandbox: 14 Chromium processes, 13
+# of them matched by nothing here. This guard exists because a research
+# session reached "63 Chrome processes at 2123 MB", and it was shedding the
+# display and the daemon while leaving every process holding the memory.
+#
+# `--user-data-dir=<profile>` fixes that and is *more* precise than matching
+# "chrome" would be, which the note above rightly warned against: it names
+# this sandbox's own browser and cannot catch an agent's own headless
+# chromium, which gets Chromium's default profile directory rather than this
+# one. The three legacy patterns stay for an image that still launches that
+# way.
 _BROWSER_PATTERNS = (
     "agent-browser",
     "workspace-chrome",
     ".agent-browser/browsers/",
+    f"--user-data-dir={BROWSER_PROFILE}",
     "Xvfb",
 )
 
@@ -106,10 +125,45 @@ def browser_process_ids() -> tuple[int, ...]:
 #: Short, because this runs in a sandbox that is already starved and the old
 #: argument against asking Chrome to do anything at all still stands: teardown
 #: in a machine with no memory to run it in is how a shutdown becomes a hang.
-#: A deadline answers that without giving up the flush -- the worst case is
-#: three seconds more in a state that is already bad, and the SIGKILL still
+#: A deadline answers that without giving up the flush -- the worst case is a
+#: few seconds more in a state that is already bad, and the SIGKILL still
 #: arrives.
 _GRACEFUL_SECONDS = 3.0
+
+#: How long the daemon's own close gets. Longer than the signal deadline
+#: because it is the only thing measured to actually flush the cookie store,
+#: and it is one process spawn rather than a teardown.
+_CLOSE_SECONDS = 8.0
+
+#: The CLI that owns the browser's lifecycle.
+_AGENT_BROWSER = "/usr/local/bin/agent-browser"
+
+
+def _close_through_the_daemon() -> bool:
+    """Ask agent-browser to close the browser. True if it said it did.
+
+    This is the only stop measured to commit Chrome's cookie store. On a real
+    sandbox, with a login made one second earlier: `close --all` keeps it, and
+    SIGTERM does not -- neither to every Chrome process nor to the browser
+    process alone, even when it exits cleanly in half a second. Chrome batches
+    cookies to disk on a 30 second timer and a signal does not flush the
+    queue; a proper shutdown through CDP does.
+
+    Best effort by construction. The caller is usually the low-memory guard,
+    and a sandbox with no memory may not be able to spawn a Node CLI at all --
+    which is exactly the case the signals below exist for.
+    """
+    try:
+        done = subprocess.run(  # noqa: S603
+            [_AGENT_BROWSER, "close", "--all"],
+            capture_output=True,
+            timeout=_CLOSE_SECONDS,
+            check=False,
+        )
+    except OSError, subprocess.SubprocessError:
+        return False
+    return done.returncode == 0
+
 
 #: How often to look while waiting. Cheap: one `kill(pid, 0)` per process.
 _POLL_SECONDS = 0.1
@@ -142,21 +196,28 @@ def _still_alive(process_ids: tuple[int, ...]) -> tuple[int, ...]:
 def shed_browser(*, graceful_seconds: float = _GRACEFUL_SECONDS) -> int:
     """End the browser. Returns how many processes were signalled.
 
-    SIGTERM first, then SIGKILL for whatever is left after
-    `graceful_seconds`. This used to be SIGKILL alone, on the reasoning that
-    there was nothing to flush -- true when the profile lived in `/tmp` and
-    was scratch, and false now that it is the durable store a person's logins
-    are kept in.
+    Three steps, in order of how much they are worth and how likely they are
+    to work: ask the daemon to close the browser, then SIGTERM, then SIGKILL
+    whatever is left after `graceful_seconds`.
 
-    The difference was measured rather than argued, on a real E2B sandbox:
-    Chrome's cookie store batches to disk on a 30 second timer, so a SIGKILL
-    two seconds after signing in to a site lost the session outright, while
-    the same kill forty seconds later kept it. A graceful exit commits the
-    store, which is the whole reason to ask before insisting.
+    This used to be SIGKILL alone, on the reasoning that there was nothing to
+    flush -- true when the profile lived in `/tmp` and was scratch, false now
+    that it is the durable store a person's logins are kept in. Chrome
+    batches cookies to disk on a 30 second timer, so a kill seconds after
+    somebody signs in loses the session.
 
-    Bounded, because the caller is usually the low-memory guard and a
-    shutdown that hangs there would be worse than the cookie it saved.
+    The order is measured, not guessed, and the measurement corrected an
+    earlier guess of mine. On a real sandbox, one second after a login:
+    `agent-browser close --all` keeps it; SIGTERM does not -- neither to all
+    eleven Chrome processes nor to the browser process alone, even though it
+    exited cleanly in half a second. A signal does not flush the queue. So
+    the close is the step that matters and the signals are the fallback for
+    when it cannot run, which in a starved sandbox is a real case.
+
+    Bounded throughout, because the caller is usually the low-memory guard
+    and a shutdown that hangs there would be worse than the cookie it saved.
     """
+    _close_through_the_daemon()
     process_ids = browser_process_ids()
     signalled = _signal(process_ids, signal.SIGTERM)
     deadline = time.monotonic() + graceful_seconds

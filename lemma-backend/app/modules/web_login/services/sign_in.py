@@ -43,7 +43,7 @@ from app.modules.web_login.services.pauses import (
 from app.modules.web_login.services.resolution import resolve_owner
 from app.modules.web_login.services.sites import (
     page_looks_like_a_login_wall,
-    site_of,
+    site_from_origin,
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
@@ -277,8 +277,7 @@ class SignInService:
         save must not turn a sign-in that worked into one that did not. The
         person has already done the thing they were asked to do.
         """
-        host = site.split("://", 1)[-1].split("/", 1)[0]
-        registrable = site_of(host) or host
+        registrable = site_from_origin(site)
         try:
             await self._browser.mark_signed_in(owner, site=registrable)
         except _relay_unavailable(), SandboxCapabilityUnsupported, AttributeError:
