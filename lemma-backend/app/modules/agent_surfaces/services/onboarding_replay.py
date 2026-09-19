@@ -19,7 +19,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    PersonalDMRoute,
+    VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
@@ -67,8 +67,9 @@ async def replay_onboarding(
             )
             if state.installation_surface_id is not None:
                 route_id = await uow.session.scalar(
-                    select(PersonalDMRoute.id).where(
-                        PersonalDMRoute.binding_key == state.binding_key
+                    select(VerifiedSurfaceIdentity.id).where(
+                        VerifiedSurfaceIdentity.binding_key == state.binding_key,
+                        VerifiedSurfaceIdentity.pod_id.is_not(None),
                     )
                 )
                 if route_id is None:

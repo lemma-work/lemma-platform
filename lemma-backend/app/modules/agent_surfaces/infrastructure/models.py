@@ -2,7 +2,6 @@ from __future__ import annotations
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noqa: F401
     OnboardingInputToken,
     PendingChatOnboarding,
-    PersonalDMRoute,
     VerifiedSurfaceIdentity,
 )
 

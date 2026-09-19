@@ -19,7 +19,6 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.events import SurfaceOnboardingReadyEvent
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    PersonalDMRoute,
     VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
@@ -92,25 +91,12 @@ async def complete_onboarding_workspace(
         else:
             assert workspace.pod_id is not None and workspace.assistant_id is not None
             if transport.surface is not None:
-                route = await uow.session.scalar(
-                    select(PersonalDMRoute).where(
-                        PersonalDMRoute.binding_key == state.binding_key
-                    )
-                )
-                if route is None:
-                    route = PersonalDMRoute(
-                        binding_key=state.binding_key,
-                        installation_surface_id=transport.surface.id,
-                        user_id=user.id,
-                        pod_id=workspace.pod_id,
-                        assistant_id=workspace.assistant_id,
-                    )
-                    uow.session.add(route)
-                else:
-                    route.pod_id, route.assistant_id = (
-                        workspace.pod_id,
-                        workspace.assistant_id,
-                    )
+                # The destination goes on the identity, which is the row
+                # `identity` already is: one write, and nothing that can
+                # outlive a revocation.
+                identity.installation_surface_id = transport.surface.id
+                identity.pod_id = workspace.pod_id
+                identity.assistant_id = workspace.assistant_id
             else:
                 await _ensure_shared_surface(
                     uow,
@@ -216,23 +202,17 @@ async def attach_chosen_workspace(
             uow, pod_id=pod_id, user_id=user.id
         )
         if transport.surface is not None:
-            route = await uow.session.scalar(
-                select(PersonalDMRoute).where(
-                    PersonalDMRoute.binding_key == state.binding_key
+            identity = await uow.session.scalar(
+                select(VerifiedSurfaceIdentity).where(
+                    VerifiedSurfaceIdentity.binding_key == state.binding_key,
+                    VerifiedSurfaceIdentity.revoked_at.is_(None),
                 )
             )
-            if route is None:
-                uow.session.add(
-                    PersonalDMRoute(
-                        binding_key=state.binding_key,
-                        installation_surface_id=transport.surface.id,
-                        user_id=user.id,
-                        pod_id=pod_id,
-                        assistant_id=assistant_id,
-                    )
-                )
-            else:
-                route.pod_id, route.assistant_id = pod_id, assistant_id
+            if identity is None:
+                return "That account needs to verify again before it can chat."
+            identity.installation_surface_id = transport.surface.id
+            identity.pod_id = pod_id
+            identity.assistant_id = assistant_id
         else:
             await _ensure_shared_surface(
                 uow,

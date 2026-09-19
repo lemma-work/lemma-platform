@@ -15,7 +15,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    PersonalDMRoute,
+    VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
@@ -140,7 +140,10 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
         assert pending.step == "organization_access_required"
         assert (
             await uow.session.scalar(
-                select(PersonalDMRoute).where(PersonalDMRoute.user_id == user.id)
+                select(VerifiedSurfaceIdentity).where(
+                    VerifiedSurfaceIdentity.user_id == user.id,
+                    VerifiedSurfaceIdentity.pod_id.is_not(None),
+                )
             )
             is None
         )
@@ -162,7 +165,10 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
     assert len(codes) == 1
     async with factory() as uow:
         route = await uow.session.scalar(
-            select(PersonalDMRoute).where(PersonalDMRoute.user_id == user_id)
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.user_id == user_id,
+                VerifiedSurfaceIdentity.pod_id.is_not(None),
+            )
         )
         assert route is not None and route.installation_surface_id == UUID(
             surface["id"]

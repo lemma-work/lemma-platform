@@ -10,7 +10,9 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.infrastructure.onboarding_models import PersonalDMRoute
+from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+    VerifiedSurfaceIdentity,
+)
 from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
 )
@@ -129,7 +131,10 @@ async def test_teams_channel_signup_uses_private_cards_and_installation_org(
         )
         assert membership.organization_id == account.organization_id
         route = await session.scalar(
-            select(PersonalDMRoute).where(PersonalDMRoute.user_id == user.id)
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.user_id == user.id,
+                VerifiedSurfaceIdentity.pod_id.is_not(None),
+            )
         )
         assert route is not None and str(route.pod_id) != test_pod["id"]
     messages = message_store.get_all("TEAMS")

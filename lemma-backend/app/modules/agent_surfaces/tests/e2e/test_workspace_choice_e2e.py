@@ -23,7 +23,6 @@ from app.modules.agent_surfaces.domain.ingress_request import (
 from app.modules.agent_surfaces.domain.onboarding_state import OnboardingStep
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    PersonalDMRoute,
     VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.services.chat_onboarding import (
@@ -149,7 +148,10 @@ async def test_choosing_a_workspace_wires_the_conversation_to_it(
 
     async with sessions() as session:
         route = await session.scalar(
-            select(PersonalDMRoute).where(PersonalDMRoute.binding_key == binding_key)
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.binding_key == binding_key,
+                VerifiedSurfaceIdentity.pod_id.is_not(None),
+            )
         )
         assert route is not None, "choosing a workspace left nowhere to talk"
         assert str(route.pod_id) == offered[0]["id"]
@@ -179,7 +181,10 @@ async def test_an_unreadable_answer_asks_again_rather_than_guessing(
         )
         assert still_asking.step == OnboardingStep.AWAITING_POD
         route = await session.scalar(
-            select(PersonalDMRoute).where(PersonalDMRoute.binding_key == binding_key)
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.binding_key == binding_key,
+                VerifiedSurfaceIdentity.pod_id.is_not(None),
+            )
         )
         assert route is None, "an unreadable answer attached a workspace anyway"
 
@@ -194,6 +199,9 @@ async def test_a_number_nobody_was_offered_attaches_nothing(
 
     async with sessions() as session:
         route = await session.scalar(
-            select(PersonalDMRoute).where(PersonalDMRoute.binding_key == binding_key)
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.binding_key == binding_key,
+                VerifiedSurfaceIdentity.pod_id.is_not(None),
+            )
         )
         assert route is None

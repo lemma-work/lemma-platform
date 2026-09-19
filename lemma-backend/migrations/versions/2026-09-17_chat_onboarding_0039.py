@@ -28,6 +28,36 @@ def upgrade() -> None:
         ),
         sa.Column("verified_phone", sa.String(32), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        # Where this identity talks. Null until a workspace is chosen: being
+        # recognised and having somewhere to talk are different things.
+        sa.Column(
+            "installation_surface_id",
+            sa.Uuid(),
+            sa.ForeignKey("agent_surfaces.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column(
+            "pod_id",
+            sa.Uuid(),
+            sa.ForeignKey("pods.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        sa.Column(
+            "assistant_id",
+            sa.Uuid(),
+            sa.ForeignKey("agents.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        # A revoked identity cannot keep a destination. This was two tables
+        # keyed on the same binding, which could disagree -- a live route
+        # beside a revoked identity was a state every reader had to exclude by
+        # hand. Here it is a row the database will not accept.
+        sa.CheckConstraint(
+            "revoked_at IS NULL OR ("
+            "installation_surface_id IS NULL AND pod_id IS NULL "
+            "AND assistant_id IS NULL)",
+            name="ck_surface_identity_route_is_live",
+        ),
     )
     op.create_index(
         "ix_surface_verified_identities_user_id",
@@ -65,38 +95,6 @@ def upgrade() -> None:
         sa.Column("message_committed_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_table(
-        "surface_personal_dm_routes",
-        sa.Column("id", sa.Uuid(), primary_key=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("binding_key", sa.String(64), nullable=False, unique=True),
-        sa.Column(
-            "installation_surface_id",
-            sa.Uuid(),
-            sa.ForeignKey("agent_surfaces.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "user_id",
-            sa.Uuid(),
-            sa.ForeignKey("users.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "pod_id",
-            sa.Uuid(),
-            sa.ForeignKey("pods.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-        sa.Column(
-            "assistant_id",
-            sa.Uuid(),
-            sa.ForeignKey("agents.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
-    )
-
-    op.create_table(
         "surface_onboarding_input_tokens",
         sa.Column("id", sa.Uuid(), primary_key=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -116,6 +114,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("surface_onboarding_input_tokens")
-    op.drop_table("surface_personal_dm_routes")
     op.drop_table("surface_pending_onboarding")
     op.drop_table("surface_verified_identities")

@@ -36,7 +36,6 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 )
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
-    PersonalDMRoute,
     VerifiedSurfaceIdentity,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
@@ -122,8 +121,12 @@ async def verified_sender(
         found = (
             await uow.session.execute(
                 select(
-                    PersonalDMRoute.id, PersonalDMRoute.installation_surface_id
-                ).where(PersonalDMRoute.binding_key == binding_key)
+                    VerifiedSurfaceIdentity.id,
+                    VerifiedSurfaceIdentity.installation_surface_id,
+                ).where(
+                    VerifiedSurfaceIdentity.binding_key == binding_key,
+                    VerifiedSurfaceIdentity.pod_id.is_not(None),
+                )
             )
         ).first()
     route = PersonalRoute(*found) if found is not None else None

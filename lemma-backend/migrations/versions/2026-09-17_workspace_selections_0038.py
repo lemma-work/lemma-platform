@@ -1,4 +1,7 @@
-"""Remember a personal workspace independently for every organization."""
+"""Remember a personal workspace independently for every organization.
+
+As a column on the membership it belongs to, rather than a table keyed the same
+way. See the note in `upgrade`."""
 
 from alembic import op
 import sqlalchemy as sa
@@ -10,22 +13,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "identity_workspace_selections",
+    # A selection is keyed by (user, organization) -- which is a membership row,
+    # not a thing of its own. As a table it needed a join back to
+    # `organization_members` on every read purely to ask whether the membership
+    # still existed; as a column it cannot outlive one.
+    op.add_column(
+        "organization_members",
         sa.Column(
-            "user_id",
-            sa.Uuid(),
-            sa.ForeignKey("users.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "organization_id",
-            sa.Uuid(),
-            sa.ForeignKey("organizations.id", ondelete="CASCADE"),
-            primary_key=True,
-        ),
-        sa.Column(
-            "pod_id",
+            "selected_pod_id",
             sa.Uuid(),
             sa.ForeignKey("pods.id", ondelete="SET NULL"),
             nullable=True,
@@ -34,4 +29,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("identity_workspace_selections")
+    op.drop_column("organization_members", "selected_pod_id")
