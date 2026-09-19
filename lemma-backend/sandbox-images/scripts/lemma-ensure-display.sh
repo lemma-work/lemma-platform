@@ -136,8 +136,17 @@ mkdir -p "$(dirname "$CONFIG_PATH")"
 # 0600: this file can now carry `user:pass@host` in its `proxy` key, so it
 # is a credential file. Keeping it out of a stray `cat` is worth one umask;
 # it does not hide it from the agent, whose shell runs as this same user.
+#
+# Both halves are needed. `umask` narrows the file only when this creates
+# it, and `cat >` over an existing path keeps the mode that path already
+# had -- and this path does survive: a resumed sandbox brings back whatever
+# `$CONFIG_PATH` was there before, including one written by an older image
+# under a wider umask. So the mode is also set explicitly, on an empty file,
+# before any proxy string is written into it.
 (
   umask 077
+  : > "$CONFIG_PATH"
+  chmod 600 "$CONFIG_PATH"
   if [ -n "$BROWSER_PROXY" ]; then
     cat > "$CONFIG_PATH" <<EOF
 {

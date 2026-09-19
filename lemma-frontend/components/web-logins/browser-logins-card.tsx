@@ -306,7 +306,17 @@ function Body({
                 only ever sent bare hosts to `clearDataForOrigin`, and local
                 storage is keyed by full origin. Measured after the fix, on
                 the origin that produced the original report -- cookie and
-                localStorage both gone. */}
+                localStorage both gone.
+
+                One case is still not reached: an origin on a non-default
+                port with no page open, because nothing then names the port
+                and cookies do not record one. It is deliberately not in the
+                copy below. This card lists sites somebody signed in to
+                through the browser -- `github.com`, a webmail, a dashboard
+                -- and none of them carry a port; a caveat that cannot apply
+                to anything in the list is noise in front of a destructive
+                action. `forget_domains` records the same limit where it can
+                actually be acted on. */}
             {confirming ? (
                 <p className="border-t border-[color:var(--border-subtle)] px-5 py-3 text-xs text-[var(--text-tertiary)]">
                     This clears {confirming}&rsquo;s cookies and stored data from the

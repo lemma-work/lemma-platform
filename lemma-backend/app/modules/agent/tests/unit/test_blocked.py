@@ -73,6 +73,23 @@ class TestTheCertainHeaderRules:
             "Chrome identically -- it is our address, not our browser"
         )
 
+    def test_either_request_id_header_alone_is_enough(self) -> None:
+        """Pinned because the `or` reads like a mistake and is not. The two
+        headers are one fact in two spellings; the 403 is the condition.
+        Requiring both would downgrade a certain DataDome block to an
+        unnamed one the moment a response carried only one of them, and an
+        unnamed 403 is escalated to a browser that gets refused identically.
+        """
+        for header in ("x-dd-b", "x-datadome-cid"):
+            verdict = _verdict(403, {header: "259"})
+            assert verdict.blocked, header
+            assert verdict.vendor == "datadome", header
+            assert not verdict.browser_may_help, header
+
+    def test_a_request_id_header_without_a_403_is_not_a_block(self) -> None:
+        """The other half of the same rule: the status carries it."""
+        assert not _verdict(200, {"x-dd-b": "259"}).blocked
+
     def test_datadome_wins_when_a_site_sits_behind_both(self) -> None:
         """g2.com really does send `x-dd-b` and `cf-ray` together, and the
         two rules disagree about whether a browser would help -- so which

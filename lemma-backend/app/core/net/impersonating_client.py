@@ -229,7 +229,21 @@ async def fetch_guarded_impersonated(
                     # is refused by too. Truncation is silent on this path:
                     # a block page measured 1.7-5.6 KB, and an error body
                     # big enough to hit the cap is not evidence of anything.
-                    body, _ = await _read_capped(response, error_max_bytes or max_bytes)
+                    try:
+                        body, _ = await _read_capped(
+                            response, error_max_bytes or max_bytes
+                        )
+                    except RequestsError as exc:
+                        # A body that will not read is a reason to have no
+                        # body, not a reason to forget the status. Letting
+                        # this reach the outer handler turned it into
+                        # `PageUnreachableError`, and a 404 that arrives as
+                        # "unreachable" is escalated to the browser -- which
+                        # spends one of five renders in a 240s budget to be
+                        # told 404 again.
+                        raise HttpStatusError(
+                            response.status_code, headers=headers_seen, body=b""
+                        ) from exc
                     raise HttpStatusError(
                         response.status_code, headers=headers_seen, body=body
                     )

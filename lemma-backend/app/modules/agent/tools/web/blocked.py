@@ -26,9 +26,11 @@ were measured live while this was being written:
     nytimes.com   200  x-datadome: protected   + 1.38 MB of article
     any Cloudflare site       cf-ray present on every response
 
-so `x-datadome` alone and `cf-ray` alone are not signals. Only the
-`x-dd-b`/`x-datadome-cid` pairing *with* a 403 is, and only `cf-mitigated`
-is for Cloudflare. A naive regex for `captcha|cf-ray` matched 9 of 16
+so `x-datadome` alone and `cf-ray` alone are not signals. What is a signal
+is one of DataDome's *request-id* headers -- `x-dd-b` or `x-datadome-cid`,
+either one -- arriving **together with a 403**; it is the status that does
+the work, and the header only says whose refusal it is. For Cloudflare only
+`cf-mitigated` counts. A naive regex for `captcha|cf-ray` matched 9 of 16
 successfully-fetched pages.
 
 Pure, stdlib-only and free of `except` on purpose: this is the piece that
@@ -136,11 +138,20 @@ def _cloudflare(evidence: _Evidence) -> BlockVerdict | None:
 
 
 def _datadome(evidence: _Evidence) -> BlockVerdict | None:
-    """The pairing, never the bare header.
+    """A request-id header *and* a 403, never a bare DataDome header.
 
     `x-datadome: protected` rides on responses that are serving normally --
-    measured on nytimes.com, 200 with 1.38 MB of article. Only the request
-    id together with a 403 says we were stopped.
+    measured on nytimes.com, 200 with 1.38 MB of article -- so the vendor
+    being present is not the signal. The 403 is; the header only attributes
+    it.
+
+    `or`, deliberately, between the two request-id headers. They are one
+    fact in two spellings, not two conditions: g2.com was measured sending
+    both, and nothing establishes that either always accompanies the other.
+    Requiring both would turn a certain block into an unnamed one the moment
+    DataDome dropped a header, and the cost of that is a browser render --
+    one of five in a 240s budget -- spent on an address-shaped refusal the
+    browser is refused by identically.
     """
     if evidence.status != 403:
         return None
