@@ -1,4 +1,4 @@
-"""Make the external-user uniqueness apply to Telegram too.
+"""Make the external-user uniqueness apply to Telegram too, and reserve a number.
 
 ``ix_agent_surface_external_user_platform_tenant_external`` is unique over
 (platform, tenant_id, external_user_id), and Telegram writes ``tenant_id``
@@ -71,8 +71,21 @@ def upgrade() -> None:
         f"({_COLUMNS}) NULLS NOT DISTINCT"
     )
 
+    # One agent per pooled WhatsApp number, the other half of 0040. That one
+    # stops an agent holding two numbers; without this nothing stops two agents
+    # holding one -- and with a pool the arriving number *is* the routing key,
+    # so two claimants on one number is an inbound message with no answer to
+    # "which agent". Partial and scoped to WhatsApp: a Slack or Teams bot id
+    # may legitimately repeat across system-credential surfaces.
+    op.execute(
+        "CREATE UNIQUE INDEX uq_agent_pooled_whatsapp_number "
+        "ON agent_surfaces (surface_identity_id) "
+        "WHERE surface_type = 'WHATSAPP' AND surface_identity_id IS NOT NULL"
+    )
+
 
 def downgrade() -> None:
+    op.drop_index("uq_agent_pooled_whatsapp_number", table_name="agent_surfaces")
     op.drop_index(_INDEX, table_name="agent_surface_external_users")
     op.create_index(
         _INDEX,

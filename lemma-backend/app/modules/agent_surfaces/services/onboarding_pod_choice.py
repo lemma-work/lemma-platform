@@ -19,6 +19,13 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
+from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
+    SqlAlchemySurfaceRoutingResolutionAdapter,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    SurfaceRepository,
+)
 from app.modules.identity.contracts.organizations import (
     organization_member_ids_for_user,
     preferred_organization_membership,
@@ -120,3 +127,25 @@ async def organization_for_new_pod(
         user_id=user_id,
         preferred_organization_id=installation_organization_id,
     )
+
+
+async def has_somewhere_to_talk(
+    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, platform: SurfacePlatform
+) -> bool:
+    """Is there any live surface on this platform in a pod this person is in?
+
+    The same question routing asks first, and only that one. Routing then picks
+    among what comes back -- saved default, then continuity, then a
+    deterministic tiebreak -- and choosing is none of this module's business.
+    What matters here is the empty case: no candidate at all is the one state
+    routing cannot answer, and the one worth interrupting someone to fix.
+    """
+    surfaces = await SurfaceRepository(uow).list_active_for_routing(
+        platform.value, system_credentials_only=True
+    )
+    if not surfaces:
+        return False
+    pod_ids = set(
+        await SqlAlchemySurfaceRoutingResolutionAdapter(uow).get_user_pod_ids(user_id)
+    )
+    return any(surface.pod_id in pod_ids for surface in surfaces)

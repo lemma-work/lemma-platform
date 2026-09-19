@@ -73,6 +73,18 @@ class AgentSurface(UUIDAuditBase):
         # a DROP for an index it cannot see. Functional and partial to match the
         # lookup exactly: inbound routing compares lower(...), and most surfaces
         # are not email and hold NULL here.
+        # One agent per pooled WhatsApp number. Mirrors migration 0041; the
+        # arriving number is the routing key once the numbers come from a pool,
+        # so two surfaces claiming one is an inbound with no answer to "which
+        # agent". Scoped to WhatsApp -- a Slack or Teams bot id may repeat.
+        Index(
+            "uq_agent_pooled_whatsapp_number",
+            "surface_identity_id",
+            unique=True,
+            postgresql_where=text(
+                "surface_type = 'WHATSAPP' AND surface_identity_id IS NOT NULL"
+            ),
+        ),
         Index(
             "uq_agent_surface_identity_email",
             func.lower(text("surface_identity_email")),

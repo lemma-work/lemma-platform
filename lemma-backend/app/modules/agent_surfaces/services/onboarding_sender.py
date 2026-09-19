@@ -46,6 +46,7 @@ from app.modules.agent_surfaces.services.identity_resolution_service import (
 )
 from app.modules.agent_surfaces.services.onboarding_pod_choice import (
     candidate_pods,
+    has_somewhere_to_talk,
 )
 from app.modules.agent_surfaces.services.onboarding_transport import OnboardingTransport
 from app.modules.agent_surfaces.services.personal_dm_routes import (
@@ -256,8 +257,20 @@ async def offer_workspace_choice(
     is kept for replay once they answer.
     """
     event = transport.event
-    if not event.is_dm or transport.surface is None:
+    if not event.is_dm:
         return None
+    if transport.surface is None:
+        # The shared bot. Here a destination is not stored on the identity --
+        # routing works it out per message from the pods this person is in,
+        # picking by saved default, then continuity, then a tiebreak. So the
+        # question is not "is there a route" but "is there anything to choose
+        # among at all": asking otherwise would interrupt every working person
+        # on the busiest path in the product, every message.
+        async with uows() as uow:
+            if await has_somewhere_to_talk(
+                uow, user_id=verified_user_id, platform=event.platform
+            ):
+                return None
     async with uows() as uow:
         pods = await candidate_pods(uow, user_id=verified_user_id)
     state = await create_pending(uows, transport, event)

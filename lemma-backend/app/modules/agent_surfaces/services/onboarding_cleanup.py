@@ -1,7 +1,7 @@
 """Expired signup content must disappear even when the sender never returns."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, update
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,6 +14,11 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 )
 
 logger = get_logger(__name__)
+
+#: How long an expired signup row outlives its expiry before deletion. Long
+#: enough that a platform redelivery still meets the `message_committed_at` that
+#: makes it a no-op, short enough that "purged after expiry" is honest.
+PURGE_GRACE_SECONDS = 24 * 60 * 60
 
 
 async def purge_expired_onboarding(uows: UnitOfWorkFactory) -> None:
@@ -29,6 +34,22 @@ async def purge_expired_onboarding(uows: UnitOfWorkFactory) -> None:
         )
         await uow.session.execute(
             delete(OnboardingInputToken).where(OnboardingInputToken.expires_at <= now)
+        )
+        # And then the rows themselves. Nulling `original_event` drops the
+        # message someone sent, but the row keeps their `verified_phone` and a
+        # `destination` stamped with `sender_email` -- so "purged after handoff,
+        # cancellation or expiry", which the operator guide promises, was only
+        # half true and the half it left behind is the personal half.
+        #
+        # Not immediately: `message_committed_at` is what stops a replayed
+        # delivery being answered twice, and it is only useful while a
+        # redelivery is still plausible. The grace window is that, not a
+        # retention policy.
+        await uow.session.execute(
+            delete(PendingChatOnboarding).where(
+                PendingChatOnboarding.expires_at
+                <= now - timedelta(seconds=PURGE_GRACE_SECONDS)
+            )
         )
 
 
