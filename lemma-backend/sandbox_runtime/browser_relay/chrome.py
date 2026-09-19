@@ -305,10 +305,37 @@ def _candidate_ports(session: str | None) -> list[int]:
     it is given one and used it. Then agent-browser's own scratch profiles,
     newest first -- there is normally at most one, and a stale directory
     whose port answers nothing costs a refused connection to rule out.
+
+    **The scratch sweep is for the default session only, and that is a
+    boundary rather than an optimisation.** A scratch directory is named
+    `agent-browser-chrome-<uuid>` and records nothing about whose browser it
+    is, so a named session whose recorded port had gone stale would pick up
+    whatever scratch Chrome was newest -- and the named session that exists
+    in this product is `login-<host>`, the one a person types a password
+    into. `/targets` would list its pages and `/profile:forget` would clear
+    its data, both while naming a different session.
+
+    The literal `/tmp` is deliberate, not an oversight flagged by a linter:
+    this is not a temporary file this process creates, it is where
+    agent-browser was *measured* to put its scratch profiles.
+    `tempfile.gettempdir()` honours `TMPDIR`, so a relay started with one
+    set would look somewhere the browser never writes and quietly find
+    nothing.
+
+    Nothing is lost by the restriction. The sweep exists for images that
+    predate this branch, where `lemma-ensure-display` ended in a bare
+    `agent-browser open` and stranded the port file -- and that is the
+    *default* browser's path. Every named session is started from this
+    module, through `agent_browser_argv(..., session=...)` with a URL, which
+    keeps Chrome on the configured profile and so keeps its recorded port
+    accurate. A named session that cannot be found by its own port file is
+    genuinely not running, and saying so is the honest answer.
     """
     found: list[int] = []
     with suppress(BrowserNotRunning):
         found.append(recorded_port(session))
+    if session is not None and session != DEFAULT_SESSION:
+        return found
     scratch = sorted(
         Path("/tmp").glob("agent-browser-chrome-*/DevToolsActivePort"),
         key=lambda p: p.stat().st_mtime if p.exists() else 0,

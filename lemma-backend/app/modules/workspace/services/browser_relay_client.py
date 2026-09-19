@@ -126,8 +126,45 @@ class ProfileCookies(TypedDict):
 #: `command -v` for the same rollout reason as the line above: on an image
 #: that predates the split, the two are already running and there is
 #: nothing to start.
+#: The proxy decision, applied here as well as in the script, and this is
+#: the half that reaches the fleet that exists today.
+#:
+#: The script reads the decision file itself -- but the script lives in the
+#: *image*, and the profile digest is deliberately not bumped in this branch,
+#: because bumping it refuses reuse of every existing sandbox and on E2B that
+#: means a new disk and a person's files gone. So on every sandbox already
+#: running, `lemma-ensure-display` is still the old one, which knows only
+#: `AGENT_BROWSER_PROXY`. Without these lines the server could not withdraw a
+#: proxy from a single sandbox currently proxied -- which is the entire
+#: feature, aimed exactly at the fleet that cannot get the new script.
+#:
+#: Harmless on a new image, and deliberately so: that script begins by
+#: `unset`ting `AGENT_BROWSER_PROXY` and reading the file itself, so the
+#: export below is overwritten by the same answer it came from. The two
+#: cannot disagree, because both read one file.
+#:
+#: Deletable when the image has rolled everywhere, like the `command -v`
+#: fallbacks around it.
+_APPLY_PROXY_DECISION = (
+    f'if [ -r "{BROWSER_PROXY_DECISION_PATH}" ]; then '
+    # `|| true`, never `|| VALUE=`: `read` returns non-zero at end-of-file
+    # without a trailing newline and has already assigned the line by then,
+    # and the server writes the URL unterminated. Clearing it there is the
+    # bug that made the whole mechanism inert in the script.
+    f'  IFS= read -r LEMMA_PROXY < "{BROWSER_PROXY_DECISION_PATH}" || true; '
+    '  if [ -n "${LEMMA_PROXY:-}" ]; then '
+    '    export AGENT_BROWSER_PROXY="$LEMMA_PROXY"; '
+    "  else "
+    # An empty decision is the server saying "no proxy", which has to be able
+    # to undo a value baked into an older sandbox's environment at create.
+    "    unset AGENT_BROWSER_PROXY; "
+    "  fi; "
+    "  unset LEMMA_PROXY; "
+    "fi; "
+)
+
 _ENSURE_DISPLAY = (
-    "if command -v lemma-ensure-display >/dev/null 2>&1; then "
+    _APPLY_PROXY_DECISION + "if command -v lemma-ensure-display >/dev/null 2>&1; then "
     "  lemma-ensure-display; "
     "else "
     "  start-browser; "

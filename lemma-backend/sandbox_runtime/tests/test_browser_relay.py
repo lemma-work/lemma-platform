@@ -1180,6 +1180,39 @@ class TestFindingAPortChromeDidNotRecordWhereItWasTold:
 
         assert chrome._candidate_ports(None) == [4111, 4222]
 
+    def test_a_named_session_is_never_handed_another_browser(
+        self, monkeypatch, tmp_path
+    ):
+        """The boundary, not an optimisation.
+
+        A scratch directory is `agent-browser-chrome-<uuid>` and records
+        nothing about whose browser it is. The named session this product
+        actually has is `login-<host>` -- the one somebody types a password
+        into -- so a session-blind sweep lets `/targets` list its pages and
+        `/profile:forget` clear its data while naming a different session.
+
+        The sweep exists for images predating this branch, where the ensure
+        script ended in a bare `agent-browser open`. That is the *default*
+        browser's path; every named session is started from `chrome.py`
+        with a URL and keeps an accurate port file of its own.
+        """
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n/devtools/browser/x")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        scratch = tmp_path / "tmp" / "agent-browser-chrome-abc"
+        scratch.mkdir(parents=True)
+        (scratch / "DevToolsActivePort").write_text("4222\n/devtools/browser/y")
+        monkeypatch.setattr(chrome, "Path", _PathRootedAt(tmp_path / "tmp"))
+
+        assert 4222 in chrome._candidate_ports(None), "the default still sweeps"
+        assert 4222 not in chrome._candidate_ports("login-example.com")
+        assert 4222 in chrome._candidate_ports(chrome.DEFAULT_SESSION)
+
     def test_an_unreadable_scratch_file_is_skipped_not_fatal(
         self, monkeypatch, tmp_path
     ):
