@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import signal
+import time
 
 # Below this, the sandbox is close enough to unusable that a browser is no
 # longer worth what it costs. Chosen from measurement rather than taste: a
@@ -100,22 +101,71 @@ def browser_process_ids() -> tuple[int, ...]:
     return tuple(found)
 
 
-def shed_browser() -> int:
-    """End the browser. Returns how many processes were signalled.
+#: How long Chrome gets to shut itself down before it is killed.
+#:
+#: Short, because this runs in a sandbox that is already starved and the old
+#: argument against asking Chrome to do anything at all still stands: teardown
+#: in a machine with no memory to run it in is how a shutdown becomes a hang.
+#: A deadline answers that without giving up the flush -- the worst case is
+#: three seconds more in a state that is already bad, and the SIGKILL still
+#: arrives.
+_GRACEFUL_SECONDS = 3.0
 
-    SIGKILL, not SIGTERM. A graceful shutdown asks Chrome to run teardown in a
-    sandbox that has no memory to run it in, which is how a shutdown becomes a
-    hang; and there is nothing to flush, because everything a capture produced
-    was already written to the workspace before this could be reached.
-    """
-    process_ids = browser_process_ids()
-    signalled = 0
+#: How often to look while waiting. Cheap: one `kill(pid, 0)` per process.
+_POLL_SECONDS = 0.1
+
+
+def _signal(process_ids: tuple[int, ...], number: int) -> int:
+    """Send one signal to each pid, ignoring the ones already gone."""
+    sent = 0
     for process_id in process_ids:
         try:
-            os.kill(process_id, signal.SIGKILL)
+            os.kill(process_id, number)
         except ProcessLookupError, PermissionError:
             continue
-        signalled += 1
+        sent += 1
+    return sent
+
+
+def _still_alive(process_ids: tuple[int, ...]) -> tuple[int, ...]:
+    """Which of these are still running. Signal 0 checks without sending."""
+    alive: list[int] = []
+    for process_id in process_ids:
+        try:
+            os.kill(process_id, 0)
+        except ProcessLookupError, PermissionError:
+            continue
+        alive.append(process_id)
+    return tuple(alive)
+
+
+def shed_browser(*, graceful_seconds: float = _GRACEFUL_SECONDS) -> int:
+    """End the browser. Returns how many processes were signalled.
+
+    SIGTERM first, then SIGKILL for whatever is left after
+    `graceful_seconds`. This used to be SIGKILL alone, on the reasoning that
+    there was nothing to flush -- true when the profile lived in `/tmp` and
+    was scratch, and false now that it is the durable store a person's logins
+    are kept in.
+
+    The difference was measured rather than argued, on a real E2B sandbox:
+    Chrome's cookie store batches to disk on a 30 second timer, so a SIGKILL
+    two seconds after signing in to a site lost the session outright, while
+    the same kill forty seconds later kept it. A graceful exit commits the
+    store, which is the whole reason to ask before insisting.
+
+    Bounded, because the caller is usually the low-memory guard and a
+    shutdown that hangs there would be worse than the cookie it saved.
+    """
+    process_ids = browser_process_ids()
+    signalled = _signal(process_ids, signal.SIGTERM)
+    deadline = time.monotonic() + graceful_seconds
+    while time.monotonic() < deadline:
+        remaining = _still_alive(process_ids)
+        if not remaining:
+            return signalled
+        time.sleep(_POLL_SECONDS)
+    _signal(_still_alive(process_ids), signal.SIGKILL)
     return signalled
 
 

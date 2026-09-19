@@ -119,3 +119,76 @@ def test_available_memory_reads_the_real_proc_when_there_is_one() -> None:
         assert value is not None and value > 0
     else:
         assert value is None
+
+
+class _Signals:
+    """A process table that records signals instead of sending them.
+
+    `os.kill` is patched rather than real pids used, for the reason at the top
+    of this file -- and because "signal 0" here has to mean "is it alive",
+    which a real killed process would answer differently on each run.
+    """
+
+    def __init__(self, *, dies_on_term: bool) -> None:
+        self.sent: list[tuple[int, int]] = []
+        self.alive = {101, 102, 103}
+        self._dies_on_term = dies_on_term
+
+    def kill(self, process_id: int, number: int) -> None:
+        if process_id not in self.alive:
+            raise ProcessLookupError(process_id)
+        if number == 0:
+            return
+        self.sent.append((process_id, number))
+        import signal as _signal
+
+        if number == _signal.SIGTERM and self._dies_on_term:
+            self.alive.discard(process_id)
+        if number == _signal.SIGKILL:
+            self.alive.discard(process_id)
+
+
+@pytest.fixture
+def signals(monkeypatch):
+    def _install(*, dies_on_term: bool) -> _Signals:
+        table = _Signals(dies_on_term=dies_on_term)
+        monkeypatch.setattr(browser_guard.os, "kill", table.kill)
+        monkeypatch.setattr(
+            browser_guard, "browser_process_ids", lambda: tuple(sorted(table.alive))
+        )
+        monkeypatch.setattr(browser_guard.time, "sleep", lambda _: None)
+        return table
+
+    return _install
+
+
+def test_the_browser_is_asked_before_it_is_killed(signals) -> None:
+    """Measured, not assumed: Chrome's cookie store batches to disk on a 30
+    second timer, so a SIGKILL two seconds after somebody signs in to a site
+    loses the session outright. A graceful exit commits it. This mattered
+    less when the profile was scratch in `/tmp`; it is the durable store
+    now."""
+    import signal as _signal
+
+    table = signals(dies_on_term=True)
+
+    assert browser_guard.shed_browser() == 3
+
+    assert {number for _, number in table.sent} == {_signal.SIGTERM}
+    assert not table.alive
+
+
+def test_a_browser_that_will_not_go_is_killed_anyway(signals) -> None:
+    """The old reasoning still holds for the case it was written about: this
+    usually runs in a sandbox with no memory left to run a teardown in, and a
+    shutdown that hangs there is worse than the cookie it would have saved.
+    So the ask is bounded and the SIGKILL still arrives."""
+    import signal as _signal
+
+    table = signals(dies_on_term=False)
+
+    assert browser_guard.shed_browser(graceful_seconds=0.05) == 3
+
+    assert (101, _signal.SIGTERM) in table.sent
+    assert (101, _signal.SIGKILL) in table.sent
+    assert not table.alive

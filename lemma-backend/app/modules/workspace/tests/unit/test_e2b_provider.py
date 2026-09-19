@@ -872,6 +872,60 @@ async def test_a_pause_discards_memory(
     )
 
 
+async def test_a_workspace_release_closes_the_browser_before_pausing(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A filesystem-only pause is power loss, and Chrome writes cookies late.
+
+    Its store batches to disk on a 30 second timer, so somebody who signed in
+    to a site and had their sandbox released a moment later came back signed
+    out. Measured on a real E2B sandbox: sign in, pause immediately, resume,
+    and the cookie is gone; close the browser first and it is there.
+
+    Docker gets this from quiesce, which sheds the browser before stopping the
+    container. The E2B path has no quiesce -- `sandbox_runtime.workspace` is
+    not even shipped into the template -- so the close goes through the
+    daemon's own command, which the image does have.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert "agent-browser close --all" in world.commands
+    assert world.paused == [instance.provider_id]
+
+
+async def test_a_browser_that_will_not_close_does_not_block_the_release(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A sandbox whose browser cannot be reached is the one most in need of
+    being released. Same rule as Docker's quiesce, which is documented as
+    never allowed to fail a release."""
+    instance = await provider.create(_spec(uuid4()))
+    world.agent_answers = False
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.paused == [instance.provider_id]
+
+
+async def test_a_function_release_has_no_browser_to_close(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A function sandbox contains the runner and the SDK and nothing else --
+    there is no Chrome in that template, so the command would only be a failed
+    round trip on every release."""
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
+
+    assert "agent-browser close --all" not in world.commands
+
+
 async def test_a_function_sandbox_pause_keeps_memory(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:

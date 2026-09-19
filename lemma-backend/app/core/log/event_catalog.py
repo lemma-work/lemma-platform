@@ -839,6 +839,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.port_proxy.upstream_websocket.degraded': EventSpec('warning', frozenset()),
     'workspace.process_probe.unreadable': EventSpec('debug', frozenset({'error_type', 'process_id'})),
     'workspace.provider_factory.metadata_namespace_derived': EventSpec('info', frozenset({'environment', 'namespace'})),
+    'workspace.release.browser_close_failed': EventSpec('warning', frozenset({'detail', 'provider_id'})),
     'workspace.runtime_bundle.absent': EventSpec('info', frozenset()),
     'workspace.runtime_bundle.install_failed.degraded': EventSpec('warning', frozenset({'error_type', 'user_id', 'version'})),
     'workspace.runtime_bundle.installed': EventSpec('info', frozenset({'component_version', 'user_id', 'version'})),

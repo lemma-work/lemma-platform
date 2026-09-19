@@ -79,9 +79,13 @@ class BrowserViewService:
         a tool call, and the idle sweep measures from the last time somebody
         asked for the sandbox -- so a person reading a page, or typing a
         password slowly, looked idle the whole time and had their computer
-        stopped underneath them after `idle_release_seconds`. Releasing runs
-        quiesce, which deletes the browser profile, so what they lost was the
-        sign-in they were in the middle of.
+        stopped underneath them after `idle_release_seconds`.
+
+        Less costly than it was: quiesce used to delete the whole browser
+        profile, so a slow sign-in was thrown away rather than paused. It now
+        removes only the lock files that name a dead process, and the profile
+        survives. The sandbox still goes away mid-keystroke without this,
+        which is reason enough.
 
         Best effort: this keeps something alive, and failing to do so must not
         take down the socket that was working.

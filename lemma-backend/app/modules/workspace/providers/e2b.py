@@ -57,6 +57,7 @@ from app.modules.workspace.providers.base import (
 from app.modules.workspace.providers.e2b_connections import SandboxConnections
 from app.modules.workspace.providers.e2b_common import (
     budget_until,
+    close_browser,
     ensure_serving,
     meta_epoch,
     meta_profile_digest,
@@ -371,10 +372,20 @@ class E2BSandboxProvider(E2BOpsMixin):
         sandbox, restored rather than respawned. Reading the docs told you it
         could not happen.
 
+        A filesystem-only pause is also why the browser is closed first. It
+        freezes a running Chrome the way pulling the power would, and Chrome's
+        cookie store batches to disk on a 30 second timer -- so somebody who
+        signed in to a site and had their sandbox released a moment later lost
+        the login. Measured on a real E2B sandbox: sign in, pause immediately,
+        resume, and the cookie is gone; close the browser first and it is
+        there. Docker gets this from quiesce, which the E2B path has no
+        equivalent of.
         """
         # Functions keep memory -- same rule as `_lifecycle` uses for timeouts.
         keep_memory = kind is SandboxKind.FUNCTION
         sandbox = await self._connect(instance.provider_id)
+        if kind is SandboxKind.WORKSPACE:
+            await close_browser(sandbox, instance.provider_id, **self._api())
         try:
             with sdk_errors():
                 await sandbox.pause(keep_memory=keep_memory, **self._api())
