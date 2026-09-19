@@ -58,6 +58,7 @@ def upgrade() -> None:
         sa.Column("verified_phone", sa.String(32), nullable=True),
         sa.Column("destination", postgresql.JSONB(), nullable=False),
         sa.Column("original_event", postgresql.JSONB(), nullable=True),
+        sa.Column("offered_pods", postgresql.JSONB(), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("ready_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("handed_off_at", sa.DateTime(timezone=True), nullable=True),

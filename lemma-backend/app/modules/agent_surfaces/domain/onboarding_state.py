@@ -38,6 +38,10 @@ class OnboardingStep(StrEnum):
     AWAITING_CODE = "awaiting_code"
     #: The mailbox (or the shared contact) is proven and an account is resolved.
     VERIFIED = "verified"
+    #: Recognised, but with nowhere to talk: the person already has an account
+    #: and no personal route, so they have been offered their pods to attach
+    #: this conversation to, or the chance to name a new one.
+    AWAITING_POD = "awaiting_pod"
     #: Verified, but the installation's organization has not admitted them.
     ORGANIZATION_ACCESS_REQUIRED = "organization_access_required"
     #: A workspace exists and the original request is ready to be replayed.
@@ -58,6 +62,12 @@ class PendingState(BaseModel):
     verified_phone: str | None
     destination: dict[str, JsonValue]
     original_event: dict[str, JsonValue] | None
+    #: The pods offered in AWAITING_POD, in the order they were listed. Stored
+    #: rather than re-derived when the reply lands, because "3" has to mean the
+    #: third pod *they were shown*: re-running the query answers a list that a
+    #: pod created or deleted in between has already shifted, and the cost of
+    #: being wrong is a conversation wired to somebody else's pod.
+    offered_pods: list[dict[str, JsonValue]] | None
     expires_at: datetime
     ready_at: datetime | None
     handed_off_at: datetime | None

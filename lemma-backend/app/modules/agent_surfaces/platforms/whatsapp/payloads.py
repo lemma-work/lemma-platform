@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import JsonValue
+
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -151,7 +153,7 @@ def resolve_whatsapp_send_type(*, delivery_mode: str, mime_type: str) -> str:
 INTERACTIVE_BODY_LIMIT = 1024
 
 
-def flow_with_message(flow: dict[str, Any], message: str) -> dict[str, Any]:
+def flow_with_message(flow: dict[str, JsonValue], message: str) -> dict[str, JsonValue]:
     """Put what the caller wanted to say inside the form it is sending.
 
     A flow carries its own generic prompt ("Enter your verification code..."),

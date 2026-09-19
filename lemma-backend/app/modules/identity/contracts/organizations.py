@@ -131,3 +131,40 @@ __all__ = [
     "organization_member_role",
     "organization_slug",
 ]
+
+
+async def preferred_organization_membership(
+    uow, *, user_id: UUID, preferred_organization_id: UUID | None
+) -> tuple[UUID, UUID] | None:
+    """Where to put something new for this person: (organization, membership).
+
+    Prefers the organization the caller names -- a workspace created from a
+    company's chat installation belongs with that company -- and otherwise
+    takes their oldest membership. None means they belong to no organization at
+    all, which callers report rather than paper over.
+    """
+    preferred = None
+    if preferred_organization_id is not None:
+        preferred = await uow.session.scalar(
+            select(OrganizationMember).where(
+                OrganizationMember.user_id == user_id,
+                OrganizationMember.organization_id == preferred_organization_id,
+            )
+        )
+    membership = preferred or await uow.session.scalar(
+        select(OrganizationMember)
+        .where(OrganizationMember.user_id == user_id)
+        .order_by(OrganizationMember.created_at, OrganizationMember.id)
+        .limit(1)
+    )
+    if membership is None:
+        return None
+    return membership.organization_id, membership.id
+
+
+async def organization_member_ids_for_user(uow, *, user_id: UUID) -> list[UUID]:
+    """Every membership row this person holds, for callers that key off them."""
+    rows = await uow.session.scalars(
+        select(OrganizationMember.id).where(OrganizationMember.user_id == user_id)
+    )
+    return list(rows)

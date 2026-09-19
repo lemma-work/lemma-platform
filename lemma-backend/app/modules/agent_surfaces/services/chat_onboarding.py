@@ -26,6 +26,10 @@ from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     private_onboarding_destination,
 )
 from app.modules.agent_surfaces.services.onboarding_inputs import native_prompt_metadata
+from app.modules.agent_surfaces.services.onboarding_pod_choice import (
+    offer_text,
+    read_choice,
+)
 from app.modules.agent_surfaces.services.onboarding_transport import (
     OnboardingTransport,
     resolve_onboarding_transport,
@@ -127,11 +131,27 @@ class ChatOnboardingCoordinator:
             return await self._cancel(transport, state, destination)
         if state.step == OnboardingStep.AWAITING_PHONE:
             return await self._contact(transport, state, destination)
+        return await self._step(transport, state, destination)
+
+    async def _step(
+        self,
+        transport: OnboardingTransport,
+        state: PendingState,
+        destination: ParsedInboundSurfaceEvent,
+    ) -> OnboardingIngressResult:
+        """Run the step this signup is actually on.
+
+        Split out of `_advance` so that the dispatch and the guards that decide
+        whether to dispatch at all stay separately readable -- and so that
+        adding a step does not push one function past the complexity ceiling.
+        """
         try:
             if state.step == OnboardingStep.AWAITING_EMAIL:
                 return await self._email(transport, state, destination)
             if state.step == OnboardingStep.AWAITING_CODE:
                 return await self._code(transport, state, destination)
+            if state.step == OnboardingStep.AWAITING_POD:
+                return await self._pod(transport, state, destination)
             if state.user_id is not None:
                 await self._complete(transport, state, destination)
         except ChallengeRejected as error:
@@ -140,6 +160,32 @@ class ChatOnboardingCoordinator:
             await self._reply(
                 transport, destination, "Too many code requests. Try again later."
             )
+        return OnboardingIngressResult(True)
+
+    async def _pod(
+        self,
+        transport: OnboardingTransport,
+        state: PendingState,
+        destination: ParsedInboundSurfaceEvent,
+    ) -> OnboardingIngressResult:
+        """Read which workspace they picked, and wire the chat to it.
+
+        An unreadable answer re-asks rather than guesses: the cost of guessing
+        is a conversation attached to somebody else's workspace.
+        """
+        from app.modules.agent_surfaces.services.onboarding_workspace import (
+            attach_chosen_workspace,
+        )
+
+        choice = read_choice(transport.event.message_text, state.offered_pods)
+        if choice is None:
+            await self._reply(
+                transport, destination, offer_text(state.offered_pods or [])
+            )
+            return OnboardingIngressResult(True)
+        refusal = await attach_chosen_workspace(self._uows, transport, state, choice)
+        if refusal is not None:
+            await self._reply(transport, destination, refusal)
         return OnboardingIngressResult(True)
 
     async def _cancel(

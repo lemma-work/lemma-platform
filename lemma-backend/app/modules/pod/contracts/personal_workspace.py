@@ -89,3 +89,35 @@ async def ensure_personal_workspace(
         uow, pod_id=pod.id, user_id=owner_user_id
     )
     return PersonalWorkspace(pod.id, assistant_id, True)
+
+
+async def create_named_workspace(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    organization_id: UUID,
+    owner_user_id: UUID,
+    name: str,
+) -> PersonalWorkspace:
+    """Make a pod the person named, and give it its default agent.
+
+    Unlike `ensure_personal_workspace`, this always creates: the caller asked
+    for a *new* workspace by name, so silently handing back an existing one
+    would answer a different question than the one they were asked.
+    """
+    existing_name = await uow.session.scalar(
+        select(Pod.id).where(
+            Pod.organization_id == organization_id,
+            Pod.name == name,
+            Pod.is_deleted.is_(False),
+        )
+    )
+    if existing_name is not None:
+        name = f"{name} {owner_user_id.hex[:8]}"
+    pod = await get_pod_service(uow).create_pod(
+        PodEntity(user_id=owner_user_id, organization_id=organization_id, name=name),
+        owner_user_id,
+    )
+    assistant_id = await ensure_pod_default_agent(
+        uow, pod_id=pod.id, user_id=owner_user_id
+    )
+    return PersonalWorkspace(pod.id, assistant_id, True)

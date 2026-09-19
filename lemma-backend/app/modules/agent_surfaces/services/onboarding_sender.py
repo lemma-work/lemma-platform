@@ -45,6 +45,9 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
+from app.modules.agent_surfaces.services.onboarding_pod_choice import (
+    candidate_pods,
+)
 from app.modules.agent_surfaces.services.onboarding_transport import OnboardingTransport
 from app.modules.agent_surfaces.services.personal_dm_routes import (
     prepare_personal_dm_context,
@@ -203,6 +206,9 @@ async def recognize_sender(
             )
         return OnboardingIngressResult(True, context)
     if verified_user_id is not None:
+        offered = await offer_workspace_choice(uows, transport, verified_user_id)
+        if offered is not None:
+            return offered
         return OnboardingIngressResult(False)
     if not previously_revoked:
         adapter = adapters.get(event.platform)
@@ -225,3 +231,40 @@ async def recognize_sender(
                 }
             )
     return await create_pending(uows, transport, event)
+
+
+async def offer_workspace_choice(
+    uows: UnitOfWorkFactory,
+    transport: OnboardingTransport,
+    verified_user_id: UUID,
+) -> PendingState | None:
+    """Park a recognised sender on "which workspace?" instead of a dead end.
+
+    Only for a private chat on an installation that routes personally: there,
+    "recognised but no route" means there is genuinely nowhere for the message
+    to go, and ordinary ingestion would answer someone who already has an
+    account by telling them to go and use the website. Everywhere else -- a
+    shared surface, a group -- routing is not this person's to choose, so this
+    declines by returning None and the caller carries on as before.
+
+    Returns the parked state rather than sending anything: the dispatcher walks
+    straight into the AWAITING_POD step, which asks the question through the
+    same reply path every other step uses, and the message that got them here
+    is kept for replay once they answer.
+    """
+    event = transport.event
+    if not event.is_dm or transport.surface is None:
+        return None
+    async with uows() as uow:
+        pods = await candidate_pods(uow, user_id=verified_user_id)
+    state = await create_pending(uows, transport, event)
+    async with uows() as uow:
+        row = await uow.session.get(PendingChatOnboarding, state.id)
+        assert row is not None
+        row.step = OnboardingStep.AWAITING_POD
+        row.user_id = verified_user_id
+        row.offered_pods = pods
+        row.destination = event.model_dump(mode="json")
+    parked = await require_state(uows, transport.binding_key)
+    assert parked is not None
+    return parked

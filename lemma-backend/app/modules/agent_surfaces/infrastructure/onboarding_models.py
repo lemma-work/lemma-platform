@@ -43,6 +43,9 @@ class PendingChatOnboarding(UUIDAuditBase):
     original_event: Mapped[dict[str, JsonValue] | None] = mapped_column(
         JSONB(none_as_null=True)
     )
+    offered_pods: Mapped[list[dict[str, JsonValue]] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     handed_off_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
