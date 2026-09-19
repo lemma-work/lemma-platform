@@ -16125,34 +16125,14 @@
         "type": "object"
       },
       "UsageLimitScopeResponse": {
+        "description": "One spend window, as a caller outside the deployment may see it.\n\n**The cap is expressed as a percentage, never as an amount.** This used to\ncarry `limit_usd` and `remaining_usd`, which state a dollar allowance \u2014\nand a dollar allowance is a promise the product does not make. What a plan\nincludes is set per plan and may be retuned; what a given request costs\ndepends on the model it routes to. Publishing \"$12.40 remaining\" invites a\ncustomer to plan against a number that is neither fixed nor ours to\nguarantee, and turns any retune into a broken promise.\n\nWhat is published instead is how much of the window is gone. That is the\nfact a caller can act on \u2014 show a meter, warn at 80%, stop starting new\nwork \u2014 and it stays true however the underlying allowance is set.\n\n`used_usd` and `reserved_usd` remain, and deliberately: those are what the\ncustomer has actually spent, which is theirs to know. It is the *boundary*\nthat is percentage-only, not the consumption.\n\nThe internal `UsageLimitScope` keeps its dollar fields \u2014 enforcement is done\nin dollars, and `usage_service` reserves against them. This is the API\nboundary, and the boundary is where the promise is made.",
         "properties": {
           "allowed": {
             "title": "Allowed",
             "type": "boolean"
           },
-          "limit_usd": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Limit Usd"
-          },
-          "remaining_usd": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Remaining Usd"
-          },
           "reserved_usd": {
+            "description": "Spend held against this window for work in flight. A reservation is released if the work does not happen, and moves into `used_usd` when it settles, so this is not a second charge.",
             "title": "Reserved Usd",
             "type": "number"
           },
@@ -16165,7 +16145,20 @@
             "title": "Scope",
             "type": "string"
           },
+          "used_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How much of this window is consumed, as a percentage of its cap, counting `used_usd` and `reserved_usd` together \u2014 a meter that ignored reservations would read low exactly while a burst was landing. Null means the window is uncapped, which is a different statement from 0% used. May exceed 100: a reservation can settle above what it reserved, and a caller wanting a meter should clamp it itself rather than be handed a number that has already lost the overage.",
+            "title": "Used Percent"
+          },
           "used_usd": {
+            "description": "Settled spend in this window: work that has finished and been charged. Does not include reservations still held for work in flight \u2014 those are `reserved_usd`.",
             "title": "Used Usd",
             "type": "number"
           },
@@ -16179,6 +16172,7 @@
           "scope",
           "used_usd",
           "reserved_usd",
+          "used_percent",
           "allowed",
           "reset_at",
           "window_start"

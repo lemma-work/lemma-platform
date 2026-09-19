@@ -20,6 +20,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.contracts.organizations import (
+    organization_member_ids_for_user,
     preferred_organization_membership,
 )
 from app.modules.pod.contracts.user_pods import list_attachable_pods
@@ -46,7 +47,10 @@ async def candidate_pods(
     answer is re-checked against live access rather than against the handful
     that happened to be shown.
     """
-    pods = await list_attachable_pods(session=uow.session, user_id=user_id, limit=limit)
+    membership_ids = await organization_member_ids_for_user(uow, user_id=user_id)
+    pods = await list_attachable_pods(
+        session=uow.session, organization_member_ids=membership_ids, limit=limit
+    )
     return [{"id": str(pod.id), "name": pod.name} for pod in pods]
 
 

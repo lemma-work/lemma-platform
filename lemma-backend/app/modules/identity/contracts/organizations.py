@@ -162,9 +162,26 @@ async def preferred_organization_membership(
     return membership.organization_id, membership.id
 
 
-async def organization_member_ids_for_user(uow, *, user_id: UUID) -> list[UUID]:
-    """Every membership row this person holds, for callers that key off them."""
+#: How many of a person's organization memberships any one caller will look at.
+#: Belonging to more organizations than this is not something the product
+#: supports meaningfully, and a caller that silently read an unbounded set here
+#: would be doing a table scan on behalf of whoever holds the record.
+MAX_MEMBERSHIPS_READ = 200
+
+
+async def organization_member_ids_for_user(
+    uow, *, user_id: UUID, limit: int = MAX_MEMBERSHIPS_READ
+) -> list[UUID]:
+    """The membership rows this person holds, for callers that key off them.
+
+    Ordered and capped rather than "all of them": the set is small in practice
+    but nothing in the schema says so, and an uncapped read is the caller's
+    problem the day someone's account proves otherwise.
+    """
     rows = await uow.session.scalars(
-        select(OrganizationMember.id).where(OrganizationMember.user_id == user_id)
+        select(OrganizationMember.id)
+        .where(OrganizationMember.user_id == user_id)
+        .order_by(OrganizationMember.created_at, OrganizationMember.id)
+        .limit(limit)
     )
     return list(rows)
