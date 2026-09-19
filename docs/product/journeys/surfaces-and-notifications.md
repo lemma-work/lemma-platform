@@ -14,6 +14,18 @@ someone only through the agents inside it. Where this document says a pod is
 reachable somewhere, that is shorthand for one of its agents being reachable
 there.
 
+An agent reaches a platform in exactly one place: one Slack app, one WhatsApp
+number, one Telegram bot. Two doors onto one platform for one agent is an
+ambiguity rather than a feature, because the person on the other side has no
+way to tell which one they are talking to. Several agents in a pod each get
+their own, which is how a pod is reachable in more than one place at once.
+
+The pod's own assistant is an agent like any other here. It holds surfaces on
+the same terms and under the same limit — it simply starts with a mailbox
+nobody had to connect. What is special about it is only how permission to
+change its surfaces is checked, pod-scoped rather than agent-scoped, because
+its row's id is the pod's own.
+
 Two rules run through everything here. **A surface is a door, not a hole**: who
 someone is on Slack has to resolve to who they are in Lemma before they get
 anything, and a person who is not entitled to the pod gets nothing.

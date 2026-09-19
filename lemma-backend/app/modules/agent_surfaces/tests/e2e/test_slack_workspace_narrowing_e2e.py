@@ -50,7 +50,8 @@ async def _sibling_agent(db_session, template_id):
     several agents. A plain `USER` agent rather than a copy of the template:
     the template is the pod default, and `ck_agents_pod_default_is_pod_id`
     requires that one's id to *be* the pod id, so there can only ever be the
-    one of it.
+    one of it. That says nothing about what the pod default may own -- it holds
+    surfaces on the same terms as any agent, and does hold the first one here.
     """
     template = await db_session.get(AgentModel, template_id)
     sibling = AgentModel(
