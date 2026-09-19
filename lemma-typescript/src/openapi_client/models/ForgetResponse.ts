@@ -2,9 +2,10 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type AnswerSignInRequest = {
+export type ForgetResponse = {
     /**
-     * True when the person says they have signed in; false when they cannot right now.
+     * False when the browser was holding nothing for this site.
      */
-    signed_in: boolean;
+    forgotten: boolean;
+    site: string;
 };

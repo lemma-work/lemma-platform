@@ -3,30 +3,23 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AnswerSignInRequest } from '../models/AnswerSignInRequest.js';
+import type { ForgetResponse } from '../models/ForgetResponse.js';
 import type { PendingSignInResponse } from '../models/PendingSignInResponse.js';
 import type { SignInOutcomeResponse } from '../models/SignInOutcomeResponse.js';
-import type { WebLoginAuditResponse } from '../models/WebLoginAuditResponse.js';
 import type { WebLoginListResponse } from '../models/WebLoginListResponse.js';
-import type { WebLoginResponse } from '../models/WebLoginResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class WebLoginsService {
     /**
-     * Remove a saved site login
-     * Forget a site.
-     *
-     * Removing the row is the whole revocation from Lemma's side. It does **not**
-     * sign the person out at the site, and the response says so — a saved session
-     * that has been deleted here is still a valid session there until they log out
-     * or it expires, and implying otherwise would be the more dangerous lie.
-     * @param origin
-     * @returns WebLoginResponse Successful Response
+     * Sign your browser out of a site
+     * @param origin The site to forget, as an origin or a host.
+     * @returns ForgetResponse Successful Response
      * @throws ApiError
      */
     public static webLoginDelete(
         origin: string,
-    ): CancelablePromise<WebLoginResponse> {
+    ): CancelablePromise<ForgetResponse> {
         return __request(OpenAPI, {
             method: 'DELETE',
             url: '/web-logins',
@@ -39,45 +32,19 @@ export class WebLoginsService {
         });
     }
     /**
-     * List saved site logins
-     * @param limit
-     * @param pageToken
+     * List the sites your browser is signed in to
+     * @param wake Start the computer if it is paused. Off by default so that rendering this list is never what wakes one.
      * @returns WebLoginListResponse Successful Response
      * @throws ApiError
      */
     public static webLoginList(
-        limit: number = 100,
-        pageToken?: (string | null),
+        wake: boolean = false,
     ): CancelablePromise<WebLoginListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/web-logins',
             query: {
-                'limit': limit,
-                'page_token': pageToken,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * What has been done with your saved logins
-     * @param limit
-     * @param pageToken
-     * @returns WebLoginAuditResponse Successful Response
-     * @throws ApiError
-     */
-    public static webLoginHistory(
-        limit: number = 100,
-        pageToken?: (string | null),
-    ): CancelablePromise<WebLoginAuditResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/web-logins/history',
-            query: {
-                'limit': limit,
-                'page_token': pageToken,
+                'wake': wake,
             },
             errors: {
                 422: `Validation Error`,
@@ -109,11 +76,12 @@ export class WebLoginsService {
     }
     /**
      * Say whether you signed in
-     * Capture what the browser now holds, and let the waiting run carry on.
+     * Let the waiting run carry on, and check the site while they are here.
      *
-     * The capture happens here, while the person is still present, rather than
-     * later in the resumed run -- so that "it did not work" is something they can
-     * be told at the moment they can still fix it.
+     * Nothing is captured: the browser keeps its own profile, so finishing a
+     * sign-in is the person finishing it. What this does do is look at the site
+     * straight afterwards, while they are still present -- so "it still wants a
+     * login" is something they hear now rather than the agent discovering it.
      *
      * One route for both answers because it is one answer. Two routes meant two
      * status writes with two different guards, and the weaker one let a stale tab
