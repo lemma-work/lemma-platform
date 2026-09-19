@@ -530,8 +530,17 @@ def _requested_range(
             length = int(last)
             if length <= 0:
                 return None
+            if total == 0:
+                # There is no last byte of an empty file. Falling through
+                # produced `(0, 0)`, which renders as `bytes 0--1/0` -- a
+                # malformed header for a range that cannot be satisfied.
+                return _UNSATISFIABLE
             start = max(total - length, 0)
-            return start, min(length, total - start)
+            # The same ceiling the ordinary branch applies. Without it
+            # `bytes=-999999999` read far more in one response than
+            # `bytes=0-999999999` would, which is the cap the whole-file
+            # reader is built around.
+            return start, min(length, total - start, _MAX_CONTENT_BYTES)
         start = int(first)
         end = int(last) if last else total - 1
     except ValueError:

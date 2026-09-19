@@ -15,7 +15,6 @@
 
 import {
     useCallback,
-    useEffect,
     useRef,
     useState,
     useSyncExternalStore,
@@ -179,19 +178,41 @@ function Centered({ children }: { children: React.ReactNode }) {
  * comes to scroll inside a container that is not scrolling.
  */
 function useMeasured() {
-    const ref = useRef<HTMLDivElement>(null);
     const [size, setSize] = useState({ width: 0, height: 0 });
-    useEffect(() => {
-        const node = ref.current;
-        if (!node) return;
-        const observer = new ResizeObserver((entries) => {
+    const observer = useRef<ResizeObserver | null>(null);
+
+    // A callback ref, not `useRef` plus an effect with `[]` deps. That effect
+    // ran once, on the first commit, and read `ref.current` -- so it only
+    // ever saw a container that was already on screen. The container is not:
+    // a sleeping sandbox renders a message instead of the tree, and by the
+    // time somebody wakes it the effect has long since run and returned
+    // early. The observer was never attached, the measured height stayed 0,
+    // and the tree -- which will not render without one -- stayed blank for
+    // the rest of the page's life. A callback ref fires on the mount that
+    // actually happens, whenever that is.
+    const attach = useCallback((node: HTMLDivElement | null) => {
+        observer.current?.disconnect();
+        observer.current = null;
+        if (!node) {
+            // Unmounted: drop the stale measurement too, so a remount
+            // re-measures rather than drawing at the last container's size.
+            setSize({ width: 0, height: 0 });
+            return;
+        }
+        const watcher = new ResizeObserver((entries) => {
             const box = entries[0]?.contentRect;
             if (box) setSize({ width: box.width, height: box.height });
         });
-        observer.observe(node);
-        return () => observer.disconnect();
+        watcher.observe(node);
+        observer.current = watcher;
+        // `ResizeObserver` fires on its own after observing, but not before
+        // the next frame, and jsdom does not fire it at all. The element is
+        // already laid out here, so take the first measurement directly.
+        const box = node.getBoundingClientRect();
+        if (box.width || box.height) setSize({ width: box.width, height: box.height });
     }, []);
-    return [ref, size] as const;
+
+    return [attach, size] as const;
 }
 
 export function FileExplorer({
@@ -204,13 +225,17 @@ export function FileExplorer({
     selected: string | null;
     onSelect: (path: string, sizeBytes: number) => void;
 }) {
-    const { data, onToggle, sleeping, loading } = useDirectoryTree(root);
+    const { data, onToggle, sleeping, loading, error, missing } =
+        useDirectoryTree(root);
     const [treeRef, treeSize] = useMeasured();
     const [selectedSize, setSelectedSize] = useState(0);
 
     const activate = useCallback(
         (node: TreeNode) => {
-            if (node.kind === 'directory') return;
+            if (node.kind === 'directory' || node.problem) return;
+            // A hint only. The reader discovers a file's real size from the
+            // server, because this resets to 0 on a reload while the open
+            // path comes back from the URL.
             setSelectedSize(node.sizeBytes);
             onSelect(node.id, node.sizeBytes);
         },
@@ -224,6 +249,22 @@ export function FileExplorer({
                 send the agent a message to wake it.
             </Centered>
         );
+    }
+
+    // Before the tree, because an empty tree is what both of these used to
+    // look like. "This folder is empty" and "we could not read this folder"
+    // are not the same sentence, and the pane pointed at a root that had
+    // moved is exactly how the first one came to be told about the second.
+    if (error) {
+        return (
+            <Centered>
+                These files could not be read. The computer may be starting up, or the
+                connection may have dropped — reload to try again.
+            </Centered>
+        );
+    }
+    if (missing) {
+        return <Centered>There is no folder at {root}.</Centered>;
     }
 
     return (
@@ -285,6 +326,18 @@ function Row({
     dragHandle?: (element: HTMLDivElement | null) => void;
 }) {
     const directory = node.data.kind === 'directory';
+    if (node.data.problem) {
+        return (
+            <div
+                ref={dragHandle}
+                // eslint-disable-next-line no-restricted-syntax
+                style={style}
+                className="flex items-center px-2 text-sm text-[var(--text-tertiary)]"
+            >
+                <span className="truncate">{node.data.problem}</span>
+            </div>
+        );
+    }
     return (
         <div
             ref={dragHandle}

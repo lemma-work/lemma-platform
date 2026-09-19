@@ -483,3 +483,33 @@ class TestTheBrowserProfileIsNotServed:
         assert controller._workspace_path("/home/user/.lemma/browserfoo/x") == (
             "/home/user/.lemma/browserfoo/x"
         )
+
+
+class TestSuffixRangesObeyTheSameRules:
+    """`bytes=-N` took a different path through the parser, and skipped both
+    of the ordinary branch's guards."""
+
+    def test_a_suffix_range_is_capped_like_any_other(self) -> None:
+        from app.modules.workspace.api.controllers.files_controller import (
+            _MAX_CONTENT_BYTES,
+            _requested_range,
+        )
+
+        start, length = _requested_range("bytes=-999999999", total=_MAX_CONTENT_BYTES * 4)
+
+        assert length == _MAX_CONTENT_BYTES, (
+            "a suffix range could read far more in one response than "
+            "`bytes=0-` could, which is the cap the whole-file reader is "
+            "built around"
+        )
+        assert start == _MAX_CONTENT_BYTES * 4 - 999999999 or start >= 0
+
+    def test_the_last_bytes_of_an_empty_file_cannot_be_satisfied(self) -> None:
+        """`(0, 0)` renders as `bytes 0--1/0`. There is no last byte of
+        nothing, and the honest answer is 416."""
+        from app.modules.workspace.api.controllers.files_controller import (
+            _UNSATISFIABLE,
+            _requested_range,
+        )
+
+        assert _requested_range("bytes=-500", total=0) is _UNSATISFIABLE

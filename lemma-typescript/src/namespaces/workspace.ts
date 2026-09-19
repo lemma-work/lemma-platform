@@ -1,4 +1,13 @@
+import { ApiError } from "../http.js";
 import type { HttpClient } from "../http.js";
+
+/**
+ * The most the server will return from one read, whatever is asked for.
+ *
+ * `_MAX_CONTENT_BYTES` in the files controller. Kept here so the chunked
+ * reader clamps to it rather than discovering it a slice at a time.
+ */
+export const MAX_READ_BYTES = 8 * 1024 * 1024;
 
 /** One entry in a workspace directory listing. */
 export interface WorkspaceFileEntry {
@@ -293,21 +302,51 @@ export class WorkspaceNamespace {
    * silently returned the first 8 MiB under the full name. Ranges are
    * requested in order and stitched, so what a person saves is the file.
    *
-   * `chunk` matches the server's ceiling. Asking for more gets 8 MiB anyway.
+   * **The size is discovered, not trusted.** This took a `sizeBytes` and
+   * stopped there, which made the caller's bookkeeping load-bearing for
+   * whether a download was complete. The explorer's was wrong on the case
+   * that matters: the open file lives in the URL and its size lived in React
+   * state, so a reload restored the path with a size of 0 and every download
+   * after it truncated at 8 MiB, under the whole file's name. Reading until
+   * the server returns a short slice needs nobody to have remembered
+   * anything. `sizeBytes` survives only as a hint that lets a small file skip
+   * straight to a single unranged read; passing 0 or nothing is correct.
+   *
+   * `chunk` is clamped to the server's ceiling rather than trusted either.
+   * Asking for 64 MiB got 8 MiB back and advanced the cursor by 64, so seven
+   * eighths of the file was skipped and the result was a corrupt download of
+   * roughly the right length — the same failure, reintroduced by the
+   * parameter meant to tune it.
    */
   async readWholeFile(
     path: string,
-    sizeBytes: number,
-    chunk = 8 * 1024 * 1024,
+    sizeBytes = 0,
+    chunk = MAX_READ_BYTES,
   ): Promise<Blob> {
-    if (sizeBytes <= chunk) return this.readFile(path);
+    const step = Math.min(Math.max(Math.floor(chunk), 1), MAX_READ_BYTES);
+    if (sizeBytes > 0 && sizeBytes <= step) return this.readFile(path);
     const parts: Blob[] = [];
-    for (let start = 0; start < sizeBytes; start += chunk) {
-      parts.push(
-        await this.readFile(path, {
-          range: { start, end: Math.min(start + chunk, sizeBytes) - 1 },
-        }),
-      );
+    let start = 0;
+    for (;;) {
+      let part: Blob;
+      try {
+        part = await this.readFile(path, {
+          range: { start, end: start + step - 1 },
+        });
+      } catch (error) {
+        // 416. The file ended exactly on a chunk boundary, or it is empty:
+        // both are "there is nothing at this offset", and neither is a
+        // failure. Any other status is.
+        if (error instanceof ApiError && error.statusCode === 416) break;
+        throw error;
+      }
+      if (part.size === 0) break;
+      parts.push(part);
+      start += part.size;
+      // Short of what was asked for means the server ran out of file, which
+      // is the ordinary way this ends — one request more than the file
+      // needs, rather than a 416 every time.
+      if (part.size < step) break;
     }
     return new Blob(parts);
   }
