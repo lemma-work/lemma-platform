@@ -31,7 +31,7 @@ Split them only where you genuinely need to see the output before choosing the n
 
 Environment facts:
 
-- Nothing is running at startup, and you do not have to start it. Any `agent-browser` command brings the browser up first if it is down. `start-browser [url]` still exists and is harmless, but it is no longer a step you must remember.
+- Nothing is running at startup, and there is no step to remember. Any `agent-browser` command brings up whatever it needs first -- the display, the window manager, the VNC stack and the browser -- if they are down. There is no separate command to call, and nothing to check beforehand.
 - There is **one browser per sandbox**, and it is the person's. Its session and profile are set for you; do not pass `--session` or `--profile` yourself unless you genuinely need a second browser at the same time (see *Parallel isolated sessions*). Naming one by hand opens a different, empty Chrome — not the one that is signed in and not the one the panel shows.
 - **The profile is durable, and it is the person's.** It lives in their home (`~/.lemma/browser/profile`), so a site they have signed in to stays signed in — across your run, across a suspend, and across conversations, exactly as the browser on their own desk does. Chrome itself still comes and goes: the daemon closes it after five idle minutes and the memory guard may kill it under pressure. That costs you a cold start, not the login.
 - **Do not write session state to disk yourself.** `agent-browser state save ./auth.json` puts cookies in plain text on the durable root, where they outlive the run that made them and are readable by whatever runs next. There is also no reason to: the profile already persists. If a site is not signed in, `browser_sign_in` asks the person.
