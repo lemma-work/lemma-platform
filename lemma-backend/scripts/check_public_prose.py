@@ -43,9 +43,27 @@ from pathlib import Path
 #: is the public product domain and is fine; `example.com` and
 #: `example.test` are reserved for documentation by RFC 2606.
 #:
-#: Add a domain here when a deployment, cluster or tenant gets a name. A
-#: plain substring, so the bare entry covers `api.<host>` and `apps.<host>`.
+#: Add a domain here when a deployment, cluster or tenant gets a name. The
+#: bare entry covers `api.<host>` and `apps.<host>`, since the match is a
+#: substring.
 INTERNAL_HOSTS = ("asur.work", "gappynew")
+
+
+def _host_pattern(host: str) -> re.Pattern[str]:
+    r"""Match a host however a file happens to spell it.
+
+    Case-insensitively, and tolerating a backslash before each dot. Both
+    came from a sweep that used a plain lowercase substring and left three
+    survivors: an uppercased hostname in a test asserting case-folding, and
+    two `asur\.work` inside testing-library regexes. The sweep read as
+    complete and CI found the rest.
+    """
+    return re.compile(
+        r"\\?\.".join(re.escape(part) for part in host.split(".")), re.IGNORECASE
+    )
+
+
+HOST_PATTERNS = tuple((host, _host_pattern(host)) for host in INTERNAL_HOSTS)
 
 _MONTHS = (
     "January|February|March|April|May|June|July|August|September|October"
@@ -183,8 +201,8 @@ def offences(path: Path, root: Path, allowed: set[str]) -> list[str]:
     prose = _prose_lines(path, text)
     found = []
     for number, line in enumerate(text.splitlines(), start=1):
-        for host in INTERNAL_HOSTS:
-            if host in line:
+        for host, pattern in HOST_PATTERNS:
+            if pattern.search(line):
                 found.append(
                     f"{where}:{number}: names internal infrastructure "
                     f"({host!r}) -- lemma.work for the product, example.com "

@@ -40,7 +40,7 @@ def test_a_site_is_remembered_once_however_often_it_is_said(profile: Path) -> No
     """Answering a sign-in twice is one sign-in. A person who reloads the
     page and presses the button again has not signed in to two sites."""
     marks.mark_signed_in("lemma.work")
-    marks.mark_signed_in("ASUR.work")
+    marks.mark_signed_in("LEMMA.work")
     marks.mark_signed_in(".lemma.work")
 
     assert marks.signed_in_sites() == ["lemma.work"]

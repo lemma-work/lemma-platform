@@ -49,7 +49,7 @@ describe('a waiting sign-in', () => {
             />),
         );
 
-        screen.getByRole('button', { name: /Open asur\.work/ }).click();
+        screen.getByRole('button', { name: /Open lemma\.work/ }).click();
 
         expect(navigations).toEqual([
             ['sign_in', 'call_abc123', { conversationId: 'conv-1' }],
@@ -62,7 +62,7 @@ describe('a waiting sign-in', () => {
     it('falls back to the standalone page where there is no panel to open', () => {
         render(withQuery(<SignInCard invocation={paused} conversationId="conv-1" />));
 
-        const link = screen.getByRole('link', { name: /Open asur\.work/ });
+        const link = screen.getByRole('link', { name: /Open lemma\.work/ });
         // The same destination the Slack and Telegram links use, so somebody
         // outside the app shell still reaches a page that can resolve it.
         expect(link.getAttribute('href')).toBe('/sign-in-to-site/conv-1/call_abc123');
