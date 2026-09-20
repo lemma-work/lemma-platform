@@ -2,8 +2,9 @@
 
 Everything here is about what Lemma does with a delivery it should not simply
 believe: one that is unsigned, one signed with the wrong secret, one it has
-already handled, two of the same racing each other, and one from somebody it
-has never heard of.
+already handled, two of the same racing each other, one from somebody it has
+never heard of, and one from somebody it knows perfectly well who has no place
+in the pod on the other side.
 
 That is why these take the forged lane and say so. A real account cannot send a
 message twice with the same update id, cannot omit the signature, and cannot be
@@ -19,6 +20,7 @@ there is one.
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 
 import pytest
 
@@ -66,6 +68,63 @@ async def test_an_unknown_sender_is_told_how_to_get_access(forged):
     assert replies[0].choices, (
         f"Telegram supports native controls, so the ask should use one: {answer!r}"
     )
+
+
+@pytest.mark.timeout(360)
+@scenario("Somebody with an account but no place in the pod is not let into it")
+@proves("PS-SURF-012")
+@covers("surface.webhook.handle_platform", "agent.surface.send", "pod.get")
+async def test_reaching_the_bot_is_not_membership_of_the_pod(world, forged):
+    """The sender this promise is really about, and the easiest one to miss.
+
+    A stranger is stopped by the identity check, which the scenario above
+    proves. This one passes that check: they have a Lemma account and an
+    `@username` Lemma resolves, so every question about who they are answers
+    cleanly. The only thing between them and the pod is that nobody put them in
+    it — and a resolved sender looks in every way like a member until something
+    actually asks.
+
+    That is the boundary the specification insists on, in its own words: being
+    present on the platform "shall not by itself grant access to the pod". So
+    both halves of what it says happens instead are asked for here — they are
+    told how to get access, and the pod is still shut to them afterwards.
+
+    Forged, and it has to be. A Telegram account belongs to one person
+    deployment-wide, so a real one cannot be the member and the outsider in the
+    same run — the same reason the rest of this file takes the lane it does.
+    """
+    outsider = await world.new_person("hannah")
+    # Unique per run, because a handle is claimed deployment-wide and the claim
+    # is sticky on purpose: reusing one would resolve this message to whoever an
+    # earlier run bound it to.
+    handle = f"hannah_{uuid4().hex[:10]}"
+    await outsider.is_known_on_telegram_as(handle)
+    theirs = forged.chat.as_another_person(handle)
+
+    await theirs.says("Show me what is in this workspace.")
+
+    said = await eventually(
+        theirs.replies,
+        bool,
+        describe="the pod to answer somebody it has never admitted",
+        timeout=UNTIL_ANSWERED,
+    )
+    answer = said[0].text
+    assert "access" in answer.lower(), (
+        f"a signed-up person outside the pod should be told how to get into it "
+        f"rather than left guessing why the bot went quiet; got: {answer!r}"
+    )
+    # Nothing was started on their behalf. The routing decision that produced
+    # that answer is the one that would otherwise have opened a conversation, so
+    # by the time the answer is here, either there is one or there never will be.
+    assert await forged.conversations() == [], (
+        "a message from somebody outside the pod opened a conversation inside "
+        "it, which is an agent running with pod tools for a person who has no "
+        "claim on them"
+    )
+    # And the refusal was about this pod, not about this platform: reaching the
+    # bot bought them nothing they did not already have.
+    await outsider.is_refused_pod(forged.pod)
 
 
 @scenario("A delivery without the platform's secret is rejected")
