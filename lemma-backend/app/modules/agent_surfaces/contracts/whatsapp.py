@@ -23,6 +23,8 @@ import httpx
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
@@ -112,7 +114,12 @@ async def _shared_row() -> WhatsAppNumberEntity | None:
             return await WhatsAppNumberRepository(
                 SqlAlchemyUnitOfWork(session)
             ).shared_number()
-    except Exception:
+    except SQLAlchemyError:
+        # The database, specifically -- unreachable, or a migration not yet run.
+        # Not `Exception`: a `TypeError` here is a bug in this resolver, and
+        # swallowing it would turn a broken fallback into a silently
+        # settings-only deployment that nobody notices until the pool is the
+        # only place the credentials live.
         logger.warning(
             "agent_surfaces.whatsapp_contract.shared_number_unreadable.degraded",
             exc_info=True,
