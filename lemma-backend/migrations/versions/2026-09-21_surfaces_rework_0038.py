@@ -66,12 +66,7 @@ sorted a table that grows per thread.
 accepted it. It had already misled the codebase once: `ThreadShape`'s docstring
 records that asking `surface.mode` gave a channel thread the DM reset.
 
-## Two phases, and why
-
-Everything that carries **correctness** is transactional: the tables, the check
-constraints, the three unique indexes, the dropped column. Losing uniqueness for
-the length of a concurrent build is worse than holding a lock for it, so no
-unique index here is built `CONCURRENTLY`.
+## Two phases, and the order they have to be in
 
 Everything that is only a **cost** — the 21 drops and the 5 non-unique adds —
 runs `CONCURRENTLY` in an autocommit block. All three tables are on the inbound
@@ -82,18 +77,35 @@ says CONCURRENTLY "cannot run inside Alembic's transaction"; that is stale —
 `script.py.mako` wraps the migrations it *generates* in
 `op.get_context().autocommit_block()`, and this hand-written one opens its own.)
 
-The cost of that second phase is that it is **not atomic**, and entering an
-autocommit block commits the first phase. Interrupt a
+Everything that carries **correctness** is transactional: the tables, the check
+constraints, the three unique indexes, the dropped column. Losing uniqueness for
+the length of a concurrent build is worse than holding a lock for it, so no
+unique index here is built `CONCURRENTLY`.
+
+**The concurrent half goes first, and that ordering is load-bearing.**
+`autocommit_block()` commits whatever preceded it, and Alembic stamps the
+revision only after `upgrade()` returns. With the transactional half first, a
+concurrent statement failing would commit the tables, leave the revision
+unstamped, and send the retry into `create_table` against tables that already
+exist — a migration that cannot be re-run, which is the one property the
+concurrent half needs from everything around it. Inverted, a failure in the
+concurrent half leaves nothing behind to trip over, and the non-idempotent half
+commits in the same transaction as the stamp. `downgrade` is ordered the same
+way for the same reason.
+
+What remains is that the concurrent half is **not atomic**. Interrupt a
 `CREATE INDEX CONCURRENTLY` and Postgres leaves the index behind marked
-`INVALID`, which `IF NOT EXISTS` then treats as present and skips. So every
-statement in phase two is idempotent and the revision is safe to re-run — but
-find the invalid ones first::
+`INVALID` — the name exists, so `IF NOT EXISTS` skips the rebuild and the
+planner ignores the result, which is a retry that reports success and leaves the
+read unindexed after the drops have removed what used to serve it. So
+`_repair_invalid` looks for `indisvalid = false` and drops it concurrently
+before each build, rather than leaving an operator to find them with::
 
     SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
 
-and `DROP INDEX CONCURRENTLY` whatever it names. None of the five added
-concurrently is unique, so there is no half-built constraint to reason about —
-only a useless index the planner ignores.
+None of the five added concurrently is unique, so there is no half-built
+constraint to reason about — only a useless index, and now one that gets
+rebuilt.
 
 Revision ID: 0038_surfaces_rework
 Revises: 0037_email_challenges
@@ -423,8 +435,57 @@ def _create_onboarding_tables() -> None:
     )
 
 
+def _repair_invalid(name: str) -> None:
+    """Drop a half-built index so `IF NOT EXISTS` stops mistaking it for done.
+
+    An interrupted `CREATE INDEX CONCURRENTLY` leaves the index behind with
+    `indisvalid = false`. The name exists, so `IF NOT EXISTS` skips the rebuild
+    and the planner ignores the index -- a retry that reports success and leaves
+    the read it was for unindexed, after the drops below have already removed
+    what used to serve it. Checking first is what makes re-running this
+    revision actually recover rather than merely not crash.
+    """
+    half_built = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE c.relname = :name AND NOT i.indisvalid"
+            ),
+            {"name": name},
+        )
+        .scalar()
+    )
+    if half_built:
+        op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+
+
+def _reshape_indexes_concurrently() -> None:
+    """The cost-only half: idempotent, resumable, and never atomic."""
+    with op.get_context().autocommit_block():
+        for name, table, body in _ADDED:
+            _repair_invalid(name)
+            op.execute(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} {body}"
+            )
+        # After the replacements exist, so no read is left without an index.
+        for name, _table, _body in _DROPPED:
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+
+
 def upgrade() -> None:
-    # --- Phase one: everything that carries correctness, in one transaction.
+    # --- Phase one: cost only, and it goes first because it is the half that
+    # can fail without being resumable-by-luck. `autocommit_block()` commits
+    # whatever preceded it, and Alembic stamps the revision only after
+    # `upgrade()` returns -- so with the transactional half first, a concurrent
+    # statement failing here would leave the tables created, the revision
+    # unstamped, and a retry dying on `create_table` against tables that
+    # already exist. Inverted, a failure here leaves nothing behind, and the
+    # non-idempotent half below commits in the same transaction as the stamp.
+    _reshape_indexes_concurrently()
+
+    # --- Phase two: everything that carries correctness, in one transaction
+    # with the revision stamp.
     _create_onboarding_tables()
 
     _refuse_duplicate_agent_surfaces()
@@ -456,20 +517,13 @@ def upgrade() -> None:
     # `_DROPPED`.
     op.drop_column("agent_surfaces", "mode")
 
-    # --- Phase two: cost only. Entering this block commits the above.
-    with op.get_context().autocommit_block():
-        for name, table, body in _ADDED:
-            op.execute(
-                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} {body}"
-            )
-        # After the replacements exist, so no read is left without an index.
-        for name, _table, _body in _DROPPED:
-            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
-
 
 def downgrade() -> None:
+    # Concurrent half first here too, and for the same reason: the column and
+    # tables restored below must land in the transaction that carries the stamp.
     with op.get_context().autocommit_block():
         for name, table, body in _DROPPED:
+            _repair_invalid(name)
             op.execute(
                 f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} {body}"
             )
