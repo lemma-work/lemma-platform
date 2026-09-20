@@ -20,7 +20,7 @@ from sqlalchemy import select
 from app.core.helpers.identifiers import normalize_mobile_e164
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
@@ -216,7 +216,7 @@ async def recognize_sender(
                     uow,
                     route_id=route.id,
                     event=event,
-                    linker=get_surface_event_handler(uow),
+                    linker=build_surface_ingress(uow),
                 )
         except PersonalRouteUnavailable:
             # The route died between one message and the next: the pod deleted,

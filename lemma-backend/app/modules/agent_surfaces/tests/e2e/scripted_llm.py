@@ -52,7 +52,7 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -155,7 +155,7 @@ async def run_scripted_agent_run(
         agent_name=agent_name,
         observer=SurfaceAgentRunProgressObserver(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            service_factory=build_surface_event_handler,
+            service_factory=build_surface_ingress,
         ),
     )
 
@@ -188,7 +188,7 @@ async def process_ingress_and_run_scripted(
     short deterministic echo) — zero setup needed for "a run completes" tests.
     """
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     context = await handler.prepare_ingress(request)
     assert context is not None
     await uow.commit()

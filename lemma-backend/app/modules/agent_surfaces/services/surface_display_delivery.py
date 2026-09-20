@@ -38,24 +38,13 @@ def build_agent_surface_ingress_service(
 ) -> AgentSurfaceIngressService:
     """Construct the ingress service from a unit of work.
 
-    Mirrors ``AppWorkerContext.build_surface_event_handler`` and the FastAPI
-    ``build_surface_event_handler`` dependency; kept here so the tool delivery
-    path does not depend on the worker/request context.
+    One function, in `composition`. This was the third copy of the same
+    four-argument constructor; its predecessor here said it "mirrors" the other
+    two and named a fourth that no longer exists.
     """
-    from app.modules.agent_surfaces.api.dependencies import surface_repository_factory
-    from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
-        SqlAlchemySurfaceRoutingResolutionAdapter,
-    )
-    from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-        SurfaceConversationLinkRepository,
-    )
+    from app.modules.agent_surfaces.composition import build_surface_ingress
 
-    return AgentSurfaceIngressService(
-        uow=uow,
-        surface_repository=surface_repository_factory(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-    )
+    return build_surface_ingress(uow)
 
 
 async def deliver_display_resource_to_surface(

@@ -102,9 +102,9 @@ async def persist_managed_bot(
             )
             account.display_name = f"@{bot_username}" if bot_username else str(bot_id)
             account = await accounts.update(account)
-        from app.modules.agent_surfaces.api.dependencies import get_surface_service
+        from app.modules.agent_surfaces.composition import build_surface_service
 
-        surface_service = get_surface_service(uow)
+        surface_service = build_surface_service(uow)
         surface = await surface_service.surface_repository.get_by_pod_and_name(
             pod_id=setup.pod_id,
             name=setup.surface_name,

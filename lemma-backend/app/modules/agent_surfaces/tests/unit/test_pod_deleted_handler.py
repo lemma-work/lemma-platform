@@ -21,7 +21,7 @@ from app.modules.agent_surfaces.domain.events import (
     SurfaceWebhookReceivedEvent,
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
-from app.modules.agent_surfaces.api import dependencies as surface_dependencies
+from app.modules.agent_surfaces import composition
 from app.modules.agent_surfaces.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
 from app.modules.agent_surfaces.services.chat_onboarding import OnboardingIngressResult
@@ -52,7 +52,7 @@ async def test_on_pod_deleted_removes_pod_surfaces(monkeypatch):
     service = AsyncMock()
     service.delete_all_surfaces_for_pod.return_value = 2
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "get_surface_service", lambda uow: service)
+    monkeypatch.setattr(handlers, "build_surface_service", lambda uow: service)
 
     pod_id = uuid4()
     event = {
@@ -75,7 +75,7 @@ async def test_on_pod_deleted_removes_pod_surfaces(monkeypatch):
 async def test_on_pod_deleted_ignores_non_delete_events(monkeypatch):
     service = AsyncMock()
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "get_surface_service", lambda uow: service)
+    monkeypatch.setattr(handlers, "build_surface_service", lambda uow: service)
 
     event = {
         "event_type": "pod.member.removed",
@@ -106,7 +106,7 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     handler.prepare_ingress.return_value = context
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="telegram", payload={"update_id": 1}),
@@ -136,7 +136,7 @@ async def test_a_batched_delivery_enqueues_one_job_per_message(monkeypatch):
     handler.split_webhook_deliveries = lambda request: [request, request, request]
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
 
     envelope = _webhook_envelope(source="whatsapp", payload={"entry": []})
     event_id = envelope["event_id"]
@@ -171,7 +171,7 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     handler.try_handle_interaction.return_value = True
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="telegram", payload={"callback_query": {}}),
@@ -198,7 +198,7 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     handler.prepare_ingress.return_value = None
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="telegram", payload={"update_id": 2}),
@@ -224,7 +224,7 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     handler.try_handle_interaction.return_value = False
     handler.prepare_ingress.return_value = None
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
     surface_id = uuid4()
 
     await handlers.handle_surface_webhook(
@@ -286,7 +286,7 @@ async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
     handler.split_webhook_deliveries = lambda request: [request]
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
 
     # Returning cleanly is the whole assertion: FastStream acknowledges only a
     # handler that does not raise, and the ack is what lets the message leave
@@ -319,7 +319,7 @@ def test_the_worker_builder_scopes_its_own_units_of_work():
     """
     factory = object()
 
-    service = surface_dependencies.build_surface_event_handler_with_factory(factory)
+    service = composition.build_worker_surface_ingress(factory)
 
     assert service._uow_factory is factory
 
@@ -355,7 +355,7 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     handler.try_handle_lifecycle.return_value = True
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
-    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="slack", payload={"type": "event_callback"}),

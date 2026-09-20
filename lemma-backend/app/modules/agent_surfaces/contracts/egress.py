@@ -112,16 +112,16 @@ def build_progress_observer(
     `agent`, which has no business knowing how a surfaces service is wired --
     and the wiring it used to pass lived on `AppWorkerContext`, so `app/core`
     had to know too. Both copies had already drifted from
-    `api/dependencies.get_surface_event_handler`, which is the one this uses.
+    `composition.build_surface_ingress`, which is the one this uses.
     """
-    from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
+    from app.modules.agent_surfaces.composition import build_surface_ingress
     from app.modules.agent_surfaces.services.progress_observer import (
         SurfaceAgentRunProgressObserver,
     )
 
     return SurfaceAgentRunProgressObserver(
         uow_factory=uow_factory,
-        service_factory=get_surface_event_handler,
+        service_factory=build_surface_ingress,
     )
 
 
