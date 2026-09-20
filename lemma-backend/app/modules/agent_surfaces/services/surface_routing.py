@@ -278,6 +278,7 @@ class SurfaceRoutingMixin:
         agent_id = surface.agent_id
         is_email = surface.mode is SurfaceMode.EMAIL
         return ResolvedSurfaceRoute(
+            pod_id=surface.pod_id,
             agent_id=agent_id,
             agent_name=await self._agent_name_for_agent_id(agent_id),
             agent_display_name=await self._agent_display_name(agent_id),
@@ -301,6 +302,7 @@ class SurfaceRoutingMixin:
             return None
         agent_id = surface.agent_id
         return ResolvedSurfaceRoute(
+            pod_id=surface.pod_id,
             agent_id=agent_id,
             agent_name=await self._agent_name_for_agent_id(agent_id),
             agent_display_name=await self._agent_display_name(agent_id),
@@ -338,6 +340,7 @@ class SurfaceRoutingMixin:
         # bot answers, not who answers in it. That is always the surface's agent.
         agent_id = surface.agent_id
         return ResolvedSurfaceRoute(
+            pod_id=surface.pod_id,
             agent_id=agent_id,
             agent_name=await self._agent_name_for_agent_id(agent_id),
             agent_display_name=await self._agent_display_name(agent_id),

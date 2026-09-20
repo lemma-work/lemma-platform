@@ -156,11 +156,6 @@ async def prepare_personal_dm_context(
     installation = await SurfaceRepository(uow).get(route.installation_surface_id)
     user = await active_chat_user(uow, route.user_id)
     assert installation is not None and user is not None
-    # This is a conversation-building snapshot only. The stored installation,
-    # its credentials and every channel route remain owned by the source pod.
-    destination = installation.model_copy(
-        update={"pod_id": route.pod_id, "agent_id": route.pod_id}
-    )
     resolved = ResolvedSurfaceUser(
         internal_user_id=user.id,
         external_user_id=event.sender_external_user_id,
@@ -168,7 +163,13 @@ async def prepare_personal_dm_context(
         phone=user.mobile_number,
         display_name=user.first_name,
     )
+    # The installation is passed as itself now. It used to arrive here as a copy
+    # with the personal pod and agent swapped in, purely so the link builder
+    # would read the right pod off it -- which meant a surface briefly meant
+    # something other than what it is, and pod reads downstream took the
+    # installation's pod instead of this one.
     assistant = ResolvedSurfaceRoute(
+        pod_id=route.pod_id,
         agent_id=route.pod_id,
         agent_name=DEFAULT_POD_AGENT_NAME,
         agent_display_name="Assistant",
@@ -176,7 +177,7 @@ async def prepare_personal_dm_context(
         route_key=f"personal:{route.id}",
     )
     link, title = await linker._get_or_create_conversation_link(
-        surface=destination, parsed=event, resolved_user=resolved, route=assistant
+        surface=installation, parsed=event, resolved_user=resolved, route=assistant
     )
     return SurfaceChatContext(
         personal_dm_route_id=route.id,

@@ -159,7 +159,11 @@ async def organization_for_new_pod(
 
 
 async def has_somewhere_to_talk(
-    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, platform: SurfacePlatform
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    user_id: UUID,
+    platform: SurfacePlatform,
+    system_credentials_only: bool,
 ) -> bool:
     """Is there any live surface on this platform in a pod this person is in?
 
@@ -168,6 +172,13 @@ async def has_somewhere_to_talk(
     deterministic tiebreak -- and choosing is none of this module's business.
     What matters here is the empty case: no candidate at all is the one state
     routing cannot answer, and the one worth interrupting someone to fix.
+
+    `system_credentials_only` matches how the transport narrowed the same
+    lookup: a message on the shared bot can only be served by a system-
+    credential surface, while one on a company's own installation is not
+    restricted that way. Getting this wrong in the permissive direction would
+    interrupt people who route perfectly well; in the strict direction it would
+    miss the ones who do not.
     """
     pod_ids = await SqlAlchemySurfaceRoutingResolutionAdapter(uow).get_user_pod_ids(
         user_id
@@ -183,7 +194,9 @@ async def has_somewhere_to_talk(
     return bool(
         await uow.session.scalar(
             select(
-                routing_surfaces(platform.value, system_credentials_only=True)
+                routing_surfaces(
+                    platform.value, system_credentials_only=system_credentials_only
+                )
                 .where(AgentSurface.pod_id.in_(pod_ids))
                 .exists()
             )

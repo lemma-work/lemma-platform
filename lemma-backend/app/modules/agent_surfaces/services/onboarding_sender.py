@@ -277,18 +277,18 @@ async def offer_workspace_choice(
     event = transport.event
     if not event.is_dm:
         return None
-    if transport.surface is None:
-        # The shared bot. Here a destination is not stored on the identity --
-        # routing works it out per message from the pods this person is in,
-        # picking by saved default, then continuity, then a tiebreak. So the
-        # question is not "is there a route" but "is there anything to choose
-        # among at all": asking otherwise would interrupt every working person
-        # on the busiest path in the product, every message.
-        async with uows() as uow:
-            if await has_somewhere_to_talk(
-                uow, user_id=verified_user_id, platform=event.platform
-            ):
-                return None
+    # Asked on both paths, because "no route stored on the identity" is not the
+    # same as "nowhere to talk". Ordinary ingestion still routes an installation
+    # message by pod membership, so a stored route missing is no reason to
+    # interrupt anybody -- only the absence of any candidate is.
+    async with uows() as uow:
+        if await has_somewhere_to_talk(
+            uow,
+            user_id=verified_user_id,
+            platform=event.platform,
+            system_credentials_only=transport.surface is None,
+        ):
+            return None
     async with uows() as uow:
         pods = await candidate_pods(
             uow,

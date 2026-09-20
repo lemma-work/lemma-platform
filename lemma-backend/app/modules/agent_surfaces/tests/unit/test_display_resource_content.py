@@ -26,7 +26,12 @@ CONVERSATION_ID = uuid4()
 
 
 def _target(adapter, platform: str = "TELEGRAM"):
+    # `pod_id` sits on the target, not on the surface: the surface is the
+    # installation the reply goes out through, and for a personal DM the
+    # conversation lives in a different pod. Reading it off the surface is the
+    # bug this shape prevents.
     return SimpleNamespace(
+        pod_id=POD_ID,
         surface=SimpleNamespace(
             pod_id=POD_ID, surface_type=SimpleNamespace(value=platform)
         ),
