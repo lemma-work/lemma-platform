@@ -13,10 +13,6 @@ from app.modules.agent_surfaces.platforms.common import (
 from app.modules.agent_surfaces.services.surface_configuration import (
     SurfaceConfigurationMixin,
 )
-from app.modules.agent_surfaces.services.surface_progress import (
-    SurfaceProgressMixin,
-)
-from app.modules.agent_surfaces.services.surface_egress import SurfaceEgressMixin
 from app.modules.agent_surfaces.services.surface_interactions import (
     SurfaceInteractionMixin,
 )
@@ -83,14 +79,21 @@ logger = get_logger(__name__)
 
 class AgentSurfaceIngressService(
     SurfaceConfigurationMixin,
-    SurfaceProgressMixin,
     SurfaceRoutingMixin,
     SurfaceConversationLinkMixin,
     SurfaceIngressCredentialMixin,
     SurfaceInboundMixin,
-    SurfaceEgressMixin,
     SurfaceInteractionMixin,
 ):
+    """Everything between a webhook arriving and a run starting.
+
+    Four of the eight bases this had are gone, to `SurfaceEgress`,
+    `SurfaceProgress`, `SurfaceDelivery` and `MemberReach` -- objects with
+    constructors rather than mixins, because the outbound half never read an
+    inbound event and the inbound half reached it exactly once, from a method
+    that already had a unit of work in hand.
+    """
+
     def __init__(
         self,
         *,

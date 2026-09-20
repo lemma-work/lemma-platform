@@ -181,11 +181,6 @@ class UndeliverableReason:
         "The surface could not deliver the message. It is worth trying again; "
         "if it keeps failing, check the surface's connection."
     )
-    #: A wiring fault in this process rather than anything the caller did, so it
-    #: says what the caller can act on and the detail goes to the log.
-    SEND_NOT_AVAILABLE = (
-        "Sending on this surface is unavailable right now. Try again shortly."
-    )
 
     @staticmethod
     def wrong_tenant_on(channel: str) -> str:

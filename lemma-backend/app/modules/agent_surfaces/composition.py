@@ -43,6 +43,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapt
 from app.modules.agent_surfaces.infrastructure.adapters.user_directory_adapter import (
     IdentityUserDirectoryAdapter,
 )
+from app.modules.agent_surfaces.infrastructure.adapters.registry import (
+    SurfacePlatformAdapterRegistry,
+)
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
@@ -56,12 +59,16 @@ from app.modules.agent_surfaces.infrastructure.repositories.surface_repository i
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
+from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
+from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
+from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.email_surface_provisioning import (
     provision_email_surface,
 )
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
+from app.modules.agent_surfaces.services.member_reach import MemberReach
 from app.modules.agent_surfaces.services.notification_rate_limiter import (
     NotificationRateLimiter,
 )
@@ -110,6 +117,42 @@ def build_surface_connection_resolver(
     )
 
 
+def build_surface_delivery(uow: SqlAlchemyUnitOfWork) -> SurfaceDelivery:
+    """Where a reply goes and how it leaves, without deciding what it says."""
+    return SurfaceDelivery(
+        uow=uow,
+        surface_repository=build_surface_repository(uow),
+        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+        adapter_registry=SurfacePlatformAdapterRegistry(),
+        credential_resolver=SurfaceCredentialResolver(uow=uow),
+    )
+
+
+def build_surface_egress(uow: SqlAlchemyUnitOfWork) -> SurfaceEgress:
+    """Everything a run says on a surface, and the live message it says it in.
+
+    Three objects rather than one because they speak two platform APIs over one
+    resolution: `SurfaceDelivery` finds the thread and hands over an envelope,
+    `SurfaceEgress` decides what the envelope contains, `SurfaceProgress` edits
+    a message already on screen. They were four mixins on the ingress service,
+    which also handled inbound events, routing and configuration.
+    """
+    delivery = build_surface_delivery(uow)
+    return SurfaceEgress(
+        uow=uow, delivery=delivery, progress=SurfaceProgress(delivery=delivery)
+    )
+
+
+def build_member_reach(uow: SqlAlchemyUnitOfWork) -> MemberReach:
+    """Sending to a named person on a named surface, with no thread in hand."""
+    return MemberReach(
+        egress=build_surface_egress(uow),
+        pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+        external_user_repository=ExternalSurfaceUserRepository(uow),
+        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+    )
+
+
 def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressService:
     """The request-mode ingress service: every collaborator bound to one session."""
     return AgentSurfaceIngressService(
@@ -140,7 +183,7 @@ def build_notification_service(uow: SqlAlchemyUnitOfWork) -> NotificationService
         surface_repository=build_surface_repository(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
         external_user_repository=ExternalSurfaceUserRepository(uow),
-        ingress_service=build_surface_ingress(uow),
+        egress=build_surface_egress(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
         rate_limiter=NotificationRateLimiter(),
         surface_provisioner=_build_system_email_provisioner(uow),

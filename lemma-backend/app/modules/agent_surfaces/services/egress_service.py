@@ -1,32 +1,32 @@
-"""Putting a message onto a surface, whichever way it was asked for.
+"""What Lemma says on a chat surface, and how each thing is shaped to be said.
 
-Everything here answers the same question -- given a conversation and something
-to say, which surface, adapter and thread does it go to, and in what shape does
-that platform accept it. Split from :mod:`ingress_service` because it is the
-outbound half: nothing here reads an inbound event.
+Eight verbs, one per thing an agent run can put in front of a person: an answer,
+a file or table, a set of questions, an approval card, a sign-in link, a voice
+note, and -- for a recipient who has never written to us -- a cold email. Each
+builds one :class:`SurfaceEnvelope` and hands it to :class:`SurfaceDelivery`,
+which is the only thing here that talks to a platform.
+
+This was ``SurfaceEgressMixin``, one of eight bases on a service that also
+handled inbound events, routing, configuration and interactions; the type
+checker could not see where ``self.uow`` or ``self.adapter_registry`` came from,
+and those unresolvable names were 85% of the repository's baselined type errors.
+It is an object with a constructor now. The live-progress verbs went to
+:class:`SurfaceProgress` and ``send_to_member`` to :class:`MemberReach`, each
+for a reason written down there.
+
+Nothing here reads an inbound event.
 """
 
 from __future__ import annotations
 
-from pydantic import ValidationError
-
-from app.modules.agent_surfaces.services.surface_member_send import (
-    SurfaceMemberSendMixin,
-)
-from app.modules.agent_surfaces.services.surface_route_types import (
-    SurfaceEgressTarget,
-)
-
 from typing import Any
 from uuid import UUID
 
+from pydantic import ValidationError
 
-from app.core.infrastructure.db.transaction_locks import connection_released
+from app.core.file_types import is_untyped_mime
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.infrastructure.adapters.registry import (
-    SurfacePlatformAdapterRegistry,
-)
-
+from app.core.log.log import get_logger
 from app.modules.agent.contracts import (
     AskUserRequest,
     DisplayResourceRequest,
@@ -36,50 +36,37 @@ from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
 from app.modules.agent.contracts.conversations_for_surfaces import PendingInteraction
+from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity
+from app.modules.agent_surfaces.domain.envelope import EnvelopeVoice, SurfaceEnvelope
+from app.modules.agent_surfaces.domain.ports import ColdEmailThread
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
+from app.modules.agent_surfaces.services.cold_email_thread import (
+    build_cold_email_thread,
+)
 from app.modules.agent_surfaces.services.display_resource_content import (
     apply_file_facts,
     apply_table_rows,
-    resolve_pod_file_parts,
     load_pod_file_bytes,
+    resolve_pod_file_parts,
     resolve_table_preview,
 )
-from app.modules.agent_surfaces.domain.envelope import (
-    EnvelopeVoice,
-    SurfaceEnvelope,
+from app.modules.agent_surfaces.domain.models import SurfaceApprovalRenderPlan
+from app.modules.agent_surfaces.services.display_resource_renderer import (
+    build_approval_render_plan,
+    build_ask_user_render_plan,
+    build_display_resource_render_plan,
 )
+from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
+from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
 from app.modules.agent_surfaces.services.one_reply_attachments import (
     files_held_for_one_reply,
-)
-from app.modules.agent_surfaces.domain.errors import AgentSurfaceError
-from app.modules.agent_surfaces.domain.entities import (
-    AgentSurfaceEntity,
-)
-from app.modules.agent_surfaces.domain.ports import (
-    ColdEmailThread,
-)
-from app.modules.agent_surfaces.services.cold_email_thread import (
-    build_cold_email_thread,
 )
 from app.modules.agent_surfaces.services.pending_interaction_resume import (
     # Re-exported: ``_ask_user_request_dict`` still has a caller here (the
     # native-interaction path) and a unit test that imports it from this module.
     _ask_user_request_dict,
 )
-from app.modules.agent_surfaces.services.display_resource_renderer import (
-    build_approval_render_plan,
-    build_ask_user_render_plan,
-    build_display_resource_render_plan,
-)
-from app.core.file_types import is_untyped_mime
-from app.core.log.log import get_logger
-
-from app.modules.agent_surfaces.services.free_text_answer import (
-    remember_a_prompt_that_arrived_as_words,
-)
-from app.modules.agent_surfaces.services.surface_egress_target import (
-    SurfaceEgressTargetMixin,
-)
+from app.modules.agent_surfaces.services.surface_route_types import SurfaceEgressTarget
 from app.modules.agent_surfaces.services.surface_sign_in import (
     sign_in_prompt_envelope,
 )
@@ -89,7 +76,7 @@ logger = get_logger(__name__)
 
 def _approval_plan(
     pending: PendingInteraction, conversation_id: UUID, tool_call_id: str | None
-) -> Any:
+) -> SurfaceApprovalRenderPlan:
     """The approval card for a paused ``request_approval`` call."""
     tool_args = pending.tool_args
     # An approve-for-session button only makes sense when the paused call
@@ -106,15 +93,26 @@ def _approval_plan(
     )
 
 
-class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
-    #: What the class this is mixed into supplies, declared so a type checker
-    #: can see it. Reaching for `self.uow` without saying so made every use an
-    #: error, and those sat in the baseline where a *new* mistake of the same
-    #: shape would have been indistinguishable. Optional to match the concrete
-    #: service, which takes either a unit of work or a factory. Annotations
-    #: only -- `__init__` still does the assigning.
-    uow: "SqlAlchemyUnitOfWork | None"
-    adapter_registry: SurfacePlatformAdapterRegistry
+class SurfaceEgress:
+    """Everything an agent run can say on a surface, as envelopes."""
+
+    def __init__(
+        self,
+        *,
+        uow: SqlAlchemyUnitOfWork,
+        delivery: SurfaceDelivery,
+        progress: SurfaceProgress,
+    ) -> None:
+        self.uow = uow
+        self.delivery = delivery
+        # Held rather than inherited. The run observer drives both halves and
+        # used to reach thirteen flattened verbs on one namespace; `egress` and
+        # `egress.progress` say which API each call is speaking.
+        self.progress = progress
+
+    async def agent_name_for_surface(self, surface: AgentSurfaceEntity) -> str | None:
+        """Part of :class:`SurfaceNotificationEgressPort`; see `agent_naming`."""
+        return await self.delivery.agent_name_for_surface(surface)
 
     async def open_cold_email_thread(
         self,
@@ -128,22 +126,22 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
     ) -> ColdEmailThread | None:
         """Email somebody who has never written to us, and remember the thread.
 
-        Cannot reuse ``_resolve_egress_target``: that resolves a *stored link*,
-        and the whole point of a cold open is that there is not one yet. Returns
-        None when the surface is inactive, has no adapter, or sits on a platform
-        that cannot start a thread — all of which are "no", not failures.
+        The one verb here that does not resolve a target: a target is a *stored
+        link*, and the whole point of a cold open is that there is not one yet.
+        Returns None when the surface is inactive, has no adapter, or sits on a
+        platform that cannot start a thread -- all of which are "no", not
+        failures.
         """
         if not surface.is_active:
             return None
-        adapter = self.adapter_registry.get(surface.surface_type)
+        adapter = self.delivery.adapter_registry.get(surface.surface_type)
         if adapter is None:
             return None
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
             return None
-        credentials = await self._resolve_credentials(surface)
         sent = await adapter.send_cold_email(
-            credentials=credentials,
+            credentials=await self.delivery.egress_credentials(surface),
             recipient_email=recipient_email,
             subject=subject,
             message=clean_message,
@@ -163,7 +161,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         message: str,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        target = await self._resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
         # Safety net: never deliver model reasoning/thinking tokens
@@ -172,17 +170,13 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         clean_message = sanitize_user_visible_text(message)
         if not clean_message:
             return False
-        return await self._deliver_envelope(
+        return await self.delivery.deliver_envelope(
             target,
             envelope=SurfaceEnvelope(
                 text=clean_message,
-                files=await files_held_for_one_reply(
-                    uow=self.uow,
-                    target=target,
-                    conversation_id=conversation_id,
-                ),
+                files=await self._held_files(target, conversation_id),
             ),
-            metadata=await self._egress_metadata_with_agent_name(target, metadata),
+            metadata=await self.delivery.egress_metadata(target, metadata),
             conversation_id=conversation_id,
         )
 
@@ -190,19 +184,22 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         self,
         *,
         conversation_id: UUID,
-        request: DisplayResourceRequest | dict[str, Any],
+        request: DisplayResourceRequest,
         tool_call_id: str | None = None,
         tool_output: object | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> bool:
-        target = await self._resolve_egress_target(conversation_id)
+        """Show one resource -- a file, a table, a card -- on the surface.
+
+        ``request`` is the validated model. It used to also accept the raw dict
+        and validate it here, which no caller ever needed: the tool path hands
+        over a `DisplayResourceRequest` and always did. Only two tests used the
+        dict, so the branch existed to be tested.
+        """
+        target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
-        display_request = (
-            request
-            if isinstance(request, DisplayResourceRequest)
-            else DisplayResourceRequest.model_validate(request)
-        )
+        display_request = request
         render_plan = build_display_resource_render_plan(
             pod_id=target.pod_id,
             request=display_request,
@@ -210,7 +207,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
             tool_call_id=tool_call_id,
             tool_output=tool_output,
         )
-        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
+        message_metadata = await self.delivery.egress_metadata(target, metadata)
         # A FILE resource is delivered as a native attachment when it fits the
         # platform's cap; otherwise we fall through to the card render plan, whose
         # action is a Lemma app deep link — openable only by a recipient with pod
@@ -238,7 +235,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                 # that cannot attach at all -- Teams has no outbound file upload
                 # -- would otherwise degrade to a line naming the file, which
                 # tells the recipient less than the link card it replaced.
-                return await self._deliver_envelope(
+                return await self.delivery.deliver_envelope(
                     target,
                     envelope=SurfaceEnvelope(
                         files=[
@@ -266,7 +263,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                     request=display_request,
                 ),
             )
-        return await self._deliver_envelope(
+        return await self.delivery.deliver_envelope(
             target,
             envelope=SurfaceEnvelope(resources=[render_plan]),
             metadata=message_metadata,
@@ -284,54 +281,25 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
 
         Triggered by the WAITING run event. Reads the paused ask_user tool-call
         args, builds a render plan, and delivers it as native tappable choices
-        where supported (Slack/Teams) or a formatted text message otherwise. The
-        user's answer is routed back via ``handle_interaction`` (native submit) or
-        the typed-reply path in ``start_agent_chat``.
+        where supported or a formatted text message otherwise. The user's answer
+        is routed back via ``handle_interaction`` (native submit) or the
+        typed-reply path in ``start_agent_chat``.
         """
-        target = await self._resolve_egress_target(conversation_id)
-        if target is None:
+        target = await self.delivery.resolve_egress_target(conversation_id)
+        request = await self._pending_ask_user(conversation_id)
+        if target is None or request is None:
             logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
+                "agent_surfaces.egress.ask_user_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
-        pending = await agent_conversations.pending_question(self.uow, conversation_id)
-        if pending is None:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-        raw_request = _ask_user_request_dict(pending.tool_args)
-        if raw_request is None:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-        try:
-            request = AskUserRequest.model_validate(raw_request)
-        except ValidationError:
-            # Stored tool_args that will not validate is a bug in whatever wrote
-            # them, not a transient — and the question is dropped here.
-            logger.warning(
-                "agent_surfaces.ingress_service.surface_ask_user_render_skipped.degraded",
-                conversation_id=conversation_id,
-                exc_info=True,
-            )
-            return False
-        if not request.questions:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_ask_user_not_delivered.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
+        pending, validated = request
         plan = build_ask_user_render_plan(
-            request=request,
+            request=validated,
             conversation_id=conversation_id,
             tool_call_id=pending.tool_call_id or str(tool_call_id or ""),
         )
-        return await self._deliver_envelope(
+        return await self.delivery.deliver_envelope(
             target,
             # The lead-in and the question are one thing the person receives.
             # Sent as two, they arrive as two on a chat surface and as two
@@ -339,15 +307,34 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
             envelope=SurfaceEnvelope(
                 text=narration,
                 choices=plan,
-                files=await files_held_for_one_reply(
-                    uow=self.uow,
-                    target=target,
-                    conversation_id=conversation_id,
-                ),
+                files=await self._held_files(target, conversation_id),
             ),
-            metadata=await self._egress_metadata_with_agent_name(target, None),
+            metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
+
+    async def _pending_ask_user(
+        self, conversation_id: UUID
+    ) -> tuple[PendingInteraction, AskUserRequest] | None:
+        """The paused ``ask_user`` call and its validated request, or nothing."""
+        pending = await agent_conversations.pending_question(self.uow, conversation_id)
+        if pending is None:
+            return None
+        raw_request = _ask_user_request_dict(pending.tool_args)
+        if raw_request is None:
+            return None
+        try:
+            request = AskUserRequest.model_validate(raw_request)
+        except ValidationError:
+            # Stored tool_args that will not validate is a bug in whatever wrote
+            # them, not a transient — and the question is dropped here.
+            logger.warning(
+                "agent_surfaces.egress.ask_user_render_skipped.degraded",
+                conversation_id=conversation_id,
+                exc_info=True,
+            )
+            return None
+        return (pending, request) if request.questions else None
 
     async def send_sign_in_prompt_for_conversation(
         self,
@@ -361,7 +348,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         False when this conversation has no surface: a web-only one has the
         browser pane beside it, so there is nothing to deliver.
         """
-        target = await self._resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(conversation_id)
         envelope = (
             None
             if target is None
@@ -374,14 +361,14 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         )
         if target is None or envelope is None:
             logger.debug(
-                "agent_surfaces.ingress_service.surface_sign_in_not_delivered.diagnostic",
+                "agent_surfaces.egress.sign_in_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
-        return await self._deliver_envelope(
+        return await self.delivery.deliver_envelope(
             target,
             envelope=envelope,
-            metadata=await self._egress_metadata_with_agent_name(target, None),
+            metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
 
@@ -401,14 +388,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         ``start_agent_chat`` via ``maybe_resume_pending_interaction``). Never
         swallowed.
         """
-        target = await self._resolve_egress_target(conversation_id)
-        if target is None:
-            logger.debug(
-                "agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic",
-                conversation_id=conversation_id,
-            )
-            return False
-
+        target = await self.delivery.resolve_egress_target(conversation_id)
         # The approval pause specifically, not "whatever this conversation is
         # waiting on". `get_pending_user_interaction` answers the second, across
         # every pausing tool, and the check below then threw away anything that
@@ -418,102 +398,23 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         # whole relationship with a person, that is permanent: dev's standing
         # Telegram chat stopped rendering approval cards entirely.
         pending = await agent_conversations.pending_approval(self.uow, conversation_id)
-        if pending is None or not pending.is_approval:
+        if target is None or pending is None or not pending.is_approval:
             logger.debug(
-                "agent_surfaces.ingress_service.surface_request_approval_not_delivered.diagnostic",
+                "agent_surfaces.egress.approval_not_delivered.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
-
-        return await self._deliver_approval(
-            target,
-            plan=_approval_plan(pending, conversation_id, tool_call_id),
-            metadata=await self._egress_metadata_with_agent_name(target, None),
-            conversation_id=conversation_id,
-            narration=narration,
-        )
-
-    async def _deliver_approval(
-        self,
-        target: SurfaceEgressTarget,
-        *,
-        plan: Any,
-        metadata: dict[str, Any],
-        conversation_id: UUID,
-        narration: str | None = None,
-    ) -> bool:
-        """Native buttons, then a text prompt, then admit it reached nobody."""
-        return await self._deliver_envelope(
+        # Native buttons, then a text prompt, then admit it reached nobody.
+        return await self.delivery.deliver_envelope(
             target,
             envelope=SurfaceEnvelope(
                 text=narration,
-                decision=plan,
-                files=await files_held_for_one_reply(
-                    uow=self.uow,
-                    target=target,
-                    conversation_id=conversation_id,
-                ),
+                decision=_approval_plan(pending, conversation_id, tool_call_id),
+                files=await self._held_files(target, conversation_id),
             ),
-            metadata=metadata,
+            metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
-
-    async def _deliver_envelope(
-        self,
-        target: SurfaceEgressTarget,
-        *,
-        envelope: SurfaceEnvelope,
-        metadata: dict[str, Any],
-        conversation_id: UUID,
-    ) -> bool:
-        """Hand one envelope to the platform and say whether it arrived.
-
-        The ladder -- native, then the part's own text, then nothing -- lives in
-        ``BaseSurfaceAdapter.deliver`` now, and this is what is left once the two
-        hand-written copies of it are gone: resolve a target, release the
-        connection, report.
-
-        Returning ``False`` matters as much as delivering. A prompt that reached
-        nobody leaves the run WAITING on an answer that cannot come, so the
-        caller un-dedupes and a later WAITING event tries again.
-        """
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            try:
-                receipt = await target.adapter.deliver(
-                    credentials=target.credentials,
-                    event=target.event,
-                    envelope=envelope,
-                    metadata=metadata,
-                )
-            except AgentSurfaceError:
-                # An error, not a warning, and with the traceback. This is the
-                # end of every ladder: native, then text, then nobody. A run
-                # left WAITING on a prompt that reached nobody cannot be seen or
-                # acted on by the person it was for, and the two events this
-                # path replaced were deliberately raised to `error` on main for
-                # exactly that reason.
-                logger.error(
-                    "agent_surfaces.egress.envelope_reached_nobody.failed",
-                    conversation_id=str(conversation_id),
-                    platform=target.surface.surface_type.value,
-                    exc_info=True,
-                )
-                return False
-            if receipt.degraded:
-                logger.debug(
-                    "agent_surfaces.egress.envelope_degraded.diagnostic",
-                    conversation_id=str(conversation_id),
-                    platform=target.surface.surface_type.value,
-                    parts=receipt.degraded,
-                )
-        await remember_a_prompt_that_arrived_as_words(
-            self.uow,
-            conversation_id=conversation_id,
-            envelope=envelope,
-            receipt=receipt,
-        )
-        return True
 
     async def send_voice_note_for_conversation(
         self,
@@ -528,7 +429,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         (Telegram sendVoice / audio message); falls back to a normal file
         attachment (an inline audio player on most platforms) and then a link.
         """
-        target = await self._resolve_egress_target(conversation_id)
+        target = await self.delivery.resolve_egress_target(conversation_id)
         if target is None:
             return False
         # The caption is model-authored — strip any reasoning before delivery.
@@ -541,7 +442,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         )
         if loaded is None:
             logger.debug(
-                "agent_surfaces.ingress_service.surface_voice_note_fetch_conversation.diagnostic",
+                "agent_surfaces.egress.voice_note_not_fetched.diagnostic",
                 conversation_id=conversation_id,
             )
             return False
@@ -555,7 +456,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
         # Voice note, then the same bytes as an attachment (an audio player on
         # most platforms), then the link card. Three rungs that used to be
         # written out here; the envelope walks them.
-        return await self._deliver_envelope(
+        return await self.delivery.deliver_envelope(
             target,
             envelope=SurfaceEnvelope(
                 voice=EnvelopeVoice(
@@ -572,27 +473,17 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                     ),
                 )
             ),
-            metadata=await self._egress_metadata_with_agent_name(target, None),
+            metadata=await self.delivery.egress_metadata(target),
             conversation_id=conversation_id,
         )
 
-    async def send_processing_indicator_for_conversation(
-        self,
-        *,
-        conversation_id: UUID,
-        metadata: dict[str, Any] | None = None,
-    ) -> bool:
-        target = await self._resolve_egress_target(conversation_id)
-        if target is None:
-            return False
-        indicator_metadata = await self._egress_metadata_with_agent_name(
-            target, metadata
+    async def _held_files(self, target: SurfaceEgressTarget, conversation_id: UUID):
+        """Pod files a one-reply surface has been holding for this very message.
+
+        Drained, not copied: whichever envelope goes out first takes them, which
+        is why an apology for a lost decision deliberately does not call any of
+        the verbs above.
+        """
+        return await files_held_for_one_reply(
+            uow=self.uow, target=target, conversation_id=conversation_id
         )
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
-            await target.adapter.add_processing_indicator(
-                credentials=target.credentials,
-                event=target.event,
-                metadata=indicator_metadata,
-            )
-            return True

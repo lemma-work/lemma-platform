@@ -12,6 +12,8 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.models import ColdEmailSendResult
+from app.modules.agent_surfaces.domain.models import StreamAppendResult
 from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
 from app.modules.agent_surfaces.domain.models import SurfaceChannelInfo
 from app.modules.agent_surfaces.domain.models import SurfaceContextMessage
@@ -281,12 +283,46 @@ class SurfacePlatformAdapterPort(Protocol):
         event: ParsedInboundSurfaceEvent,
         progress_text: str,
         progress_handle: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None: ...
 
     # Show live progress text on platforms that support an editable message
     # (Telegram, Teams). Returns an opaque handle (e.g. {"message_id": ...}) to
     # pass back on the next call so the same message is edited. None → platform
     # has no editable progress; the caller keeps using typing indicators.
+    #
+    # `metadata` carries the agent's display name and icon: the answer that
+    # closes this same message is authored by the agent, so the stream must be
+    # too or the thread reads as two speakers. It was on every adapter and
+    # absent here, which is why `SurfaceProgress` calling it was a type error.
+
+    async def append_stream_text(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        progress_handle: dict[str, Any] | None,
+        text: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> StreamAppendResult: ...
+
+    # Append model text to a live stream, token by token. The default on
+    # `BaseSurfaceAdapter` reports `appended=False`, which is every platform
+    # except Slack.
+
+    async def finish_progress(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        progress_handle: dict[str, Any] | None,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool: ...
+
+    # Close a live stream *with* the final answer, so steps and answer are one
+    # message. False means "I did not deliver it" and the caller falls back to
+    # clearing progress and sending the answer separately.
 
     async def end_progress(
         self,
@@ -298,6 +334,21 @@ class SurfacePlatformAdapterPort(Protocol):
 
     # Clean up the streaming progress message at run end (e.g. delete it before
     # the final answer is delivered).
+
+    async def send_cold_email(
+        self,
+        *,
+        credentials: dict[str, Any],
+        recipient_email: str,
+        subject: str,
+        message: str,
+        thread_seed_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> ColdEmailSendResult | None: ...
+
+    # Start a thread with somebody who has never written to us. None on every
+    # platform that cannot address a recipient it has no prior message from,
+    # which is all of them except mail.
 
     async def download_attachment(
         self,

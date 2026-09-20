@@ -20,17 +20,15 @@ from fastapi import Depends
 from app.core.api.dependencies import UoWDep, get_uow_factory
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.composition import (
+    build_member_reach,
     build_notification_service,
     build_surface_connection_resolver,
-    build_surface_ingress,
     build_surface_service,
     build_surface_webhook_security_service,
     build_telegram_manager_service,
     build_user_surfaces_service,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
-)
+from app.modules.agent_surfaces.services.member_reach import MemberReach
 from app.modules.agent_surfaces.services.notification_service import (
     NotificationService,
 )
@@ -59,8 +57,8 @@ def get_surface_connection_resolver(uow: UoWDep) -> SurfaceConnectionResolver:
     return build_surface_connection_resolver(uow)
 
 
-def get_surface_event_handler(uow: UoWDep) -> AgentSurfaceIngressService:
-    return build_surface_ingress(uow)
+def get_member_reach(uow: UoWDep) -> MemberReach:
+    return build_member_reach(uow)
 
 
 def get_notification_service(uow: UoWDep) -> NotificationService:
@@ -90,9 +88,7 @@ SurfaceConnectionResolverDep = Annotated[
 UserSurfacesServiceDep = Annotated[
     UserSurfacesService, Depends(get_user_surfaces_service)
 ]
-SurfaceEventHandlerDep = Annotated[
-    AgentSurfaceIngressService, Depends(get_surface_event_handler)
-]
+MemberReachDep = Annotated[MemberReach, Depends(get_member_reach)]
 SurfaceWebhookSecurityServiceDep = Annotated[
     SurfaceWebhookSecurityService, Depends(get_surface_webhook_security_service)
 ]

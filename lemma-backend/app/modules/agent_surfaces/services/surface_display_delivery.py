@@ -3,7 +3,7 @@
 The ``display_resource`` tool delivers a resource to a third-party chat surface
 itself (rather than the run observer re-parsing the event stream). It calls
 ``deliver_display_resource_to_surface`` with the validated request; this module
-owns the unit-of-work + ingress-service construction so the tool needs no
+owns the unit-of-work + egress construction so the tool needs no
 surface-specific wiring on its context.
 
 Works uniformly for both agent harnesses: the in-process LEMMA harness and the
@@ -26,25 +26,23 @@ from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.log.log import get_logger
 from app.modules.agent.contracts import DisplayResourceRequest
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
-)
+from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 
 logger = get_logger(__name__)
 
 
-def build_agent_surface_ingress_service(
-    uow: SqlAlchemyUnitOfWork,
-) -> AgentSurfaceIngressService:
-    """Construct the ingress service from a unit of work.
+def build_egress(uow: SqlAlchemyUnitOfWork) -> SurfaceEgress:
+    """The outbound objects, from a unit of work.
 
     One function, in `composition`. This was the third copy of the same
-    four-argument constructor; its predecessor here said it "mirrors" the other
-    two and named a fourth that no longer exists.
+    four-argument ingress constructor; its predecessor here said it "mirrors"
+    the other two and named a fourth that no longer exists. What the three
+    functions below actually need is the sending half, which is now its own
+    object.
     """
-    from app.modules.agent_surfaces.composition import build_surface_ingress
+    from app.modules.agent_surfaces.composition import build_surface_egress
 
-    return build_surface_ingress(uow)
+    return build_surface_egress(uow)
 
 
 async def deliver_display_resource_to_surface(
@@ -63,7 +61,7 @@ async def deliver_display_resource_to_surface(
     """
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            service = build_agent_surface_ingress_service(uow)
+            service = build_egress(uow)
             return await service.send_display_resource_for_conversation(
                 conversation_id=conversation_id,
                 request=request,
@@ -92,7 +90,7 @@ async def deliver_surface_message_to_surface(
     """
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            service = build_agent_surface_ingress_service(uow)
+            service = build_egress(uow)
             return await service.send_agent_message_for_conversation(
                 conversation_id=conversation_id,
                 message=message,
@@ -119,7 +117,7 @@ async def deliver_voice_note_to_surface(
     """
     try:
         async with create_uow_from_session_maker(async_session_maker) as uow:
-            service = build_agent_surface_ingress_service(uow)
+            service = build_egress(uow)
             return await service.send_voice_note_for_conversation(
                 conversation_id=conversation_id,
                 path=file_path,

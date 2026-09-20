@@ -27,9 +27,7 @@ from app.modules.agent_surfaces.platforms.platform_capabilities import (
 from app.modules.agent_surfaces.platforms.rendering import (
     ThinkingStreamFilter,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
-)
+from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.progress_display import (
     ProgressDisplayMixin,
 )
@@ -101,10 +99,10 @@ class SurfaceAgentRunProgressObserver(
         self,
         *,
         uow_factory: UnitOfWorkFactory,
-        service_factory: Callable[[SqlAlchemyUnitOfWork], AgentSurfaceIngressService],
+        egress_factory: Callable[[SqlAlchemyUnitOfWork], SurfaceEgress],
     ) -> None:
         self.uow_factory = uow_factory
-        self.service_factory = service_factory
+        self.egress_factory = egress_factory
         self._typing_task: asyncio.Task[None] | None = None
         self._last_text_progress_at = 0.0
         self._last_text_progress: str | None = None
@@ -272,8 +270,8 @@ class SurfaceAgentRunProgressObserver(
         handle = self._progress_handle
         try:
             async with self.uow_factory() as uow:
-                service = self.service_factory(uow)
-                delivered = await service.finish_progress_for_conversation(
+                service = self.egress_factory(uow)
+                delivered = await service.progress.finish_with_answer(
                     conversation_id=conversation.id,
                     progress_handle=handle,
                     message=message,
@@ -296,8 +294,8 @@ class SurfaceAgentRunProgressObserver(
         handle = self._progress_handle
         self._progress_handle = None
         async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
-            await service.clear_progress_for_conversation(
+            service = self.egress_factory(uow)
+            await service.progress.clear_progress(
                 conversation_id=conversation_id,
                 progress_handle=handle,
             )
@@ -457,8 +455,8 @@ class SurfaceAgentRunProgressObserver(
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
-            return await service.send_processing_indicator_for_conversation(
+            service = self.egress_factory(uow)
+            return await service.progress.show_typing(
                 conversation_id=conversation_id,
                 metadata=metadata,
             )
@@ -471,7 +469,7 @@ class SurfaceAgentRunProgressObserver(
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
+            service = self.egress_factory(uow)
             kwargs: dict[str, Any] = {
                 "conversation_id": conversation_id,
                 "message": message,

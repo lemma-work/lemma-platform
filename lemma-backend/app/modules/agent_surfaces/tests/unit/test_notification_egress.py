@@ -36,9 +36,7 @@ from app.modules.agent_surfaces.services.cold_email_thread import (
     build_cold_email_thread,
     cold_thread_seed_id,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
-)
+from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
     UndeliverableReason,
@@ -111,7 +109,7 @@ class _Conversation:
         self.updated_at = datetime.now(timezone.utc)
 
 
-def _egress_double() -> AgentSurfaceIngressService:
+def _egress_double() -> SurfaceEgress:
     """A stand-in that can only answer what the real class actually declares.
 
     Configured by *reading* each attribute and setting ``return_value``, never
@@ -119,8 +117,12 @@ def _egress_double() -> AgentSurfaceIngressService:
     property: an autospec mock raises ``AttributeError`` when you read a method
     the class does not have, but happily accepts one you assign. Assigning here
     would rebuild the blind spot this file exists to close.
+
+    It autospecs `SurfaceEgress` rather than the ingress service, and the change
+    was not cosmetic: this failed the moment the three methods moved, which is
+    the property working.
     """
-    double = create_autospec(AgentSurfaceIngressService, instance=True)
+    double = create_autospec(SurfaceEgress, instance=True)
     double.agent_name_for_surface.return_value = "Ops"
     double.send_agent_message_for_conversation.return_value = True
     double.open_cold_email_thread.return_value = None
@@ -436,7 +438,7 @@ def _notification_service(
         surface_repository=surface_repo,
         conversation_link_repository=_links(),
         external_user_repository=external_users,
-        ingress_service=_egress_double(),
+        egress=_egress_double(),
         pod_membership_port=membership,
         surface_provisioner=provisioner,
     )
@@ -779,7 +781,7 @@ async def test_the_daily_email_cap_stops_the_send_but_not_the_notification(
     assert delivered.delivery_status == NotificationDeliveryStatus.FAILED
     assert "emails today" in (delivered.delivery_error or "")
     # Never reached the platform: the point is that the mail does not go out.
-    service.ingress.open_cold_email_thread.assert_not_awaited()
+    service.egress.egress.open_cold_email_thread.assert_not_awaited()
 
 
 async def test_a_chat_channel_does_not_spend_the_email_budget(
@@ -967,7 +969,7 @@ async def test_a_cold_open_carries_both_names_to_the_platform():
 async def test_an_unknown_agent_name_is_absent_rather_than_None():
     """A present key beats ``setdefault``, and would unname every chat bot.
 
-    ``_egress_metadata_with_agent_name`` fills ``agent_display_name`` from the
+    ``SurfaceDelivery.metadata_for`` fills ``agent_display_name`` from the
     surface with ``setdefault``, so writing an explicit None here does not mean
     "we don't know" — it wins, and the reply goes out with no name and no icon
     on a platform that had both.
@@ -1200,7 +1202,7 @@ async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user
         recipient_user_id=recipient_user_id,
         actor_user_id=actor_user_id,
     )
-    service.ingress.open_cold_email_thread.return_value = _thread_for(
+    service.egress.egress.open_cold_email_thread.return_value = _thread_for(
         surface,
         cold_thread_seed_id(notification_id=notification.id, surface=surface),
         "bob@example.com",
@@ -1209,7 +1211,7 @@ async def _deliver_and_read_header(monkeypatch, *, actor_user_id, recipient_user
     await service.deliver(
         notification, agent_name="Priya", actor_display_name="Deepak Jha"
     )
-    return service.ingress.open_cold_email_thread.await_args.kwargs
+    return service.egress.egress.open_cold_email_thread.await_args.kwargs
 
 
 async def test_a_message_to_its_own_asker_carries_no_header(monkeypatch):

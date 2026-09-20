@@ -438,21 +438,28 @@ def test_surface_send_policy_round_trips_through_stored_json():
     assert SurfaceSendPolicy.model_validate(stored).allow_send is True
 
 
-def test_the_ingress_service_answers_every_call_delivery_makes():
+def test_the_egress_object_answers_every_call_delivery_makes():
     """One line that would have caught both shipped AttributeErrors.
 
-    Notification delivery holds the ingress service through a port. Two of the
+    Notification delivery holds the sending object through a port. Two of the
     methods it declared were never written on the implementation, and nothing
     noticed: the attribute was untyped, so mypy saw nothing, and every existing
     test ran in a pod with no surface, so delivery returned before calling
     either. A structural check costs nothing and fails the moment the two drift.
+
+    It is `SurfaceEgress` that has to satisfy the port now. The third method the
+    port asks for, ``agent_name_for_surface``, was a routing method reached
+    through a flattened namespace; it is a free function in `agent_naming` that
+    both objects delegate to, which is the only reason this assertion is still
+    one line.
     """
     from app.modules.agent_surfaces.domain.ports import (
         SurfaceNotificationEgressPort,
     )
+    from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 
-    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
-    assert isinstance(service, SurfaceNotificationEgressPort)
+    egress = SurfaceEgress.__new__(SurfaceEgress)
+    assert isinstance(egress, SurfaceNotificationEgressPort)
 
 
 def test_an_agent_never_speaks_through_another_agents_surface():

@@ -19,7 +19,6 @@ from app.core.authorization.delegation import DEFAULT_RESPONDER_NAME
 from app.modules.agent.contracts import (
     conversations_for_surfaces as agent_conversations,
 )
-from app.modules.agent.contracts import agents as agent_directory
 from app.modules.agent_surfaces.services.surface_route_types import (
     ResolvedSurfaceRoute,
 )
@@ -31,6 +30,7 @@ from uuid import UUID
 
 from app.core.infrastructure.db.transaction_locks import connection_released
 
+from app.modules.agent_surfaces.services.agent_naming import agent_name_for_agent_id
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -419,24 +419,6 @@ class SurfaceRoutingMixin:
             ),
         )
 
-    async def agent_name_for_surface(
-        self,
-        surface: AgentSurfaceEntity,
-    ) -> str | None:
-        """Whose name a message on this surface goes out under.
-
-        Public because notification delivery names the agent when it opens a
-        conversation for a recipient -- see ``SurfaceNotificationEgressPort``.
-        It was private for exactly as long as it took that cross-service call to
-        raise ``AttributeError`` in production; keeping the port and this method
-        in step is what stops the next rename doing the same.
-
-        The assistant's real name, not its display name: this feeds
-        `create_conversation`, which resolves it back to a row. Use
-        `_agent_display_name` for anything a person reads.
-        """
-        return await self._agent_name_for_agent_id(surface.agent_id)
-
     async def _agent_display_name(self, agent_id: UUID | None) -> str:
         """What this agent calls itself in front of a person.
 
@@ -462,9 +444,7 @@ class SurfaceRoutingMixin:
         self,
         agent_id: UUID | None,
     ) -> str | None:
-        if agent_id is None:
-            return None
-        return await agent_directory.agent_name_for_id(self.uow.session, agent_id)
+        return await agent_name_for_agent_id(self.uow, agent_id)
 
     def _resolve_platform(self, source: str) -> str | None:
         platform = SurfacePlatform.from_source(source)

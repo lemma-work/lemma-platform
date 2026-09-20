@@ -52,7 +52,10 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.composition import build_surface_ingress
+from app.modules.agent_surfaces.composition import (
+    build_surface_egress,
+    build_surface_ingress,
+)
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -155,7 +158,7 @@ async def run_scripted_agent_run(
         agent_name=agent_name,
         observer=SurfaceAgentRunProgressObserver(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            service_factory=build_surface_ingress,
+            egress_factory=build_surface_egress,
         ),
     )
 

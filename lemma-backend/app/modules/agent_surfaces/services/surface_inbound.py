@@ -44,6 +44,7 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
     surface_setup_context,
     unresolved_sender_context,
 )
+from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.core.log.log import get_logger
 
 from app.modules.agent_surfaces.services.surface_inbound_message import (
@@ -131,10 +132,10 @@ def _needs_mention_verification(
 class SurfaceInboundMixin(SurfaceInboundMessageMixin):
     #: Supplied by `AgentSurfaceIngressService`, which composes these mixins.
     #: `None` in the worker's factory mode, which is why every reader here goes
-    #: through `getattr(..., "session", None)` -- the idiom `surface_egress`
-    #: already uses. Declared so these reads type-check instead of reading as
-    #: "this class has no `uow`", the shape of most of this file's baselined
-    #: type errors.
+    #: through `getattr(..., "session", None)`. Declared so these reads
+    #: type-check instead of reading as "this class has no `uow`", the shape of
+    #: most of this file's baselined type errors. The outbound half no longer
+    #: needs the idiom: `SurfaceDelivery` requires a unit of work.
     uow: SqlAlchemyUnitOfWork | None
 
     async def _prepare_platform_webhook_ingress(
@@ -312,7 +313,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 installation_id=(surface.account_id or surface.id) if surface else None,
             )
         display_name = agent_display_name(
-            (await self.agent_name_for_surface(surface)) if surface else None
+            (await agent_name_for_surface(self.uow, surface)) if surface else None
         )
         # `prepare_unrouted_context` opens with a Redis dedup claim, and
         # `_resolve_sender_identity` above has flushed an external-user upsert --
@@ -348,7 +349,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             return None
 
         credentials = await self._resolve_credentials(surface)
-        fallback_agent_name = await self.agent_name_for_surface(surface)
+        fallback_agent_name = await agent_name_for_surface(self.uow, surface)
         fallback_agent_display_name = agent_display_name(fallback_agent_name)
 
         # `enrich_or_drop` is module-level: no session of its own to release.

@@ -13,6 +13,7 @@ from uuid import UUID
 
 
 from app.core.authorization.current import reset_current_context, set_current_context
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.factory import create_authorization_data_service
 
 from app.modules.agent.contracts import (
@@ -202,7 +203,7 @@ class SurfaceInboundMessageMixin:
                 # supersedes the pause with an auto-DENY. The pause is still
                 # there, so saying so and letting them answer again is the one
                 # move that loses nothing.
-                await self._say_the_decision_was_not_recorded(context)
+                await _say_the_decision_was_not_recorded(context, uow)
                 return None
             if outcome is ResumeOutcome.NOT_A_DECISION:
                 return await agent_conversations.start_surface_turn(
@@ -217,29 +218,6 @@ class SurfaceInboundMessageMixin:
             return None
         finally:
             reset_current_context(token)
-
-    async def _say_the_decision_was_not_recorded(
-        self, context: SurfaceChatContext
-    ) -> None:
-        """Tell the person their answer did not land, so they can give it again.
-
-        A bare envelope rather than ``send_agent_message_for_conversation``:
-        that one drains the files ``display_resource`` is holding for a
-        one-reply surface, and attaching them to an apology would consume them
-        before the reply they were meant for. ``_deliver_envelope`` already
-        reports a delivery that reached nobody, so there is nothing to catch
-        here — and if resolving the target fails too, this inbound is failing
-        loudly rather than quietly, which is the point.
-        """
-        target = await self._resolve_egress_target(context.conversation_id)
-        if target is None:
-            return
-        await self._deliver_envelope(
-            target,
-            envelope=SurfaceEnvelope(text=_DECISION_NOT_RECORDED),
-            metadata={},
-            conversation_id=context.conversation_id,
-        )
 
     async def _fetch_channel_context(
         self,
@@ -307,3 +285,35 @@ class SurfaceInboundMessageMixin:
             ]
         )
         return list(zip(items, transcripts))
+
+
+async def _say_the_decision_was_not_recorded(
+    context: SurfaceChatContext, uow: SqlAlchemyUnitOfWork
+) -> None:
+    """Tell the person their answer did not land, so they can give it again.
+
+    A bare envelope rather than ``SurfaceEgress.send_agent_message_for_conversation``:
+    that one drains the files ``display_resource`` is holding for a one-reply
+    surface, and attaching them to an apology would consume them before the
+    reply they were meant for. ``SurfaceDelivery.deliver_envelope`` already reports a
+    delivery that reached nobody, so there is nothing to catch here -- and if
+    resolving the target fails too, this inbound is failing loudly rather than
+    quietly, which is the point.
+
+    Built from the unit of work the caller already has open rather than taken as
+    a collaborator: this is the single edge from the inbound half of the module
+    into the outbound one, and holding an egress object on the ingress service
+    for it is what made the two one class.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_delivery
+
+    delivery = build_surface_delivery(uow)
+    target = await delivery.resolve_egress_target(context.conversation_id)
+    if target is None:
+        return
+    await delivery.deliver_envelope(
+        target,
+        envelope=SurfaceEnvelope(text=_DECISION_NOT_RECORDED),
+        metadata={},
+        conversation_id=context.conversation_id,
+    )
