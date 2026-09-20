@@ -134,6 +134,7 @@ class SurfaceInstallationRepositoryPort(Protocol):
         pod_ids: Collection[UUID] | None = None,
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
+        surface_identity_id: str | None = None,
     ) -> list[AgentSurfaceEntity]: ...
 
     async def list_active_native_receiver_surfaces(

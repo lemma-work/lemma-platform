@@ -64,6 +64,7 @@ def routing_surfaces(
     pod_ids: Collection[UUID] | None = None,
     external_workspace_id: str | None = None,
     system_credentials_only: bool = False,
+    surface_identity_id: str | None = None,
 ) -> Select:
     """The live surfaces of one platform, narrowed by whatever the event carries.
 
@@ -94,6 +95,22 @@ def routing_surfaces(
     that is the read it exists to avoid. Callers pass it only when the sender is
     already known; an unknown sender has no pods and must see the whole fan-in.
 
+    ``surface_identity_id`` is the number an inbound WhatsApp message arrived
+    on, and it is an *additional* predicate rather than a replacement for
+    ``pod_ids``. A pooled number is shared across organisations and exclusive
+    within one, so the number alone names a number and not a customer -- it is
+    ambiguous by construction. Narrowed to the sender's pods first, the pair is
+    at most one surface per organisation the sender belongs to, which is the
+    answer. Applying it *instead* of ``pod_ids`` would route a message to
+    whichever organisation happened to sort first.
+
+    **A surface holding no number still matches.** Every WhatsApp surface alive
+    today has ``surface_identity_id`` NULL, because ``resolve_binding`` has
+    never populated it for the platform; a strict equality would take every one
+    of them out of routing the moment this predicate was passed, which is an
+    outage rather than a narrowing. So it reads "this number, or no number yet",
+    and the NULL half retires on its own as allocation fills the column in.
+
     ``system_credentials_only`` is the shared-webhook narrowing. A platform-wide
     webhook arrives on shared system credentials, so a surface bound to its own
     account cannot be what it is for -- and without the narrowing, continuity for
@@ -115,5 +132,10 @@ def routing_surfaces(
         statement = statement.where(
             AgentSurface.account_id.is_(None),
             AgentSurface.credential_mode == SurfaceCredentialMode.SYSTEM.value,
+        )
+    if surface_identity_id:
+        statement = statement.where(
+            (AgentSurface.surface_identity_id == surface_identity_id)
+            | AgentSurface.surface_identity_id.is_(None)
         )
     return statement

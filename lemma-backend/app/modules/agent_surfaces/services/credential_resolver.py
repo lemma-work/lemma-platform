@@ -30,6 +30,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.surface_connectors import (
     SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
 from app.modules.connectors.contracts import AuthConfigSource
 from app.modules.connectors.contracts.surfaces import (
     SurfaceAccount,
@@ -145,6 +148,51 @@ class SurfaceCredentialResolver:
     def __init__(self, *, uow):
         self._uow = uow
 
+    async def _pooled_overrides(
+        self, surface: AgentSurfaceEntity | None
+    ) -> dict[str, str]:
+        """What the number this surface holds answers with, if it holds one.
+
+        Returns only overrides, so the caller merges rather than this wrapping:
+        that keeps the signature `dict[str, str]` end to end. The credentials
+        currency of this module is `dict[str, Any]`, honestly so -- provider
+        payloads are genuinely shapeless -- but a pooled number's four fields
+        are all strings, and taking the looser type here would have added two
+        untyped escapes to buy nothing.
+
+        `native_credentials` is a pure function over settings and stays that
+        way: it is called from synchronous code and from paths with no unit of
+        work, and giving it a database read would make every one of those a lie.
+        The pool read belongs here instead, where there is a `uow` and where the
+        result is resolved once per delivery.
+
+        Absent overrides leave the settings answer standing, which is what makes
+        a single-number deployment need no rows. A surface holding no number --
+        every WhatsApp surface today, since `resolve_binding` has never
+        populated `surface_identity_id` for the platform -- is left alone
+        entirely, so this is inert until allocation runs.
+        """
+        if (
+            surface is None
+            or surface.surface_type is not SurfacePlatform.WHATSAPP
+            or not surface.surface_identity_id
+        ):
+            return {}
+        number = await WhatsAppNumberRepository(self._uow).get_by_phone_number_id(
+            surface.surface_identity_id
+        )
+        if number is None:
+            # The row was removed while a surface still named it. The settings
+            # number is the wrong answer but it is a working one, and refusing
+            # here would take the surface off the air over an inventory edit.
+            logger.warning(
+                "agent_surfaces.credential_resolver.pooled_number_missing.degraded",
+                surface_id=str(surface.id),
+                phone_number_id=surface.surface_identity_id,
+            )
+            return {}
+        return number.credential_overrides()
+
     async def for_surface(
         self,
         surface: AgentSurfaceEntity,
@@ -155,9 +203,15 @@ class SurfaceCredentialResolver:
         # Every branch returns through ``with_surface_identity``; see there for
         # why that is a property of the function rather than of the caller.
         if prefer_native and has_native_credentials(surface.surface_type):
-            return native_credentials(surface.surface_type, surface=surface)
+            return {
+                **native_credentials(surface.surface_type, surface=surface),
+                **await self._pooled_overrides(surface),
+            }
         if surface.account_id is None:
-            return native_credentials(surface.surface_type, surface=surface)
+            return {
+                **native_credentials(surface.surface_type, surface=surface),
+                **await self._pooled_overrides(surface),
+            }
         credentials = await self.for_account(
             surface.account_id, force_refresh=force_refresh
         )
@@ -182,7 +236,10 @@ class SurfaceCredentialResolver:
         has to answer rather than something a reader has to infer.
         """
         if not account_id:
-            return native_credentials(platform, surface=surface)
+            return {
+                **native_credentials(platform, surface=surface),
+                **await self._pooled_overrides(surface),
+            }
         credentials = await self.for_account(account_id, force_refresh=force_refresh)
         return with_surface_identity(credentials, surface)
 

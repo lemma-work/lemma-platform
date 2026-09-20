@@ -188,6 +188,33 @@ class SurfaceWebhookSecurityService:
             status_code=404,
         )
 
+    def verify_whatsapp_app_secret(
+        self,
+        *,
+        headers: dict[str, str],
+        raw_body: bytes,
+        app_secret: str | None,
+    ) -> None:
+        """Check ``X-Hub-Signature-256`` against one caller-chosen app secret.
+
+        The two verifiers above each *derive* the secret: from settings for the
+        platform endpoint, from the surface for the surface endpoint. A pooled
+        WhatsApp number has neither -- it is named by the URL it arrived on and
+        its secret comes from its own row -- so the caller is the only thing
+        that knows which secret is meant, and this lets it say so without
+        reaching for a private method or restating Meta's signature scheme.
+
+        Still honours the deployment-wide verification switch, so a developer
+        machine behaves here exactly as it does on every other webhook route.
+        """
+        if not self.verification_enabled():
+            return
+        self._verify_whatsapp_signature(
+            headers=headers,
+            raw_body=raw_body,
+            app_secret=app_secret,
+        )
+
     async def verify_surface_request(
         self,
         *,

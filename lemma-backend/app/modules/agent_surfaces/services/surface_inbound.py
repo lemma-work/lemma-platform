@@ -237,12 +237,24 @@ class SurfaceInboundMixin:
         deployment -- one per provisioned person -- read and hydrated on the way
         to picking the handful this sender can use. Narrowing it looks circular,
         because selection needs the sender and the sender was resolved from
-        `candidates[0]`'s credentials. It is not. Every candidate here is by
-        definition a system-credential surface, and `for_surface` answers those
-        with `native_credentials`, which comes from settings: the same values
-        whichever row asks, and no database round trip to get them. The
-        installation id is not needed either -- `resolve` consults it only for
-        Slack and Teams, and neither has a shared bot.
+        `candidates[0]`'s credentials. It is not, and the reason changed when
+        WhatsApp numbers became a pool.
+
+        It *used* to be that every candidate is a system-credential surface and
+        `native_credentials` answers those from settings -- the same values
+        whichever row asks. That is no longer true: a pooled number carries its
+        own access token, so which row asks now decides what comes back. The
+        ordering survives because sender resolution needs no credentials at all.
+        `WhatsAppPlatformService.fetch_sender_profile` reads `sender_phone` and
+        `sender_display_name` straight off the parsed webhook and makes no API
+        call, so there is nothing for a token to authorise. The installation id
+        is not needed either -- `resolve` consults it only for Slack and Teams,
+        and neither has a shared bot.
+
+        The arriving number then narrows beside the sender's pods rather than
+        instead of them. It has to be beside: a pooled number may be held by
+        several organisations, so on its own it names a number and not a
+        customer.
 
         An unknown sender, or one who belongs to none of these pods, gets no
         candidates from here and the caller reads the fan-in unnarrowed. That is
@@ -272,7 +284,10 @@ class SurfaceInboundMixin:
             return [], resolved_user, None
         return (
             await self.surface_repository.list_active_for_routing(
-                platform, pod_ids=pod_ids, system_credentials_only=True
+                platform,
+                pod_ids=pod_ids,
+                system_credentials_only=True,
+                surface_identity_id=parsed.reply_target.get("phone_number_id"),
             ),
             resolved_user,
             pod_ids,

@@ -34794,6 +34794,103 @@
         }
       }
     },
+    "/surfaces/webhooks/whatsapp/numbers/{phone_number_id}": {
+      "get": {
+        "description": "Webhook verification endpoint for one pooled WhatsApp number.",
+        "operationId": "surface.webhook.verify_whatsapp_number",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "phone_number_id",
+            "required": true,
+            "schema": {
+              "title": "Phone Number Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify a pooled WhatsApp number's own callback URL",
+        "tags": [
+          "Agent Surfaces (Ingress)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "surface.webhook",
+          "result": "entity",
+          "verb": "verify_whatsapp_number"
+        }
+      },
+      "post": {
+        "description": "Handle a delivery to one pooled WhatsApp number's own callback URL.",
+        "operationId": "surface.webhook.handle_whatsapp_number",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "phone_number_id",
+            "required": true,
+            "schema": {
+              "title": "Phone Number Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Handle a webhook delivered to one pooled WhatsApp number",
+        "tags": [
+          "Agent Surfaces (Ingress)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "surface.webhook"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "surface.webhook",
+          "result": "entity",
+          "verb": "handle_whatsapp_number"
+        }
+      }
+    },
     "/surfaces/webhooks/{platform}": {
       "get": {
         "description": "Webhook verification endpoint for platforms that require it.",

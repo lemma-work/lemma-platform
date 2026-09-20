@@ -184,6 +184,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.consent.token_request_failed.degraded': EventSpec('warning', frozenset({'tenant_id'})),
     'agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic': EventSpec('debug', frozenset({'account_id'})),
     'agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic': EventSpec('debug', frozenset()),
+    'agent_surfaces.credential_resolver.pooled_number_missing.degraded': EventSpec('warning', frozenset({'phone_number_id', 'surface_id'})),
     'agent_surfaces.delivery.native_attachment_unavailable.diagnostic': EventSpec('debug', frozenset({'platform'})),
     'agent_surfaces.delivery.native_choices_unavailable.diagnostic': EventSpec('debug', frozenset({'platform'})),
     'agent_surfaces.delivery.native_decision_unavailable.diagnostic': EventSpec('debug', frozenset({'platform'})),

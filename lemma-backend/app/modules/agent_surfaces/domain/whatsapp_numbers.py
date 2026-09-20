@@ -97,3 +97,23 @@ class WhatsAppNumberEntity(Entity):
             self.role is WhatsAppNumberRole.ALLOCATABLE
             and self.status is WhatsAppNumberStatus.AVAILABLE
         )
+
+    def credential_overrides(self) -> dict[str, str]:
+        """What this number answers with, for laying over the settings defaults.
+
+        Only the fields it actually has. A `None` here means "this number does
+        not say", and the deployment-wide setting is the answer -- so omitting
+        the key is the whole mechanism by which a pool of one, or a pool whose
+        numbers share an app, needs no rows and no duplicated secrets.
+
+        Returning `""` for an absent value instead would be the bug this shape
+        exists to avoid: it would override the setting with nothing, and the
+        send would fail on an empty token that looks configured.
+        """
+        answers = {
+            "phone_number_id": self.phone_number_id,
+            "waba_id": self.waba_id,
+            "access_token": self.access_token,
+            "app_secret": self.app_secret,
+        }
+        return {key: value for key, value in answers.items() if value}

@@ -147,6 +147,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         pod_ids: Collection[UUID] | None = None,
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
+        surface_identity_id: str | None = None,
     ) -> list[AgentSurfaceEntity]:
         """The live surfaces an inbound event could be for; see `routing_surfaces`."""
         result = await self.session.execute(
@@ -156,6 +157,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
                 pod_ids=pod_ids,
                 external_workspace_id=external_workspace_id,
                 system_credentials_only=system_credentials_only,
+                surface_identity_id=surface_identity_id,
             )
         )
         return [model.to_entity() for model in result.scalars().all()]

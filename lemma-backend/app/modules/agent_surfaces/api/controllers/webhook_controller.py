@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+from collections.abc import Mapping
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
@@ -35,6 +36,10 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _verify_inbound_request,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
+from app.modules.agent_surfaces.domain.whatsapp_numbers import WhatsAppNumberEntity
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.onboarding_slack_modal import (
     open_onboarding_modal,
@@ -164,6 +169,153 @@ async def handle_platform_webhook(
     return {"message": "Webhook received"}
 
 
+#: One pooled WhatsApp number's own callback URL.
+#:
+#: Meta lets a webhook be overridden per phone number, set purely by API --
+#: ``POST /{PHONE_NUMBER_ID}`` with an ``override_callback_uri`` and a
+#: ``verify_token`` -- and resolves it phone number, then WABA, then app
+#: default. So a number that carries an override never reaches
+#: ``/surfaces/webhooks/whatsapp``, and the path is what says which number a
+#: delivery is for.
+#:
+#: The path carries ``phone_number_id``, the opaque Graph identifier, and never
+#: the display number: Meta normalises a literal ``+`` in a URL path to a space,
+#: so an E.164 number in a path is one that sometimes arrives mangled.
+_WHATSAPP_NUMBER_WEBHOOK = "/webhooks/whatsapp/numbers/{phone_number_id}"
+
+
+async def _pooled_whatsapp_number(
+    phone_number_id: str, uow_factory: UnitOfWorkFactory
+) -> WhatsAppNumberEntity | None:
+    """The pool row this callback path names, if the deployment has one.
+
+    ``None`` is ordinary rather than an error: a deployment with a single
+    WhatsApp number has no pool rows at all, and every credential below falls
+    back to ``surface_settings.whatsapp_*`` when the row -- or the column on it
+    -- is absent.
+    """
+    async with uow_scope(uow_factory) as uow:
+        return await WhatsAppNumberRepository(uow).get_by_phone_number_id(
+            phone_number_id
+        )
+
+
+def _addressed_phone_number_ids(payload: Mapping[str, object]) -> set[str]:
+    """Every ``metadata.phone_number_id`` a WhatsApp body claims to be for.
+
+    A set rather than one value because one delivery may batch several changes;
+    Meta only ever batches changes for one number, but nothing in the payload
+    shape promises that, and a check that assumes it would pass a body it should
+    have questioned.
+    """
+    addressed: set[str] = set()
+    entries = payload.get("entry")
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        changes = entry.get("changes")
+        for change in changes if isinstance(changes, list) else []:
+            if not isinstance(change, dict):
+                continue
+            value = change.get("value")
+            metadata = value.get("metadata") if isinstance(value, dict) else None
+            identifier = (
+                metadata.get("phone_number_id") if isinstance(metadata, dict) else None
+            )
+            if identifier:
+                addressed.add(str(identifier))
+    return addressed
+
+
+@router.post(
+    _WHATSAPP_NUMBER_WEBHOOK,
+    operation_id="surface.webhook.handle_whatsapp_number",
+    summary="Handle a webhook delivered to one pooled WhatsApp number",
+)
+async def handle_whatsapp_number_webhook(
+    phone_number_id: str,
+    request: Request,
+    security_service: SurfaceWebhookSecurityServiceDep,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+):
+    """Handle a delivery to one pooled WhatsApp number's own callback URL."""
+    # Same shape as `handle_platform_webhook`: no request-scoped session, one
+    # short scope for the pool lookup, nothing held across the publish.
+    headers = dict(request.headers)
+    raw_body = await request.body()
+
+    # The order below is the whole point of this route, and it looks odd enough
+    # to be worth stating. The body names a `metadata.phone_number_id`, and
+    # selecting the verifying secret with it would be the obvious thing to
+    # do -- and it would be trust before verify: those are unauthenticated
+    # bytes, so a forger would name whichever number's app secret he holds and
+    # have his forgery checked against exactly that one. The URL is not a claim
+    # in the same sense. Each number's callback path is one this deployment
+    # configured with Meta, so it is a fact about the route rather than
+    # something the sender chose. Select by path, verify the HMAC over the raw
+    # bytes, and only then parse.
+    number = await _pooled_whatsapp_number(phone_number_id, uow_factory)
+    app_secret = (
+        number.app_secret if number else None
+    ) or surface_settings.whatsapp_app_secret
+    # Raises SurfaceWebhookAuthenticationError (a DomainError) on a bad or
+    # missing signature, translated to the right status by the global handler.
+    security_service.verify_whatsapp_app_secret(
+        headers=headers,
+        raw_body=raw_body,
+        app_secret=app_secret,
+    )
+
+    payload = _decode_webhook_payload(raw_body, headers)
+
+    # Authentic bytes, so the body may now be believed -- but only about itself.
+    # `app_secret` is per Meta *app*, so numbers co-tenanted under one app share
+    # it and a signature that verifies here is equally valid for any of them.
+    # Without this the number in the path and the number in the body could
+    # disagree and the delivery would be attributed to whichever one the path
+    # happened to say.
+    #
+    # Ordinary set equality and not `compare_digest`: a phone number id is an
+    # identifier Meta publishes, not a secret, so there is nothing here for a
+    # timing oracle to leak.
+    addressed = _addressed_phone_number_ids(payload)
+    # Equality and not membership. This URL is a per-number override, so what
+    # Meta sends to it is that number's traffic and nothing else; a body naming
+    # this number *and* another is as much a body this route cannot account for
+    # as one naming only another, and "at least one matched" would wave it
+    # through with the rest unexamined.
+    #
+    # A body that names no number at all is left alone rather than rejected:
+    # not every WhatsApp change carries `metadata` (account and template
+    # notifications do not), and refusing those would break them for a check
+    # they cannot answer. The signature already established who sent them.
+    if addressed and addressed != {phone_number_id}:
+        raise HTTPException(
+            status_code=400,
+            detail="Webhook payload is addressed to a different phone number",
+        )
+
+    if await _published_whatsapp_verification(payload):
+        return {"message": "Verification message received"}
+
+    # The number is the receiver, not `SHARED_PLATFORM_RECEIVER`: this URL has
+    # one per pooled number, and the content-hash fallback in
+    # `_surface_source_event_id` is only unique per receiver.
+    source_event_id = _surface_source_event_id(
+        "whatsapp", payload, raw_body, receiver=phone_number_id
+    )
+    event = SurfaceWebhookReceivedEvent(
+        event_id=stable_event_id({"event_id": source_event_id}),
+        source="whatsapp",
+        payload=payload,
+        headers=_redacted_headers(headers),
+        source_event_id=source_event_id,
+    )
+    await EventPublisher.publish(event.stream_name(), event)
+
+    return {"message": "Webhook received"}
+
+
 @router.post(
     "/{surface_id}/webhook",
     operation_id="surface.webhook.handle_surface",
@@ -273,6 +425,37 @@ async def verify_surface_webhook(
         platform,
         dict(request.query_params),
         whatsapp_verify_token=surface_settings.whatsapp_verify_token,
+    )
+
+
+@router.get(
+    _WHATSAPP_NUMBER_WEBHOOK,
+    operation_id="surface.webhook.verify_whatsapp_number",
+    summary="Verify a pooled WhatsApp number's own callback URL",
+)
+async def verify_whatsapp_number_webhook(
+    phone_number_id: str,
+    request: Request,
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> Response:
+    """Webhook verification endpoint for one pooled WhatsApp number."""
+    # The handshake carries `hub.mode`, `hub.challenge` and `hub.verify_token`
+    # and nothing else -- no number, no WABA, no app. So on the one shared
+    # callback URL there is nothing to select a token *by*, which is why a
+    # per-number `verify_token` was not expressible before this route existed.
+    # Here the path is the identifier, and it is enough.
+    number = await _pooled_whatsapp_number(phone_number_id, uow_factory)
+    verify_token = (
+        number.verify_token if number else None
+    ) or surface_settings.whatsapp_verify_token
+    # `_token_matches` is constant-time and treats an absent expected token as
+    # never matching, so a number with no stored token and a deployment with
+    # none in settings refuses the handshake instead of handing out the
+    # challenge to whoever asked.
+    return _webhook_verification_response(
+        "whatsapp",
+        dict(request.query_params),
+        whatsapp_verify_token=verify_token,
     )
 
 

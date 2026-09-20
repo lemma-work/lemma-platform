@@ -33,6 +33,7 @@ def routing_surfaces_double(surfaces: Sequence):
         pod_ids: Collection[UUID] | None = None,
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
+        surface_identity_id: str | None = None,
     ) -> list:
         chosen = list(surfaces)
         if surface_ids is not None:
@@ -56,6 +57,15 @@ def routing_surfaces_double(surfaces: Sequence):
                 for surface in chosen
                 if surface.account_id is None
                 and str(surface.credential_mode) == "SYSTEM"
+            ]
+        if surface_identity_id:
+            # "This number, or no number yet" -- the NULL half matters, because
+            # every WhatsApp surface alive holds NULL and a strict equality here
+            # would quietly certify a narrowing that takes them all out.
+            chosen = [
+                surface
+                for surface in chosen
+                if surface.surface_identity_id in (surface_identity_id, None)
             ]
         return chosen
 
