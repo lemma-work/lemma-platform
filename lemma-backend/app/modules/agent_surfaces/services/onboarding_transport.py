@@ -26,6 +26,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
 from app.modules.agent_surfaces.services.credential_resolver import native_credentials
 from app.modules.agent_surfaces.services.onboarding_submissions import (
     parse_native_submission,
@@ -125,7 +128,9 @@ async def resolve_onboarding_transport(
         and surface.matches_tenant(parsed.tenant_id)
     ]
     if platform in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM):
-        return _shared_transport(request, surfaces, parsed, receiver_ids)
+        return await _shared_transport(
+            request, surfaces, parsed, receiver_ids, uow_factory
+        )
     return await _installation_transport(surfaces, parsed, uow_factory, receiver_ids)
 
 
@@ -175,11 +180,12 @@ async def _transport_candidates(
     return platform, surfaces
 
 
-def _shared_transport(
+async def _shared_transport(
     request: SurfaceIngressRequest,
     surfaces: list[AgentSurfaceEntity],
     parsed: ParsedInboundSurfaceEvent,
     receiver_ids: list[UUID] | None,
+    uow_factory: UnitOfWorkFactory,
 ) -> OnboardingTransport | None:
     platform = parsed.platform
     if not parsed.is_dm:
@@ -202,23 +208,31 @@ def _shared_transport(
     credentials = TypeAdapter(dict[str, JsonValue]).validate_python(
         native_credentials(platform)
     )
-    # Shared signup belongs to the shared line, and only to it. This reads like
-    # a leftover single-number assumption now that numbers come from a pool, and
-    # it is the opposite: a pooled number is held by one organisation, so an
-    # unknown sender who reaches it is that organisation's surface's business,
-    # not the deployment's signup flow. Answering them here would introduce them
-    # to Lemma-at-large from a number somebody bought for their own customers.
-    #
-    # It compares against settings rather than the pool because this function is
-    # synchronous and has no unit of work, and because the number it is asking
-    # about is the one the deployment configured -- which is what `SHARED` in
-    # `surface_whatsapp_numbers` mirrors rather than replaces.
-    if platform == SurfacePlatform.WHATSAPP and (
-        not credentials.get("phone_number_id")
-        or parsed.reply_target.get("phone_number_id")
-        != credentials.get("phone_number_id")
-    ):
-        return None
+    if platform == SurfacePlatform.WHATSAPP:
+        # Every pooled number is a system number and behaves like the one in
+        # settings, so signup works on all of them. What the gate is actually
+        # asking is "did this arrive on a number we own" -- it used to be able
+        # to answer that by comparing against the single configured one, and a
+        # pool is the reason it no longer can.
+        #
+        # The lookup matters for more than the gate: the reply has to go out
+        # from the number the person messaged. Handing the settings credentials
+        # to a signup that arrived on a pooled number would answer from a
+        # different number than the one they wrote to, which for a stranger
+        # being asked to trust us is the worst possible first impression.
+        arrived_on = parsed.reply_target.get("phone_number_id")
+        if not arrived_on:
+            return None
+        if arrived_on != credentials.get("phone_number_id"):
+            async with uow_factory() as uow:
+                number = await WhatsAppNumberRepository(uow).get_by_phone_number_id(
+                    arrived_on
+                )
+            if number is None:
+                # Not a number this deployment owns. The signature check upstream
+                # proves Meta sent it; it does not prove it was meant for us.
+                return None
+            credentials = {**credentials, **number.credential_overrides()}
     return OnboardingTransport(
         parsed,
         None,

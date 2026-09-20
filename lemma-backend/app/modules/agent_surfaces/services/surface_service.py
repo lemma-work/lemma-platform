@@ -33,6 +33,9 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.surface_bulk_teardown import (
+    delete_matching_surfaces,
+)
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_one_surface_per_agent,
     ensure_unique_org_credential_binding,
@@ -462,7 +465,7 @@ class AgentSurfaceService(
 
     async def delete_all_surfaces_for_pod(self, pod_id: UUID) -> int:
         """Remove every surface in a pod so its accounts become free again."""
-        return await self._delete_matching_surfaces(pod_id)
+        return await delete_matching_surfaces(self, pod_id)
 
     async def delete_surfaces_for_agent(self, pod_id: UUID, agent_id: UUID) -> int:
         """Remove the surfaces belonging to one agent, as it is deleted.
@@ -474,8 +477,8 @@ class AgentSurfaceService(
         starts answering from a deleted agent's address. Harmless while most pods
         had no agentless surface; every pod has one now.
         """
-        return await self._delete_matching_surfaces(
-            pod_id, agent_id=agent_id, match_agent=True
+        return await delete_matching_surfaces(
+            self, pod_id, agent_id=agent_id, match_agent=True
         )
 
     async def release_scarce_identities_for_pod(self, pod_id: UUID) -> int:
@@ -507,64 +510,15 @@ class AgentSurfaceService(
         the shared line has taken nothing scarce, so it keeps the ordinary
         teardown path.
         """
-        released = await self._delete_matching_surfaces(
-            pod_id, platform=SurfacePlatform.RESEND.value
+        released = await delete_matching_surfaces(
+            self, pod_id, platform=SurfacePlatform.RESEND.value
         )
-        return released + await self._delete_matching_surfaces(
+        return released + await delete_matching_surfaces(
+            self,
             pod_id,
             platform=SurfacePlatform.WHATSAPP.value,
             only_holding_an_identity=True,
         )
-
-    async def _delete_matching_surfaces(
-        self,
-        pod_id: UUID,
-        *,
-        platform: str | None = None,
-        agent_id: UUID | None = None,
-        match_agent: bool = False,
-        only_holding_an_identity: bool = False,
-    ) -> int:
-        """Delete a pod's surfaces, or the subset the filters name.
-
-        One loop for all three callers — a pod being deleted, an agent being
-        deleted, and a pod releasing its addresses — because the awkward part is
-        identical and worth having in one place: page through, tear each one
-        down, and never let one failure strand the rest.
-
-        Best-effort per surface. ``delete_surface`` runs the external teardown (a
-        Telegram webhook, a Composio polling schedule) and deletes the row even
-        when that fails, so an unreachable provider can neither keep a deleted
-        agent's mailbox alive nor hold an org-unique account binding hostage.
-        """
-        deleted = 0
-        failure_count = 0
-        cursor: UUID | None = None
-        while True:
-            surfaces, cursor = await self.list_surfaces_by_pod(
-                pod_id,
-                platform=platform,
-                agent_id=agent_id,
-                match_agent=match_agent,
-                cursor=cursor,
-            )
-            for surface in surfaces:
-                if only_holding_an_identity and not surface.surface_identity_id:
-                    # Nothing scarce to give back; the pod-deleted event will
-                    # tear this one down with the rest.
-                    continue
-                try:
-                    await self.delete_surface(surface.id)
-                    deleted += 1
-                except Exception:
-                    failure_count += 1
-            if cursor is None:
-                break
-        if failure_count:
-            logger.error(
-                "surface.cleanup.failed", pod_id=pod_id, failure_count=failure_count
-            )
-        return deleted
 
     async def _get_connected_account(self, account_id: UUID) -> SurfaceAccountInfo:
         if self._account_port is None:

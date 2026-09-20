@@ -509,3 +509,67 @@ async def test_deleting_a_pod_gives_its_number_back_to_the_pool(
         "finite pool drains one deleted pod at a time"
     )
     assert again.id != first.id
+
+
+async def test_a_stranger_can_sign_up_on_a_pooled_number_and_is_answered_from_it(
+    db_session, monkeypatch
+) -> None:
+    """Every pooled number is a system number, so signup works on all of them.
+
+    The gate here used to compare the arriving number against the single
+    configured one, which was the only way to ask "is this ours" when there was
+    one. With a pool that question needs the pool, and asking it the old way
+    would have made a stranger messaging a pooled number reach nothing at all.
+
+    The credentials matter as much as the gate. Answering a signup from the
+    settings number when the person wrote to a pooled one replies from a
+    different number than the one they messaged -- which, for a stranger being
+    asked to trust us with an email address, is the worst possible first
+    impression.
+    """
+    from app.modules.agent_surfaces.infrastructure.adapters.registry import (
+        SurfacePlatformAdapterRegistry,
+    )
+    from app.modules.agent_surfaces.domain.ingress_request import (
+        SurfacePlatformWebhookIngress,
+    )
+    from app.modules.agent_surfaces.services.onboarding_transport import (
+        resolve_onboarding_transport,
+    )
+    from app.modules.agent_surfaces.tests.e2e.helpers import _whatsapp_payload
+
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "settings-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "settings-waba")
+    await _number(db_session, phone_number_id="pooled-signup", token="the-pools-token")
+
+    # A plain callable rather than a subclass: the architecture ratchet counts
+    # declared ancestry across `app/`, and a throwaway class in a test is four
+    # units of inheritance depth bought for nothing.
+    def uow_factory():
+        return SqlAlchemyUnitOfWork(db_session)
+
+    transport = await resolve_onboarding_transport(
+        SurfacePlatformWebhookIngress(
+            source="whatsapp",
+            payload=_whatsapp_payload(
+                text="hello, who is this",
+                message_id=uuid4().hex,
+                phone_number_id="pooled-signup",
+                waba_id="waba-pooled-signup",
+                sender_phone="15550001111",
+            ),
+        ),
+        uow_factory=uow_factory,
+        adapters=SurfacePlatformAdapterRegistry(),
+    )
+
+    assert transport is not None, (
+        "a stranger messaging a pooled number reached no signup flow at all, so "
+        "the number answers nobody it does not already know"
+    )
+    assert transport.credentials["access_token"] == "the-pools-token", (
+        "the signup would have replied from the settings number rather than the "
+        "one the person actually wrote to"
+    )
+    assert transport.credentials["phone_number_id"] == "pooled-signup"
