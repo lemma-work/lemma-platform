@@ -254,6 +254,39 @@ class TestAStaleDaemonIsRestartedOnce:
         assert any(c.startswith("close --all") for c in calls), calls
         assert len([c for c in calls if c.startswith("open")]) == 2, calls
 
+    def test_a_network_control_failure_that_is_not_stale_is_not_retried(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """The near match, and why the condition needs both halves.
+
+        An alternation on either fragment meant any failure that merely
+        mentioned the network controls -- a permanent one included -- closed
+        every session in the sandbox and retried. That costs a person
+        whatever else they had open, for a fault a retry cannot fix.
+        """
+        environment, opened = _workspace(
+            tmp_path, browser_live=False, vnc_port=vnc_port
+        )
+        _stub(
+            tmp_path / "bin",
+            "agent-browser",
+            f'echo "$*" >> "{opened}"\n'
+            'case "$1" in\n'
+            "  open)\n"
+            '    echo "Failed to install browser network controls: CDP error'
+            ' (Fetch.enable): Target closed." >&2\n'
+            "    exit 1 ;;\n"
+            "  *) exit 0 ;;\n"
+            "esac",
+        )
+
+        result = _run(environment)
+
+        assert result.returncode != 0
+        calls = (opened.read_text() if opened.exists() else "").splitlines()
+        assert not any(c.startswith("close --all") for c in calls), calls
+        assert len([c for c in calls if c.startswith("open")]) == 1, calls
+
     def test_a_failure_that_is_not_staleness_is_not_retried(
         self, tmp_path: Path, vnc_port: int
     ) -> None:

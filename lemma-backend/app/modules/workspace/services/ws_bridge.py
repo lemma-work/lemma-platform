@@ -125,7 +125,13 @@ def _origin_of(url: str) -> str | None:
     equal any `Origin` a browser sends -- so as a candidate it was dead
     weight that looked like coverage.
     """
-    parsed = urlsplit(url.strip())
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError:
+        # Configured rather than sent, so this is a deployment mistake and
+        # not an attack -- but a settings typo must not stop the allowlist
+        # being built out of the entries that are fine.
+        return None
     if not parsed.scheme or not parsed.netloc:
         return None
     return f"{parsed.scheme}://{parsed.netloc}".lower()
@@ -201,9 +207,17 @@ def origin_refusal_hint(origin: str | None, *, allowed: tuple[str, ...]) -> str:
     """
     if origin is None:
         return "no origin, allowed"
-    parsed = urlsplit(origin)
-    scheme = parsed.scheme if parsed.scheme in ("http", "https") else "other"
-    host = parsed.hostname or ""
+    # `urlsplit` raises on a malformed authority -- `http://[` is enough,
+    # measured -- and this runs *before* authentication, so without this an
+    # unauthenticated client could trade a close code for an unhandled ASGI
+    # exception by sending one header. An origin we cannot parse is an
+    # origin we refuse; it just has nothing to say about itself.
+    try:
+        parsed = urlsplit(origin)
+        scheme = parsed.scheme if parsed.scheme in ("http", "https") else "other"
+        host = parsed.hostname or ""
+    except ValueError:
+        scheme, host = "other", ""
     shape = ".".join(host.rsplit(".", 2)[-2:]) if "." in host else "opaque"
     safe = re.sub(r"[^a-z0-9.-]", "", shape.lower())[:60] or "opaque"
     return f"{scheme}://…{safe} against {len(allowed)} configured"

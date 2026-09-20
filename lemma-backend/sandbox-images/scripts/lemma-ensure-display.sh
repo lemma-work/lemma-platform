@@ -487,8 +487,12 @@ if run_open "$@"; then
   open_status=0
 else
   open_status=$?
-  if grep -qiE 'install browser network controls|Session with given id not found' \
-    "$open_log" 2>/dev/null; then
+  # Both halves, not either. An alternation here meant any failure that
+  # merely mentioned the network controls -- a permanent one included --
+  # closed every session in the sandbox and retried, which costs a person
+  # whatever else was open for a fault a retry cannot fix.
+  if grep -qiF 'Failed to install browser network controls' "$open_log" 2>/dev/null &&
+    grep -qiF 'Session with given id not found' "$open_log" 2>/dev/null; then
     echo "lemma-ensure-display: the browser daemon's session is stale;" \
       "restarting it and trying once more" >&2
     agent-browser close --all >/dev/null 2>&1 || true

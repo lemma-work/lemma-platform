@@ -92,10 +92,16 @@ class TestTheListIsTheOneTheRestOfTheAppUses:
         that failed it read `https://<host>/auth`. No browser ever sends
         that as an `Origin`, so as a candidate it was dead weight that
         looked like coverage."""
-        allowed = self._allowed()
-
-        assert "https://train.lemma.test/auth" not in allowed
-        assert "https://train.lemma.test" in allowed
+        # Asserted as the whole tuple rather than with `in`: exact, and it
+        # also pins the order and the de-duplication, which a membership
+        # check leaves free.
+        assert self._allowed() == (
+            "https://lemma.test",
+            "https://www.lemma.test",
+            "http://localhost:3000",
+            "https://train.lemma.test",
+            "https://api.lemma.test",
+        )
 
     def test_widening_the_list_does_not_widen_it_to_everyone(self) -> None:
         allowed = self._allowed()
@@ -157,6 +163,22 @@ class TestTheRefusalSaysEnoughToDiagnose:
 
         assert "lemma.test" in hint
         assert "2" in hint
+
+    def test_a_malformed_origin_refuses_instead_of_raising(self) -> None:
+        """`urlsplit` raises on a bad authority, and this runs *before*
+        authentication -- so without the guard one header buys an
+        unauthenticated caller an unhandled ASGI exception instead of a
+        close code."""
+        for bad in ("http://[", "https://[::1", "http://a]b"):
+            assert origin_is_allowed(bad, allowed=("https://a.test",)) is False, bad
+            assert origin_refusal_hint(bad, allowed=()), bad
+
+    def test_a_configured_url_that_will_not_parse_is_skipped(self) -> None:
+        """A settings typo must not stop the allowlist being built from the
+        entries that are fine."""
+        allowed = origins_from(["http://[", "https://good.test"])
+
+        assert allowed == ("https://good.test",)
 
     def test_the_hint_never_carries_what_a_stranger_sent(self) -> None:
         hint = origin_refusal_hint(

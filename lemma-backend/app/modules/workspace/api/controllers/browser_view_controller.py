@@ -34,6 +34,7 @@ from app.core.api.dependencies import CurrentUser
 from app.core.request_context import create_inherited_task
 
 from app.core.config import settings
+from app.core.cors import get_allowed_cors_origin_regex
 from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
@@ -141,13 +142,20 @@ def allowed_origins() -> tuple[str, ...]:
 
 
 def allowed_origin_pattern() -> str | None:
-    """`cors_origin_regex`, for deployments whose frontends are per-tenant.
+    """The pattern HTTP CORS uses, for deployments whose frontends are
+    per-tenant.
 
-    The same argument as above: a deployment that needs a pattern to serve
-    its app needs it to watch a browser too. Kept a separate dependency so
-    a test can supply one without also supplying the list.
+    `get_allowed_cors_origin_regex`, not `settings.cors_origin_regex`: the
+    helper combines the configured pattern with the generated app-subdomain
+    one, and taking only the configured half would recreate this whole
+    change one layer down -- HTTP accepting an origin while the browser-view
+    socket refuses it with 4403. Two allowlists that disagree is the fault
+    being fixed here, not a shape to repeat.
+
+    Kept a separate dependency so a test can supply one without also
+    supplying the list.
     """
-    return settings.cors_origin_regex
+    return get_allowed_cors_origin_regex()
 
 
 def _engine_error() -> type[Exception]:
