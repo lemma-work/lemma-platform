@@ -940,7 +940,7 @@ def _patch_resend_minting(monkeypatch, surface_fake, *, pod_name="Acme"):
     from app.modules.agent_surfaces.config import surface_settings
     from app.modules.agent_surfaces.services import email_surface_provisioning
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(
         email_surface_provisioning,
         "pod_name_for",
@@ -977,7 +977,7 @@ async def test_a_bundle_s_email_surface_gets_a_readable_address(tmp_path, monkey
     assert surface_fake.created["platform"] == "RESEND"
     # Readable, and under the deployment's own domain — not `pod-<32 hex>@`.
     assert (
-        surface_fake.created["surface_identity_email"] == "reporter.acme@ops.asur.work"
+        surface_fake.created["surface_identity_email"] == "reporter.acme@ops.lemma.work"
     )
 
 

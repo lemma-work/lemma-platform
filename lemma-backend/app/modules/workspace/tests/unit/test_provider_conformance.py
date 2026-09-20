@@ -13,6 +13,7 @@ failed on that commit.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import inspect
 from pathlib import Path
 from uuid import uuid4
 
@@ -304,12 +305,127 @@ async def test_new_e2b_sandboxes_do_not_answer_the_internet(
 ) -> None:
     """The exposure this closes was reachable, unauthenticated, in production.
 
-    `start-browser.sh` republishes the agent-browser dashboard on 0.0.0.0:4848,
+    `lemma-ensure-display.sh` republishes the agent-browser dashboard on 0.0.0.0:4848,
     which on Docker is the container's own network and on E2B is a public name.
     Nothing in front of it asks who you are. Closing public traffic at create is
     what puts E2B's own doorkeeper there; `reach_port` then carries the token.
+
+    Unconditional now. This was `E2B_ALLOW_PUBLIC_TRAFFIC`, and a deployment
+    that set it true got sandboxes whose every listening port answered the
+    internet -- for no gain, because nothing outside the backend ever needs a
+    sandbox's own address.
     """
     await e2b_provider.create(_spec(uuid4()))
     assert e2b_world.created_public_traffic == [False], (
         "a sandbox created without this argument is open by default"
+    )
+
+
+def test_no_setting_can_open_a_sandbox_to_the_internet() -> None:
+    """There is no longer a position of a knob that exposes the browser.
+
+    The pairing is the point: the constant says what is sent, and this says
+    nothing can be introduced that changes it per deployment. Re-adding the
+    setting fails here even if every other test still passes, because every
+    other test would be exercising whatever the default happened to be.
+    """
+    from app.modules.workspace.config import WorkspaceSettings
+    from app.modules.workspace.providers.e2b_config import CLOSED_TO_THE_INTERNET
+
+    assert CLOSED_TO_THE_INTERNET == {"allow_public_traffic": False}
+    assert not [
+        name
+        for name, field in WorkspaceSettings.model_fields.items()
+        if "public_traffic" in name
+        or "PUBLIC_TRAFFIC"
+        in (
+            field.validation_alias.choices[0].upper()
+            if field.validation_alias
+            else name.upper()
+        )
+    ]
+
+
+async def test_the_arguments_we_create_sandboxes_with_are_ones_the_sdk_takes(
+    e2b_provider, e2b_world
+) -> None:
+    """Bind our real call against the real library, not against the double.
+
+    This is the test that was missing. `allow_public_traffic` was passed to
+    `AsyncSandbox.create` as a keyword of its own for the life of this branch,
+    and no released `e2b` has ever had such a parameter -- it is a key on
+    `network`. `create` forwards its extra keywords to `ConnectionConfig`,
+    which raises on a name it does not know, so every real sandbox creation
+    raised `TypeError` while `test_new_e2b_sandboxes_do_not_answer_the_internet`
+    passed, because the double had been written to match our call rather than
+    the library.
+
+    Skipped where the extra is absent, which is every unit lane; there, the
+    double's own signature carries the guarantee. This is what notices when the
+    SDK moves a parameter again.
+    """
+    e2b = pytest.importorskip("e2b", reason="the e2b extra is not installed")
+
+    await e2b_provider.create(_spec(uuid4()))
+    (passed,) = e2b_world.created_kwargs
+
+    # `bind` raises exactly what production raised.
+    inspect.signature(e2b.AsyncSandbox.create).bind(**passed)
+
+    # And the flag really is a network key, which is why it has to travel there.
+    from e2b.sandbox.sandbox_api import SandboxNetworkOpts
+
+    assert "allow_public_traffic" in SandboxNetworkOpts.__annotations__
+    assert passed["network"] == {"allow_public_traffic": False}
+
+
+async def test_a_burst_of_operations_makes_one_connection(e2b_provider, e2b_world):
+    """Every provider operation used to open its own connection first.
+
+    There are nineteen `_connect` call sites, and the browser view touches most
+    of them, so opening the pane on a paused sandbox was measured making thirty
+    requests to E2B -- nineteen of them this one, to the same sandbox, inside
+    four seconds. Each is a round trip over the internet, so the wait a person
+    reads as "the sandbox is slow" was mostly the platform talking to itself.
+
+    Asserted as a count rather than a duration: a timing test would pass on a
+    fast machine while the round trips were still being made.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    instance = await e2b_provider.create(_spec(uuid4()))
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    before = len(e2b_world.connect_timeouts)
+
+    for _ in range(5):
+        await e2b_provider.reach_port(instance, port=4850, deadline_at=deadline)
+
+    spent = len(e2b_world.connect_timeouts) - before
+    assert spent == 1, f"five operations opened {spent} connections"
+
+
+async def test_the_lease_is_still_re_armed_when_the_hold_lapses(
+    e2b_provider, e2b_world, monkeypatch
+):
+    """Holding a connection must not stop the sandbox lease being renewed.
+
+    Connecting is what re-arms it, and a workspace whose lease runs out loses
+    every process at once. So the hold is a short window, not a cache: once it
+    lapses the next operation connects again and the lease moves with it.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    instance = await e2b_provider.create(_spec(uuid4()))
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    await e2b_provider.reach_port(instance, port=4850, deadline_at=deadline)
+    before = len(e2b_world.connect_timeouts)
+
+    # Lapse the hold rather than sleep through it.
+    monkeypatch.setattr(e2b_provider._connections, "_rearm_seconds", -1.0)
+    await e2b_provider.reach_port(instance, port=4850, deadline_at=deadline)
+
+    assert len(e2b_world.connect_timeouts) == before + 1
+    # And it carries the real lease, not the SDK's five-minute default.
+    assert (
+        e2b_world.connect_timeouts[-1] == e2b_provider._config.sandbox_timeout_seconds
     )

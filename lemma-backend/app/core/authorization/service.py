@@ -46,6 +46,11 @@ from app.core.authorization.permissions import (
     SYSTEM_ROLE_PERMISSIONS,
 )
 from app.core.authorization.authorizer import Authorizer
+from app.core.authorization.role_queries import (
+    RoleRow,
+    load_roles_for_principals,
+    merge_role_data,
+)
 from app.core.authorization.resource_names import resolve_resource_id_by_name
 from app.core.authorization.resource_tables import (
     RESOURCE_TABLES,
@@ -929,36 +934,17 @@ class AuthorizationDataService:
         principal_id: UUID,
         organization_id: UUID,
         pod_id: UUID | None,
-    ) -> list[tuple[UUID, str, str | None]]:
-        stmt = (
-            select(RoleModel.id, RoleModel.name, RolePermissionModel.permission_id)
-            .join(RoleAssignmentModel, RoleAssignmentModel.role_id == RoleModel.id)
-            .join(
-                RolePermissionModel,
-                RolePermissionModel.role_id == RoleModel.id,
-                isouter=True,
-            )
-            .where(
-                RoleAssignmentModel.principal_type == principal_type,
-                RoleAssignmentModel.principal_id == principal_id,
-                RoleModel.organization_id == organization_id,
-                RoleModel.pod_id == pod_id,
-            )
+    ) -> list[RoleRow]:
+        """One principal's roles. The join itself lives in `role_queries`."""
+        return await load_roles_for_principals(
+            self.session,
+            principal_ids=[principal_id],
+            organization_id=organization_id,
+            principal_type=principal_type,
+            pod_scope=pod_id,
         )
-        return list((await self.session.execute(stmt)).all())
 
-    @staticmethod
-    def _merge_role_data(
-        rows: list[tuple[UUID, str, str | None]],
-        role_ids: set[UUID],
-        role_names: set[str],
-        permission_ids: set[str],
-    ) -> None:
-        for role_id, role_name, permission_id in rows:
-            role_ids.add(role_id)
-            role_names.add(role_name)
-            if permission_id is not None:
-                permission_ids.add(permission_id)
+    _merge_role_data = staticmethod(merge_role_data)
 
     async def _resolve_snapshot_principal_id(
         self, principal_type: str, principal_id: UUID

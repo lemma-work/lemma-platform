@@ -51,6 +51,7 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 )
 from app.modules.test_support.e2e.worker_process import production_worker_process
 import app.modules.workspace.services.workspace_tool_runtime as workspace_runtime
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 
 pytestmark = [
@@ -685,7 +686,9 @@ async def test_agent_workspace_cli_tools_execute_through_a_real_sandbox(
     )
     assert shell.success is True, shell.stdout or shell
     assert shell.completed is True
-    assert f"/workspace/conversations/{ctx.conversation_id}" in (shell.stdout or "")
+    assert f"{WORKSPACE_ROOT}/conversations/{ctx.conversation_id}" in (
+        shell.stdout or ""
+    )
     assert f"pod={pod['id']}" in (shell.stdout or "")
     assert f"user={fixed_test_user['id']}" in (shell.stdout or "")
     if _SANDBOX_CAN_REACH_TEST_BACKEND:

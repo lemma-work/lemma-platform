@@ -20,6 +20,8 @@ result as its own port; the `Protocol` is structural, so pod never names it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -47,6 +49,38 @@ async def pod_name(session, pod_id: UUID) -> str | None:
     return (
         await session.execute(select(Pod.name).where(Pod.id == pod_id))
     ).scalar_one_or_none()
+
+
+@dataclass(frozen=True, slots=True)
+class PodProfile:
+    """The pod as its own agent needs to describe itself.
+
+    `pod_name` answered the brief for a long time, so an agent knew which pod it
+    was in and nothing about it: not what the pod is for, which is the one
+    sentence the team wrote about their own work, and not when it started, which
+    is the tenure the agent's profile page shows to everybody but the agent.
+    """
+
+    name: str | None = None
+    description: str | None = None
+    created_at: datetime | None = None
+
+
+async def pod_profile(session, pod_id: UUID) -> PodProfile:
+    """Name, description and start date in one read.
+
+    An empty profile for a pod that is gone rather than a raise: a brief is
+    still worth rendering without one, exactly as with a missing user.
+    """
+    row = (
+        await session.execute(
+            select(Pod.name, Pod.description, Pod.created_at).where(Pod.id == pod_id)
+        )
+    ).first()
+    if row is None:
+        return PodProfile()
+    name, description, created_at = row
+    return PodProfile(name=name, description=description, created_at=created_at)
 
 
 async def pod_organization_id(uow, pod_id: UUID) -> UUID | None:

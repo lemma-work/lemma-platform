@@ -19,6 +19,7 @@ never hand the provider an oversized prompt.
 
 from __future__ import annotations
 
+
 from collections.abc import Sequence
 
 from pydantic_ai.messages import ModelMessage
@@ -27,7 +28,8 @@ from pydantic_ai._history_processor import HistoryProcessor
 
 from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
-from app.modules.agent.domain.value_objects import HarnessOptions
+from app.modules.agent.config import agent_settings
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.services.history_tokens import count_model_message_tokens
 
 logger = get_logger(__name__)
@@ -284,6 +286,8 @@ def build_history_processors[DepsT](
                 model=summarization_model,
                 trigger_tokens=options.history_summarization_token_limit,
                 keep_messages=options.history_summarization_keep_messages,
+                notices=options.notices,
+                warn_at=agent_settings.agent_run_warn_at,
             )
         )
 

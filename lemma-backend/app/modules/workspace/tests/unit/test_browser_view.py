@@ -7,6 +7,9 @@ open sockets.
 
 from __future__ import annotations
 
+import asyncio
+from uuid import uuid4
+
 import pytest
 
 
@@ -67,11 +70,20 @@ class _FakeService:
         self.opened: list[dict] = []
         self.closed = False
 
-    async def open_session(self, user_id, *, mode, origin=None, session=None):
-        self.opened.append({"user_id": user_id, "mode": mode, "origin": origin})
+    async def open_vnc_session(
+        self, user_id, *, mode, origin=None, conversation_id=None
+    ):
+        self.opened.append(
+            {
+                "user_id": user_id,
+                "mode": mode,
+                "origin": origin,
+                "conversation_id": conversation_id,
+            }
+        )
         if self.fail is not None:
             raise self.fail
-        return "ws://sandbox.test/session?target=t1", {"X-Lemma-Relay-Token": "t"}
+        return "ws://sandbox.test/vnc?mode=view", {"X-Lemma-Relay-Token": "t"}
 
     async def status(self, user_id):
         return {"state": "stopped"}
@@ -218,3 +230,339 @@ async def test_a_relay_that_cannot_say_is_not_treated_as_public() -> None:
             raise OSError("no route to the sandbox")
 
     await module._require_private(_Unreachable(public=True), doing="sign in to a site")
+
+
+# ---------------------------------------------------------------------------
+# Which session a plain watch/drive lands in
+# ---------------------------------------------------------------------------
+
+
+class _VncRelay(_Relay):
+    """A relay that remembers what `ensure_browser` and `vnc_socket_url` were
+    asked for, without touching a real sandbox."""
+
+    def __init__(self) -> None:
+        super().__init__(public=False)
+        self.ensured: dict | None = None
+
+    async def ensure_browser(self, *, origin, session, domain):
+        self.ensured = {"origin": origin, "session": session, "domain": domain}
+        return {"session": session or "workspace"}
+
+    async def vnc_socket_url(self, *, mode, session):
+        return f"ws://sandbox.test/vnc?mode={mode}&session={session}", {}
+
+
+def _service_with_relay(relay: _VncRelay):
+    """`BrowserViewService`, its own sandbox resolution replaced with `relay`.
+
+    `_relay` is the one method here that touches a real sandbox -- everything
+    `open_vnc_session` decides afterwards is what this test is about, so that
+    is the seam, not a double planted inside `open_vnc_session` itself.
+    """
+    from app.modules.workspace.services import browser_view_service as module
+
+    class _Service(module.BrowserViewService):
+        async def _relay(self, user_id, *, start):
+            return relay
+
+    return _Service()
+
+
+async def test_no_caller_names_a_browser_session() -> None:
+    """There is one browser per sandbox, so nothing picks between them.
+
+    A conversation used to select `agent_session(conversation_id)`, a Chrome
+    and profile of its own -- which is exactly what forced a sign-in to be
+    captured in one browser and rebuilt in another, and the rebuilding is what
+    kept being wrong. The conversation id is still accepted, for logging and
+    the keepalive; it must no longer steer anything.
+    """
+    relay = _VncRelay()
+    await _service_with_relay(relay).open_vnc_session(
+        uuid4(), mode="view", conversation_id=uuid4()
+    )
+    assert relay.ensured == {"origin": None, "session": None, "domain": None}
+
+
+async def test_a_plain_watch_with_no_conversation_lands_in_the_same_browser() -> None:
+    relay = _VncRelay()
+    await _service_with_relay(relay).open_vnc_session(uuid4(), mode="view")
+    assert relay.ensured == {"origin": None, "session": None, "domain": None}
+
+
+async def test_a_sign_in_steers_the_one_browser_rather_than_opening_another() -> None:
+    """An origin still steers -- it just does so in the browser everything
+    else is already using, instead of a session named for the site."""
+
+    relay = _VncRelay()
+    await _service_with_relay(relay).open_vnc_session(
+        uuid4(),
+        mode="view",
+        origin="https://example.com",
+        conversation_id=uuid4(),
+    )
+    assert relay.ensured == {
+        "origin": "https://example.com",
+        "session": None,
+        "domain": "example.com",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Hanging up
+# ---------------------------------------------------------------------------
+
+
+class _WebSocketThatIsAlreadyGone:
+    """A socket whose handshake never completed, which is what production had.
+
+    `close()` raises `AttributeError` from inside uvicorn's own close path --
+    `'WebSocketProtocol' object has no attribute 'transfer_data_task'` -- when
+    the client went away before the refusal was written. Reproduced by type
+    rather than by message: the point is that it is not a `RuntimeError`.
+    """
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    def __init__(self, raises: BaseException | None = None) -> None:  # noqa: F811
+        self.accepted = False
+        self.close_attempts = 0
+        self.raises = raises or AttributeError(
+            "'WebSocketProtocol' object has no attribute 'transfer_data_task'"
+        )
+
+    async def close(self, code: int) -> None:
+        self.close_attempts += 1
+        raise self.raises
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_that_cannot_be_delivered_is_not_an_error_of_its_own() -> None:
+    """The close path guessed `RuntimeError` and got `AttributeError`.
+
+    So refusing a socket whose client had already gone raised, uvicorn logged
+    "Exception in ASGI application", and the pane -- which saw an error instead
+    of its close code -- reconnected and asked again. "The browser is not
+    running" is the ordinary resting state of an idle workspace, and it was
+    reaching people as a crash loop.
+    """
+    socket = _WebSocketThatIsAlreadyGone()
+
+    await view._refuse(socket, view.CLOSE_NO_BROWSER)
+
+    assert socket.accepted, "a close before accept never carries its code"
+    assert socket.close_attempts == 1, "the refusal was attempted"
+
+
+@pytest.mark.asyncio
+async def test_collecting_the_keep_awake_task_does_not_raise() -> None:
+    """Every close of the browser pane logged an unhandled ASGI error.
+
+    The keep-awake task is cancelled when the socket ends and then awaited, so
+    that a cancelled task is collected rather than outliving the request. That
+    await is *guaranteed* to raise `CancelledError` -- and it was collected
+    under `suppress(Exception)`, which does not catch it, because
+    `CancelledError` is a `BaseException`. So uvicorn logged a stack trace for
+    the ordinary act of stopping watching.
+
+    A real task, really cancelled: the bug was entirely in which exception the
+    suppression named, so a stand-in that raised something else would have
+    proved nothing.
+    """
+    import asyncio
+
+    async def _forever() -> None:
+        await asyncio.sleep(3600)
+
+    task = asyncio.get_running_loop().create_task(_forever())
+    await asyncio.sleep(0)  # let it reach the sleep
+
+    await view._collect(task)
+
+    assert task.cancelled(), "collected means finished, not merely asked to stop"
+
+
+@pytest.mark.asyncio
+async def test_every_way_a_socket_is_seen_to_end_is_handled() -> None:
+    """The set has been corrected twice from production; this is what pins it.
+
+    `RuntimeError` was the original guess. `AttributeError` was found crashing
+    refusals in dev. `WebSocketDisconnect` was found crashing them again in a
+    local run against E2B that was meant to confirm the first fix -- and it is
+    the *ordinary* case, because by the time a refusal is written the person may
+    simply have navigated away.
+    """
+    from fastapi import WebSocketDisconnect
+
+    for failure in (
+        RuntimeError("socket is not connected"),
+        AttributeError("'WebSocketProtocol' object has no attribute ..."),
+        OSError("transport gone"),
+        WebSocketDisconnect(code=1006),
+    ):
+        socket = _WebSocketThatIsAlreadyGone(failure)
+        await view._refuse(socket, view.CLOSE_NO_BROWSER)
+        assert socket.close_attempts == 1, f"{type(failure).__name__} was not handled"
+
+
+# ---------------------------------------------------------------------------
+# Putting the display back
+# ---------------------------------------------------------------------------
+
+
+class _ResettableService:
+    """A view service that records whether it was asked to reset."""
+
+    def __init__(self, *, fails: bool = False) -> None:
+        self.resets = 0
+        self.fails = fails
+
+    #: What the sandbox's own relay says is watching. `None` is an older
+    #: image that cannot answer.
+    watching: int | None = 0
+
+    async def viewers(self, _user_id) -> int | None:
+        return self.watching
+
+    async def reset_display(self, _user_id) -> str:
+        self.resets += 1
+        if self.fails:
+            raise RuntimeError("the relay went away")
+        return "1440x960"
+
+    async def close(self) -> None:
+        return None
+
+
+@pytest.fixture
+def watching(monkeypatch):
+    """The viewer bookkeeping, with the settle window collapsed.
+
+    The service and the window are both parameters of `watch_ended`, so the
+    double goes in through the call rather than being patched onto the
+    module: patching the constructor a subject reaches for from inside it
+    puts a double in front of half of what is under test.
+    """
+    from app.modules.workspace.api.controllers import browser_view_watchers as mod
+
+    service = _ResettableService()
+    watcher = uuid4()
+    try:
+        yield mod, watcher, service
+    finally:
+        mod._watchers.pop(watcher, None)
+
+
+def _ended(mod, watcher, service) -> None:
+    """A viewer leaving, with the collaborators injected."""
+    mod.watch_ended(watcher, build_service=lambda: service, settle_seconds=0.01)
+
+
+async def _settle() -> None:
+    """Let the detached reset run."""
+    await asyncio.sleep(0.05)
+
+
+async def test_the_last_viewer_leaving_puts_the_display_back(watching) -> None:
+    """Counted server-side, because a pane often never runs its cleanup.
+
+    A closed tab, a killed renderer or a dropped network fires no unmount.
+    The socket closing is the only signal that is always there, which is why
+    this does not live in the React effect it would be tidier in.
+    """
+    mod, watcher, service = watching
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 1
+    assert watcher not in mod._watchers
+
+
+async def test_a_second_viewer_leaving_does_not_resize_under_the_first(
+    watching,
+) -> None:
+    """Two people can watch one display. The first to close must not take the
+    other's picture back to the default shape underneath them."""
+    mod, watcher, service = watching
+    mod._watchers[watcher] = 2
+
+    _ended(mod, watcher, service)
+    await _settle()
+    assert service.resets == 0, "somebody is still watching"
+    assert mod._watchers[watcher] == 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+    assert service.resets == 1
+
+
+async def test_somebody_reconnecting_keeps_their_shape(watching) -> None:
+    """The reason the reset waits at all.
+
+    A socket closing is not a person leaving: a dropped network, a reload,
+    and the pane's own retry after `CLOSE_NO_BROWSER` each close one and open
+    another a moment later. Resetting on the close resized the display under
+    the handshake that followed -- which the browser e2e caught as a
+    framebuffer that never painted, having agreed its dimensions just before
+    they changed.
+    """
+    mod, watcher, service = watching
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    # Arrives while the reset is still settling, as a reconnect does.
+    mod._watchers[watcher] = 1
+    await _settle()
+
+    assert service.resets == 0
+
+
+async def test_a_reset_that_fails_does_not_fail_the_socket(watching) -> None:
+    """Tidying up is best effort. The socket has already done its job, and a
+    sandbox that went away between the last frame and the close is ordinary."""
+    mod, watcher, _ = watching
+    broken = _ResettableService(fails=True)
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, broken)
+    await _settle()
+
+    assert broken.resets == 1
+
+
+async def test_a_viewer_on_another_worker_keeps_their_shape(watching) -> None:
+    """The count that decides this lives in the sandbox, not in a process.
+
+    `_watchers` is a module-level dict, so two people watching one sandbox
+    through different API workers each see a count of one. The first to
+    close saw zero locally and reset the display under the second. The relay
+    is per-sandbox, so its count is the only one with a single answer.
+    """
+    mod, watcher, service = watching
+    service.watching = 1
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 0, "somebody is still attached to this sandbox"
+
+
+async def test_an_image_that_cannot_count_falls_back_to_the_local_view(
+    watching,
+) -> None:
+    """An older relay has no `viewers` field. Refusing to reset on that
+    would leave every display stuck at the last pane's shape, which is the
+    bug the reset exists for."""
+    mod, watcher, service = watching
+    service.watching = None
+    mod._watchers[watcher] = 1
+
+    _ended(mod, watcher, service)
+    await _settle()
+
+    assert service.resets == 1

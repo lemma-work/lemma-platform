@@ -24,15 +24,16 @@ from app.modules.workspace.domain.sandbox import SandboxKind, SandboxOwnerKind
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayClient,
     BrowserRelayUnavailable,
+    ProfileCookies,
 )
 from app.modules.workspace.services.workspace_sandbox_service import (
     WorkspaceSandboxService,
 )
 from typing import TypedDict
 
-from app.modules.workspace.contracts.browser import BrowserState, host_of
+from app.modules.workspace.contracts.browser import host_of
 from app.modules.workspace.providers.base import ProviderGone
-from sandbox_runtime.errors import SandboxCapabilityUnsupported
+from sandbox_runtime.errors import SandboxCapabilityUnsupported, SandboxUnavailable
 
 logger = get_logger(__name__)
 
@@ -78,9 +79,13 @@ class BrowserViewService:
         a tool call, and the idle sweep measures from the last time somebody
         asked for the sandbox -- so a person reading a page, or typing a
         password slowly, looked idle the whole time and had their computer
-        stopped underneath them after `idle_release_seconds`. Releasing runs
-        quiesce, which deletes the browser profile, so what they lost was the
-        sign-in they were in the middle of.
+        stopped underneath them after `idle_release_seconds`.
+
+        Less costly than it was: quiesce used to delete the whole browser
+        profile, so a slow sign-in was thrown away rather than paused. It now
+        removes only the lock files that name a dead process, and the profile
+        survives. The sandbox still goes away mid-keystroke without this,
+        which is reason enough.
 
         Best effort: this keeps something alive, and failing to do so must not
         take down the socket that was working.
@@ -127,6 +132,11 @@ class BrowserViewService:
         provider, instance = service.reach(handle)
         relay = BrowserRelayClient(provider, instance)
         await relay.deliver_token()
+        # Beside the token, and for the same reason: written on every use
+        # rather than asked about. This is what makes withdrawing a proxy
+        # server-side actually reach a sandbox -- it used to be baked in at
+        # create and could never be taken back.
+        await relay.deliver_browser_proxy(sandbox.id, sandbox.kind)
         return relay
 
     async def status(self, user_id: UUID) -> BrowserStatus:
@@ -164,72 +174,180 @@ class BrowserViewService:
 
         return {"state": "running" if chrome == "running" else "stopped"}
 
-    async def open_session(
+    async def open_vnc_session(
         self,
         user_id: UUID,
         *,
         mode: str,
         origin: str | None = None,
-        session: str | None = None,
-        domain: str | None = None,
+        conversation_id: UUID | None = None,
     ) -> tuple[str, dict[str, str]]:
-        """Get a browser up, on the right page, and say where to attach.
+        """Get a browser up, on the right page, and say where to attach a VNC view.
 
         Raises `BrowserRelayUnavailable` with a sentence when the browser will
         not start, and `SandboxCapabilityUnsupported` where this fabric cannot
         reach a port at all.
+
+        `origin`, when given, steers the browser to that site first -- the
+        "arrival repeats" self-heal that makes opening the sign-in page a
+        second time land on the right site even if an earlier best-effort
+        `ensure_for_sign_in` never ran or the browser had gone idle since.
+        VNC shows the whole shared display rather than one CDP-picked tab, so
+        there is no target to resolve the way the JSON stream this replaced
+        needed -- but the session the steer actually landed in is still
+        wanted, for the driving lease. See `vnc_socket_url`.
+
+        `conversation_id` is carried for logging and for the keepalive, not
+        to pick a browser: there is one per sandbox and everything shares it.
+        It used to select `agent_session(conversation_id)`, a Chrome and
+        profile of its own per conversation, which is what made a sign-in
+        need carrying from one browser to another.
+
+        `ensure_browser` is called either way, `origin` or not: it is what
+        starts Xvfb, Chrome, and -- through `start-browser.sh` -- the VNC
+        pair, none of which a mere port-forward through `deliver_token`
+        brings up on its own. Skipping it for a plain watch/drive with no
+        site to steer to was the first version of this method, and it left
+        VNC connecting to a display nothing was running yet -- the browser
+        used to start this way implicitly, through the JSON stream's own
+        `ensure_browser` call, which VNC has no equivalent path for.
         """
         relay = await self._relay(user_id, start=True)
         # The same rule the state paths hold, on the path a person actually
-        # uses. `load_login_state` and `ensure_for_sign_in` both refused a
+        # uses. `forget_sites` and `ensure_for_sign_in` both refused a
         # sandbox the internet can reach; this one -- the socket somebody types
         # a password into -- did not, so the guard was on the two doors nobody
         # was walking through.
         await _require_private(relay, doing="watch or drive this browser")
-        # No session named and a site named means a sign-in: it belongs in that
-        # site's own session, the one `save_login_state` later reads. The relay
-        # names that session from `domain` and not from `origin`, so an origin
-        # on its own used to land in the default session -- the whole of the
-        # bug this pairing removes. `ensure_for_sign_in` already did this; the
-        # viewer did not, and they are the two halves of one journey.
-        if session is None and domain is None and origin:
-            domain = host_of(origin)
+        # No session is named, by any caller, ever. There is one browser in a
+        # sandbox and it keeps its own profile, so a sign-in, an agent's
+        # command and a person's pane are all looking at the same Chrome --
+        # which is the point, and what removed the whole business of carrying
+        # a captured login from one browser into another.
         found = await relay.ensure_browser(
-            origin=origin, session=session, domain=domain
+            origin=origin,
+            session=None,
+            domain=host_of(origin) if origin else None,
         )
-        target_id = str(found.get("target_id") or "")
-        if not target_id:
-            raise BrowserRelayUnavailable("the browser has no page to show")
-        # The session the relay says it used, never one worked out again here.
-        #
-        # This used to re-derive `login-<host>` from the origin while the relay,
-        # given neither a session nor a domain, had opened the page in the
-        # default one. The socket then carried a target id from one browser to
-        # another, where it does not exist -- so the person watched a reconnect
-        # loop, and a capture afterwards read a browser nobody had signed in to.
-        # Two derivations of one fact is the bug; this is the one that knows.
-        attached = str(found.get("session") or "") or None
-        return await relay.session_socket_url(
-            target_id=target_id, mode=mode, session=attached
-        )
+        # The session the relay says it used, never one worked out again
+        # here -- see the note on `vnc_socket_url` for why this matters even
+        # though VNC does not scope the picture by it.
+        session = str(found.get("session") or "") or None
+        return await relay.vnc_socket_url(mode=mode, session=session)
 
-    async def save_login_state(
-        self, user_id: UUID, *, domain: str, session: str | None = None
-    ) -> "BrowserState":
-        relay = await self._relay(user_id, start=True)
-        return await relay.save_state(domain=domain, session=session)
+    async def current_page_url(self, user_id: UUID, *, origin: str) -> str | None:
+        """What page the browser signing in to `origin` is actually showing.
 
-    async def load_login_state(
-        self,
-        user_id: UUID,
-        state: "BrowserState | dict[str, object]",
-        *,
-        domain: str,
-        session: str | None = None,
-    ) -> None:
+        VNC carries no navigation signal of its own -- it is pixels, not
+        events -- so the anti-phishing host display on the sign-in page
+        (`sign-in-to-site/[conversationId]/[toolCallId]/page.tsx`) polls
+        this rather than reading it off the video the way the JSON stream's
+        `onNavigated` used to. `None` when nothing can be read, which leaves
+        that page showing the origin it was told about rather than breaking.
+        """
+        try:
+            relay = await self._relay(user_id, start=False)
+            found = await relay.targets(domain=host_of(origin))
+        except SandboxCapabilityUnsupported:
+            return None
+        except SandboxUnavailable, BrowserRelayUnavailable:
+            return None
+        except OSError, httpx.HTTPError, ProviderGone, _engine_error():
+            return None
+        if not found:
+            return None
+        url = found[0].get("url")
+        return str(url) if url else None
+
+    async def resize_display(self, user_id: UUID, *, width: int, height: int) -> str:
+        """Fit the display to the pane somebody is watching it in.
+
+        `start=False`: this follows a pane that is already open, so it must
+        not be what wakes a sandbox. A resize with nothing to resize is not
+        an error worth raising at a viewer -- the caller turns the refusal
+        into "keep what you have", which is a worse fit rather than a broken
+        picture.
+
+        One display serves every session in the sandbox, so this is not
+        session-scoped and the last request wins. `/vnc`'s docstring records
+        per-session displays as the real answer.
+        """
+        relay = await self._relay(user_id, start=False)
+        return await relay.resize_display(width=width, height=height)
+
+    async def viewers(self, user_id: UUID) -> int | None:
+        """How many people the sandbox's own relay is serving.
+
+        Asked of the relay rather than counted here: two viewers of one
+        sandbox can arrive through different API workers, and a count local
+        to one of them says zero while the other is still watching.
+        """
+        relay = await self._relay(user_id, start=False)
+        return await relay.viewers()
+
+    async def reset_display(self, user_id: UUID) -> str:
+        """Put the display back to its resting size.
+
+        Called when the last viewer disconnects. `start=False`, because a
+        paused sandbox has no display to reset and waking one to tidy it up
+        would be the opposite of the point.
+        """
+        relay = await self._relay(user_id, start=False)
+        return await relay.reset_display()
+
+    async def signed_in_sites(
+        self, user_id: UUID, *, wake: bool = False
+    ) -> ProfileCookies:
+        """Which hosts the browser holds cookies for, and nothing else.
+
+        `wake` off by default: rendering a settings page must not be what
+        starts somebody's computer, so a paused sandbox answers
+        `running: False` and an empty list instead. No cookie value crosses
+        this boundary -- see `browser_relay/cookies.py`.
+        """
+        relay = await self._relay(user_id, start=wake)
+        if wake:
+            # Three things have to be up, and `wake` means all three: the
+            # sandbox, the relay process inside it, and Chrome. Starting only
+            # the first left this answering "asleep" about a machine that was
+            # plainly running -- `_relay` delivers the token but starts
+            # nothing, and `health(start=True)` is the only thing that runs
+            # the relay's own start script.
+            await relay.health(start=True)
+        return await relay.profile_cookies(start=wake)
+
+    async def forget_sites(
+        self, user_id: UUID, *, domains: list[str], sites: list[str]
+    ) -> int:
+        """Drop the cookies for these hosts, and say how many went.
+
+        Unlike the delete this replaces, which removed Lemma's encrypted copy
+        and left the browser signed in, this signs the browser out.
+
+        `sites` are the registrable domains those hosts roll up to. They go
+        in the same call so the "they signed in here" mark leaves with the
+        cookies rather than outliving them.
+        """
         relay = await self._relay(user_id, start=True)
-        await _require_private(relay, doing="load a saved login")
-        await relay.load_state(state, domain=domain, session=session)
+        await relay.health(start=True)
+        await _require_private(relay, doing="forget a saved login")
+        return await relay.forget_cookies(domains=domains, sites=sites)
+
+    async def mark_signed_in(self, user_id: UUID, *, site: str) -> None:
+        """Record that somebody said they signed in to this site.
+
+        The one fact about a login that cannot be read back off the profile.
+        Measured: `api.lemma.work`'s two session cookies and `youtube.com`'s
+        six visitor cookies are indistinguishable by every flag CDP reports,
+        so without this the list can only say "sites with cookies". See
+        `sandbox_runtime/browser_relay/marks.py`.
+
+        `start=False`: the browser has just been driven through a sign-in,
+        so the relay is up -- and if it is not, a lost label must not be
+        what fails a sign-in that worked.
+        """
+        relay = await self._relay(user_id, start=False)
+        await relay.mark_signed_in(site=site)
 
     async def ensure_for_sign_in(
         self,
@@ -237,7 +355,6 @@ class BrowserViewService:
         *,
         origin: str,
         report: bool = False,
-        session: str | None = None,
     ) -> dict[str, object] | None:
         """Put the site in front of the person before they arrive.
 
@@ -247,26 +364,18 @@ class BrowserViewService:
         common case where they click straight away.
 
         `report` returns where the browser landed -- address and page title --
-        for the one caller that needs to know whether the site accepted a
-        restored session or bounced it to a login form. Off by default because
-        the other callers are opening a page for a person, not asking a
-        question about it.
+        which is how `already_signed_in` decides whether the person needs
+        asking at all. Off by default because the other callers are opening a
+        page for a person, not asking a question about it.
         """
         relay = await self._relay(user_id, start=True)
         await _require_private(relay, doing="sign in to a site")
-        # In the site's own session, which is the session `save_login_state`
-        # reads. Opening it in the default one and capturing from the login one
-        # means capturing from a browser nobody ever signed in to.
-        #
-        # `session` overrides that for the one caller that is not opening a
-        # page for a person: checking whether a restored session still works
-        # has to look at the browser the *agent* will use, or it answers a
-        # question nobody asked.
-        landed = await relay.ensure_browser(
-            origin=origin,
-            session=session,
-            domain=None if session else host_of(origin),
-        )
+        # The one browser, the one anybody watching is already looking at.
+        # This used to open a Chrome named for the site, so that a capture
+        # taken from it could only contain that site -- scoping by
+        # construction, and the reason a sign-in then had to be carried into
+        # the agent's own browser afterwards. Nothing is captured now.
+        landed = await relay.ensure_browser(origin=origin, session=None, domain=None)
         return landed if report else None
 
 
@@ -286,10 +395,14 @@ async def _require_private(relay, *, doing: str) -> None:
     that evaluates script. Loading somebody's saved session into a browser
     behind that is handing their account to whoever finds the address.
 
-    So the two paths that put a session into a browser refuse. Watching is not
-    refused: a viewer reaches the browser through this API over an
-    authenticated socket, and nothing about the sandbox's own address changes
-    what that person is already entitled to see.
+    So all three paths into that browser refuse: loading a saved login, opening
+    one for a sign-in, and attaching a viewer -- the last because attaching is
+    also how somebody drives, and a password typed into a browser behind an
+    open dashboard is the same exposure as a session loaded into one. An
+    earlier draft of this argued that watching was safe because the viewer
+    arrives over an authenticated socket. That is true of the socket and beside
+    the point: what leaks is the sandbox's own address, which nothing about the
+    viewer's credentials closes.
     """
     try:
         public = await relay.endpoint_is_public()

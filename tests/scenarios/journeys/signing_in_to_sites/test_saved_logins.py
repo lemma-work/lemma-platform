@@ -46,31 +46,34 @@ async def test_one_persons_logins_are_not_anothers(world) -> None:
         assert items_of(await person.api.get("/web-logins")) == []
 
     # And the route takes no user parameter at all -- there is no way to ask
-    # for somebody else's, correctly or otherwise.
+    # for somebody else's, correctly or otherwise. The body carries the
+    # listing and whether the computer was asleep, and nothing else: no
+    # owner, no id, nothing a caller could change to mean a different person.
+    # The sandbox this reads is resolved from the session, so the isolation is
+    # the same one that makes a person's files theirs.
     mine = await alice.api.get("/web-logins")
-    assert set(mine) <= {"items"}, mine
+    assert set(mine) <= {"items", "sleeping"}, mine
 
 
-@scenario("Removing a site that was never saved says so, rather than pretending")
+@scenario("Signing out needs a running computer, and says so when there is none")
 @proves("PS-BROWSER-022")
 @covers("web_login.delete")
-async def test_removing_something_that_is_not_there_is_refused(world) -> None:
+async def test_signing_out_without_a_running_browser_is_refused(world) -> None:
+    """Refusing beats reporting a success that did not happen.
+
+    This is the whole difference from the delete it replaces. That one removed
+    an encrypted copy Lemma kept and left the browser signed in, so it could
+    always claim to have worked. This changes the browser, and a browser that
+    is not running has not been changed.
+    """
     alice = await world.person("priya")
     await alice.api.expect(
         "DELETE",
         "/web-logins",
         params={"origin": "https://never-saved.example.com"},
-        status=404,
-        what="removing a login that does not exist",
+        status=409,
+        what="signing out while the computer is asleep",
     )
-
-
-@scenario("A person can read what has been done with their saved logins")
-@proves("PS-BROWSER-022")
-@covers("web_login.history")
-async def test_history_is_answerable_to_its_owner(world) -> None:
-    alice = await world.person("priya")
-    assert items_of(await alice.api.get("/web-logins/history")) == []
 
 
 @scenario("A sign-in request opens only for the person it was made for")
@@ -82,6 +85,11 @@ async def test_somebody_elses_request_is_not_found(world) -> None:
     A stranger, and the owner of a link that was forwarded to them, get the
     same answer as somebody who invented the id: not found. Anything else would
     tell a holder of a guessed id that they had guessed right.
+
+    What this half proves is the invented id. Raising a real pause needs a run
+    that stops on one, so the branch that turns *somebody else's* conversation
+    into the same 404 is proved against the service in
+    `test_sign_in_service.py::test_a_stranger_cannot_read_what_somebody_is_being_asked_to_sign_in_to`.
     """
     alice = await world.person("priya")
     await alice.api.expect(
@@ -96,6 +104,8 @@ async def test_somebody_elses_request_is_not_found(world) -> None:
 @proves("PS-BROWSER-012")
 @covers("web_login.sign_in.answer")
 async def test_finishing_somebody_elses_request_is_refused(world) -> None:
+    """As above, the owned-by-somebody-else branch is proved against the
+    service, in `test_a_stranger_cannot_answer_somebody_elses_sign_in`."""
     alice = await world.person("priya")
     await alice.api.expect(
         "POST",

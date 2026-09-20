@@ -794,7 +794,7 @@ async def test_compaction_bounds_a_history_built_from_real_tool_output(
         UserPromptPart,
     )
 
-    from app.modules.agent.domain.value_objects import HarnessOptions
+    from app.modules.agent.domain.harness_options import HarnessOptions
     from app.modules.agent.infrastructure.harnesses.history import (
         build_history_processors,
     )

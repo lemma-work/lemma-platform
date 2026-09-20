@@ -95,10 +95,10 @@ async def test_resend_webhook_ignores_unmatched_address(
     fails closed rather than guessing a destination. The Svix signature is valid;
     only the destination is unknown."""
     monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     envelope = _raw_resend_envelope(
         sender_email=fixed_test_user["email"],
-        to_address="pod-nonexistent@ops.asur.work",
+        to_address="pod-nonexistent@ops.lemma.work",
         message_id="resend-raw-unmatched-1",
         text="Is anyone there?",
         subject="Surface Resend Raw E2E",
@@ -122,10 +122,10 @@ async def test_resend_webhook_rejects_invalid_signature(
     """An inbound envelope with a bad/absent Svix signature is rejected (401)
     before any address routing — proves inbound is authenticated."""
     monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     envelope = _raw_resend_envelope(
         sender_email="attacker@evil.test",
-        to_address="pod-anything@ops.asur.work",
+        to_address="pod-anything@ops.lemma.work",
         message_id="resend-forged-1",
         text="Forged inbound",
         subject="Forged",
@@ -156,7 +156,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
     monkeypatch.setattr(core_settings, "resend_webhook_secret", _RESEND_SIGNING_SECRET)
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,
@@ -180,7 +180,7 @@ async def test_resend_webhook_routes_raw_envelope_to_provisioned_address(
         assistant_address = surface_model.surface_identity_email
     assert assistant_address
     # Minted per agent by `email_surface_provisioning`, not a fixed constant.
-    assert assistant_address.endswith("@ops.asur.work")
+    assert assistant_address.endswith("@ops.lemma.work")
 
     envelope = _raw_resend_envelope(
         sender_email=fixed_test_user["email"],
@@ -250,7 +250,7 @@ async def test_a_spoofed_sender_gets_neither_the_members_identity_nor_a_reply(
     still the guarantee; silence is how it is kept without writing to a
     stranger.
     """
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     pod_id = test_pod["id"]
     account = await _ensure_connector_account(
         db_session,

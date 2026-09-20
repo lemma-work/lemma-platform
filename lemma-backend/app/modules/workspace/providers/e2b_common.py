@@ -14,6 +14,7 @@ from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxUnavailable,
 )
+from app.core.log.log import get_logger
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers.base import (
     ProviderFailed,
@@ -21,7 +22,17 @@ from app.modules.workspace.providers.base import (
     ProviderRejected,
 )
 
+logger = get_logger(__name__)
+
 DEFAULT_METADATA_NAMESPACE = "lemma"
+
+#: How long the browser gets to close itself before a release goes ahead.
+#:
+#: Generous next to the low-memory guard's three seconds, because this one is
+#: not running in a starved sandbox -- an idle release is the calm case, and
+#: what is being waited for is a disk commit that decides whether somebody is
+#: still signed in when they come back.
+BROWSER_CLOSE_SECONDS = 15
 
 
 def meta_sandbox_id(namespace: str) -> str:
@@ -350,3 +361,45 @@ async def _poll_runtime(url: str, budget_seconds: float) -> int | None:
             if time.monotonic() >= deadline:
                 return status
             await asyncio.sleep(0.1)
+
+
+async def close_browser(sandbox, provider_id: str, **api) -> None:
+    """Ask the browser to shut down, so the profile is written back.
+
+    Called before a pause, because an E2B workspace pause is
+    `keep_memory=False` -- power loss, as far as Chrome is concerned -- and a
+    browser that loses power has saved nothing: `agent-browser` runs Chrome on
+    a throwaway `--user-data-dir` under `/tmp` and copies it to the configured
+    profile only on a clean close. Measured on a real sandbox: sign in, pause
+    immediately, resume, and the session is gone; close first and it is there.
+    That did not matter while the profile was scratch in `/tmp`; it is the
+    durable store a person's logins live in now.
+
+    `agent-browser close --all` rather than a signal, because the daemon owns
+    the process and closing through it is what the image supports -- and
+    because `sandbox_runtime.workspace`, where the guard's own `shed_browser`
+    lives, is not shipped into the E2B template at all.
+
+    Best effort and bounded, for the same reason Docker's quiesce is never
+    allowed to fail a release: a sandbox whose browser cannot be reached is
+    exactly the one most in need of being released. Worst case the pause
+    proceeds as it did before this existed.
+    """
+    try:
+        with sdk_errors():
+            await sandbox.commands.run(
+                "agent-browser close --all",
+                timeout=BROWSER_CLOSE_SECONDS,
+                **api,
+            )
+    # Exhaustive: `classify` returns one of these three and nothing else, so
+    # a mistake in our own code here still propagates rather than being
+    # reported as a release that tidied up.
+    except (ProviderGone, ProviderRejected, SandboxUnavailable) as exc:
+        # Warning, not debug: debug is below the production log level, and
+        # this is the step whose absence silently costs somebody a login.
+        logger.warning(
+            "workspace.release.browser_close_failed",
+            provider_id=provider_id,
+            detail=str(exc),
+        )

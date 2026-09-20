@@ -20,12 +20,13 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_memory_paths import memory_is_active
-from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.entities import Agent, AgentRun, Conversation
 from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
+from app.modules.agent.services.brief_lines import run_source_of
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.services.surface_context import (
     surface_context_from_conversation,
@@ -56,7 +57,7 @@ async def build_run_context(
     uow_factory: UnitOfWorkFactory,
     conversation: Conversation,
     agent: Agent,
-    agent_run_id: UUID,
+    agent_run: AgentRun,
     user_id: UUID,
     resolved_runtime: Any,
     runtime_profile_snapshot: dict[str, object | None] | None,
@@ -100,7 +101,7 @@ async def build_run_context(
         pod_id=conversation.pod_id,
         conversation_id=conversation.id,
         agent_name=agent.name,
-        agent_run_id=agent_run_id,
+        agent_run_id=agent_run.id,
         workload_type="agent",
         workload_id=agent.id,
         configured_accounts=await resolve_configured_accounts(
@@ -130,6 +131,10 @@ async def build_run_context(
             toolsets=run_toolsets,
             user_id=user_id,
             pod_id=conversation.pod_id,
+            # What started *this* run, as against how the conversation began.
+            # A schedule stamps the conversation once and it stays stamped, so
+            # only the run can say whether a person is here on this turn.
+            run_source=run_source_of(agent_run),
         )
     # The failures a run should survive: a denied grant, a missing file, a
     # database or storage blip. Not a TypeError -- `agent_memory_brief` says a

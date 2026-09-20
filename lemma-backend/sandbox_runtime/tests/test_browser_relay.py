@@ -9,18 +9,14 @@ are mostly about what happened rather than about what came back.
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
 
-from sandbox_runtime.browser_relay import chrome, state
+from sandbox_runtime.browser_relay import chrome
+from sandbox_runtime.paths import HOME_ROOT
 from sandbox_runtime.browser_relay.app import TOKEN_PATH, create_app
-from sandbox_runtime.browser_relay.stream_proxy import (
-    CONTROL,
-    VIEW,
-    viewer_message_allowed,
-)
+from sandbox_runtime.browser_relay.stream_proxy import CONTROL, VIEW
 
 # No module-level `pytest.mark.asyncio`: pytest-asyncio runs in auto mode here,
 # so async tests are collected without it, and marking the synchronous ones in
@@ -113,7 +109,7 @@ async def test_a_recorded_port_nothing_answers_on_is_not_believed(
     async def nothing_listening(_port: int) -> bool:
         return False
 
-    monkeypatch.setattr(chrome, "_answers_on", nothing_listening)
+    monkeypatch.setattr(chrome, "answers_on", nothing_listening)
 
     assert chrome.recorded_port() == 45999
     with pytest.raises(chrome.BrowserNotRunning):
@@ -130,7 +126,7 @@ async def test_a_recorded_port_that_answers_is_used(
     async def listening(_port: int) -> bool:
         return True
 
-    monkeypatch.setattr(chrome, "_answers_on", listening)
+    monkeypatch.setattr(chrome, "answers_on", listening)
     assert await chrome.live_port() == 45998
 
 
@@ -142,82 +138,6 @@ async def test_the_absolute_wrapper_is_preferred_over_the_bare_name(
     argv = chrome.agent_browser_argv("get", "cdp-url", session="workspace")
     assert argv[0] == "/usr/local/bin/agent-browser"
     assert argv[1:3] == ["--session", "workspace"]
-
-
-# ---------------------------------------------------------------------------
-# What a viewer may send
-# ---------------------------------------------------------------------------
-#
-# The frame protocol itself is `agent-browser`'s, not ours -- we proxy its
-# session-scoped stream rather than driving CDP. What is still ours, and so
-# what is tested here, is the one rule the stream server does not know about:
-# a viewer who asked to watch may not type.
-
-
-def _allowed(message: dict, *, mode: str) -> bool:
-    ok, _ = viewer_message_allowed(json.dumps(message), mode=mode)
-    return ok
-
-
-def _refusal(message: dict, *, mode: str) -> dict | None:
-    _, refusal = viewer_message_allowed(json.dumps(message), mode=mode)
-    return refusal
-
-
-def test_watching_cannot_type() -> None:
-    """The stream server takes input from whoever connects.
-
-    It has no notion of a read-only viewer, so `view` mode is enforced here --
-    the only place that knows which mode was asked for. Without it, "watch"
-    and "drive" would be the same socket with a different label.
-    """
-    for kind in ("input_mouse", "input_keyboard", "input_touch"):
-        assert _allowed({"type": kind}, mode=VIEW) is False
-        assert _refusal({"type": kind}, mode=VIEW)["code"] == "read_only"
-
-
-def test_driving_can_type_and_touch() -> None:
-    """Touch included: it is what makes a sign-in work on a phone, and it is
-    something the hand-rolled screencast never had."""
-    for kind in ("input_mouse", "input_keyboard", "input_touch"):
-        assert _allowed({"type": kind}, mode=CONTROL) is True
-
-
-def test_pacing_and_acks_are_allowed_to_a_watcher() -> None:
-    """Capping your own frame rate is not driving the page."""
-    for kind in ("config", "ack", "screencast_start", "screencast_stop"):
-        assert _allowed({"type": kind}, mode=VIEW) is True
-
-
-def test_anything_outside_the_vocabulary_is_refused_in_words() -> None:
-    """Matched against a set, not a prefix.
-
-    `input_*` as a prefix test would silently admit whatever the next release
-    of the CLI adds under that name. And a message dropped in silence looks to
-    a client exactly like a browser that has stopped.
-    """
-    assert _allowed({"type": "input_something_new"}, mode=CONTROL) is False
-    assert _refusal({"type": "Runtime.evaluate"}, mode=CONTROL)["code"] == (
-        "unknown_message"
-    )
-
-
-def test_unreadable_messages_are_never_forwarded() -> None:
-    ok, refusal = viewer_message_allowed("{not json", mode=CONTROL)
-    assert ok is False
-    assert refusal["code"] == "unreadable"
-    ok, _ = viewer_message_allowed('"a string"', mode=CONTROL)
-    assert ok is False
-
-
-def test_the_stream_url_paces_from_the_opening_frame() -> None:
-    """`pacing` and `maxFps` go on the URL because the CLI's own help says that
-    is the only way to cover the first frame; a config message arrives too
-    late to pace it."""
-    url = chrome.stream_socket_url(41234, max_fps=15)
-    assert url.startswith("ws://127.0.0.1:41234/?")
-    assert "pacing=ack" in url
-    assert "maxFps=15" in url
 
 
 # ---------------------------------------------------------------------------
@@ -265,73 +185,48 @@ def test_the_token_file_is_not_where_quiesce_looks() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Session state
+# The profile, and what leaves the sandbox
 # ---------------------------------------------------------------------------
 
 
-def test_a_login_session_is_named_for_its_site() -> None:
-    """Scoping by construction: a capture from this session can only contain
-    what was signed in to in it."""
-    assert state.session_for_domain("example.com") == "login-example.com"
-    assert state.session_for_domain("EXAMPLE.com") == "login-example.com"
-    # A hostile domain cannot escape into a shell argument or a path.
-    assert "/" not in state.session_for_domain("a/../../etc/passwd")
-    assert ";" not in state.session_for_domain("a;rm -rf /")
+def test_the_profile_is_on_the_durable_disk() -> None:
+    """A login that does not survive a suspend is a login the person is asked
+    for again next conversation, which is the whole complaint this answers."""
+    assert chrome._DEFAULT_PROFILE == f"{HOME_ROOT}/.lemma/browser/profile"
+    assert not chrome._DEFAULT_PROFILE.startswith("/tmp/")
 
 
-def test_the_state_directory_is_never_the_durable_volume() -> None:
-    """A saved session under /workspace would outlive the run that captured it
-    and be waiting for whatever ran next."""
-    assert not str(state._STATE_DIR).startswith("/workspace")
-    assert str(state._STATE_DIR).startswith("/tmp/")
+def test_a_named_session_stays_scratch() -> None:
+    """Naming a session is how an agent asks for a *second* browser -- two
+    accounts side by side -- and that is a throwaway by construction. Letting
+    those accumulate in the home would grow a profile per name anyone ever
+    passed."""
+    profile = chrome.profile_for_session("compare-b")
+    assert profile is not None and profile.startswith("/tmp/")
+    assert chrome.profile_for_session(chrome.DEFAULT_SESSION) is None
 
 
-async def test_a_saved_session_leaves_no_file_behind(monkeypatch, tmp_path) -> None:
-    written: dict[str, Path] = {}
-
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
-        path = Path(argv[-1])
-        written["path"] = path
-        path.write_text(json.dumps({"cookies": [{"name": "s", "value": "v"}]}))
-        return 0, ""
-
-    monkeypatch.setattr(state, "_STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(state, "_run", fake_run)
-
-    saved = await state.save_session(session="login-example.com")
-    assert saved == {"cookies": [{"name": "s", "value": "v"}]}
-    assert not written["path"].exists(), "the plaintext session must not persist"
+def test_a_hostile_session_name_cannot_escape_into_a_path() -> None:
+    for hostile in ("a/../../etc/passwd", "a;rm -rf /", ".."):
+        assert not chrome.is_safe_session(hostile)
+        with pytest.raises(chrome.UnsafeSessionName):
+            chrome.profile_for_session(hostile)
 
 
-async def test_an_oversized_session_is_refused(monkeypatch, tmp_path) -> None:
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
-        Path(argv[-1]).write_text(json.dumps({"junk": "x" * (3 * 1024 * 1024)}))
-        return 0, ""
+def test_no_cookie_value_can_leave_the_sandbox() -> None:
+    """The relay reports hosts and expiries, never values.
 
-    monkeypatch.setattr(state, "_STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(state, "_run", fake_run)
+    The design this replaced had to carry values out by construction -- the
+    backend encrypted them and put them back later. This one does not, so the
+    guarantee is the shape of the function rather than a rule about who may
+    call it.
+    """
+    import inspect
 
-    with pytest.raises(state.StateOperationFailed, match="larger than"):
-        await state.save_session(session="login-example.com")
+    from sandbox_runtime.browser_relay import cookies
 
-
-async def test_a_loaded_session_is_staged_and_removed(monkeypatch, tmp_path) -> None:
-    seen: dict[str, object] = {}
-
-    async def fake_run(argv: list[str]) -> tuple[int, str]:
-        path = Path(argv[-1])
-        seen["path"] = path
-        seen["content"] = json.loads(path.read_text())
-        seen["mode"] = path.stat().st_mode & 0o777
-        return 0, ""
-
-    monkeypatch.setattr(state, "_STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(state, "_run", fake_run)
-
-    await state.load_session({"cookies": []}, session="login-example.com")
-    assert seen["content"] == {"cookies": []}
-    assert seen["mode"] == 0o600, "readable by its owner and nobody else"
-    assert not Path(seen["path"]).exists()  # type: ignore[arg-type]
+    source = inspect.getsource(cookies.list_cookie_domains)
+    assert '"value"' not in source and "'value'" not in source
 
 
 def test_the_relay_serves_only_what_it_means_to() -> None:
@@ -343,19 +238,39 @@ def test_the_relay_serves_only_what_it_means_to() -> None:
         "/health",
         "/targets",
         "/browser:ensure",
-        "/state:save",
-        "/state:load",
-        "/session",
+        "/display:resize",
+        "/display:reset",
+        "/profile:cookies",
+        "/profile:forget",
+        "/profile:signed-in",
+        "/vnc",
     } <= served
-    # Asserted as an equality on the state routes, not a subset: `/state:clear`
-    # was here and nothing ever called it, all the way down through the client
-    # and the service to `clear_session`. A route into a signed-in browser that
-    # no product path uses is surface for free.
-    assert {p for p in served if p.startswith("/state")} == {
-        "/state:save",
-        "/state:load",
+    # Asserted as an equality, not a subset: `/state:clear` was once here and
+    # nothing ever called it, all the way down through the client and the
+    # service. A route into a signed-in browser that no product path uses is
+    # surface for free. `/state:save` and `/state:load` are gone for a larger
+    # reason -- nothing lifts a session out of the sandbox any more.
+    assert {p for p in served if p.startswith("/profile")} == {
+        "/profile:cookies",
+        "/profile:forget",
+        # Names only, never a cookie: the set of sites somebody said they
+        # signed in to, which is the one thing the cookie store cannot say.
+        "/profile:signed-in",
     }
+    # Equality here too, for the reason above. Both were absent from this
+    # file while it claimed to assert the served surface, so a display route
+    # could have come or gone without anything noticing.
+    assert {p for p in served if p.startswith("/display")} == {
+        "/display:resize",
+        "/display:reset",
+    }
+    assert not {p for p in served if p.startswith("/state")}
     assert not {p for p in served if p.startswith("/cdp")}
+    # `/session` proxied `agent-browser`'s own JSON/JPEG stream server. VNC
+    # replaced it outright rather than living beside it, so a route this
+    # relay no longer needs is exactly the surface the docstring above warns
+    # against leaving behind.
+    assert "/session" not in served
 
 
 # ---------------------------------------------------------------------------
@@ -385,11 +300,17 @@ def _client(monkeypatch, tmp_path, token: str = "token-abc"):
 def test_health_needs_no_token_and_says_when_chrome_is_down(
     monkeypatch, tmp_path
 ) -> None:
-    """A paused workspace has no browser, and that is not a fault."""
+    """A paused workspace has no browser, and that is not a fault.
+
+    `vnc` rides alongside because they fail separately and the remedies
+    differ: a viewer that got no picture used to close 4409, "the browser is
+    not running", which was the same answer for a browser that was down, a
+    display that never came up, and a websockify that had died.
+    """
     client = _client(monkeypatch, tmp_path)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"chrome": "stopped"}
+    assert response.json() == {"chrome": "stopped", "vnc": "down", "viewers": 0}
 
 
 def test_a_guarded_route_without_a_token_is_refused_as_unauthorised(
@@ -416,15 +337,92 @@ def test_the_right_token_reaches_the_route(monkeypatch, tmp_path) -> None:
     assert response.status_code == 409
 
 
-def test_every_state_route_is_behind_the_token(monkeypatch, tmp_path) -> None:
-    """These read and write signed-in sessions; none may be reachable openly."""
+def test_every_profile_route_is_behind_the_token(monkeypatch, tmp_path) -> None:
+    """These read and change a signed-in browser; none may be open."""
     client = _client(monkeypatch, tmp_path)
     for path, body in (
         ("/browser:ensure", {}),
-        ("/state:save", {}),
-        ("/state:load", {"state": {}}),
+        ("/profile:forget", {"domains": ["example.com"]}),
     ):
         assert client.post(path, json=body).status_code == 401, path
+    assert client.get("/profile:cookies").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# A sign-out that did not sign anyone out
+# ---------------------------------------------------------------------------
+
+
+def _forget(monkeypatch, tmp_path, outcome):
+    """`/profile:forget` over a clear whose result is dictated by the test."""
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    client = _client(monkeypatch, tmp_path)
+    forgotten: list[list[str]] = []
+
+    async def _live_port(session: str = "") -> int:
+        return 9222
+
+    async def _forget_domains(domains, *, port):
+        return outcome
+
+    monkeypatch.setattr(relay_app, "live_port", _live_port)
+    monkeypatch.setattr(relay_app, "forget_domains", _forget_domains)
+    monkeypatch.setattr(
+        relay_app, "forget_marks", lambda sites: forgotten.append(sites)
+    )
+    response = client.post(
+        "/profile:forget",
+        json={"domains": ["example.com"], "sites": ["example.com"]},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+    return response, forgotten
+
+
+def test_a_refused_clear_is_not_reported_as_a_sign_out(monkeypatch, tmp_path) -> None:
+    """`clearDataForOrigin` is the only thing on this path that deletes
+    anything -- the cookie read above it merely counts. So a run in which
+    every origin refused has removed nothing, and returning the pre-clear
+    count let the route drop the "signed in" mark and show a person a
+    finished sign-out over a session that was still live.
+
+    The mark is the part that matters: a wrong count is a wrong number, a
+    wrong mark is somebody who stops looking.
+    """
+    from sandbox_runtime.browser_relay.cookies import ForgetOutcome
+
+    response, forgotten = _forget(
+        monkeypatch, tmp_path, ForgetOutcome(dropped=3, refused=2, origins=2)
+    )
+
+    assert response.status_code == 502
+    assert forgotten == [], "the mark must survive a clear that did not happen"
+
+
+def test_a_partial_refusal_is_a_refusal(monkeypatch, tmp_path) -> None:
+    """One origin cleared and one refused still leaves a live session."""
+    from sandbox_runtime.browser_relay.cookies import ForgetOutcome
+
+    response, forgotten = _forget(
+        monkeypatch, tmp_path, ForgetOutcome(dropped=3, refused=1, origins=4)
+    )
+
+    assert response.status_code == 502
+    assert forgotten == []
+
+
+def test_a_clean_clear_still_drops_the_mark(monkeypatch, tmp_path) -> None:
+    """The negative: none of the above may cost the ordinary case, including
+    the one where a site's session had already lapsed and no cookie went."""
+    from sandbox_runtime.browser_relay.cookies import ForgetOutcome
+
+    response, forgotten = _forget(
+        monkeypatch, tmp_path, ForgetOutcome(dropped=0, refused=0, origins=2)
+    )
+
+    assert response.status_code == 200
+    assert response.json()["dropped"] == 0
+    assert forgotten == [["example.com"]]
 
 
 # ---------------------------------------------------------------------------
@@ -444,12 +442,6 @@ def test_a_session_name_cannot_escape_the_profile_directory() -> None:
 def test_the_names_this_actually_uses_are_allowed() -> None:
     for good in ("login-app.example.com", "workspace", "login-site", "a_b-1.2"):
         assert chrome.is_safe_session(good) is True, good
-
-
-def test_a_derived_name_is_safe_by_construction() -> None:
-    """`session_for_domain` already strips; this is belt to that brace."""
-    for hostile in ("a/../../etc/passwd", "a;rm -rf /", "../..", "x\x00y"):
-        assert chrome.is_safe_session(state.session_for_domain(hostile)) is True
 
 
 def test_the_default_session_needs_no_profile_of_its_own() -> None:
@@ -510,71 +502,9 @@ def test_the_same_session_always_gets_the_same_profile() -> None:
     )
 
 
-async def test_input_for_a_dead_stream_ends_the_socket_rather_than_vanishing() -> None:
-    """A person typing into a picture has to be told.
-
-    The old CDP path wrapped its dispatch in `suppress(Exception)`: with the
-    socket to Chrome gone, clicks and keystrokes vanished with nothing on screen
-    and nothing in the log. Forwarding to a dead stream now raises out of the
-    pump, the viewer's socket closes, and the pane says the connection dropped
-    and reconnects -- which is the truth.
-    """
-    from sandbox_runtime.browser_relay.stream_proxy import pump
-
-    class _DeadStream:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            await asyncio.sleep(3600)
-
-        async def send(self, _raw):
-            raise ConnectionResetError("the stream went away")
-
-    sent: list[str] = []
-    incoming = [json.dumps({"type": "input_mouse", "eventType": "mousePressed"})]
-
-    async def receive_text():
-        return incoming.pop(0) if incoming else None
-
-    await pump(
-        _DeadStream(), mode=CONTROL, send_text=sent.append, receive_text=receive_text
-    )
-
-    # The pump returned rather than hanging: the caller closes the socket, and
-    # nothing was quietly dropped on the floor.
-    assert sent == []
-
-
-async def test_a_refusal_reaches_the_viewer_without_touching_the_stream() -> None:
-    """Refused input is answered, not dropped."""
-    from sandbox_runtime.browser_relay.stream_proxy import pump
-
-    forwarded: list[str] = []
-
-    class _Stream:
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            raise StopAsyncIteration
-
-        async def send(self, raw):
-            forwarded.append(raw)
-
-    sent: list[str] = []
-    incoming = [json.dumps({"type": "input_keyboard", "eventType": "keyDown"})]
-
-    async def receive_text():
-        return incoming.pop(0) if incoming else None
-
-    await pump(_Stream(), mode=VIEW, send_text=sent.append, receive_text=receive_text)
-
-    assert forwarded == []
-    assert json.loads(sent[0])["code"] == "read_only"
-
-
-def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) -> None:
+def test_a_refused_vnc_viewer_is_told_which_refusal_it_was(
+    monkeypatch, tmp_path
+) -> None:
     """The close code has to survive the sandbox wall, or the pane loops.
 
     A close sent before `accept()` is not a close -- ASGI turns it into a
@@ -593,7 +523,7 @@ def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) ->
 
     client = _client(monkeypatch, tmp_path)
     with client.websocket_connect(
-        "/session?session=../../etc",
+        "/vnc?session=../../etc",
         headers={"X-Lemma-Relay-Token": "token-abc"},
     ) as socket:
         with pytest.raises(WebSocketDisconnect) as refused:
@@ -601,20 +531,398 @@ def test_a_refused_viewer_is_told_which_refusal_it_was(monkeypatch, tmp_path) ->
     assert refused.value.code == CLOSE_UNAUTHENTICATED
 
 
-def test_a_viewer_without_the_token_is_refused_the_same_way(
+def test_a_bridge_that_lied_is_still_a_readable_refusal(monkeypatch, tmp_path) -> None:
+    """The CI failure this closes, and the reason the probe is not optional.
+
+    `ensure_vnc_bridge` reports what a shell script exited with. In CI the
+    script exited 0 while nothing was serving 5901, the route trusted it and
+    called `accept()`, and the socket then died mid-RFB -- "no close frame
+    received or sent", the one failure shape with nowhere to put a reason,
+    because the handshake has already succeeded by the time anything goes
+    wrong.
+
+    So the route asks the port directly, and asks it even when the script
+    said yes. Here the bridge claims success over a port nothing is on, and
+    the viewer gets a close code it can act on instead of a dropped socket.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+
+    async def fake_live_port(session=None):
+        return 12345
+
+    async def bridge_claims_success() -> bool:
+        return True
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app, "ensure_vnc_bridge", bridge_claims_success)
+    # A port bound and immediately closed: a number nothing can be listening
+    # on, without guessing one and racing whatever really holds it.
+    import socket as socketlib
+
+    probe = socketlib.socket()
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+    monkeypatch.setattr(relay_app, "VNC_WS_PORT", dead_port)
+
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_UPSTREAM_GONE
+
+
+def test_a_vnc_viewer_without_the_token_is_refused_the_same_way(
     monkeypatch, tmp_path
 ) -> None:
-    """The socket is the one route a browser opens, so it is the one that has to
-    refuse in a code rather than in a status nobody can read."""
+    """`/vnc` is a second door into the same signed-in browser, so it gets the
+    same refusal, not a weaker one because it is newer."""
     from starlette.websockets import WebSocketDisconnect
 
     from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
 
     client = _client(monkeypatch, tmp_path)
-    with client.websocket_connect("/session") as socket:
+    with client.websocket_connect("/vnc") as socket:
         with pytest.raises(WebSocketDisconnect) as refused:
             socket.receive_text()
     assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_vnc_viewer_with_an_unknown_mode_is_refused(monkeypatch, tmp_path) -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay.app import CLOSE_UNAUTHENTICATED
+
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?mode=drive", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_UNAUTHENTICATED
+
+
+def test_a_vnc_viewer_is_refused_when_no_browser_is_running(
+    monkeypatch, tmp_path
+) -> None:
+    """No live Chrome means nothing on `:99` worth showing, and the browser is
+    told so with a code it treats as "asleep", not "dropped, retry"."""
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_NO_BROWSER
+    from sandbox_runtime.browser_relay.chrome import BrowserNotRunning
+
+    async def fake_live_port(session=None):
+        raise BrowserNotRunning("no chrome here")
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc", headers={"X-Lemma-Relay-Token": "token-abc"}
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            socket.receive_text()
+    assert refused.value.code == CLOSE_NO_BROWSER
+
+
+def test_a_vnc_viewer_is_checked_against_its_own_session_not_the_default(
+    monkeypatch, tmp_path
+) -> None:
+    """The bug this pins: a sign-in's Chrome runs in its own named session,
+    not the default one -- `ensure_browser` starts it there, with its own
+    profile and its own port. Checking `live_port()` with no session, as the
+    route first shipped, asks whether the *default* session's Chrome is
+    running and finds nothing, so a person landed on a sign-in page mid-flow
+    was told "no browser running" about a browser that was on screen at the
+    time. This is only reachable if the check passes for the *named* session
+    and still fails for the default one.
+    """
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+    from sandbox_runtime.browser_relay.chrome import BrowserNotRunning
+
+    async def fake_live_port(session=None):
+        if session != "login-example.com":
+            raise BrowserNotRunning("no chrome in this session")
+        return 12345
+
+    class _RefusingConnect:
+        # `websockets.connect(...)` is used as an async context manager, not
+        # merely awaited -- this stands in for its shape rather than a bare
+        # coroutine. Nothing about reaching websockify is under test here,
+        # only that the liveness check passed for the right session: failing
+        # fast at the next step, with its own distinct close code, is what
+        # proves the refusal above did not fire.
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            raise OSError("no websockify in this test")
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app.websockets, "connect", _RefusingConnect)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?session=login-example.com",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+    assert closed.value.code == CLOSE_UPSTREAM_GONE
+
+
+def test_the_vnc_keepalive_touches_the_session_being_watched(
+    monkeypatch, tmp_path
+) -> None:
+    """The bug this pins: the route kept the *default* session warm whatever
+    the viewer was actually looking at.
+
+    Watching is not a command, and `agent-browser` retires a browser after two
+    idle minutes -- which is the entire reason this loop exists. Pointed at the
+    default session, it let the browser actually on screen idle out from under
+    the person reading it: a sign-in's `login-<host>`, or a conversation's own
+    session. For a sign-in that is worse than a blank panel, because releasing
+    runs quiesce and takes the profile -- and the half-finished sign-in -- with
+    it. It also kept a browser nobody was watching alive, in a sandbox whose
+    memory guard kills on ~220 MB free.
+    """
+    import socket as socketlib
+
+    from starlette.websockets import WebSocketDisconnect
+
+    from sandbox_runtime.browser_relay import app as relay_app
+    from sandbox_runtime.browser_relay.app import CLOSE_UPSTREAM_GONE
+
+    # A real listening socket on a real port, rather than a stubbed probe.
+    # The route now refuses before `accept()` unless something is actually
+    # serving VNC -- it used to trust the bridge script's exit code, and in
+    # CI the two came apart: exit 0, accept, then a socket that died
+    # mid-RFB with no close frame. This test needs to get past that check
+    # to reach the keepalive, and the honest way to satisfy a "is anything
+    # listening" probe is for something to be listening.
+    upstream = socketlib.socket()
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(1)
+    monkeypatch.setattr(relay_app, "VNC_WS_PORT", upstream.getsockname()[1])
+
+    async def fake_live_port(session=None):
+        return 12345
+
+    kept_warm: list[str] = []
+
+    async def _never_finishes() -> None:
+        await asyncio.Event().wait()
+
+    def fake_keepalive_loop(session: str):
+        # Recorded where the loop is *created*, not where it first runs: the
+        # real one sleeps for a minute before its first touch and this socket
+        # is over long before that. Which session it is handed is the whole of
+        # what regressed.
+        kept_warm.append(session)
+        return _never_finishes()
+
+    class _RefusingConnect:
+        # Same stand-in as the liveness test above: failing at websockify with
+        # its own close code proves the route got past the checks and reached
+        # the point where the keepalive has already been started.
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            raise OSError("no websockify in this test")
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr(relay_app, "live_port", fake_live_port)
+    monkeypatch.setattr(relay_app, "_keepalive_loop", fake_keepalive_loop)
+    monkeypatch.setattr(relay_app.websockets, "connect", _RefusingConnect)
+    client = _client(monkeypatch, tmp_path)
+    with client.websocket_connect(
+        "/vnc?session=login-example.com",
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    ) as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_text()
+
+    assert closed.value.code == CLOSE_UPSTREAM_GONE
+    assert kept_warm == ["login-example.com"]
+
+
+#: Correctly-sized fake RFB client messages, by the protocol's own fixed and
+#: header-driven lengths -- a real message, not a plausible-looking prefix of
+#: one, is what the smuggling test below needs a legitimate message to be.
+_SET_PIXEL_FORMAT_MSG = bytes([0]) + b"\x00" * 19  # type + pad(3) + format(16)
+_FRAMEBUFFER_UPDATE_REQUEST_MSG = bytes([3]) + b"\x00" * 9
+_POINTER_EVENT_MSG = bytes([5]) + b"\x00" * 5
+_KEY_EVENT_MSG = bytes([4]) + b"\x00" * 7
+_CLIENT_CUT_TEXT_MSG = bytes([6, 0, 0, 0, 0, 0, 0, 0])  # empty text, length 0
+
+#: The three client-side steps of an RFB handshake, correctly sized -- every
+#: test below that exercises `pump_binary` past its first three messages needs
+#: these first, or its real messages are themselves mistaken for handshake
+#: steps by length and refused before ever reaching the view-safe check.
+_FAKE_HANDSHAKE = [b"RFB 003.008\n", bytes([1]), bytes([1])]
+
+
+class _RecordingUpstream:
+    def __init__(self) -> None:
+        self.sent: list[bytes] = []
+
+    def __aiter__(self):
+        async def _empty():
+            return
+            yield  # pragma: no cover - makes this an async generator
+
+        return _empty()
+
+    async def send(self, data: bytes) -> None:
+        self.sent.append(data)
+
+
+def _receiver_over(frames: list[bytes]):
+    async def receive_bytes() -> bytes | None:
+        if frames:
+            return frames.pop(0)
+        return None
+
+    return receive_bytes
+
+
+async def test_a_viewer_watching_over_vnc_cannot_type() -> None:
+    """`view` mode forwards only the messages that ask for a picture, and
+    drops a `KeyEvent`, a `PointerEvent`, and a `ClientCutText` outright --
+    nothing in this product pastes from view mode, so admitting the message
+    class on the promise a caller happens not to use it would be exactly the
+    allowlist erosion the module warns against."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    inbound = [
+        *_FAKE_HANDSHAKE,
+        _FRAMEBUFFER_UPDATE_REQUEST_MSG,
+        _POINTER_EVENT_MSG,
+        _KEY_EVENT_MSG,
+        _CLIENT_CUT_TEXT_MSG,
+        _SET_PIXEL_FORMAT_MSG,
+    ]
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(inbound),
+    )
+    assert upstream.sent == [
+        *_FAKE_HANDSHAKE,
+        _FRAMEBUFFER_UPDATE_REQUEST_MSG,
+        _SET_PIXEL_FORMAT_MSG,
+    ]
+
+
+async def test_a_view_mode_frame_cannot_smuggle_a_second_message() -> None:
+    """The vulnerability this closes: a first version of this filter looked
+    only at a frame's first byte, on the assumption that one WebSocket frame
+    carries exactly one RFB message. That assumption holds for noVNC; it does
+    not hold for whatever a viewer's socket actually is, and nothing stops a
+    frame from carrying a legitimate message's bytes followed by a
+    `PointerEvent` the byte-0 check never sees. RFB is a byte stream to the
+    server on the other end, which has no notion of WebSocket frame
+    boundaries -- so a smuggled message reached it exactly as if it had been
+    sent openly. The fix drops the *whole* frame rather than forwarding a
+    prefix of it, because forwarding the legitimate-looking part is what let
+    the rest ride along in the first place."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    smuggled = _FRAMEBUFFER_UPDATE_REQUEST_MSG + _POINTER_EVENT_MSG
+    upstream = _RecordingUpstream()
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over([*_FAKE_HANDSHAKE, smuggled]),
+    )
+    assert upstream.sent == _FAKE_HANDSHAKE
+
+
+async def _noop_send(_data: bytes) -> None:
+    pass
+
+
+async def test_a_viewer_driving_over_vnc_can_type() -> None:
+    """Driving mode does not run messages through the view-safe check at
+    all -- the wheel lease is what gates who may be in this mode, not a
+    per-message filter, so a real message's exact byte layout does not
+    matter here the way it does for the view-mode tests above."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    inbound = [*_FAKE_HANDSHAKE, _POINTER_EVENT_MSG, _KEY_EVENT_MSG]
+
+    await pump_binary(
+        upstream,
+        mode=CONTROL,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(inbound),
+    )
+    assert upstream.sent == [*_FAKE_HANDSHAKE, _POINTER_EVENT_MSG, _KEY_EVENT_MSG]
+
+
+async def test_the_handshake_passes_through_before_any_view_safe_check() -> None:
+    """The regression this pins: a viewer's RFB handshake reply -- the
+    ProtocolVersion string, the chosen security type, ClientInit -- carries no
+    message-type byte the way every later client-to-server message does, so
+    `_view_mode_messages` cannot recognise any of it and, before this was
+    handled specially, silently dropped every one of the three steps. The
+    viewer's reply never reached the server, which never answered, and the
+    connection hung waiting for bytes that were never coming -- discovered by
+    running the real relay end to end, not by any of the tests above, none of
+    which sent a handshake at all."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+
+    await pump_binary(
+        upstream,
+        mode=VIEW,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over(
+            [*_FAKE_HANDSHAKE, _FRAMEBUFFER_UPDATE_REQUEST_MSG]
+        ),
+    )
+    assert upstream.sent == [*_FAKE_HANDSHAKE, _FRAMEBUFFER_UPDATE_REQUEST_MSG]
+
+
+async def test_a_handshake_step_of_the_wrong_length_is_refused() -> None:
+    """Passing the handshake through by length, rather than leaving it
+    unfiltered by mode, closes the smuggling window that would otherwise
+    reopen here: a step padded with trailing bytes is refused outright, the
+    same as an unrecognised message type is once the handshake is behind it,
+    rather than having its extra bytes ride along to the server."""
+    from sandbox_runtime.browser_relay.stream_proxy import pump_binary
+
+    upstream = _RecordingUpstream()
+    padded_client_init = _FAKE_HANDSHAKE[2] + _POINTER_EVENT_MSG
+
+    await pump_binary(
+        upstream,
+        mode=CONTROL,
+        send_bytes=_noop_send,
+        receive_bytes=_receiver_over([*_FAKE_HANDSHAKE[:2], padded_client_init]),
+    )
+    assert upstream.sent == _FAKE_HANDSHAKE[:2]
 
 
 def test_a_conversation_cannot_rename_the_default_session(monkeypatch) -> None:
@@ -672,29 +980,269 @@ def test_the_cli_is_told_its_session_in_the_environment_too(monkeypatch) -> None
     assert "PATH" in env
 
 
-def test_one_viewer_leaving_does_not_release_another_viewers_wheel(
+# ---------------------------------------------------------------------------
+# The display, and who is allowed to make it big
+# ---------------------------------------------------------------------------
+
+
+def test_the_starting_size_comes_from_the_image(monkeypatch) -> None:
+    """One definition, in the thing that actually starts Xvfb at it."""
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1280x800x24")
+    assert chrome.default_display_size() == (1280, 800)
+    monkeypatch.delenv("WORKSPACE_XVFB_SCREEN")
+    assert chrome.default_display_size() == (1440, 960)
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "nonsense")
+    assert chrome.default_display_size() == (1440, 960)
+
+
+def test_a_viewer_cannot_push_the_display_past_its_starting_size(
     monkeypatch, tmp_path
 ) -> None:
-    """The lease says who holds it, not merely that somebody does.
+    """A maximised pane on a large monitor is not a reason to run a 2 GB
+    sandbox at 1920x1200 for the rest of its life.
 
-    Two people can have the same session open -- a second tab, a phone
-    alongside a laptop, a reconnect that overlaps its own close. The lease was
-    a file whose existence was the whole signal, so whichever socket closed
-    first deleted it, and the one still driving lost the wheel without being
-    told. The agent's script reads that file to decide whether to yield, so
-    what followed was a command typed into a page somebody was using.
+    That was measured to lose an `agent-browser record` part-way through on a
+    loaded runner -- 1.67x the pixels for x11vnc to encode and for ffmpeg to
+    grab. The framebuffer ceiling is still reachable, but only by an agent
+    asking for it on purpose with `set-display-size`.
+    """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    asked: list[tuple[int, int]] = []
+
+    async def fake_resize(width: int, height: int) -> str:
+        asked.append((width, height))
+        return f"{width}x{height}"
+
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:resize",
+        json={"width": 1900, "height": 1180},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+
+    assert response.status_code == 200
+    assert asked == [(1440, 960)]
+    # A pane smaller than the cap is passed through untouched.
+    client.post(
+        "/display:resize",
+        json={"width": 900, "height": 700},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+    assert asked[-1] == (900, 700)
+
+
+def test_the_display_can_be_put_back(monkeypatch, tmp_path) -> None:
+    """What the last viewer leaving triggers.
+
+    Without it the sandbox kept whichever shape the last pane happened to be
+    for the rest of its life, so an agent screenshotting afterwards inherited
+    the dimensions of a sidebar it could not see.
+    """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    asked: list[tuple[int, int]] = []
+
+    async def fake_resize(width: int, height: int) -> str:
+        asked.append((width, height))
+        return f"{width}x{height}"
+
+    from sandbox_runtime.browser_relay import app as relay_app
+
+    monkeypatch.setattr(relay_app, "set_display_size", fake_resize)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:reset", headers={"X-Lemma-Relay-Token": "token-abc"}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["size"] == "1440x960"
+    assert asked == [(1440, 960)]
+
+
+def test_resetting_the_display_is_behind_the_token(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    assert client.post("/display:reset").status_code == 401
+
+
+def _refusing_resize(monkeypatch):
+    """`set_display_size` as it behaves while a take is running.
+
+    Raises `relay_app.RecordingInProgress`, not the one importable from
+    `chrome`, and the difference is not pedantry: a test earlier in this
+    file reloads `chrome` to re-read an environment variable, which makes a
+    *new* class object while `app` keeps the one it imported. Raise the
+    wrong one and the route's `except` does not match, the exception escapes
+    as a 500, and the test fails only when run alongside its neighbours.
     """
     from sandbox_runtime.browser_relay import app as relay_app
 
-    monkeypatch.setattr(relay_app, "_WHEEL_DIR", tmp_path / "wheel")
+    async def refuse(width: int, height: int) -> str:
+        raise relay_app.RecordingInProgress(
+            "the display is being recorded, so its size is held until the "
+            "recording stops"
+        )
 
-    first = relay_app._take_the_wheel("conv-abc")
-    second = relay_app._take_the_wheel("conv-abc")
-    assert first is not None and second is not None
-    assert first.token != second.token
+    monkeypatch.setattr(relay_app, "set_display_size", refuse)
 
-    relay_app._release_the_wheel(first)
-    assert relay_app.wheel_path("conv-abc").exists(), "the second viewer still holds it"
 
-    relay_app._release_the_wheel(second)
-    assert not relay_app.wheel_path("conv-abc").exists()
+def test_a_viewer_cannot_resize_the_display_out_from_under_a_recording(
+    monkeypatch, tmp_path
+) -> None:
+    """A person opening the pane must not ruin a capture in flight.
+
+    The recorder is built around the framebuffer it started with -- its
+    ffmpeg runs `-vf pad=...` sized at `record start` -- so moving the
+    display under it produces a broken take. Measured in the sandbox: a
+    recording is exactly one `ffmpeg` process, zero before and zero after,
+    which is how the relay knows.
+
+    The viewer keeps a letterboxed picture until the take ends. That is the
+    recoverable half of the trade; a lost recording is not.
+    """
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    _refusing_resize(monkeypatch)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:resize",
+        json={"width": 900, "height": 700},
+        headers={"X-Lemma-Relay-Token": "token-abc"},
+    )
+
+    assert response.status_code == 409
+    assert "recorded" in response.json()["detail"]
+
+
+def test_the_last_viewer_leaving_cannot_either(monkeypatch, tmp_path) -> None:
+    """The more dangerous of the two, because nobody is watching when it
+    fires: the agent is alone with its recording and the reset would land in
+    the middle of it."""
+    monkeypatch.setenv("WORKSPACE_XVFB_SCREEN", "1440x960x24")
+    _refusing_resize(monkeypatch)
+    client = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/display:reset", headers={"X-Lemma-Relay-Token": "token-abc"}
+    )
+
+    assert response.status_code == 409
+    assert "recorded" in response.json()["detail"]
+
+
+class TestFindingAPortChromeDidNotRecordWhereItWasTold:
+    """`agent-browser` can run Chrome on a throwaway profile.
+
+    It launches on `--user-data-dir=/tmp/agent-browser-chrome-<uuid>` and
+    copies the profile back on close -- measured, and what a bare
+    `agent-browser open` does. Chrome writes `DevToolsActivePort` into
+    whichever directory it is actually using, so the configured profile's
+    copy can name a launch that has ended while the live browser is
+    recorded somewhere else:
+
+        ensure 1: recorded=45007 live=40977 recorded_answers=no
+        ensure 2: recorded=40977 live=42989 recorded_answers=no
+
+    The script no longer provokes this, but that fix is in the image while
+    this is in the runtime bundle -- installed on every session, so it
+    reaches sandboxes the image has not. Verified against the old image: the
+    bundle found the live port while `recorded_port` still returned the
+    stale one.
+    """
+
+    def test_the_configured_profile_is_asked_first(self, monkeypatch, tmp_path):
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n/devtools/browser/x")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        assert chrome._candidate_ports(None)[0] == 4111
+
+    def test_a_scratch_profile_is_asked_too(self, monkeypatch, tmp_path):
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n/devtools/browser/x")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        scratch = tmp_path / "tmp" / "agent-browser-chrome-abc"
+        scratch.mkdir(parents=True)
+        (scratch / "DevToolsActivePort").write_text("4222\n/devtools/browser/y")
+        monkeypatch.setattr(chrome, "Path", _PathRootedAt(tmp_path / "tmp"))
+
+        assert chrome._candidate_ports(None) == [4111, 4222]
+
+    def test_a_named_session_is_never_handed_another_browser(
+        self, monkeypatch, tmp_path
+    ):
+        """The boundary, not an optimisation.
+
+        A scratch directory is `agent-browser-chrome-<uuid>` and records
+        nothing about whose browser it is. The named session this product
+        actually has is `login-<host>` -- the one somebody types a password
+        into -- so a session-blind sweep lets `/targets` list its pages and
+        `/profile:forget` clear its data while naming a different session.
+
+        The sweep exists for images predating this branch, where the ensure
+        script ended in a bare `agent-browser open`. That is the *default*
+        browser's path; every named session is started from `chrome.py`
+        with a URL and keeps an accurate port file of its own.
+        """
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n/devtools/browser/x")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        scratch = tmp_path / "tmp" / "agent-browser-chrome-abc"
+        scratch.mkdir(parents=True)
+        (scratch / "DevToolsActivePort").write_text("4222\n/devtools/browser/y")
+        monkeypatch.setattr(chrome, "Path", _PathRootedAt(tmp_path / "tmp"))
+
+        assert 4222 in chrome._candidate_ports(None), "the default still sweeps"
+        assert 4222 not in chrome._candidate_ports("login-example.com")
+        assert 4222 in chrome._candidate_ports(chrome.DEFAULT_SESSION)
+
+    def test_an_unreadable_scratch_file_is_skipped_not_fatal(
+        self, monkeypatch, tmp_path
+    ):
+        from sandbox_runtime.browser_relay import chrome
+
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        (profile / "DevToolsActivePort").write_text("4111\n")
+        monkeypatch.setattr(chrome, "_ACTIVE_PORT_FILE", profile / "DevToolsActivePort")
+        monkeypatch.setattr(chrome, "_DEFAULT_PROFILE", str(profile))
+
+        scratch = tmp_path / "tmp" / "agent-browser-chrome-bad"
+        scratch.mkdir(parents=True)
+        (scratch / "DevToolsActivePort").write_text("not a port")
+        monkeypatch.setattr(chrome, "Path", _PathRootedAt(tmp_path / "tmp"))
+
+        assert chrome._candidate_ports(None) == [4111]
+
+
+class _PathRootedAt:
+    """`Path` with `/tmp` pointed at a temporary directory.
+
+    The scan is over a real absolute path, so redirecting it is the only way
+    to test it without writing into the machine's own `/tmp`.
+    """
+
+    def __init__(self, root) -> None:
+        self._root = root
+
+    def __call__(self, value):
+        from pathlib import Path as _Path
+
+        return self._root if str(value) == "/tmp" else _Path(value)

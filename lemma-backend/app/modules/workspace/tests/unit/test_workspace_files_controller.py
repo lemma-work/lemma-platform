@@ -5,10 +5,11 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 
 from sandbox_runtime.errors import SandboxPathNotFound, SandboxUnavailable
 
+from sandbox_runtime.paths import HOME_ROOT, WORKSPACE_ROOT
 from app.modules.workspace.api.controllers import files_controller as controller
 from app.modules.workspace.providers.runtime_client import (
     WorkspaceRuntimeFileNotFound,
@@ -29,13 +30,13 @@ def _stat(path: str, kind: str = "file", size: int = 12) -> SimpleNamespace:
 
 
 def test_a_relative_path_resolves_under_the_workspace_root() -> None:
-    assert controller._workspace_path("notes/a.md") == "/workspace/notes/a.md"
-    assert controller._workspace_path(None) == "/workspace"
-    assert controller._workspace_path("") == "/workspace"
+    assert controller._workspace_path("notes/a.md") == f"{WORKSPACE_ROOT}/notes/a.md"
+    assert controller._workspace_path(None) == f"{WORKSPACE_ROOT}"
+    assert controller._workspace_path("") == f"{WORKSPACE_ROOT}"
 
 
 def test_the_workspace_root_itself_is_allowed() -> None:
-    assert controller._workspace_path("/workspace") == "/workspace"
+    assert controller._workspace_path(f"{WORKSPACE_ROOT}") == f"{WORKSPACE_ROOT}"
 
 
 @pytest.mark.parametrize(
@@ -45,8 +46,8 @@ def test_the_workspace_root_itself_is_allowed() -> None:
         "/tmp",
         "/etc/passwd",
         "../../etc/passwd",
-        "/workspace/../tmp/secret",
-        "/workspace/../../root",
+        f"{HOME_ROOT}/../tmp/secret",
+        f"{HOME_ROOT}/../../root",
     ],
 )
 def test_nothing_outside_the_workspace_is_readable(path: str) -> None:
@@ -59,12 +60,15 @@ def test_nothing_outside_the_workspace_is_readable(path: str) -> None:
 
 def test_a_traversal_that_lands_back_inside_is_allowed() -> None:
     """Refusing this would be a lie about what the path means."""
-    assert controller._workspace_path("/workspace/a/../b.txt") == "/workspace/b.txt"
+    assert (
+        controller._workspace_path(f"{WORKSPACE_ROOT}/a/../b.txt")
+        == f"{WORKSPACE_ROOT}/b.txt"
+    )
 
 
 def test_a_null_byte_is_refused() -> None:
     with pytest.raises(HTTPException) as raised:
-        controller._workspace_path("/workspace/a\x00b")
+        controller._workspace_path(f"{WORKSPACE_ROOT}/a\x00b")
     assert raised.value.status_code == 422
 
 
@@ -145,7 +149,7 @@ async def test_listing_a_paused_workspace_does_not_start_it() -> None:
 
 @pytest.mark.asyncio
 async def test_listing_wakes_the_workspace_when_asked() -> None:
-    service = _FakeService(running=False, stats=[_stat("/workspace/a.md")])
+    service = _FakeService(running=False, stats=[_stat(f"{WORKSPACE_ROOT}/a.md")])
 
     result = await controller.list_workspace_files(
         _user(), service, path=None, wake=True, after=None
@@ -160,7 +164,7 @@ async def test_listing_wakes_the_workspace_when_asked() -> None:
 async def test_a_running_workspace_is_listed_without_being_asked_to_wake() -> None:
     service = _FakeService(
         running=True,
-        stats=[_stat("/workspace/src", kind="directory", size=0)],
+        stats=[_stat(f"{WORKSPACE_ROOT}/src", kind="directory", size=0)],
     )
 
     result = await controller.list_workspace_files(
@@ -175,7 +179,8 @@ async def test_a_running_workspace_is_listed_without_being_asked_to_wake() -> No
 @pytest.mark.asyncio
 async def test_a_directory_larger_than_one_page_says_so() -> None:
     stats = [
-        _stat(f"/workspace/f{index}") for index in range(controller._MAX_ENTRIES + 5)
+        _stat(f"{WORKSPACE_ROOT}/f{index}")
+        for index in range(controller._MAX_ENTRIES + 5)
     ]
     service = _FakeService(running=True, stats=stats)
 
@@ -202,7 +207,7 @@ async def test_a_directory_larger_than_one_page_says_so() -> None:
 def test_read_failures_map_to_something_the_caller_can_act_on(exc, expected) -> None:
     """The two families are parallel, not shared, so both spellings of "not
     there" have to reach the same 404."""
-    assert controller._as_http_error(exc, "/workspace/a").status_code == expected
+    assert controller._as_http_error(exc, f"{WORKSPACE_ROOT}/a").status_code == expected
 
 
 def test_only_real_read_failures_are_dressed_as_a_status() -> None:
@@ -215,7 +220,7 @@ def test_only_real_read_failures_are_dressed_as_a_status() -> None:
 async def test_content_is_served_as_an_attachment() -> None:
     """Workspace files are the person's own content, never markup this origin
     should render."""
-    service = _FakeService(running=True, stats=[_stat("/workspace/a.html")])
+    service = _FakeService(running=True, stats=[_stat(f"{WORKSPACE_ROOT}/a.html")])
 
     response = await controller.read_workspace_file(
         _user(), service, path="a.html", offset=0, length=None
@@ -239,7 +244,7 @@ async def test_a_conversation_that_has_written_nothing_is_empty_not_missing() ->
     service.session = _MissingDirectorySession([])
 
     result = await controller.list_workspace_files(
-        _user(), service, path="/workspace/conversations/abc", wake=False
+        _user(), service, path=f"{WORKSPACE_ROOT}/conversations/abc", wake=False
     )
 
     assert result.entries == []
@@ -273,7 +278,9 @@ def test_a_symlink_is_refused_rather_than_followed() -> None:
     where a staged git credential and the relay token live.
     """
     with pytest.raises(HTTPException) as raised:
-        controller._inside_workspace(_stat("/workspace/shortcut", kind="symlink"))
+        controller._inside_workspace(
+            _stat(f"{WORKSPACE_ROOT}/shortcut", kind="symlink")
+        )
     assert raised.value.status_code == 422
 
 
@@ -290,15 +297,15 @@ def test_a_symlinked_parent_is_refused() -> None:
 
 
 def test_an_ordinary_workspace_file_is_allowed() -> None:
-    controller._inside_workspace(_stat("/workspace/notes/a.md"))
-    controller._inside_workspace(_stat("/workspace", kind="directory", size=0))
+    controller._inside_workspace(_stat(f"{WORKSPACE_ROOT}/notes/a.md"))
+    controller._inside_workspace(_stat(f"{WORKSPACE_ROOT}", kind="directory", size=0))
 
 
 def test_a_path_that_merely_starts_with_the_root_name_is_refused() -> None:
-    """`/workspace-other` is not inside `/workspace`, and a prefix test that
+    """`/home/user-other` is not inside `/home/user`, and a prefix test that
     forgets the separator says it is."""
     with pytest.raises(HTTPException) as raised:
-        controller._inside_workspace(_stat("/workspace-other/secrets"))
+        controller._inside_workspace(_stat(f"{HOME_ROOT}-other/secrets"))
     assert raised.value.status_code == 422
 
 
@@ -311,7 +318,7 @@ async def test_a_big_directory_can_be_paged_through() -> None:
     pathological one.
     """
     stats = [
-        _stat(f"/workspace/f{index:04d}")
+        _stat(f"{WORKSPACE_ROOT}/f{index:04d}")
         for index in range(controller._MAX_ENTRIES + 5)
     ]
     service = _FakeService(running=True, stats=stats)
@@ -337,7 +344,7 @@ async def test_a_big_directory_can_be_paged_through() -> None:
 
 @pytest.mark.asyncio
 async def test_a_listing_that_fits_offers_no_next_page() -> None:
-    service = _FakeService(running=True, stats=[_stat("/workspace/a.md")])
+    service = _FakeService(running=True, stats=[_stat(f"{WORKSPACE_ROOT}/a.md")])
 
     result = await controller.list_workspace_files(
         _user(), service, path=None, wake=False, after=None
@@ -345,3 +352,166 @@ async def test_a_listing_that_fits_offers_no_next_page() -> None:
 
     assert result.truncated is False
     assert result.next_after is None
+
+
+# ---------------------------------------------------------------------------
+# Asking for part of a file
+# ---------------------------------------------------------------------------
+
+
+def test_no_range_header_means_the_whole_file() -> None:
+    from app.modules.workspace.api.controllers.files_controller import _requested_range
+
+    assert _requested_range(None, 100) is None
+    assert _requested_range("", 100) is None
+
+
+def test_a_range_becomes_an_offset_and_a_length() -> None:
+    from app.modules.workspace.api.controllers.files_controller import _requested_range
+
+    assert _requested_range("bytes=0-9", 100) == (0, 10)
+    # An open-ended range runs to the end of the file.
+    assert _requested_range("bytes=10-", 100) == (10, 90)
+
+
+def test_a_suffix_range_reads_the_end() -> None:
+    """How a person peeks at the tail of a log without pulling all of it."""
+    from app.modules.workspace.api.controllers.files_controller import _requested_range
+
+    assert _requested_range("bytes=-20", 100) == (80, 20)
+    # Asking for more tail than there is file is the whole file, not an error.
+    assert _requested_range("bytes=-500", 100) == (0, 100)
+
+
+def test_a_range_past_the_end_is_refused_rather_than_clamped() -> None:
+    """416 with a `Content-Range`, which is what tells a client the real size.
+
+    Clamping would answer 206 with bytes the caller did not ask for, and a
+    resuming download would stitch them into the wrong place.
+    """
+    from app.modules.workspace.api.controllers.files_controller import (
+        _UNSATISFIABLE,
+        _requested_range,
+    )
+
+    assert _requested_range("bytes=200-300", 100) is _UNSATISFIABLE
+    assert _requested_range("bytes=100-", 100) is _UNSATISFIABLE
+
+
+def test_a_range_this_does_not_understand_is_ignored_not_refused() -> None:
+    """RFC 9110's instruction, and the safe direction: the caller gets the
+    whole file, which is always a correct answer to a read."""
+    from app.modules.workspace.api.controllers.files_controller import _requested_range
+
+    # Multipart would mean building a multipart body, and nothing asks for one.
+    assert _requested_range("bytes=0-1,5-6", 100) is None
+    assert _requested_range("items=0-1", 100) is None
+    assert _requested_range("bytes=abc-def", 100) is None
+
+
+def test_a_range_is_still_capped_at_one_read() -> None:
+    """The ceiling is about what one request should transfer, so a range
+    cannot be the way around it."""
+    from app.modules.workspace.api.controllers.files_controller import (
+        _MAX_CONTENT_BYTES,
+        _requested_range,
+    )
+
+    huge = _MAX_CONTENT_BYTES * 4
+    offset, length = _requested_range(f"bytes=0-{huge}", huge)
+    assert (offset, length) == (0, _MAX_CONTENT_BYTES)
+
+
+def test_content_a_caller_already_holds_is_not_sent_again() -> None:
+    from app.modules.workspace.api.controllers.files_controller import _matches
+
+    assert _matches('"abc"', '"abc"')
+    assert _matches("*", '"abc"'), "anything the caller has will do"
+    # A weak validator is the same bytes for this purpose.
+    assert _matches('W/"abc"', '"abc"')
+    assert _matches('"zzz", "abc"', '"abc"'), "a list is comma-separated"
+    assert not _matches('"zzz"', '"abc"')
+
+
+class TestTheBrowserProfileIsNotServed:
+    """The one thing under the durable home these routes refuse.
+
+    Moving the browser profile out of `/tmp` and into `~/.lemma/browser` is
+    what put it in range: `is_inside_home` is the only gate, and it says yes
+    to anything under `/home/user`. So the cookie database and the
+    local-storage LevelDB -- the live sessions of every site somebody has
+    signed in to -- became downloadable over ordinary HTTP.
+
+    That would have made a promise elsewhere in this feature into theatre:
+    the listing endpoint reports hosts and expiries and deliberately never a
+    cookie *value*, while the file endpoint next door served the file they
+    live in. The shell inside the sandbox can still read it, which was
+    accepted and written down; reachable by anything holding a URL was not.
+    """
+
+    def test_the_cookie_database_is_refused(self) -> None:
+        from sandbox_runtime.paths import BROWSER_PROFILE
+
+        with pytest.raises(HTTPException) as raised:
+            controller._workspace_path(f"{BROWSER_PROFILE}/Default/Cookies")
+
+        assert raised.value.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_the_profile_directory_itself_is_refused(self) -> None:
+        from sandbox_runtime.paths import BROWSER_PROFILE_ROOT
+
+        with pytest.raises(HTTPException) as raised:
+            controller._workspace_path(BROWSER_PROFILE_ROOT)
+
+        assert raised.value.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_traversal_back_into_the_profile_is_refused(self) -> None:
+        """Normalised before it is judged, so `..` cannot walk in."""
+        with pytest.raises(HTTPException) as raised:
+            controller._workspace_path("/home/user/lemma/../.lemma/browser/profile")
+
+        assert raised.value.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_an_ordinary_workspace_file_is_still_served(self) -> None:
+        assert (
+            controller._workspace_path("/home/user/lemma/notes.md")
+            == "/home/user/lemma/notes.md"
+        )
+
+    def test_a_similarly_named_directory_is_not_caught(self) -> None:
+        """`browserfoo` is not `browser/`."""
+        assert controller._workspace_path("/home/user/.lemma/browserfoo/x") == (
+            "/home/user/.lemma/browserfoo/x"
+        )
+
+
+class TestSuffixRangesObeyTheSameRules:
+    """`bytes=-N` took a different path through the parser, and skipped both
+    of the ordinary branch's guards."""
+
+    def test_a_suffix_range_is_capped_like_any_other(self) -> None:
+        from app.modules.workspace.api.controllers.files_controller import (
+            _MAX_CONTENT_BYTES,
+            _requested_range,
+        )
+
+        start, length = _requested_range(
+            "bytes=-999999999", total=_MAX_CONTENT_BYTES * 4
+        )
+
+        assert length == _MAX_CONTENT_BYTES, (
+            "a suffix range could read far more in one response than "
+            "`bytes=0-` could, which is the cap the whole-file reader is "
+            "built around"
+        )
+        assert start == _MAX_CONTENT_BYTES * 4 - 999999999 or start >= 0
+
+    def test_the_last_bytes_of_an_empty_file_cannot_be_satisfied(self) -> None:
+        """`(0, 0)` renders as `bytes 0--1/0`. There is no last byte of
+        nothing, and the honest answer is 416."""
+        from app.modules.workspace.api.controllers.files_controller import (
+            _UNSATISFIABLE,
+            _requested_range,
+        )
+
+        assert _requested_range("bytes=-500", total=0) is _UNSATISFIABLE

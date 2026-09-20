@@ -80,7 +80,7 @@ FUNCTION_BENCH_ENV = \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
 
-.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
+.PHONY: help test test-unit test-e2e test-e2e-real test-e2e-real-llm test-e2e-fast test-e2e-runtime test-module coverage coverage-unit coverage-e2e coverage-backend-unit coverage-backend-e2e-shard coverage-backend-report coverage-backend-gate coverage-baseline test-collect lint lint-async lint-session-scope lint-io-hygiene lint-unbounded lint-unbounded-reads lint-import-bound-defaults lint-controller-types lint-swallowed-errors lint-public-prose lint-test-doubles lint-migration-order lint-e2e-waits lint-import-budget test-e2e-shard-ci test-connection-scope typecheck-critical architecture migrate docker-build docker-build-cloud docker-build-arm64 docker-build-amd64 benchmark-functions-docker benchmark-functions-e2b teams-manifest-zip load-test-build load-test-up load-test-migrate load-test-setup load-test-run load-test-sse load-test-journey load-test-datastore-up load-test-datastore-setup load-test-datastore-files load-test-datastore-stats load-test-datastore-down load-test-monitor load-test-profile load-test-down load-test docker-reap
 
 help:
 	@echo "Lemma backend:"
@@ -105,6 +105,7 @@ help:
 	@echo "  make lint-controller-types  # new basedpyright errors in the typed surfaces"
 	@echo "  make test-e2e-shard-ci SHARD=sandbox   # one CI shard, exactly as CI runs it"
 	@echo "  make lint-swallowed-errors # broad excepts that leave no trace"
+	@echo "  make lint-public-prose   # internal hosts or dates in comments"
 	@echo "  make lint-test-doubles     # tests that patch inside their own subject"
 	@echo "  make lint-migration-order  # one alembic head, numbers matching apply order"
 	@echo "  make lint-e2e-waits    # hand-rolled e2e poll loops, not waiters.eventually()"
@@ -441,7 +442,9 @@ typecheck-critical:
 		app/modules/workspace/services/local_sandbox_client.py \
 		app/modules/workspace/services/port_access.py \
 		app/modules/workspace/services/sandbox_service.py \
-		app/modules/workspace/services/sandbox_sweeper.py
+		app/modules/workspace/services/sandbox_sweeper.py \
+		app/modules/workspace/services/workspace_runtime_bundle.py \
+		app/modules/workspace/infrastructure/runtime_bundle.py
 
 architecture:
 	uv run python scripts/check_architecture.py
@@ -511,6 +514,18 @@ lint-controller-types:
 # Ratcheted against swallowed-errors-baseline.json.
 lint-swallowed-errors:
 	uv run python scripts/check_swallowed_errors.py
+
+# Public-prose gate (enforced in CI). This repository is public, and
+# CONTRIBUTING's "Code and comments" already forbids internal hostnames,
+# incident timestamps and "what I tried" narratives in comments, docstrings
+# and test names. That rule was written down and then broken anyway, by a
+# docstring that named an internal cluster host and dated the incident it
+# came from -- prose is the part of a diff a reviewer skims, and no other
+# gate reads it. Hostnames are refused anywhere in a file (a deployment name
+# leaks from a fixture exactly as well as from a sentence); dates only in
+# comments and docstrings, with an allowlist for genuinely public ones.
+lint-public-prose:
+	uv run python scripts/check_public_prose.py
 
 # Migration order gate (enforced in CI). One head — a second one makes
 # `alembic upgrade head` refuse to run at all — and filename numbers that match
@@ -776,7 +791,20 @@ IMAGES_DIR := sandbox-images
 
 .PHONY: sandbox-images sandbox-image-workspace sandbox-image-function \
         push-sandbox-images push-sandbox-workspace push-sandbox-function \
-        print-sandbox-images
+        print-sandbox-images runtime-bundle
+
+RUNTIME_BUNDLE_DIR ?= dist/runtime-bundle
+
+# The first-party Python the backend installs into a workspace sandbox. Built
+# into the backend image for real deployments; built here, explicitly, for
+# development. Deliberately not discovered automatically -- a loader that built
+# from the checkout whenever it could made a unit test shell out to `uv build`,
+# so the system behaved differently on a developer's machine than anywhere else.
+runtime-bundle:
+	uv run python scripts/build_runtime_bundle.py --out-dir $(RUNTIME_BUNDLE_DIR)
+	@echo
+	@echo "Point the backend at it with:"
+	@echo "  export WORKSPACE_RUNTIME_BUNDLE_DIR=$(CURDIR)/$(RUNTIME_BUNDLE_DIR)"
 
 print-sandbox-images:
 	@echo "workspace: $(WORKSPACE_IMAGE):$(SANDBOX_TAG)"

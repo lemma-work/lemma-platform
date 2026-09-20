@@ -67,6 +67,32 @@ def public_surface_api_url(monkeypatch):
 # why this suite is entitled to it.
 os.environ.setdefault("CONNECTOR_ALLOW_PRIVATE_NETWORK_TARGETS", "true")
 
+# Read by the worker subprocess, which inherits this environment. It is too
+# late for *this* process — the imports above have already built
+# `agent_settings` — so the fixture below covers the in-process half. Both are
+# needed, and for the same reason the comment above gives.
+os.environ.setdefault("AGENT_RUN_BUDGET_TOOL_FAILURES", "0")
+
+
+@pytest.fixture(autouse=True)
+def scripted_runs_spend_no_failure_budget(monkeypatch):
+    """A scripted run has no model, so a failure streak means nothing here.
+
+    These suites drive the run from a fixed list of turns, and a matrix test
+    walks every invalid-input branch in one run, back to back. That is exactly
+    the shape the consecutive-failure budget exists to stop — a run that has
+    stopped converging — except there is nothing converging to begin with: the
+    streak measures the size of the matrix, not the state of the run. Left on,
+    it truncates the matrix partway and the assertion counts come up short.
+
+    Only this dimension is switched off. The step and clock ceilings stay, and
+    what the budget does when it does trip is asserted in
+    `agent/tests/unit/test_run_limits.py`.
+    """
+    from app.modules.agent.config import agent_settings
+
+    monkeypatch.setattr(agent_settings, "agent_run_budget_tool_failures", 0)
+
 
 @pytest.fixture(autouse=True)
 def reachable_fake_providers(monkeypatch):
@@ -106,7 +132,7 @@ def configured_email_domain(monkeypatch):
     """
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
 
 
 @pytest_asyncio.fixture
@@ -127,7 +153,7 @@ async def pod_with_a_mailbox(authenticated_client, fixed_test_org, monkeypatch):
     from app.core.config import settings as core_settings
     from app.modules.agent_surfaces.config import surface_settings
 
-    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.asur.work")
+    monkeypatch.setattr(surface_settings, "resend_inbound_domain", "ops.lemma.work")
     monkeypatch.setattr(core_settings, "resend_api_key", "re_test")
 
     response = await authenticated_client.post(

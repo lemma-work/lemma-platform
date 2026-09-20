@@ -185,10 +185,20 @@ is harmless, but it is not a substitute for the one that matters.
 
 **Under `e2b`, the images are not what a sandbox is made from — the templates
 are.** `E2BSandboxProvider.create` passes `template=...` and never reads the
-image, so leaving `WORKSPACE_IMAGE` at its default is correct there. What
-still matters on E2B is the profile digest: it is stamped into sandbox
-metadata and is the only thing that moves an existing workspace onto a
-rebuilt template.
+image, so leaving `WORKSPACE_IMAGE` at its default is correct there.
+
+**Nothing moves an existing workspace onto a rebuilt template**, and that is
+deliberate: on E2B the sandbox *is* the disk, so replacing one to adopt a newer
+image deletes the user's files. Both the template and the profile digest are
+stamped into sandbox metadata, drift in either is recorded, and the sandbox is
+adopted as it stands. The first-party Lemma code a workspace runs — the CLI, the
+SDK, the skills, the browser relay — is installed into the running sandbox
+instead (`WORKSPACE_RUNTIME_BUNDLE_DIR`), so shipping a code change no longer
+needs a template at all. A genuinely new base image reaches an existing
+workspace only when that workspace is next created from scratch.
+
+Function sandboxes are the opposite, because they own no durable disk: drift
+replaces them, which costs a cold start and nothing else.
 
 ```dotenv
 WORKSPACE_PROVIDER=docker
@@ -210,13 +220,28 @@ WORKSPACE_SWEEP_CRON=*/5 * * * *
 
 ### Making a new sandbox image take effect
 
-A sandbox is reused only when the profile digest recorded on it matches
-`WORKSPACE_PROFILE_DIGEST` (or `FUNCTION_PROFILE_DIGEST` for function runtimes).
-This is the supported way to force existing workspaces onto a new image:
-publish the image, point `WORKSPACE_IMAGE` at it, and bump the digest in the
-same change. Without the bump, a workspace that already exists keeps running the
-image it was created from for as long as it lives, and a fix shipped in the
-image never reaches anyone who already has a workspace.
+What a digest bump does depends on whether the sandbox owns a disk separate from
+itself, so this is stated per provider.
+
+**Under `docker` and `lemma_local`,** a sandbox is reused only when the profile
+digest recorded on it matches `WORKSPACE_PROFILE_DIGEST` (or
+`FUNCTION_PROFILE_DIGEST` for function runtimes). This is the supported way to
+force existing workspaces onto a new image: publish the image, point
+`WORKSPACE_IMAGE` at it, and bump the digest in the same change. The container
+is destroyed and rebuilt; its volume is a separate object and is adopted
+afterwards, so the user's files survive. Without the bump, a workspace that
+already exists keeps running the image it was created from for as long as it
+lives, and a fix shipped in the image never reaches anyone who already has a
+workspace.
+
+**Under `e2b`, a bump does not move an existing workspace.** There the sandbox
+*is* the disk, so the drift is recorded and the sandbox adopted as it stands --
+see above. Bump the digest anyway when you publish a template: it is what
+workspaces created from then on are stamped with, and it is what makes function
+sandboxes, which own no disk, pick the new template up. But do not expect it to
+re-home a workspace that already exists; nothing does, by design. Ship
+first-party code changes through the runtime bundle instead, which reaches
+running workspaces without a template at all.
 
 The digest is an opaque identity — any `sha256:` value works, as long as it
 changes when the image does.
@@ -257,21 +282,25 @@ E2B_DOMAIN=
 # production; override it for anything sharing an E2B account with real
 # workspaces.
 E2B_METADATA_NAMESPACE=
-# Whether a sandbox's public *.e2b.app hosts answer without a credential.
-# Off by default; see below before turning it on.
-E2B_ALLOW_PUBLIC_TRAFFIC=false
 ```
 
-These six are the whole backend-side E2B surface. In particular:
+These five are the whole backend-side E2B surface. In particular:
 
-- **`E2B_ALLOW_PUBLIC_TRAFFIC` decides whether a sandbox is on the internet.**
-  E2B gives every port a sandbox listens on a public name. With this off — the
-  default — E2B mints a per-sandbox traffic token and answers 403 without it,
-  and the backend carries that token on every call it makes. Turning it on
-  exposes whatever is listening, which includes the agent's browser and its
-  dashboard. The flag is set when a sandbox is created and cannot be changed
-  afterwards, so sandboxes made before it was introduced stay open until they
-  are replaced; the backend reports those as public rather than assuming.
+- **Whether a sandbox is on the internet is not one of them.** E2B gives every
+  port a sandbox listens on a public name, so sandboxes are created closed:
+  E2B mints a per-sandbox traffic token, the edge answers 403 without it, and
+  the backend carries that token on every call it makes. This used to be
+  `E2B_ALLOW_PUBLIC_TRAFFIC` and is now `CLOSED_TO_THE_INTERNET`, a constant in
+  the E2B provider. Nothing outside the backend ever needs a sandbox's own
+  address — a browser is handed a signed URL at Lemma's own API, which
+  reverse-proxies to the port — so the setting's only other position exposed
+  whatever was listening, including the agent's browser and its dashboard, for
+  nothing in return. Setting the variable now configures nothing.
+
+  It is fixed when a sandbox is created and cannot be changed afterwards, so
+  sandboxes made before this stay open until they are replaced; the backend
+  reports those as public rather than assuming, and refuses to put a saved
+  login into one.
 
 - **`E2B_METADATA_NAMESPACE` is a safety boundary.** A provider is blind to
   sandboxes labelled with any other namespace, and the orphan sweep destroys
@@ -288,8 +317,48 @@ These six are the whole backend-side E2B surface. In particular:
   build those runs exercise. Setting them in a deployment environment does
   nothing; do not treat a template id alone as an unpinned deployment.
 - A template name is a moving pointer: rebuilding a template under the same
-  name changes what a *new* sandbox is made from. It does not touch sandboxes
-  that already exist — bump `WORKSPACE_PROFILE_DIGEST` for that.
+  name changes what a *new* sandbox is made from. It does not touch workspace
+  sandboxes that already exist, and no setting makes it — see above.
+
+### The sandbox browser's proxy
+
+```dotenv
+# Comma-separated pool of proxy URLs the sandbox browser routes through.
+# Credentials inline where the proxy needs them. Empty (the default) means a
+# direct connection. SecretStr: never logged.
+WORKSPACE_BROWSER_PROXY_URLS=http://user:pass@residential.example:8080,http://user:pass@residential-2.example:8080
+```
+
+**Asserted at every browser start, not at sandbox creation.** Emptying the
+pool withdraws the proxy from existing sandboxes the next time their browser
+starts — no restart, no recreation. This was not true before: the value was
+baked into the sandbox's creation environment, so it could be given and never
+taken back, and workspace sandboxes are not replaced on template drift.
+
+**One sandbox keeps one entry.** Chosen by hashing the sandbox id, so it
+survives restarts, resumes and container replacement. Adding an entry moves
+roughly a 1/n share of sandboxes; removing one moves only the sandboxes that
+held it. A sandbox's exit IP changes when you change the pool, and not
+otherwise. That matters because the feature exists for sign-in pages: a
+session cookie bound to an IP logs the person out when the IP hops.
+
+**A person watching right now keeps the browser they have.** A change of
+decision closes the browser at the next start so the new setting takes
+effect; it does not interrupt a viewer mid-session.
+
+**Every fabric.** The previous mechanism reached only Docker and E2B —
+`lemma_local` never read the provisioning environment at all, so the desktop
+fabric was never proxied and nothing said so.
+
+**The agent can read the proxy URL.** It is delivered `0600` into a sandbox
+with one unprivileged user, which is the agent's own user, and it lands in
+`config.json` in the same mode. That keeps it out of a file listing and out
+of `/proc/*/cmdline`; it does not hide it from the agent. Put nothing here
+that is not scoped to this use.
+
+This setting is deliberately *not* one of the things needing an image roll
+(see [Making a new sandbox image take effect](#making-a-new-sandbox-image-take-effect)),
+because the decision travels as data rather than as part of the image.
 
 ### Reaching a sandbox
 

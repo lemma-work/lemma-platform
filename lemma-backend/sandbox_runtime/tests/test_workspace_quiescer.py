@@ -35,6 +35,57 @@ async def test_quiescer_removes_only_declared_ephemeral_state(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_a_suspend_leaves_the_whole_profile_alone(tmp_path: Path) -> None:
+    """A pause touches nothing in the browser's profile. Not the login, and
+    not the lock files either.
+
+    This began by deleting the whole profile, which is why signing in lasted
+    exactly as long as the sandbox did. It was then narrowed to the four
+    files naming a dead process -- `SingletonLock`, `SingletonSocket`,
+    `SingletonCookie`, `DevToolsActivePort` -- on the theory that Chrome
+    would refuse to start against them.
+
+    Measured on a real sandbox, it does not: `kill -9` the browser, leave all
+    four behind, and `agent-browser open` starts one and rewrites them, because
+    Chrome checks whether the pid a lock names is still alive. And deleting
+    them was never free -- `DevToolsActivePort` is the only record of a
+    running browser's port, so removing it under a live browser left one that
+    nothing could find.
+    """
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "Cookies").write_text("the session")
+    (profile / "Local Storage").mkdir()
+    (profile / "SingletonLock").symlink_to("hostname-1234")
+    (profile / "DevToolsActivePort").write_text("41337\n/devtools/browser/x")
+
+    await WorkspaceQuiescer(
+        ephemeral_directories=(),
+        ephemeral_files=(),
+        isolated_process_namespace=False,
+        shed_browser_processes=lambda: 0,
+    ).quiesce()
+
+    assert (profile / "Cookies").read_text() == "the session"
+    assert (profile / "Local Storage").is_dir()
+    # `is_symlink` rather than `exists`: the target never existed, so a
+    # dangling link reports `exists() is False` while still being present.
+    assert (profile / "SingletonLock").is_symlink()
+    assert (profile / "DevToolsActivePort").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_profile_is_not_an_error(tmp_path: Path) -> None:
+    """The common case: nothing has run a browser in this sandbox yet."""
+    await WorkspaceQuiescer(
+        ephemeral_directories=(),
+        ephemeral_files=(),
+        isolated_process_namespace=False,
+        shed_browser_processes=lambda: 0,
+    ).quiesce()
+
+
+@pytest.mark.asyncio
 async def test_a_shared_namespace_still_sheds_the_browser(tmp_path: Path) -> None:
     """The E2B path, which is the one carrying production.
 
@@ -51,18 +102,32 @@ async def test_a_shared_namespace_still_sheds_the_browser(tmp_path: Path) -> Non
         ephemeral_directories=(),
         ephemeral_files=(),
         isolated_process_namespace=False,
-        shed_browser_processes=lambda: sheds.append(1) or 7,
+        shed_browser_processes=lambda: sheds.append(1) or True,
     ).quiesce()
 
     assert sheds == [1], "the browser must be ended, not just its profile deleted"
-    assert result.terminated_unmanaged_processes == 7
+    # One, not a process count. Shedding is a single close through the daemon
+    # now; the number this used to carry was of processes matched by a
+    # pattern list that had gone stale and matched almost none of them.
+    assert result.terminated_unmanaged_processes == 1
 
 
 @pytest.mark.asyncio
-async def test_an_isolated_namespace_does_not_shed_twice(monkeypatch) -> None:
-    """Docker's sweep already covers the browser; doing both would double count.
+async def test_an_isolated_namespace_still_closes_the_browser(monkeypatch) -> None:
+    """Docker's sweep does not cover the browser, whatever it looks like.
 
-    The real sweep signals every pid it can see, so it is stubbed rather than
+    This test used to assert the opposite -- "the sweep already covers it,
+    doing both would double count" -- and that premise is what made Docker
+    the one fabric where a suspend lost the login. The sweep signals, and a
+    signal is exactly what loses the session: `agent-browser` runs Chrome on
+    a throwaway profile under `/tmp` and copies it back to the durable one
+    only on a clean close. Measured on this image, one second after a login:
+    a graceful close keeps the session, SIGTERM to all eleven Chrome
+    processes does not, and nor does SIGTERM to the browser process alone
+    even when it exits cleanly in half a second.
+
+    So the close runs first on every fabric and the sweep still follows. The
+    real sweep signals every pid it can see, so it is stubbed rather than
     run: a unit test that SIGTERMs the machine it runs on is not a test.
     """
     sheds = []
@@ -77,4 +142,4 @@ async def test_an_isolated_namespace_does_not_shed_twice(monkeypatch) -> None:
         shed_browser_processes=lambda: sheds.append(1) or 1,
     ).quiesce()
 
-    assert sheds == []
+    assert sheds == [1], "the browser must be closed before the sweep signals it"

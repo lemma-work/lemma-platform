@@ -24,8 +24,8 @@ import contextlib
 import httpx
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, WebSocket, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
+from pydantic import BaseModel, Field
 from supertokens_python.recipe.session.asyncio import (
     get_session_without_request_response,
 )
@@ -36,6 +36,10 @@ from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
     BrowserRelayUnavailable,
+)
+from app.modules.workspace.api.controllers.browser_view_watchers import (
+    watch_begun,
+    watch_ended,
 )
 from app.modules.workspace.services.browser_view_service import (
     MODE_CONTROL,
@@ -91,7 +95,7 @@ class BrowserStatusResponse(BaseModel):
     """What the pane can say without waking anything.
 
     `asleep` the computer is paused or was never started; `stopped` it is up but
-    the browser is not (the resting state after two idle minutes); `running` a
+    the browser is not (the resting state after five idle minutes); `running` a
     browser is there now; `unavailable` the relay did not answer, which on an
     older image is permanent until it is replaced; `unsupported` this fabric
     cannot reach a port at all.
@@ -147,6 +151,121 @@ async def browser_status(
     )
 
 
+class CurrentPageUrlResponse(BaseModel):
+    url: str | None = None
+
+
+@router.get(
+    "/current-page-url",
+    response_model=CurrentPageUrlResponse,
+    operation_id="workspace.browser.current_page_url",
+    summary="What page a sign-in's browser is actually showing",
+)
+async def current_page_url(
+    user: CurrentUser,
+    service: Annotated[BrowserViewService, Depends(browser_view_service)],
+    origin: str = Query(),
+) -> CurrentPageUrlResponse:
+    """Polled by the sign-in page while its VNC pane is open.
+
+    VNC is pixels, not events -- it carries no navigation signal the way the
+    JSON stream this replaced did with its `url` message on every
+    navigation. This is what the anti-phishing host display on
+    `sign-in-to-site/[conversationId]/[toolCallId]/page.tsx` reads instead,
+    so a person mid-SSO-redirect still sees which site they are actually on.
+    """
+    try:
+        url = await service.current_page_url(user.id, origin=origin)
+    finally:
+        await service.close()
+    return CurrentPageUrlResponse(url=url)
+
+
+class DisplaySizeRequest(BaseModel):
+    """The size the pane wants its picture to be, in CSS pixels.
+
+    Bounded here because these numbers come from a browser window and decide
+    how much memory a framebuffer takes. The sandbox clamps again against the
+    framebuffer it actually allocated, which is the limit that cannot be
+    argued with.
+    """
+
+    width: int = Field(ge=320, le=4096)
+    height: int = Field(ge=240, le=4096)
+
+
+class DisplaySizeResponse(BaseModel):
+    #: What the display ended up as. Not always what was asked for, and the
+    #: pane is told so rather than left to assume.
+    size: str | None = None
+
+
+@router.post(
+    "/display-size",
+    response_model=DisplaySizeResponse,
+    operation_id="workspace.browser.resize_display",
+    summary="Fit the workspace display to the pane showing it",
+)
+async def resize_display(
+    user: CurrentUser,
+    service: Annotated[BrowserViewService, Depends(browser_view_service)],
+    request: DisplaySizeRequest,
+) -> DisplaySizeResponse:
+    """Resize the sandbox display so the picture matches the pane.
+
+    The alternative, and what this replaces, is one fixed display scaled to
+    fit: a 3:2 screen letterboxed into whatever box it lands in, small and
+    ringed with dead space. Resizing the display itself means the pixels sent
+    are the pixels shown -- and a narrow pane gets a narrow *viewport*, so a
+    site serves its mobile layout to somebody signing in on a phone.
+
+    A failure here is not an error for the person: they keep the display they
+    had. So an unreachable or sleeping sandbox answers with no size rather
+    than a status code the pane would have to special-case.
+    """
+    # Every branch below logs. Answering the viewer with "no size" is right --
+    # they keep a working picture either way -- but answering *silently* meant
+    # a display that never resized looked exactly like one that had nothing to
+    # resize, and the pane letterboxed a 1920x1200 screen for days with no
+    # trace anywhere of why. A degraded path still has to say it degraded.
+    try:
+        size = await service.resize_display(
+            user.id, width=request.width, height=request.height
+        )
+    except SandboxCapabilityUnsupported:
+        logger.warning(
+            "workspace.browser_view.resize_unsupported.degraded",
+            width=request.width,
+            height=request.height,
+        )
+        return DisplaySizeResponse()
+    except BrowserRelayUnavailable as exc:
+        logger.warning(
+            "workspace.browser_view.resize_no_relay.degraded",
+            width=request.width,
+            height=request.height,
+            error_type=type(exc).__name__,
+        )
+        return DisplaySizeResponse()
+    except (OSError, httpx.HTTPError, _engine_error()) as exc:
+        logger.warning(
+            "workspace.browser_view.resize_failed.degraded",
+            error_type=type(exc).__name__,
+        )
+        return DisplaySizeResponse()
+    finally:
+        await service.close()
+    if not size:
+        # The relay answered and still changed nothing, which is its own
+        # outcome and not the same as any failure above.
+        logger.warning(
+            "workspace.browser_view.resize_had_no_effect.degraded",
+            width=request.width,
+            height=request.height,
+        )
+    return DisplaySizeResponse(size=size or None)
+
+
 async def _resolve_user_id(websocket: WebSocket):
     """Whose session this handshake carries.
 
@@ -192,19 +311,84 @@ async def _keep_awake(service: BrowserViewService, user_id: UUID) -> None:
         await service.keep_awake(user_id)
 
 
-def _session_for(conversation: str | None, origin: str | None) -> str | None:
-    """Which session this viewer is joining.
+#: What closing a socket that is already over can raise.
+#:
+#: `RuntimeError` is starlette's, for a socket in the wrong state, and it was
+#: the obvious guess and the only one handled. The one production actually
+#: threw is `AttributeError`, from inside uvicorn's own close path
+#: (`'WebSocketProtocol' object has no attribute 'transfer_data_task'`) when the
+#: handshake never completed -- so a refusal aimed at a client that had already
+#: gone became an unhandled ASGI error, and the pane, seeing an error rather
+#: than its close code, retried. `OSError` covers the transport being gone
+#: underneath, `ConnectionError` included.
+#:
+#: `WebSocketDisconnect` is starlette's for a client that has already gone, and
+#: is the *ordinary* case here rather than an edge: by the time anything is
+#: being refused, the person may well have navigated away.
+#:
+#: This tuple has now been corrected twice from production, which is the honest
+#: note to leave. It began as `RuntimeError` alone; `AttributeError` was found
+#: crashing refusals in dev; `WebSocketDisconnect` was found crashing them again
+#: in the local E2B run that was meant to confirm the first fix. So read the
+#: list as "the ways a socket is observed to end", not as a proof of
+#: completeness -- and if a fifth appears, the log line below names its type,
+#: which is the whole reason it logs rather than swallowing.
+_HANGUP_FAILURES = (RuntimeError, AttributeError, OSError, WebSocketDisconnect)
 
-    `None` means "the relay decides", which it does from the origin -- the
-    sign-in case. Raises `ValueError` for a conversation id that is not one,
-    rather than falling back to somebody else's browser.
+
+async def _collect(task: "asyncio.Task[None]") -> None:
+    """Cancel a task and wait for it to finish, without that becoming an error.
+
+    Awaited rather than merely cancelled, because a cancelled task is not
+    finished until it has been collected and leaving it uncollected is how a
+    task outlives the request that started it.
+
+    `CancelledError` by name, and that is the whole point. Cancelling is what
+    makes awaiting it raise, and `CancelledError` is a `BaseException` -- so the
+    `suppress(Exception)` this replaces caught everything *except* the one
+    exception the line is guaranteed to produce. uvicorn logged "Exception in
+    ASGI application" on every close of the browser pane: a stack trace for the
+    ordinary act of stopping watching.
     """
-    from app.modules.workspace.domain.browser_context import agent_session
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
-    if conversation:
-        return agent_session(UUID(conversation))
-    del origin  # the relay names the login session from it
-    return None
+
+async def _hang_up(websocket: WebSocket, code: int, *, doing: str) -> None:
+    """Accept if needed, then close, and never raise while doing it.
+
+    Broad on purpose, and logged rather than swallowed. `RuntimeError` alone was
+    the obvious guess and the wrong one: a socket whose handshake never
+    completed raises `AttributeError` from inside uvicorn's own close path
+    (`'WebSocketProtocol' object has no attribute 'transfer_data_task'`), so a
+    refusal aimed at a client that had already gone became an unhandled ASGI
+    error -- and the pane, which sees an error rather than its close code,
+    retries. "The browser is not running" is the ordinary resting state of an
+    idle workspace, and it was reaching people as a crash loop.
+
+    Whatever goes wrong here, the caller has already decided this socket is
+    over. There is nothing left to fail into, which is what makes catching
+    everything the right shape rather than a shrug.
+    """
+    try:
+        await websocket.accept()
+    except _HANGUP_FAILURES as exc:
+        # Already accepted is the ordinary case and not worth a line.
+        logger.debug(
+            "workspace.browser_view.accept_before_close_failed.observed",
+            doing=doing,
+            error_type=type(exc).__name__,
+        )
+    try:
+        await websocket.close(code=code)
+    except _HANGUP_FAILURES as exc:
+        logger.debug(
+            "workspace.browser_view.close_not_delivered.observed",
+            doing=doing,
+            close_code=code,
+            error_type=type(exc).__name__,
+        )
 
 
 async def _refuse(websocket: WebSocket, code: int) -> None:
@@ -230,13 +414,7 @@ async def _refuse(websocket: WebSocket, code: int) -> None:
     correct anyway is that nothing is sent between the two. A caller refused
     here gets an open event, a close frame carrying the reason, and no bytes.
     """
-    # Suppressed rather than checked: the client may have gone between the
-    # handshake and here, and a refusal that fails to be delivered must not
-    # become a traceback in its own right.
-    with contextlib.suppress(RuntimeError):
-        await websocket.accept()
-    with contextlib.suppress(RuntimeError):
-        await websocket.close(code=code)
+    await _hang_up(websocket, code, doing="refusing")
 
 
 @router.websocket("/view")
@@ -246,19 +424,24 @@ async def browser_view(
     origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
-    conversation: str | None = Query(default=None),
+    conversation: UUID | None = Query(default=None),
 ) -> None:
-    """One person, watching or driving their own browser.
+    """One person, watching or driving their own browser, over VNC.
 
     Every refusal goes through `_refuse`, which accepts the socket before
     closing it. That is the opposite of what it should be, and is the only way
     a browser is ever told which refusal happened -- see `_refuse`.
 
-    A view joins a session, it never names a new one. `conversation` joins the
-    agent's, which is per conversation so two of them do not share cookies;
-    `origin` alone means a sign-in, which lives in a session named for the site.
-    Neither is trusted as a session name -- both are turned into one here, and
-    the relay's reply says which was actually used.
+    `origin`, when given, means a sign-in: it steers the browser to that site
+    before attaching, in a session named for it. `conversation`, when given
+    and `origin` is not, names the conversation whose own agent browser this
+    watches or drives -- `run_browser_script` puts every agent browser
+    command in its own session and profile, named for the conversation, so
+    without this a plain watch/drive resolved to the *shared* default session
+    instead and found nothing the agent had touched. Neither given shows
+    whatever this person's shared sandbox already has open -- VNC is the
+    whole shared display, not a session-scoped tab, so there is nothing else
+    here to name.
     """
     if not origin_is_allowed(websocket.headers.get("origin"), allowed=origins):
         # Browsers do not apply same-origin to WebSockets but do send cookies,
@@ -287,23 +470,24 @@ async def browser_view(
         return
 
     try:
-        session = _session_for(conversation, origin)
-    except ValueError:
-        logger.warning("workspace.browser_view.unreadable_conversation.denied")
-        await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
-        return
-
-    try:
-        upstream_url, headers = await service.open_session(
-            UUID(user_id), mode=mode, origin=origin, session=session
+        upstream_url, headers = await service.open_vnc_session(
+            UUID(user_id), mode=mode, origin=origin, conversation_id=conversation
         )
     except SandboxCapabilityUnsupported:
         logger.warning("workspace.browser_view.unsupported.denied")
         await _refuse(websocket, CLOSE_UNSUPPORTED)
         await service.close()
         return
-    except BrowserRelayUnavailable:
-        logger.warning("workspace.browser_view.browser_start_failed.degraded")
+    except BrowserRelayUnavailable as exc:
+        # With the reason. It said only that starting failed, so a browser
+        # stuck on "Connecting..." meant reproducing this code path by hand
+        # inside a sandbox to find out why -- and the exception had the
+        # sentence all along ("the browser relay answered 502"). The neighbour
+        # below already carried its `error_type`; this one carried nothing.
+        logger.warning(
+            "workspace.browser_view.browser_start_failed.degraded",
+            reason=str(exc),
+        )
         await _refuse(websocket, CLOSE_NO_BROWSER)
         await service.close()
         return
@@ -327,8 +511,10 @@ async def browser_view(
     # counted as idle and had their computer stopped underneath them. Releasing
     # runs quiesce, which deletes the browser profile, so what a slow sign-in
     # lost was the sign-in.
+    watcher = UUID(user_id)
+    watch_begun(watcher)
     awake = create_inherited_task(
-        _keep_awake(service, UUID(user_id)), name="workspace.browser_view.keep_awake"
+        _keep_awake(service, watcher), name="workspace.browser_view.keep_awake"
     )
     try:
         async with await connect_upstream(upstream_url, headers=headers) as upstream:
@@ -349,18 +535,10 @@ async def browser_view(
             "workspace.browser_view.upstream.degraded", error_type=type(exc).__name__
         )
         del exc
-        try:
-            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-        except RuntimeError:
-            # Already closed by the disconnect that brought us here.
-            pass
+        await _hang_up(websocket, status.WS_1011_INTERNAL_ERROR, doing="failing")
     finally:
-        awake.cancel()
-        # Awaited, not merely cancelled: a cancelled task is not finished until
-        # it has been collected, and leaving it uncollected is how a task
-        # outlives the request that started it.
-        with contextlib.suppress(Exception):
-            await awake
+        await _collect(awake)
+        watch_ended(watcher)
         await service.close()
 
 

@@ -26,6 +26,7 @@ from functools import partial
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 from app.modules.agent.domain.vision import resolve_vision_mode
 from app.modules.agent.services.vision_service import vision_delegate_available
@@ -35,6 +36,7 @@ from app.modules.agent.domain.agent_host_permissions import (
 from app.modules.agent.domain.agent_kind import AgentKind
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.ports import AgentRepository
+from app.modules.agent.domain.run_budget_pause import is_budget_pause
 from app.modules.agent.domain.value_objects import AgentRunApprovalDecision
 from app.modules.agent.services.approval_reconciliation import (
     agent_host_permission_tool_return,
@@ -47,12 +49,44 @@ from app.modules.agent.services.pod_runtime_defaults import (
 )
 from app.modules.agent.services.workspace_location import resolve_workspace_location
 
+logger = get_logger(__name__)
+
+
+def _budget_decision_return(decision: AgentRunApprovalDecision) -> dict[str, object]:
+    """What the model is told after a person answered "keep going?".
+
+    Denial is not a failure and must not read as one: the person made a
+    decision, and an agent told its own work "failed" will try to repair
+    something that was never broken. It is told to stop and report, which is the
+    thing that makes the deny button worth pressing.
+    """
+    if decision is AgentRunApprovalDecision.DENY:
+        return {
+            "success": True,
+            "message": (
+                "A person decided not to continue this run. Stop here. Do not "
+                "start any more work — report what you have done so far and "
+                "what is left, so somebody can pick it up."
+            ),
+        }
+    return {
+        "success": True,
+        "message": (
+            "A person asked you to keep going, and your allowance has been "
+            "renewed. Carry on from where you stopped — but this was a long "
+            "run, so prefer the shortest route to a result over starting "
+            "anything new."
+        ),
+    }
+
 
 class ResumeToolReturnBuilder:
     """Builds the synthesized tool return that unblocks a resumed run."""
 
     def __init__(
-        self, uow: SqlAlchemyUnitOfWork, agent_repository: AgentRepository
+        self,
+        uow: SqlAlchemyUnitOfWork,
+        agent_repository: AgentRepository,
     ) -> None:
         self.uow = uow
         self.agent_repository = agent_repository
@@ -75,6 +109,13 @@ class ResumeToolReturnBuilder:
             AskUserResponse,
             RequestApprovalResponse,
         )
+
+        if is_budget_pause(tool_args):
+            # Before the `agent_host_permission_request` check and before
+            # `inner_tool = tool_args.get("tool_name")` below: the card names a
+            # tool (`continue_running`) that does not exist, and the executor
+            # branch would try to run it.
+            return "request_approval", _budget_decision_return(decision)
 
         if kind == "ask_user":
             if decision == AgentRunApprovalDecision.DENY:
@@ -101,6 +142,8 @@ class ResumeToolReturnBuilder:
                 tool_args=tool_args,
                 decision=decision,
                 response=response,
+                user_id=user_id,
+                conversation_id=conversation.id,
             )
 
         host_permission = agent_host_permission_request(tool_args)
@@ -197,15 +240,26 @@ class ResumeToolReturnBuilder:
         tool_args: dict[str, object],
         decision: AgentRunApprovalDecision,
         response: dict[str, object],
+        user_id: UUID,
+        conversation_id: UUID,
     ) -> dict[str, object]:
         """What the agent is told after somebody answered a sign-in request.
 
-        The capture itself already happened, at the moment the person pressed
-        "I'm signed in" -- that endpoint reads the browser while they are still
-        there to be told if it found nothing. This only reports it, which is
-        why a failure to capture does not fail the resume: the run is allowed
-        to carry on with a browser that is signed in but a login that was not
-        kept, and the agent is told exactly that.
+        The card in the conversation answers a sign-in the same way it answers
+        an `ask_user`: through the ordinary approval decision, with no second
+        endpoint and no state of its own. That matters for more than symmetry
+        -- the transcript and the composer both key off the paused tool call,
+        so a resolution the client did not make itself is a resolution it
+        never learns about, and the card sat there afterwards saying "sign in
+        to continue" over a run that had already moved on.
+
+        This used to *capture* here as well: read the browser, decide which
+        cookies were the login, encrypt them. That ran after the execution
+        claim had been committed, so anything it raised wrote no tool return
+        at all -- and a paused call with no return is a conversation nobody
+        can get out of. The whole hazard is gone with the capture: the browser
+        keeps its own profile, so finishing a sign-in is the person finishing
+        it, and there is nothing left here to fail.
         """
         from app.modules.agent.tools.browser.models import BrowserSignInResponse
 
@@ -224,28 +278,37 @@ class ResumeToolReturnBuilder:
             ).model_dump(mode="json")
 
         # Read from the decision's own payload, the way the `ask_user` branch
-        # above reads its answers. This used to query a table of this feature's
-        # own, keyed by the same tool call -- two stores for two values, and
-        # they drifted: the lookup filtered on a status the capture had already
-        # moved past, so the agent was told the login had not been kept every
-        # single time, including the times it had.
-        saved = bool(response.get("saved"))
-        detail = response.get("saved_detail")
-        detail = str(detail) if detail else None
-
-        kept = (
-            "It has been kept, so the next run will not ask."
-            if saved
-            else f"It was not kept{f' ({detail})' if detail else ''}, so a later "
-            "run may ask again."
-        )
+        # above reads its answers. The standalone page puts `working` there --
+        # what the site looked like straight after the person finished -- and
+        # a card answered in the chat has no browser of its own to ask, so its
+        # absence means "not checked" rather than "not working".
+        checked = "working" in response
+        working = bool(response.get("working"))
+        if not checked:
+            # Three states, not two. This used to fold "nobody looked" in
+            # with "it worked" and tell the agent "the site stopped asking
+            # for a login" -- a verification claim about a check that never
+            # ran. The standalone page verifies and puts `working` here; a
+            # card answered in the chat has no browser of its own to ask.
+            # Saying so is the difference between a fact and a guess, and
+            # this feature exists because of a guess of exactly this shape.
+            note = (
+                "Nobody checked whether it took, so open the page and see "
+                "before relying on it."
+            )
+        elif working:
+            note = "The site stopped asking for a login."
+        else:
+            note = (
+                "The site still showed a login form straight afterwards, so "
+                "check before relying on it."
+            )
         return BrowserSignInResponse(
             success=True,
             outcome="signed_in",
             source="person",
             origin=origin,
-            saved=saved,
-            message=f"The person signed in. {kept} Open the page again to carry on.",
+            message=f"The person signed in. {note} Open the page again to carry on.",
         ).model_dump(mode="json")
 
     async def _execute_approved_tool_as_user(

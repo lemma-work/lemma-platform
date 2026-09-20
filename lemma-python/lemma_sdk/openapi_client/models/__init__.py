@@ -181,6 +181,7 @@ _NAME_TO_MODULE = {
     'CreateScheduleRequestFilterOutputSchemaType0': 'create_schedule_request_filter_output_schema_type_0',
     'CreateTableRequest': 'create_table_request',
     'CreateTableRequestConfigType0': 'create_table_request_config_type_0',
+    'CurrentPageUrlResponse': 'current_page_url_response',
     'DataStoreWorkflowStartConfigInput': 'data_store_workflow_start_config_input',
     'DataStoreWorkflowStartConfigOutput': 'data_store_workflow_start_config_output',
     'DataStoreWorkflowStartInput': 'data_store_workflow_start_input',
@@ -200,6 +201,8 @@ _NAME_TO_MODULE = {
     'DecisionRule': 'decision_rule',
     'DirectoryTreeNode': 'directory_tree_node',
     'DirectoryTreeResponse': 'directory_tree_response',
+    'DisplaySizeRequest': 'display_size_request',
+    'DisplaySizeResponse': 'display_size_response',
     'EndNode': 'end_node',
     'EndNodeConfig': 'end_node_config',
     'EndNodePositionType0': 'end_node_position_type_0',
@@ -235,6 +238,7 @@ _NAME_TO_MODULE = {
     'FileSummaryResponse': 'file_summary_response',
     'FileUrlResponse': 'file_url_response',
     'ForeignKeySpec': 'foreign_key_spec',
+    'ForgetResponse': 'forget_response',
     'FormNode': 'form_node',
     'FormNodeConfig': 'form_node_config',
     'FormNodeConfigInputSchema': 'form_node_config_input_schema',
@@ -523,8 +527,6 @@ _NAME_TO_MODULE = {
     'WaitUntilNodePositionType0': 'wait_until_node_position_type_0',
     'WaitUntilNodeResponse': 'wait_until_node_response',
     'WaitUntilNodeResponsePositionType0': 'wait_until_node_response_position_type_0',
-    'WebLoginAuditEntry': 'web_login_audit_entry',
-    'WebLoginAuditResponse': 'web_login_audit_response',
     'WebLoginListResponse': 'web_login_list_response',
     'WebLoginResponse': 'web_login_response',
     'WebSearchRequest': 'web_search_request',
@@ -731,6 +733,7 @@ if TYPE_CHECKING:
     from .create_schedule_request_filter_output_schema_type_0 import CreateScheduleRequestFilterOutputSchemaType0
     from .create_table_request import CreateTableRequest
     from .create_table_request_config_type_0 import CreateTableRequestConfigType0
+    from .current_page_url_response import CurrentPageUrlResponse
     from .data_store_workflow_start_config_input import DataStoreWorkflowStartConfigInput
     from .data_store_workflow_start_config_output import DataStoreWorkflowStartConfigOutput
     from .data_store_workflow_start_input import DataStoreWorkflowStartInput
@@ -750,6 +753,8 @@ if TYPE_CHECKING:
     from .decision_rule import DecisionRule
     from .directory_tree_node import DirectoryTreeNode
     from .directory_tree_response import DirectoryTreeResponse
+    from .display_size_request import DisplaySizeRequest
+    from .display_size_response import DisplaySizeResponse
     from .end_node import EndNode
     from .end_node_config import EndNodeConfig
     from .end_node_position_type_0 import EndNodePositionType0
@@ -785,6 +790,7 @@ if TYPE_CHECKING:
     from .file_summary_response import FileSummaryResponse
     from .file_url_response import FileUrlResponse
     from .foreign_key_spec import ForeignKeySpec
+    from .forget_response import ForgetResponse
     from .form_node import FormNode
     from .form_node_config import FormNodeConfig
     from .form_node_config_input_schema import FormNodeConfigInputSchema
@@ -1073,8 +1079,6 @@ if TYPE_CHECKING:
     from .wait_until_node_position_type_0 import WaitUntilNodePositionType0
     from .wait_until_node_response import WaitUntilNodeResponse
     from .wait_until_node_response_position_type_0 import WaitUntilNodeResponsePositionType0
-    from .web_login_audit_entry import WebLoginAuditEntry
-    from .web_login_audit_response import WebLoginAuditResponse
     from .web_login_list_response import WebLoginListResponse
     from .web_login_response import WebLoginResponse
     from .web_search_request import WebSearchRequest
@@ -1294,6 +1298,7 @@ __all__ = [
     'CreateScheduleRequestFilterOutputSchemaType0',
     'CreateTableRequest',
     'CreateTableRequestConfigType0',
+    'CurrentPageUrlResponse',
     'DataStoreWorkflowStartConfigInput',
     'DataStoreWorkflowStartConfigOutput',
     'DataStoreWorkflowStartInput',
@@ -1313,6 +1318,8 @@ __all__ = [
     'DecisionRule',
     'DirectoryTreeNode',
     'DirectoryTreeResponse',
+    'DisplaySizeRequest',
+    'DisplaySizeResponse',
     'EndNode',
     'EndNodeConfig',
     'EndNodePositionType0',
@@ -1348,6 +1355,7 @@ __all__ = [
     'FileSummaryResponse',
     'FileUrlResponse',
     'ForeignKeySpec',
+    'ForgetResponse',
     'FormNode',
     'FormNodeConfig',
     'FormNodeConfigInputSchema',
@@ -1636,8 +1644,6 @@ __all__ = [
     'WaitUntilNodePositionType0',
     'WaitUntilNodeResponse',
     'WaitUntilNodeResponsePositionType0',
-    'WebLoginAuditEntry',
-    'WebLoginAuditResponse',
     'WebLoginListResponse',
     'WebLoginResponse',
     'WebSearchRequest',

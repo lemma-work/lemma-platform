@@ -78,6 +78,7 @@ export {
   isToolInvocationActive,
   isUserApprovalToolName,
   isAskUserToolName,
+  isSignInToolName,
   isUserInteractionToolName,
   isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
@@ -259,7 +260,6 @@ export type {
   PendingSignIn,
   SignInOutcome,
   WebLogin,
-  WebLoginAuditEntry,
   WebLoginsNamespace,
   WorkspaceNamespace,
 } from "./namespaces/workspace.js";

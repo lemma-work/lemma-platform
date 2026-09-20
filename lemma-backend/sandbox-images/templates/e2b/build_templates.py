@@ -17,9 +17,7 @@ NODE_LINUX_X64_SHA256 = (
 )
 PNPM_VERSION = "11.15.1"
 GH_VERSION = "2.97.0"
-GH_LINUX_X64_SHA256 = (
-    "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
-)
+GH_LINUX_X64_SHA256 = "a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112"
 DEFAULT_CPU_COUNT = 1
 DEFAULT_MEMORY_MB = 2048
 
@@ -66,7 +64,15 @@ def _install_uv_command() -> str:
         f"-o /tmp/{archive} && "
         f"echo '{UV_LINUX_X64_SHA256}  /tmp/{archive}' | sha256sum -c - && "
         f"tar -xzf /tmp/{archive} -C /tmp && "
-        f"install -m 0755 /tmp/{directory}/uv /usr/local/bin/uv && "
+        # The real binary goes where the shim expects to find it, and the shim
+        # takes the name on PATH -- the same arrangement `Dockerfile.workspace`
+        # has. Without it `uv pip install` targets the shared interpreter's own
+        # site-packages, which is root-owned, and dies with a bare permission
+        # error while `pip install` beside it works: two installers on one PATH
+        # disagreeing about where a package goes, and the one the prompt
+        # recommends being the broken one. Measured on a live sandbox, not
+        # inferred.
+        f"install -m 0755 /tmp/{directory}/uv /usr/local/lib/lemma-uv-bin && "
         f"install -m 0755 /tmp/{directory}/uvx /usr/local/bin/uvx && "
         f"rm -rf /tmp/{archive} /tmp/{directory}"
     )
@@ -78,6 +84,10 @@ def workspace_template():
         .from_template("code-interpreter-v1")
         .apt_install(
             [
+                # `agent-browser record` shells out to ffmpeg. See the note in
+                # Dockerfile.workspace; the two images have to agree on this or
+                # recording works on one fabric and not the other.
+                "ffmpeg",
                 "fonts-dejavu-core",
                 "fonts-liberation",
                 "libasound2t64",
@@ -115,6 +125,20 @@ def workspace_template():
                 "procps",
                 "ripgrep",
                 "socat",
+                # The human-facing view of the same Xvfb display. See the note
+                # in Dockerfile.workspace; the two images have to agree on
+                # this or the VNC pane connects on one fabric and not the
+                # other -- the same failure mode the `ffmpeg` note above
+                # describes, for the same reason.
+                # Places the OAuth popup a real sign-in opens, which the X
+                # server would otherwise put wherever it liked -- possibly
+                # off-screen, where the person watching sees nothing happen.
+                "matchbox-window-manager",
+                "websockify",
+                # `xrandr`, for resizing the display to match the pane it is
+                # being watched in.
+                "x11-xserver-utils",
+                "x11vnc",
                 "xz-utils",
                 "xvfb",
             ],
@@ -189,8 +213,20 @@ def workspace_template():
             mode=0o644,
         )
         .copy(
-            "lemma-backend/sandbox-images/scripts/start-browser.sh",
-            "/usr/local/bin/start-browser",
+            # Takes the name on PATH, with the real binary at
+            # `/usr/local/lib/lemma-uv-bin`. See `_install_uv_command`.
+            "lemma-backend/sandbox-images/scripts/lemma-uv",
+            "/usr/local/bin/uv",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/set-display-size.sh",
+            "/usr/local/bin/set-display-size",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/lemma-ensure-display.sh",
+            "/usr/local/bin/lemma-ensure-display",
             mode=0o755,
         )
         .copy(
@@ -198,7 +234,17 @@ def workspace_template():
             "/usr/local/bin/start-browser-relay",
             mode=0o755,
         )
-        # The browser relay, and the two package files it needs to be importable.
+        .copy(
+            "lemma-backend/sandbox-images/scripts/browser-is-live.sh",
+            "/usr/local/bin/browser-is-live",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh",
+            "/usr/local/bin/start-vnc-bridge",
+            mode=0o755,
+        )
+        # The browser relay, and the package files it needs to be importable.
         #
         # This template deliberately ships no workspace runtime -- an E2B
         # sandbox serves no HTTP of its own, and exec and files go through the
@@ -206,9 +252,29 @@ def workspace_template():
         # as a separate process: a browser channel that lived in the runtime
         # existed on Docker and nowhere else, which is the whole reason this
         # exists.
+        #
+        # `tasks.py` is here because `browser_relay.app` and
+        # `browser_relay.stream_proxy` both import it, and it was not: the
+        # comment said "the two package files it needs" while the relay needed
+        # three, so every workspace sandbox shipped a relay that raised
+        # `ModuleNotFoundError` on its first line and left no log. Counting
+        # them by hand is what `test_e2b_templates_ship_what_they_import` now
+        # does instead.
         .copy(
             "lemma-backend/sandbox_runtime/__init__.py",
             "/app/sandbox_runtime/__init__.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/tasks.py",
+            "/app/sandbox_runtime/tasks.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/paths.py",
+            "/app/sandbox_runtime/paths.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/sandbox_memory.py",
+            "/app/sandbox_runtime/sandbox_memory.py",
         )
         .copy(
             "lemma-backend/sandbox_runtime/browser_relay",
@@ -224,18 +290,48 @@ def workspace_template():
             "/opt/lemma-node/webpage-to-markdown.mjs",
             mode=0o755,
         )
+        # Real Chrome, not the testing build.
+        #
+        # `workspace-chrome` used to be a symlink to whatever
+        # `agent-browser install` had downloaded, and that installer fetches
+        # from Google's *Chrome for Testing* CDN. So this fabric ran a build
+        # that announces itself in an infobar -- above the page a person is
+        # being asked to type their password into -- while the Docker fabric
+        # ran ordinary Chromium. Anti-bot systems treat the two differently,
+        # which matters most on exactly the sign-in pages this feature exists
+        # for.
+        #
+        # `apt install chromium` is not the answer here the way it is in
+        # `Dockerfile.workspace`: this template builds from E2B's Ubuntu-based
+        # `code-interpreter-v1`, where `chromium` is the snap transitional
+        # package and does not run in a container at all. Google's own apt
+        # repository is the one that gives a real, non-testing Chrome on this
+        # base.
         .run_cmd(
-            "mkdir -p /workspace /tmp/lemma-browser/runtime "
-            "/tmp/lemma-browser/profile && "
+            "install -d -m 0755 /etc/apt/keyrings && "
+            "curl -fsSL https://dl.google.com/linux/linux_signing_key.pub "
+            "| gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg && "
+            "chmod a+r /etc/apt/keyrings/google-chrome.gpg && "
+            "echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] "
+            "https://dl.google.com/linux/chrome/deb/ stable main' "
+            "> /etc/apt/sources.list.d/google-chrome.list && "
+            "apt-get update && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y "
+            "--no-install-recommends google-chrome-stable && "
+            "rm -rf /var/lib/apt/lists/*",
+            user="root",
+        )
+        .run_cmd(
+            "mkdir -p /home/user /home/user/lemma /home/user/.lemma/browser "
+            "/tmp/lemma-browser/runtime && "
             "ln -sf /opt/lemma-node/webpage-to-markdown.mjs "
             "/usr/local/lib/webpage-to-markdown.mjs && "
-            "find /home/user/.agent-browser/browsers -type f "
-            "-name chrome -perm /111 "
-            "-exec ln -sf {} /usr/local/bin/workspace-chrome \\; -quit && "
+            'ln -sf "$(command -v google-chrome-stable)" '
+            "/usr/local/bin/workspace-chrome && "
             "test -x /usr/local/bin/workspace-chrome && "
             "rm -rf /root/.cache/pnpm /root/.local/share/pnpm/store "
             "/home/user/.cache/pnpm /home/user/.local/share/pnpm/store && "
-            "chown -R user:user /workspace /tmp/lemma-browser",
+            "chown -R user:user /home/user /tmp/lemma-browser",
             user="root",
         )
         # Layer order is cache order, and these two blocks were the wrong way
@@ -263,10 +359,38 @@ def workspace_template():
             "--locked --no-dev --no-editable && "
             "printf '%s\\n' "
             "'import sys; "
-            'p="/workspace/.python/lib/python3.14/site-packages"; '
+            'p="/home/user/.python/lib/python3.14/site-packages"; '
             "sys.path.insert(0, p) if p not in sys.path else None' "
             "> /opt/lemma-python/lib/python3.14/site-packages/"
             "lemma-workspace-overlay.pth && "
+            # Where the backend installs the first-party code this image also
+            # carries. The copy below is a *floor*, not the shipped version: the
+            # overlay supersedes it, so a Lemma code change no longer needs a
+            # template at all -- and on a provider where the sandbox is the
+            # disk, needing a template meant destroying workspaces to publish
+            # one.
+            #
+            # Both halves are baked, and that is the point. The directory is
+            # owned by the sandbox user and the `.pth` is written here, so
+            # installing needs no elevation; without them the backend has to
+            # reach root to write into `/opt`, which works on E2B only because
+            # its user happens to have passwordless sudo.
+            #
+            # `lemma-runtime-` sorts before `lemma-workspace-` and both insert
+            # at position 0, so the later one lands in front: a package the user
+            # pip-installs stays ahead of the overlay, and the overlay stays
+            # ahead of this image's own copy. Pointing at `current` rather than
+            # a version means an upgrade is a symlink flip and never a rewrite
+            # of this file. It naming a directory that does not exist yet is
+            # harmless -- sys.path tolerates it.
+            "mkdir -p /opt/lemma-runtime && "
+            "chown user:user /opt/lemma-runtime && "
+            "printf '%s\\n' "
+            "'import sys; "
+            'p="/opt/lemma-runtime/current/site-packages"; '
+            "sys.path.insert(0, p) if p not in sys.path else None' "
+            "> /opt/lemma-python/lib/python3.14/site-packages/"
+            "lemma-runtime-overlay.pth && "
             "test -x /opt/lemma-python/bin/python && "
             'test "$(/opt/lemma-python/bin/python -c '
             "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
@@ -294,22 +418,18 @@ def workspace_template():
                 "XDG_RUNTIME_DIR": "/tmp/lemma-browser/runtime",
                 "WORKSPACE_XVFB_SCREEN": "1440x960x24",
                 "AGENT_BROWSER_CONFIG": "/tmp/lemma-browser/config.json",
-                "AGENT_BROWSER_DASHBOARD_PORT": "4848",
-                "AGENT_BROWSER_DASHBOARD_INTERNAL_PORT": "4849",
                 "AGENT_BROWSER_EXECUTABLE_PATH": "/usr/local/bin/workspace-chrome",
-                "AGENT_BROWSER_PROFILE": "/tmp/lemma-browser/profile",
+                "AGENT_BROWSER_PROFILE": "/home/user/.lemma/browser/profile",
                 "AGENT_BROWSER_SESSION": "workspace",
                 "AGENT_BROWSER_HEADED": "true",
                 # See Dockerfile.workspace: the daemon closes Chrome after this
                 # long idle, which is what keeps a finished research session
                 # from holding the sandbox's whole memory budget.
-                "AGENT_BROWSER_IDLE_TIMEOUT_MS": "120000",
-                # See Dockerfile.workspace: what the live view costs on the
-                # wire. Capped where the frames are encoded, so a small pane is
-                # never sent pixels it cannot draw.
-                "AGENT_BROWSER_STREAM_QUALITY": "60",
-                "AGENT_BROWSER_STREAM_MAX_WIDTH": "1280",
-                "AGENT_BROWSER_STREAM_MAX_HEIGHT": "800",
+                "AGENT_BROWSER_IDLE_TIMEOUT_MS": "300000",
+                # See Dockerfile.workspace: the ceiling on a viewer-requested
+                # resize, since RandR cannot grow the framebuffer Xvfb
+                # allocated at startup.
+                "WORKSPACE_XVFB_MAX_SCREEN": "1920x1200x24",
                 "LEMMA_BROWSER_RELAY_PORT": "4850",
                 "LEMMA_NODE_BINARY": "/opt/node24/bin/node",
                 # Where the credential bridge writes gh's config.
@@ -318,22 +438,32 @@ def workspace_template():
                 "GH_PAGER": "cat",
                 "NODE_PATH": "/opt/lemma-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
-                "PIP_PREFIX": "/workspace/.python",
+                "PIP_PREFIX": "/home/user/.python",
+                # Deliberately *not* the user's own site-packages. A path
+                # already on PYTHONPATH is already on sys.path, so
+                # `lemma-workspace-overlay.pth`'s "insert unless present" guard
+                # does nothing -- and the runtime overlay, which has no such
+                # competition, lands in front of it. That inverts the one
+                # ordering this design promises: a package the agent installed
+                # itself must outrank the one we ship. Docker dropped PYTHONPATH
+                # for the same class of reason and says so in its own comment.
                 "PYTHONPATH": (
-                    "/workspace/.python/lib/python3.14/site-packages:"
                     "/opt/lemma-python/lib/python3.14/site-packages:"
                     # Where the browser relay package lives.
                     "/app"
                 ),
                 "PATH": (
-                    "/workspace/.python/bin:/opt/lemma-python/bin:"
+                    "/home/user/.python/bin:/home/user/.local/share/pnpm:"
+                    "/home/user/.local/bin:"
+                    "/opt/lemma-python/bin:"
                     "/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"
                 ),
                 "MPLBACKEND": "Agg",
+                "UV_CACHE_DIR": "/home/user/.uv-cache",
             }
         )
-        .set_workdir("/workspace")
+        .set_workdir("/home/user/lemma")
         .set_user("user")
     )
 

@@ -472,6 +472,26 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
         ]
     }
 
+    # One throwaway poll first, with the hold turned right down so it costs
+    # only what it warms.
+    #
+    # The first poll of this test pays some one-off cost the later ones do not,
+    # and it lands on the call whose whole point is to return without holding --
+    # so the ceiling below was reading that cost rather than the hold it names:
+    # 14ms on a warm laptop, 790ms on a cold CI runner, against a ceiling of
+    # 700. The second poll came back in 803ms, which is the 800ms hold and
+    # almost nothing else, so whatever the cost is it is paid once per test and
+    # not per request.
+    #
+    # Deliberately not named here. It is not the secret check -- that is one
+    # sha256 and one indexed lookup -- and guessing in a comment is how the
+    # wrong cause gets believed by the next person to read it. Establishing
+    # which one-off it is would mean instrumenting the first pass on a cold
+    # runner; moving it off the measured call fixes the test either way.
+    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.05)
+    await _elapsed_poll(scenario.async_client, machine, capacity=_capacity(1))
+    monkeypatch.setattr(agent_host_controller, "_LONG_POLL_SECONDS", 0.8)
+
     advanced, advanced_elapsed = await _elapsed_poll(
         scenario.async_client, machine, capacity=_capacity(1), **heartbeat
     )
@@ -479,10 +499,23 @@ async def test_a_repeated_heartbeat_is_not_mistaken_for_news(
         scenario.async_client, machine, capacity=_capacity(1), **heartbeat
     )
 
+    # The two readings below are not symmetric, and knowing why is what stops
+    # the fragile-looking one being deleted the next time it flakes.
+    #
+    # `poll_after_ms` is the server's own account of which branch it took: it is
+    # non-zero only when a control update changed something, which is the same
+    # condition that returns without entering the idle wait. So for the advance
+    # it is already proof, and the clock below is a latency guard rather than
+    # the evidence. For the repeat there is no such proxy -- that branch answers
+    # 0 when it merely has commands to hand back -- so only the duration can
+    # show it actually waited, and that assertion is load-bearing.
     assert advanced["poll_after_ms"] > 0
-    assert advanced_elapsed < 0.7, "a real state advance should answer promptly"
     assert repeated["poll_after_ms"] == 0
     assert repeated_elapsed >= 0.7, "a repeated heartbeat kept cutting the poll short"
+    assert advanced_elapsed < 0.7, (
+        "a real state advance should answer promptly rather than hold: "
+        f"{advanced_elapsed:.3f}s"
+    )
 
 
 @pytest.mark.asyncio

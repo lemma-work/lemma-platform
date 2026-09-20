@@ -27,7 +27,8 @@ itself is not reimplemented -- only the loop is.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
@@ -55,11 +56,28 @@ _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
 class HttpStatusError(RuntimeError):
-    """The page came back with a non-success status."""
+    """The page came back with a non-success status.
 
-    def __init__(self, status_code: int):
+    Carries the headers and the body, because the status alone cannot tell a
+    bot defence from a broken page, and the caller's next decision depends on
+    knowing which. Measured: `reuters.com` answers 429 with the whole
+    article, `g2.com` answers 403 with `x-dd-b` and 1.7 KB of challenge, and
+    roughly a fifth of 403/429/503 responses are not blocks at all.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        *,
+        headers: Mapping[str, str] | None = None,
+        body: bytes = b"",
+    ):
         super().__init__(f"The site returned HTTP {status_code}.")
         self.status_code = status_code
+        #: Lowercased keys. A caller matching `cf-mitigated` should not have
+        #: to care that one server sent `CF-Mitigated`.
+        self.headers: Mapping[str, str] = headers or {}
+        self.body = body
 
 
 class PageUnreachableError(RuntimeError):
@@ -76,6 +94,42 @@ class FetchedBody:
     body: bytes
     content_type: str | None
     final_url: str
+    #: Defaulted so every existing construction still type-checks; the
+    #: fallback httpx path in `page_extract` builds one of these too.
+    status: int = 200
+    headers: Mapping[str, str] = field(default_factory=dict)
+
+
+def normalized_headers(raw: object) -> dict[str, str]:
+    """Header names lowercased, values as strings.
+
+    curl_cffi's own mapping already does this; a plain dict from a test
+    double does not, and a rule that matched `cf-mitigated` but not
+    `CF-Mitigated` would pass every test and fail on the wire.
+    """
+    try:
+        items = raw.items()  # type: ignore[union-attr]
+    except AttributeError:
+        return {}
+    return {str(key).lower(): str(value) for key, value in items}
+
+
+async def _read_capped(response: object, max_bytes: int) -> tuple[bytes, bool]:
+    """The body, stopping at `max_bytes`. True when there was more.
+
+    Hoisted out of the fetch so the >=400 path can read a body too without
+    duplicating the mid-transfer cut-off -- and kept module-level rather than
+    nested, because the fetch it came from is already near the complexity
+    the architecture gate allows.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in response.aiter_content():  # type: ignore[attr-defined]
+        total += len(chunk)
+        if total > max_bytes:
+            return b"".join(chunks), True
+        chunks.append(chunk)
+    return b"".join(chunks), False
 
 
 def get_impersonating_client() -> "AsyncSession":
@@ -123,6 +177,7 @@ async def fetch_guarded_impersonated(
     headers: dict[str, str] | None = None,
     max_redirects: int = 3,
     policy: GuardPolicy | None = None,
+    error_max_bytes: int | None = None,
 ) -> FetchedBody:
     """GET ``url`` as Chrome, re-validating every hop and capping the body.
 
@@ -132,6 +187,14 @@ async def fetch_guarded_impersonated(
     The body is cut off *during* the transfer rather than measured afterwards: a
     host that advertises a small response and sends a large one should cost us
     ``max_bytes``, not its whole body.
+
+    ``error_max_bytes`` bounds the body read from a >=400 response, and
+    defaults to ``max_bytes`` on purpose. A tighter cap looks appealing
+    because a block page is tiny -- 1.7 KB and 5.6 KB measured -- but the
+    case this reading exists to serve is the opposite one: Reuters answering
+    429 with a 526 KB article that should be kept rather than re-fetched
+    through a browser. The seam is here so that choice can be revisited
+    without restructuring anything.
     """
     from curl_cffi.requests.errors import RequestsError
 
@@ -157,27 +220,50 @@ async def fetch_guarded_impersonated(
                         )
                     current = urljoin(current, location)
                     continue
+                headers_seen = normalized_headers(response.headers)
                 if response.status_code >= 400:
-                    raise HttpStatusError(response.status_code)
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_content():
-                    total += len(chunk)
-                    if total > max_bytes:
-                        raise UnsafeUrlError(
-                            f"Response exceeds the {max_bytes} byte limit.",
-                            reason="response_too_large",
+                    # Read the body before raising. It used to raise here,
+                    # so a challenge page's markup -- the thing that names
+                    # the defence -- was never downloaded, and the caller
+                    # got "escalate to the browser" for a site the browser
+                    # is refused by too. Truncation is silent on this path:
+                    # a block page measured 1.7-5.6 KB, and an error body
+                    # big enough to hit the cap is not evidence of anything.
+                    try:
+                        body, _ = await _read_capped(
+                            response, error_max_bytes or max_bytes
                         )
-                    chunks.append(chunk)
+                    except RequestsError as exc:
+                        # A body that will not read is a reason to have no
+                        # body, not a reason to forget the status. Letting
+                        # this reach the outer handler turned it into
+                        # `PageUnreachableError`, and a 404 that arrives as
+                        # "unreachable" is escalated to the browser -- which
+                        # spends one of five renders in a 240s budget to be
+                        # told 404 again.
+                        raise HttpStatusError(
+                            response.status_code, headers=headers_seen, body=b""
+                        ) from exc
+                    raise HttpStatusError(
+                        response.status_code, headers=headers_seen, body=body
+                    )
+                body, overflowed = await _read_capped(response, max_bytes)
+                if overflowed:
+                    raise UnsafeUrlError(
+                        f"Response exceeds the {max_bytes} byte limit.",
+                        reason="response_too_large",
+                    )
                 logger.debug(
                     "net.impersonating_client.fetch_completed.observed",
                     status_code=response.status_code,
-                    bytes=total,
+                    bytes=len(body),
                 )
                 return FetchedBody(
-                    body=b"".join(chunks),
+                    body=body,
                     content_type=response.headers.get("content-type"),
                     final_url=current,
+                    status=response.status_code,
+                    headers=headers_seen,
                 )
         except RequestsError as exc:
             raise PageUnreachableError(str(exc)) from exc

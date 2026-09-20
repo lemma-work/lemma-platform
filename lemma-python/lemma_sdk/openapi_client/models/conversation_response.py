@@ -35,6 +35,8 @@ class ConversationResponse:
         pod_id (UUID):
         updated_at (datetime.datetime):
         user_id (UUID):
+        workspace_cwd (str): The conversation's working directory in the sandbox. This is where the agent's shell starts
+            and where its files land, so it is the directory a file pane should be showing.
         agent_id (None | Unset | UUID):
         agent_runtime (AgentRuntimeConfig | None | Unset):
         instructions (None | str | Unset):
@@ -60,6 +62,7 @@ class ConversationResponse:
     pod_id: UUID
     updated_at: datetime.datetime
     user_id: UUID
+    workspace_cwd: str
     agent_id: None | Unset | UUID = UNSET
     agent_runtime: AgentRuntimeConfig | None | Unset = UNSET
     instructions: None | str | Unset = UNSET
@@ -96,6 +99,8 @@ class ConversationResponse:
         updated_at = self.updated_at.isoformat()
 
         user_id = str(self.user_id)
+
+        workspace_cwd = self.workspace_cwd
 
         agent_id: None | str | Unset
         if isinstance(self.agent_id, Unset):
@@ -215,6 +220,7 @@ class ConversationResponse:
                 "pod_id": pod_id,
                 "updated_at": updated_at,
                 "user_id": user_id,
+                "workspace_cwd": workspace_cwd,
             }
         )
         if agent_id is not UNSET:
@@ -273,6 +279,8 @@ class ConversationResponse:
         updated_at = isoparse(d.pop("updated_at"))
 
         user_id = UUID(d.pop("user_id"))
+
+        workspace_cwd = d.pop("workspace_cwd")
 
         def _parse_agent_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -492,6 +500,7 @@ class ConversationResponse:
             pod_id=pod_id,
             updated_at=updated_at,
             user_id=user_id,
+            workspace_cwd=workspace_cwd,
             agent_id=agent_id,
             agent_runtime=agent_runtime,
             instructions=instructions,

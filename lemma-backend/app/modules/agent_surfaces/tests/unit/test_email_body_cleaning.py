@@ -112,13 +112,13 @@ def test_plain_text_is_preferred_over_html():
 def test_the_thread_root_is_the_first_reference():
     """This is what lets a seeded outbound be recognised when it comes back."""
     root = email_thread_root(
-        references=["<seed@ops.asur.work>", "<generated@resend.dev>"],
+        references=["<seed@ops.lemma.work>", "<generated@resend.dev>"],
         in_reply_to="<generated@resend.dev>",
         message_id="<reply@example.com>",
         sender="bob@example.com",
     )
 
-    assert root == "<seed@ops.asur.work>"
+    assert root == "<seed@ops.lemma.work>"
 
 
 def test_a_first_contact_is_its_own_thread_root():
@@ -248,7 +248,7 @@ class TestASoftWrappedAttribution:
     def test_the_wrapped_form_is_stripped(self) -> None:
         body = (
             "approve\n\nOn Tue, Aug 25, 2026 at 11:54 PM butler via Lemma <\n"
-            "butler.lemma2@ops.asur.work> wrote:\n> Approval needed: ...\n"
+            "butler.lemma2@ops.lemma.work> wrote:\n> Approval needed: ...\n"
         )
         assert strip_quoted_reply(body, "Re: Hello") == "approve"
 
@@ -260,7 +260,7 @@ class TestASoftWrappedAttribution:
 
         body = (
             "approve\n\nOn Tue, Aug 25, 2026 at 11:54 PM butler via Lemma <\n"
-            "butler.lemma2@ops.asur.work> wrote:\n> Approval needed: ...\n"
+            "butler.lemma2@ops.lemma.work> wrote:\n> Approval needed: ...\n"
         )
         text = inbound_email_text(text=body, subject="Re: Hello")
         assert _classify_approval_reply(text) is not None, (

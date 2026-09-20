@@ -1,8 +1,8 @@
 """How a sign-in reaches the run it paused.
 
-Two questions, both asked of the `agent` module and neither answerable here:
-what is this conversation waiting to be signed in to, and how does an answer
-close that wait.
+Three questions, all asked of the `agent` module and none answerable here:
+whose conversation this is, what it is waiting to be signed in to, and how an
+answer closes that wait.
 
 Protocols with adapters behind them, rather than calls the service reaches for
 inside itself, for one reason: a double placed *inside* the subject certifies
@@ -10,7 +10,7 @@ the half that was not written. `SignInService` takes these as collaborators, so
 a test stands in front of them and a rename of the real thing fails that test
 instead of slipping past it.
 
-Both adapters import `agent` inside the function. `agent` imports this module's
+All three adapters import `agent` inside the function. `agent` imports this module's
 contracts, so naming it at the top would close a cycle.
 """
 
@@ -36,6 +36,19 @@ class ReadPause(Protocol):
     ) -> object | None: ...
 
 
+class OwnerOfConversation(Protocol):
+    """Whose conversation this is, or ``None`` when there is no such row.
+
+    Asked before the pause is read rather than after, because the pause is the
+    thing being protected: its origin and its reason are the person's, and
+    resolving it speaks to their agent in their name.
+    """
+
+    async def __call__(
+        self, uow: "SqlAlchemyUnitOfWork", conversation_id: UUID
+    ) -> UUID | None: ...
+
+
 class ResumePause(Protocol):
     """How an answer closes the wait and hands the outcome to the agent."""
 
@@ -49,6 +62,18 @@ class ResumePause(Protocol):
         approved: bool,
         response: dict[str, object] | None = None,
     ) -> bool: ...
+
+
+async def owner_through_contracts(
+    uow: "SqlAlchemyUnitOfWork", conversation_id: UUID
+) -> UUID | None:
+    """The conversation's owner, through `agent`'s own contract."""
+    from app.modules.agent.contracts.conversations_for_surfaces import (
+        surface_conversation,
+    )
+
+    found = await surface_conversation(uow, conversation_id)
+    return None if found is None else found.user_id
 
 
 async def pending_through_contracts(
@@ -101,8 +126,10 @@ async def resume_through_approvals(
 
 
 __all__ = [
+    "OwnerOfConversation",
     "ReadPause",
     "ResumePause",
+    "owner_through_contracts",
     "pending_through_contracts",
     "resume_through_approvals",
 ]

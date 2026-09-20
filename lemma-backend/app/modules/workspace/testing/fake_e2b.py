@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote, unquote
+
+import httpx
 
 
 class FakeE2BError(Exception):
@@ -128,6 +131,9 @@ class FakeE2B:
     #: "the provider said nothing" -- and saying nothing is what puts a signed-in
     #: browser on a public URL.
     created_public_traffic: list[bool | None] = field(default_factory=list)
+    #: Every keyword `create` was called with, so a test can bind them
+    #: against the real SDK's signature rather than against this stand-in's.
+    created_kwargs: list[dict[str, object]] = field(default_factory=list)
     #: The per-sandbox traffic token E2B mints when a sandbox is created with
     #: public traffic disabled. `None` models the older, open arrangement, which
     #: is what every sandbox created before that flag still has -- and what the
@@ -285,18 +291,63 @@ class FakeE2B:
                 self.files = _Files()
                 self.pty = _Pty()
 
+            def download_url(self, path, **_kwargs):
+                """Where envd serves this file. Sync in the real SDK too."""
+                return f"{FAKE_ENVD_ORIGIN}/files?path={quote(path)}"
+
             @staticmethod
             async def create(
                 template=None,
                 timeout=None,
                 metadata=None,
                 envs=None,
-                volume_mounts=None,
+                secure=True,
+                allow_internet_access=True,
+                mcp=None,
+                network=None,
                 lifecycle=None,
-                allow_public_traffic=None,
-                **_kwargs,
+                volume_mounts=None,
+                logger=None,
+                # `AsyncSandbox.create` takes its remaining keywords as
+                # `Unpack[ApiParams]` and passes them to `ConnectionConfig`,
+                # which raises `TypeError` on a name it does not know. Spelling
+                # those names out here instead of a `**_kwargs` catch-all is
+                # what makes this double fail the way production fails: the
+                # previous signature invented an `allow_public_traffic`
+                # parameter the SDK has never had at any version, so the test
+                # asserting sandboxes were closed passed for months against a
+                # call that could only ever have raised.
+                api_key=None,
+                api_url=None,
+                api_headers=None,
+                domain=None,
+                debug=None,
+                headers=None,
+                proxy=None,
+                request_timeout=None,
+                sandbox_url=None,
+                validate_api_key=None,
             ):
-                world.created_public_traffic.append(allow_public_traffic)
+                world.created_public_traffic.append(
+                    (network or {}).get("allow_public_traffic")
+                )
+                world.created_kwargs.append(
+                    {
+                        "template": template,
+                        "timeout": timeout,
+                        "metadata": metadata,
+                        "envs": envs,
+                        "secure": secure,
+                        "allow_internet_access": allow_internet_access,
+                        "mcp": mcp,
+                        "network": network,
+                        "lifecycle": lifecycle,
+                        "volume_mounts": volume_mounts,
+                        "logger": logger,
+                        "api_key": api_key,
+                        "domain": domain,
+                    }
+                )
                 world._next += 1
                 sandbox_id = f"e2b-{world._next}"
                 world.sandboxes[sandbox_id] = FakeSandboxInfo(
@@ -416,6 +467,66 @@ class FakeE2B:
                 return world.volumes.pop(volume_id, None) is not None
 
         return FakeAsyncVolume
+
+
+#: The origin `download_url` points at. Nothing resolves it; `envd_transport`
+#: is what answers.
+FAKE_ENVD_ORIGIN = "https://fake-envd.invalid"
+
+
+def envd_transport(world: FakeE2B) -> httpx.MockTransport:
+    """envd's file route, including the part the provider now depends on.
+
+    Range support is the reason this exists rather than a fake that returns
+    whole files. It is written from a measurement against a real sandbox,
+    not from the spec: `Range: bytes=1048576-2097151` against a 20 MiB file
+    answered `206` with `Content-Range: bytes 1048576-2097151/20971520`,
+    `Accept-Ranges: bytes`, and exactly 1048576 bytes. A double that served
+    whole files would certify the provider against the behaviour it was
+    written to stop using.
+    """
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        path = unquote(request.url.params.get("path", ""))
+        if path not in world.files:
+            return httpx.Response(404)
+        content = world.files[path]
+        header = request.headers.get("Range")
+        if not header:
+            return httpx.Response(200, content=content)
+        spec = header.removeprefix("bytes=")
+        first, _, last = spec.partition("-")
+        start = int(first)
+        if start >= len(content):
+            return httpx.Response(416)
+        end = min(int(last) if last else len(content) - 1, len(content) - 1)
+        return httpx.Response(
+            206,
+            content=content[start : end + 1],
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{len(content)}",
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    return httpx.MockTransport(handle)
+
+
+def envd_client_class(world: FakeE2B) -> type[httpx.AsyncClient]:
+    """An `httpx.AsyncClient` wired to `envd_transport`, for monkeypatching.
+
+    The provider builds its own client, as it must -- the URL is signed per
+    file and there is nothing to inject. So the substitution happens at the
+    class, and the real client code path runs.
+    """
+    transport = envd_transport(world)
+
+    class _Client(httpx.AsyncClient):
+        def __init__(self, *args, **kwargs):
+            kwargs["transport"] = transport
+            super().__init__(*args, **kwargs)
+
+    return _Client
 
 
 @dataclass

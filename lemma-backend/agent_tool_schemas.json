@@ -141,1263 +141,6 @@
     }
   },
   {
-    "tool_name": "browser_act",
-    "toolset": "BROWSER",
-    "description": "Click, fill, press, select or scroll, then return the page as it now is.\n\nAddress elements by the `@eN` ref from the most recent result. **Refs go\nstale the moment the page changes**, which is why every call returns a new\nsnapshot \u2014 use those refs for the next step, never ones from an earlier\nresult.\n\nWhen the action navigates or submits, say what to wait for with\n`wait_for_url` or `wait_for_text`. Without it the snapshot can describe the\nold page.\n\nIf a click seems to do nothing, a modal or cookie banner is usually\nintercepting it \u2014 find it in the snapshot and dismiss it first.",
-    "input_schema": {
-      "description": "Act on one element, then return the page as it now is.",
-      "properties": {
-        "action": {
-          "description": "What to do.",
-          "enum": [
-            "click",
-            "fill",
-            "type",
-            "press",
-            "select",
-            "check",
-            "uncheck",
-            "hover",
-            "scroll"
-          ],
-          "type": "string"
-        },
-        "target": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The element, as an `@eN` ref from the most recent snapshot. A CSS selector works too but is a last resort. Not needed for `press` (which goes to the focused element) or `scroll`."
-        },
-        "text": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Text for `fill` (clears first) and `type` (appends), or the option label for `select`."
-        },
-        "key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Key for `press`, e.g. `Enter`, `Escape`, `Tab`."
-        },
-        "scroll_direction": {
-          "default": "down",
-          "description": "Direction for `scroll`.",
-          "enum": [
-            "up",
-            "down",
-            "left",
-            "right"
-          ],
-          "type": "string"
-        },
-        "scroll_amount": {
-          "default": 500,
-          "description": "Pixels to scroll.",
-          "maximum": 20000,
-          "minimum": 1,
-          "type": "integer"
-        },
-        "wait_for_url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Glob to wait for after acting, e.g. `**/dashboard`. Use it whenever the action navigates or submits."
-        },
-        "wait_for_text": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Text to wait for after acting, e.g. a success message."
-        },
-        "max_snapshot_tokens": {
-          "default": 4000,
-          "description": "Truncate the returned snapshot past this many tokens.",
-          "maximum": 40000,
-          "minimum": 200,
-          "type": "integer"
-        },
-        "comment": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "One-line statement of intent, shown to the user."
-        }
-      },
-      "required": [
-        "action"
-      ],
-      "title": "BrowserActRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "properties": {
-        "success": {
-          "default": false,
-          "description": "Whether the tool completed successfully.",
-          "type": "boolean"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable error details when the tool fails."
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable status or follow-up information for the tool call."
-        },
-        "url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's URL after the call."
-        },
-        "title": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's title after the call."
-        },
-        "snapshot": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
-        },
-        "output": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "What the command returned, for reads and diagnostics."
-        },
-        "truncated": {
-          "default": false,
-          "description": "Whether the snapshot or output was cut short by the limit.",
-          "type": "boolean"
-        }
-      },
-      "title": "BrowserResult",
-      "type": "object"
-    }
-  },
-  {
-    "tool_name": "browser_open",
-    "toolset": "BROWSER",
-    "description": "Open a page in the workspace's real Chromium and return what is on it.\n\nUse it for anything a page renders: JS-heavy sites, logins, forms, scraping,\nand apps running inside this sandbox (`http://127.0.0.1:<port>` \u2014 never a\npublic preview URL). The browser starts itself on the first call.\n\nThe result carries the page's `@eN` element refs. Act on them with\n`browser_act`, read from them with `browser_read`, and look at the page with\n`browser_screenshot`.\n\nWhen opening triggers a redirect, name where you expect to land with\n`wait_for_url` rather than opening and hoping \u2014 a snapshot taken mid-redirect\ndescribes a page that is already gone.",
-    "input_schema": {
-      "properties": {
-        "url": {
-          "description": "Absolute URL to open, e.g. `https://example.com`. For an app running inside this sandbox use `http://127.0.0.1:<port>`, never a public preview URL.",
-          "type": "string"
-        },
-        "wait_for_url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Glob to wait for after loading, e.g. `**/dashboard`. Use it when opening triggers a redirect you need to land on before reading."
-        },
-        "wait_for_text": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Text to wait for on the page before returning."
-        },
-        "max_snapshot_tokens": {
-          "default": 4000,
-          "description": "Truncate the returned snapshot past this many tokens.",
-          "maximum": 40000,
-          "minimum": 200,
-          "type": "integer"
-        },
-        "comment": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "One-line statement of intent, shown to the user."
-        }
-      },
-      "required": [
-        "url"
-      ],
-      "title": "BrowserOpenRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "properties": {
-        "success": {
-          "default": false,
-          "description": "Whether the tool completed successfully.",
-          "type": "boolean"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable error details when the tool fails."
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable status or follow-up information for the tool call."
-        },
-        "url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's URL after the call."
-        },
-        "title": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's title after the call."
-        },
-        "snapshot": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
-        },
-        "output": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "What the command returned, for reads and diagnostics."
-        },
-        "truncated": {
-          "default": false,
-          "description": "Whether the snapshot or output was cut short by the limit.",
-          "type": "boolean"
-        }
-      },
-      "title": "BrowserResult",
-      "type": "object"
-    }
-  },
-  {
-    "tool_name": "browser_read",
-    "toolset": "BROWSER",
-    "description": "Read text, an attribute, the URL, the title, or the console and network logs.\n\nUse `console` and `network` when a page misbehaves \u2014 a blank screen is\nusually a failed request or a thrown error, and stopping at the visual\nfailure means guessing at it.",
-    "input_schema": {
-      "properties": {
-        "what": {
-          "description": "What to read from the page.",
-          "enum": [
-            "text",
-            "html",
-            "url",
-            "title",
-            "attr",
-            "console",
-            "network"
-          ],
-          "type": "string"
-        },
-        "target": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Element `@eN` ref for `text` and `attr`. Omit for `html` to get the whole document. Ignored by `url`, `title`, `console` and `network`."
-        },
-        "attribute": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Attribute name for `attr`, e.g. `href`."
-        },
-        "max_output_tokens": {
-          "default": 4000,
-          "description": "Truncate the result past this many tokens.",
-          "maximum": 200000,
-          "minimum": 200,
-          "type": "integer"
-        },
-        "comment": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "One-line statement of intent, shown to the user."
-        }
-      },
-      "required": [
-        "what"
-      ],
-      "title": "BrowserReadRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "properties": {
-        "success": {
-          "default": false,
-          "description": "Whether the tool completed successfully.",
-          "type": "boolean"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable error details when the tool fails."
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable status or follow-up information for the tool call."
-        },
-        "url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's URL after the call."
-        },
-        "title": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's title after the call."
-        },
-        "snapshot": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
-        },
-        "output": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "What the command returned, for reads and diagnostics."
-        },
-        "truncated": {
-          "default": false,
-          "description": "Whether the snapshot or output was cut short by the limit.",
-          "type": "boolean"
-        }
-      },
-      "title": "BrowserResult",
-      "type": "object"
-    }
-  },
-  {
-    "tool_name": "browser_screenshot",
-    "toolset": "BROWSER",
-    "description": "Capture the page as an image and return it as binary tool content.\n\nUse it to see what a snapshot cannot describe: layout, charts, broken\nstyles, error overlays. `annotate` draws numbered labels matching the `@eN`\nrefs, which is how you tell two identical-looking buttons apart.\n\nAlways set `instructions` \u2014 if this agent's model cannot see images, that is\nthe question a vision model answers on your behalf.",
-    "input_schema": {
-      "properties": {
-        "full_page": {
-          "default": false,
-          "description": "Capture the whole scroll height rather than the viewport.",
-          "type": "boolean"
-        },
-        "annotate": {
-          "default": false,
-          "description": "Draw numbered labels on interactive elements, keyed to the `@eN` refs a snapshot returns. Use it when you need to see which element is which.",
-          "type": "boolean"
-        },
-        "instructions": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "What you need from the screenshot \u2014 'is the chart rendered', 'read the error banner', 'does the layout break'. Always set it: if this agent's model cannot see images, this is the question a vision model answers on your behalf, and a vague question gets a vague answer."
-        },
-        "comment": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "One-line statement of intent, shown to the user."
-        }
-      },
-      "title": "BrowserScreenshotRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "$defs": {
-        "AudioUrl": {
-          "description": "A URL to an audio file.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "audio-url",
-              "default": "audio-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "AudioUrl",
-          "type": "object"
-        },
-        "BinaryContent": {
-          "description": "Binary content, e.g. an audio or image file.",
-          "properties": {
-            "data": {
-              "format": "base64url",
-              "type": "string"
-            },
-            "media_type": {
-              "anyOf": [
-                {
-                  "enum": [
-                    "audio/wav",
-                    "audio/mpeg",
-                    "audio/ogg",
-                    "audio/flac",
-                    "audio/aiff",
-                    "audio/aac"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "enum": [
-                    "image/jpeg",
-                    "image/png",
-                    "image/gif",
-                    "image/webp"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "enum": [
-                    "application/pdf",
-                    "text/plain",
-                    "text/csv",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    "text/html",
-                    "text/markdown",
-                    "application/msword",
-                    "application/vnd.ms-excel"
-                  ],
-                  "type": "string"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "binary",
-              "default": "binary",
-              "type": "string"
-            },
-            "identifier": {
-              "description": "Identifier for the binary content, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `BinaryContent`.\n\nThis identifier is only automatically passed to the model when the `BinaryContent` is returned by a tool.\nIf you're passing the `BinaryContent` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `BinaryContent`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "data",
-            "media_type",
-            "identifier"
-          ],
-          "title": "BinaryContent",
-          "type": "object"
-        },
-        "BrowserScreenshotResponse": {
-          "properties": {
-            "success": {
-              "default": false,
-              "description": "Whether the tool completed successfully.",
-              "type": "boolean"
-            },
-            "error": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Human-readable error details when the tool fails."
-            },
-            "message": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Human-readable status or follow-up information for the tool call."
-            },
-            "url": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "The page the screenshot was taken of."
-            },
-            "title": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "The page's title."
-            },
-            "media_type": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "MIME type of the returned image."
-            },
-            "size_bytes": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Size of the captured image in bytes."
-            },
-            "full_page": {
-              "default": false,
-              "description": "Whether the whole scroll height was captured.",
-              "type": "boolean"
-            }
-          },
-          "title": "BrowserScreenshotResponse",
-          "type": "object"
-        },
-        "CachePoint": {
-          "description": "A cache point marker for prompt caching.\n\nCan be inserted into UserPromptPart.content to mark cache boundaries.\nModels that don't support caching will filter these out.\n\nSupported by:\n\n- Anthropic\n- Amazon Bedrock (Converse API)\n- OpenAI (GPT-5.6 models)\n- OpenRouter (Anthropic and Gemini models via `OpenRouterModel`, plus OpenAI GPT-5.6 models when\n  using `OpenAIChatModel` or `OpenAIResponsesModel` with `OpenRouterProvider`)",
-          "properties": {
-            "kind": {
-              "const": "cache-point",
-              "default": "cache-point",
-              "type": "string"
-            },
-            "ttl": {
-              "default": "5m",
-              "enum": [
-                "5m",
-                "1h"
-              ],
-              "type": "string"
-            }
-          },
-          "title": "CachePoint",
-          "type": "object"
-        },
-        "DocumentUrl": {
-          "description": "The URL of the document.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "document-url",
-              "default": "document-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "DocumentUrl",
-          "type": "object"
-        },
-        "ImageUrl": {
-          "description": "A URL to an image.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "image-url",
-              "default": "image-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "ImageUrl",
-          "type": "object"
-        },
-        "TextContent": {
-          "description": "String content that is tagged with additional metadata.\n\nThis is useful for including metadata that can be accessed programmatically by the application, but is not sent to the LLM.",
-          "properties": {
-            "content": {
-              "type": "string"
-            },
-            "metadata": {
-              "default": null
-            },
-            "kind": {
-              "const": "text-content",
-              "default": "text-content",
-              "type": "string"
-            }
-          },
-          "required": [
-            "content"
-          ],
-          "title": "TextContent",
-          "type": "object"
-        },
-        "ToolReturn": {
-          "description": "A structured tool return that separates the tool result from additional content sent to the model.\n\nCan be parameterized with a type to enable return schema generation:\n- `ToolReturn[User]` \u2014 generates a return schema for `User`\n- `ToolReturn` (bare) \u2014 no return schema generated",
-          "properties": {
-            "return_value": {
-              "$ref": "#/$defs/ToolReturnContent"
-            },
-            "content": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "items": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "$ref": "#/$defs/TextContent"
-                      },
-                      {
-                        "discriminator": {
-                          "mapping": {
-                            "audio-url": "#/$defs/AudioUrl",
-                            "binary": "#/$defs/BinaryContent",
-                            "document-url": "#/$defs/DocumentUrl",
-                            "image-url": "#/$defs/ImageUrl",
-                            "uploaded-file": "#/$defs/UploadedFile",
-                            "video-url": "#/$defs/VideoUrl"
-                          },
-                          "propertyName": "kind"
-                        },
-                        "oneOf": [
-                          {
-                            "$ref": "#/$defs/ImageUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/AudioUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/DocumentUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/VideoUrl"
-                          },
-                          {
-                            "$ref": "#/$defs/BinaryContent"
-                          },
-                          {
-                            "$ref": "#/$defs/UploadedFile"
-                          }
-                        ]
-                      },
-                      {
-                        "$ref": "#/$defs/CachePoint"
-                      }
-                    ]
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "metadata": {
-              "default": null
-            },
-            "tools": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "tool-return",
-              "default": "tool-return",
-              "type": "string"
-            }
-          },
-          "required": [
-            "return_value"
-          ],
-          "title": "ToolReturn",
-          "type": "object"
-        },
-        "ToolReturnContent": {
-          "oneOf": [
-            {},
-            {
-              "additionalProperties": {
-                "$ref": "#/$defs/ToolReturnContent"
-              },
-              "type": "object"
-            },
-            {
-              "items": {
-                "$ref": "#/$defs/ToolReturnContent"
-              },
-              "type": "array"
-            }
-          ]
-        },
-        "UploadedFile": {
-          "description": "A reference to a file uploaded to a provider's file storage by ID.\n\nThis allows referencing files that have been uploaded via provider-specific file APIs\nrather than providing the file content directly.\n\nSupported by:\n\n- [`AnthropicModel`][pydantic_ai.models.anthropic.AnthropicModel]\n- [`OpenAIChatModel`][pydantic_ai.models.openai.OpenAIChatModel]\n- [`OpenAIResponsesModel`][pydantic_ai.models.openai.OpenAIResponsesModel]\n- [`BedrockConverseModel`][pydantic_ai.models.bedrock.BedrockConverseModel]\n- [`GoogleModel`][pydantic_ai.models.google.GoogleModel] (Gemini API: [Files API](https://ai.google.dev/gemini-api/docs/files) URIs, Google Cloud: GCS `gs://` URIs)\n- [`XaiModel`][pydantic_ai.models.xai.XaiModel]",
-          "properties": {
-            "file_id": {
-              "type": "string"
-            },
-            "provider_name": {
-              "enum": [
-                "anthropic",
-                "openai",
-                "google",
-                "google-cloud",
-                "google-gla",
-                "google-vertex",
-                "bedrock",
-                "xai"
-              ],
-              "type": "string"
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "uploaded-file",
-              "default": "uploaded-file",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, inferred from `file_id` if not explicitly provided.\n\nNote: Inference relies on the file extension in `file_id`.\nFor opaque file IDs (e.g., `'file-abc123'`), the media type will default to `'application/octet-stream'`.\nInference relies on Python's `mimetypes` module, whose results may vary across platforms.\n\nRequired by some providers (e.g., Bedrock) for certain file types.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `UploadedFile`.\n\nThis identifier is only automatically passed to the model when the `UploadedFile` is returned by a tool.\nIf you're passing the `UploadedFile` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `UploadedFile`.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "file_id",
-            "provider_name",
-            "media_type",
-            "identifier"
-          ],
-          "title": "UploadedFile",
-          "type": "object"
-        },
-        "VideoUrl": {
-          "description": "A URL to a video.",
-          "properties": {
-            "url": {
-              "type": "string"
-            },
-            "force_download": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "const": "allow-local",
-                  "type": "string"
-                }
-              ],
-              "default": false
-            },
-            "vendor_metadata": {
-              "anyOf": [
-                {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "kind": {
-              "const": "video-url",
-              "default": "video-url",
-              "type": "string"
-            },
-            "media_type": {
-              "description": "Return the media type of the file, based on the URL or the provided `media_type`.",
-              "readOnly": true,
-              "type": "string"
-            },
-            "identifier": {
-              "description": "The identifier of the file, such as a unique ID.\n\nThis identifier can be provided to the model in a message to allow it to refer to this file in a tool call argument,\nand the tool can look up the file in question by iterating over the message history and finding the matching `FileUrl`.\n\nThis identifier is only automatically passed to the model when the `FileUrl` is returned by a tool.\nIf you're passing the `FileUrl` as a user message, it's up to you to include a separate text part with the identifier,\ne.g. \"This is file <identifier>:\" preceding the `FileUrl`.\n\nIt's also included in inline-text delimiters for providers that require inlining text documents, so the model can\ndistinguish multiple files.",
-              "readOnly": true,
-              "type": "string"
-            }
-          },
-          "required": [
-            "url",
-            "media_type",
-            "identifier"
-          ],
-          "title": "VideoUrl",
-          "type": "object"
-        },
-        "ViewImageResponse": {
-          "properties": {
-            "success": {
-              "default": false,
-              "description": "Whether the tool completed successfully.",
-              "type": "boolean"
-            },
-            "error": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Human-readable error details when the tool fails."
-            },
-            "message": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Human-readable status or follow-up information for the tool call."
-            },
-            "file_path": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Resolved file path of the image that was loaded."
-            },
-            "media_type": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Detected MIME type for the returned image content."
-            },
-            "source": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Which store served the image: 'datastore' or 'workspace'."
-            },
-            "size_bytes": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Size of the image in bytes."
-            }
-          },
-          "title": "ViewImageResponse",
-          "type": "object"
-        }
-      },
-      "anyOf": [
-        {
-          "$ref": "#/$defs/BrowserScreenshotResponse"
-        },
-        {
-          "$ref": "#/$defs/ViewImageResponse"
-        },
-        {
-          "$ref": "#/$defs/ToolReturn"
-        }
-      ]
-    }
-  },
-  {
     "tool_name": "browser_sign_in",
     "toolset": "BROWSER",
     "description": "Get signed in to a site, without ever seeing or asking for a password.\n\nCall this the moment a page needs a login \u2014 before touching a login form,\nand instead of asking anyone for credentials.\n\nIf a saved login for the site exists it is loaded and you get `signed_in`\nstraight away; open the page again and carry on. Otherwise this run pauses\nwhile the person signs in themselves, in this browser, wherever they are.\nYou will be started again with the outcome once they have.\n\n`declined` means they said no: do the task another way, or stop and say\nplainly what you could not reach. Never ask a person to type a password\ninto the conversation, never put one in a command, and never try to sign in\nby filling a form with credentials somebody sent you.",
@@ -1412,6 +155,23 @@
           "description": "What you are doing and why this site needs a login, in one sentence and in plain words. This is shown to the person as the explanation for why they are being asked, so write it for them rather than for a log.",
           "maxLength": 500,
           "type": "string"
+        },
+        "page_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page you were actually blocked on, if you have one \u2014 `https://app.example.com/reports/42`. Checking this instead of the site's front page is what makes the answer mean anything: a marketing homepage loads for everybody, signed in or not, so a site whose root is one will otherwise report you as already signed in when you are not."
+        },
+        "force": {
+          "default": false,
+          "description": "Ask the person even if the check thinks you are already signed in. Use this when you have met the login wall yourself and been told otherwise \u2014 the check reads a page and can be wrong, and without this there is no way to say so.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -1488,129 +248,6 @@
         }
       },
       "title": "BrowserSignInResponse",
-      "type": "object"
-    }
-  },
-  {
-    "tool_name": "browser_snapshot",
-    "toolset": "BROWSER",
-    "description": "Re-read the current page's elements and their `@eN` refs.\n\n`browser_open` and `browser_act` already return a fresh snapshot, so reach\nfor this one when you need the page again without acting on it \u2014 after a\nbackground update, or to widen from interactive-only to the full tree.",
-    "input_schema": {
-      "properties": {
-        "interactive_only": {
-          "default": true,
-          "description": "Only elements you can act on. Turn it off only when you need page text you cannot get with `browser_read`, and expect a large result.",
-          "type": "boolean"
-        },
-        "max_snapshot_tokens": {
-          "default": 4000,
-          "description": "Truncate the returned snapshot past this many tokens.",
-          "maximum": 40000,
-          "minimum": 200,
-          "type": "integer"
-        },
-        "comment": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "One-line statement of intent, shown to the user."
-        }
-      },
-      "title": "BrowserSnapshotRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "properties": {
-        "success": {
-          "default": false,
-          "description": "Whether the tool completed successfully.",
-          "type": "boolean"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable error details when the tool fails."
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable status or follow-up information for the tool call."
-        },
-        "url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's URL after the call."
-        },
-        "title": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's title after the call."
-        },
-        "snapshot": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "The page's elements with their `@eN` refs. Refs go stale the moment the page changes, so use the ones from this result rather than any from an earlier call."
-        },
-        "output": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "What the command returned, for reads and diagnostics."
-        },
-        "truncated": {
-          "default": false,
-          "description": "Whether the snapshot or output was cut short by the limit.",
-          "type": "boolean"
-        }
-      },
-      "title": "BrowserResult",
       "type": "object"
     }
   },
@@ -2010,7 +647,7 @@
   {
     "tool_name": "exec_command",
     "toolset": "WORKSPACE_CLI",
-    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 poll or send input with `action=\"input\"`, stop it with\n`action=\"kill\"`, and use `action=\"list\"` to find processes started earlier.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Keep polling until it finishes:\n\n    exec_command(cmd=\"npm ci && npm run build\", timeout_seconds=300)\n    -> completed: false, process_id: \"abc\"\n    manage_process(action=\"input\", process_id=\"abc\")\n    -> completed: false        # repeat; each poll returns new output\n    manage_process(action=\"input\", process_id=\"abc\")\n    -> completed: true, exit_code: 0\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
+    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
     "input_schema": {
       "properties": {
         "cmd": {
@@ -2089,7 +726,7 @@
             }
           ],
           "default": null,
-          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Poll it with `manage_process(action='input', process_id=...)` until `completed: true` \u2014 never re-run the command."
+          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Hand that id to `wait_for` rather than raising this \u2014 waiting there costs nothing and costs no model calls. Never re-run the command."
         }
       },
       "required": [
@@ -2170,6 +807,18 @@
           "description": "Whether the process has finished. `false` whenever the command outlived this call's wait window \u2014 a long build or test run as much as an interactive TTY session. The command is still running; it was not cancelled.",
           "type": "boolean"
         },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something about this call that is not about the command itself \u2014 most often that a wait you asked for was longer than one call can give. Read it: it usually explains an empty result."
+        },
         "process_id": {
           "anyOf": [
             {
@@ -2180,7 +829,7 @@
             }
           ],
           "default": null,
-          "description": "Handle for a process that is still running. Poll it with `manage_process(action='input', process_id=...)` to collect more output, or send input the same way. Present whenever `completed` is false."
+          "description": "Handle for a process that is still running. Wait for it with `wait_for(process_id=...)`; read its output so far or send it input with `manage_process(action='input', process_id=...)`. Present whenever `completed` is false."
         }
       },
       "title": "ExecCommandResult",
@@ -2211,7 +860,9 @@
         },
         "timeout_seconds": {
           "default": 60,
-          "description": "Maximum execution time in seconds before timing out.",
+          "description": "How long to wait before giving up, up to 300s. Unlike `exec_command` there is no handle to come back to: this runs in the shared kernel and a timeout ends it. For work that may take longer, run it with `exec_command` and wait for the process.",
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -2344,8 +995,8 @@
         },
         "timeout_seconds": {
           "default": 30.0,
-          "description": "Max seconds to block when action='await' before returning a still-running handle. Keep this small and poll again with query_subagents(mode='messages') for long-running children rather than blocking the parent run.",
-          "maximum": 120.0,
+          "description": "Max seconds to block when action='await' before returning a still-running handle. This is for a child that should finish almost immediately \u2014 blocking holds the parent's run open. For anything longer, end this call and use `wait_for(subagent_run_id=...)`, which costs nothing while it waits.",
+          "maximum": 60.0,
           "minimum": 1.0,
           "type": "number"
         }
@@ -2594,6 +1245,117 @@
         }
       },
       "title": "SkillListResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "list_voices",
+    "toolset": "SPEECH",
+    "description": "What `say` can sound like: the voices this deployment can actually use.\n\nRead from the provider rather than a list kept here, so it is the whole\nrange and cannot go stale. Filter by `language` when you know it; each\nvoice carries an accent and use-case tags, which is usually what decides\nbetween two that speak the same language.\n\nA language with no voices is a real answer: say so rather than speaking it\nwith a voice that does not.",
+    "input_schema": {
+      "properties": {
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "BCP-47 code to filter by, e.g. 'es' or 'ja'. Omit to see every voice the provider has."
+        },
+        "limit": {
+          "default": 20,
+          "description": "How many to return. There are roughly eighty in total.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "VoiceSummary": {
+          "properties": {
+            "name": {
+              "description": "Pass this to `say` as `voice`.",
+              "type": "string"
+            },
+            "languages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "accent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "VoiceSummary",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "default": false,
+          "type": "boolean"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "voices": {
+          "items": {
+            "$ref": "#/$defs/VoiceSummary"
+          },
+          "type": "array"
+        },
+        "total": {
+          "default": 0,
+          "description": "How many matched before `limit` was applied.",
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesResponse",
       "type": "object"
     }
   },
@@ -4567,7 +3329,7 @@
             }
           ],
           "default": null,
-          "description": "Optional provider-specific voice/model id. None = default."
+          "description": "A specific voice, by its full name \u2014 `aura-2-andromeda-en`, not `andromeda`. Omit it and one is chosen for `language`. Call `list_voices` to see what exists; there are far more than one per language, differing by accent, age and intended use."
         }
       },
       "required": [
@@ -4663,118 +3425,6 @@
     },
     "output_schema": {
       "additionalProperties": true,
-      "type": "object"
-    }
-  },
-  {
-    "tool_name": "snooze",
-    "toolset": "SNOOZE",
-    "description": "Suspend this turn and pick it up later, where you left off.\n\nUse it when the work has a real gap \u2014 a build to check back on, something\nthat needs time to settle. You wake in the same conversation with the same\nhistory.\n\nThree things that bite:\n- **Your sandbox does not survive.** `/workspace`, background processes, and\n  your shell cwd are gone on wake. Write anything you need to the pod first.\n- **Waking proves nothing happened.** `TIMER` means your time elapsed and\n  nothing more \u2014 check the thing you were waiting for.\n- **Every wake replays the whole conversation**, so one longer sleep beats a\n  poll loop.\n\nDon't use it to wait on the person you are *talking to* \u2014 ask with\n`ask_user`, or end your turn; their reply starts a fresh run either way.\n\nSize the sleep from whatever you are actually waiting on. Don't use it to\nwait for a person, including one you reached with `message_user` \u2014 end your\nturn instead, and you get a fresh one when they answer.",
-    "input_schema": {
-      "properties": {
-        "reason": {
-          "description": "One line shown to the user while you sleep. Be specific: 'waiting for the nightly build' beats 'waiting'.",
-          "type": "string"
-        },
-        "seconds": {
-          "description": "How long to sleep, chosen from what you are waiting for \u2014 an eight-minute build wants one ~500s check. Under 30s is rejected; over 24h is clamped.",
-          "type": "integer"
-        },
-        "note_to_self": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Handed back verbatim on wake. What you intended to do next."
-        }
-      },
-      "required": [
-        "reason",
-        "seconds"
-      ],
-      "title": "SnoozeRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "description": "What the agent sees when it wakes.",
-      "properties": {
-        "success": {
-          "default": false,
-          "description": "Whether the tool completed successfully.",
-          "type": "boolean"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable error details when the tool fails."
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable status or follow-up information for the tool call."
-        },
-        "woke_because": {
-          "anyOf": [
-            {
-              "enum": [
-                "TIMER",
-                "ANSWERED",
-                "CANCELLED"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "TIMER: your time elapsed \u2014 this says nothing about whether what you were waiting for actually happened, so check. ANSWERED: everyone you reached with message_user has replied, and you woke early because of it. CANCELLED: the wait was ended early."
-        },
-        "slept_seconds": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Actual time asleep."
-        },
-        "note_to_self": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Whatever you passed in note_to_self."
-        }
-      },
-      "title": "SnoozeResponse",
       "type": "object"
     }
   },
@@ -4926,9 +3576,179 @@
     "output_schema": {}
   },
   {
+    "tool_name": "wait_for",
+    "toolset": "WAIT",
+    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `message_user` ends your turn and gets you a new one when\nthe answers arrive.",
+    "input_schema": {
+      "properties": {
+        "reason": {
+          "description": "One line shown to the person while you wait. Be specific: 'waiting for the test suite' beats 'waiting'.",
+          "type": "string"
+        },
+        "seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wait this long, then carry on. For a gap with nothing to watch \u2014 something that needs time to settle. Under 30s is rejected; over 24h is clamped."
+        },
+        "process_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wait for a sandbox process to finish, from `exec_command`'s `process_id`. You wake when it exits, with its exit code."
+        },
+        "subagent_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wait for a sub-agent run to finish, from `spawn_subagent`'s `run_id`. You wake with its result."
+        },
+        "max_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Give up waiting after this long and wake anyway, for `process_id` / `subagent_run_id`. Defaults to 60 minutes."
+        },
+        "note_to_self": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Handed back verbatim on wake. What you intended to do next."
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "WaitForRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "description": "What the agent sees when it wakes.",
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "woke_because": {
+          "anyOf": [
+            {
+              "enum": [
+                "TIMER",
+                "TARGET_FINISHED",
+                "TARGET_GONE",
+                "DEADLINE",
+                "ANSWERED",
+                "CANCELLED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why this wait ended."
+        },
+        "waited_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Time actually spent."
+        },
+        "note_to_self": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whatever you passed in note_to_self."
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exit code of the process you waited on, when there was one."
+        }
+      },
+      "title": "WaitForResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "web_fetch",
     "toolset": "WEB_SEARCH",
-    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them,\n`view_image` for a screenshot, `pod_view_document_pages` for a captured\nPDF. This is the right way to read anything longer than a search snippet.",
+    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. This is the right way to read\nanything longer than a search snippet.",
     "input_schema": {
       "properties": {
         "urls": {
@@ -5049,6 +3869,42 @@
               ],
               "default": null
             },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The HTTP status the plain fetch saw. Null on the browser path, which cannot report one. Worth having because a status and a page can disagree: a site answering 429 while serving the whole article is saved, and told about, rather than re-fetched."
+            },
+            "blocked_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The bot defence that refused this request, when one did -- `cloudflare`, `datadome`, `aws_waf`, `perimeterx`, or `unnamed` for a challenge page whose vendor was not named. Absent means nothing refused us, not that nothing could."
+            },
             "error": {
               "anyOf": [
                 {
@@ -5100,6 +3956,18 @@
             }
           ],
           "default": null
+        },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
         },
         "error": {
           "anyOf": [

@@ -30,6 +30,11 @@ COMPLETE_SET_LISTINGS = {
         "the org's runtime profiles — the endpoint takes neither limit nor "
         "page_token and answers with all of them"
     ),
+    "browser-logins list": (
+        "the cookie domains one browser profile holds — read over CDP in a "
+        "single round trip, so there is no cursor to hand back and nothing a "
+        "second page could contain"
+    ),
 }
 
 

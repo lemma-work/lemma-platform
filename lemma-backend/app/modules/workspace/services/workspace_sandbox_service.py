@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from opentelemetry import trace
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
@@ -31,6 +32,9 @@ from app.modules.workspace.sandbox_session import (
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.workspace_process_store import WorkspaceProcessStore
+from app.modules.workspace.services.workspace_runtime_bundle import (
+    WorkspaceRuntimeBundleMixin,
+)
 from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
 )
@@ -77,36 +81,7 @@ async def reset_workspace_store_state() -> None:
         _process_store = None
 
 
-def _browser_session_env(session: str | None) -> dict[str, str]:
-    """Put a shell in its conversation's browser, not the image's default one.
-
-    The typed browser tools already name their session on every command. Agents
-    do not always use them -- an agent that knows `agent-browser` reaches for it
-    through `exec_command`, and that shell inherits `AGENT_BROWSER_SESSION` from
-    the image, which is the *shared* default. So the agent browsed in one
-    browser while the person's pane watched another, and the pane showed a blank
-    page for the whole of a run that was working perfectly.
-
-    Both names, because either alone leaves the same hole: `agent-browser`
-    points every session at the image's single profile directory unless told
-    otherwise, and a second browser opening a profile Chrome has already locked
-    exits immediately, reporting only "Chrome exited early".
-    """
-    if not session:
-        return {}
-    # Deferred: this is the sandbox runtime's naming, and importing it at module
-    # scope would put the relay in the import graph of everything that touches a
-    # workspace session.
-    from sandbox_runtime.browser_relay.chrome import profile_for_session
-
-    env = {"AGENT_BROWSER_SESSION": session}
-    profile = profile_for_session(session)
-    if profile:
-        env["AGENT_BROWSER_PROFILE"] = profile
-    return env
-
-
-class WorkspaceSandboxService:
+class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
     """Service for user-scoped workspace sandbox lifecycle and sessions."""
 
     _inflight_ensures: dict[tuple[int, UUID], asyncio.Task[SandboxInfo]] = {}
@@ -332,7 +307,6 @@ class WorkspaceSandboxService:
         workload_name: str | None = None,
         scope: list[str] | None = None,
         session_id: str | None = None,
-        browser_session: str | None = None,
     ) -> dict[str, str]:
         from app.modules.identity.contracts.delegated_tokens import (
             mint_delegated_token,
@@ -373,7 +347,6 @@ class WorkspaceSandboxService:
             "LEMMA_ORG_ID": resolved_org_id,
             "LEMMA_WORKSPACE_URL": workspace_url,
         }
-        env_vars.update(_browser_session_env(browser_session))
         return {k: v for k, v in env_vars.items() if v is not None}
 
     async def _resolve_organization_id(self, pod_id: UUID | None) -> str | None:
@@ -391,7 +364,7 @@ class WorkspaceSandboxService:
         user_id: UUID,
         pod_id: UUID | None,
         session_id: Optional[str] = None,
-        initial_cwd: str = "/workspace",
+        initial_cwd: str = WORKSPACE_ROOT,
         close_on_exit: bool = True,
         workload_type: str | None = None,
         workload_id: UUID | None = None,
@@ -399,7 +372,6 @@ class WorkspaceSandboxService:
         organization_id: UUID | None = None,
         scope: list[str] | None = None,
         env_vars: dict[str, str] | None = None,
-        browser_session: str | None = None,
     ) -> IWorkspaceSession:
         resolved_cwd = canonical_workspace_cwd(initial_cwd)
         with _tracer.start_as_current_span("lemma.workspace.ensure_dir"):
@@ -407,6 +379,9 @@ class WorkspaceSandboxService:
                 user_id,
                 resolved_cwd,
             )
+        with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
+            await self._ensure_runtime_bundle(user_id, sandbox_info)
+            await self._ensure_browser_proxy(user_id, sandbox_info)
 
         if env_vars is None:
             with _tracer.start_as_current_span("lemma.workspace.env_vars"):
@@ -418,7 +393,6 @@ class WorkspaceSandboxService:
                     workload_type=workload_type,
                     workload_id=workload_id,
                     workload_name=workload_name,
-                    browser_session=browser_session,
                     scope=scope,
                     session_id=session_id,
                 )

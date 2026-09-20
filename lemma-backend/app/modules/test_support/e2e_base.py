@@ -72,9 +72,16 @@ def _ensure_repo_root_on_path() -> None:
 def _remove_workspace_volumes() -> None:
     """Remove sandbox workspace volumes left by e2e runs.
 
-    Scoped to ``managed-by=lemma-workspace`` rather than pruning dangling
-    volumes: a broad prune is machine-wide and would take an unrelated project's
-    disks with it on a shared developer machine.
+    Scoped to this harness's own volumes, by *both* ``managed-by`` and
+    ``lemma-owner``. The first alone is not a scope: every Lemma sandbox on
+    the machine carries it, including a dev stack's. This function used to
+    filter on it and say it was safe because it avoided a broad dangling
+    prune -- and it deleted a live dev stack's workspace volume out from under
+    somebody, over and over, while an e2e suite ran beside it.
+
+    Filtering on the owner instead is what makes the claim true. Volumes from
+    an *interrupted* e2e run still match, because the tag identifies the
+    harness rather than one process.
     """
     listed = subprocess.run(
         [
@@ -84,6 +91,8 @@ def _remove_workspace_volumes() -> None:
             "-q",
             "--filter",
             "label=managed-by=lemma-workspace",
+            "--filter",
+            f"label=lemma-owner={E2E_OWNER_TAG}",
         ],
         capture_output=True,
         text=True,
@@ -98,6 +107,54 @@ def _remove_workspace_volumes() -> None:
             check=False,
             capture_output=True,
         )
+
+
+#: Stamped on every sandbox an e2e run creates (`settings.workspace_owner_tag`,
+#: read by the Docker provider) and the only thing these sweeps delete by.
+#:
+#: Fixed rather than per-run: an interrupted run leaves containers and volumes
+#: behind and the next run has to recognise them. What it must never match is
+#: another *stack* -- a developer's `make dev` on the same daemon, whose
+#: sandboxes this used to delete mid-use.
+E2E_OWNER_TAG = "lemma-e2e"
+
+
+def sweep_filter_sets(*, sandboxes_only: bool) -> list[list[str]]:
+    """The `docker ps` filters this harness is allowed to delete by.
+
+    Its own function so the property that matters can be asserted without a
+    Docker daemon: **every set must name something only this harness creates.**
+
+    Docker's filters are conjunctive, so each way of labelling a sandbox has to
+    be swept separately. The workspace set used to be
+    `managed-by=lemma-workspace` alone, which is not a scope -- it matches
+    every Lemma sandbox on the daemon. An e2e run beside a developer's dev
+    stack deleted that stack's live sandbox on every sweep, repeatedly, within
+    seconds, and the person using it watched the page they were typing into go
+    black each time. `lemma-owner` is what narrows it to ours.
+
+    Two e2e runs on one daemon still collide, because they share the tag by
+    design: it identifies the harness rather than one process, which is what
+    lets the next run clean up after an interrupted one. That is the same
+    trade CI's one-runner-per-job layout already assumes.
+    """
+    workspace_ours = [
+        "--filter",
+        "label=managed-by=lemma-workspace",
+        "--filter",
+        f"label=lemma-owner={E2E_OWNER_TAG}",
+    ]
+    if sandboxes_only:
+        return [
+            [
+                "--filter",
+                "label=lemma.e2e=true",
+                "--filter",
+                "label=app.kubernetes.io/name=lemma-sandbox",
+            ],
+            workspace_ours,
+        ]
+    return [["--filter", "label=lemma.e2e=true"], workspace_ours]
 
 
 def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
@@ -120,27 +177,7 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
     if not shutil.which("docker"):
         return
 
-    # Docker's filters are conjunctive, so each way of labelling a sandbox has
-    # to be swept separately.
-    #
-    # Note this sweep is machine-wide, not run-scoped: two e2e runs sharing a
-    # Docker daemon will destroy each other's sandboxes, which surfaces as
-    # "container is marked for removal and cannot be started" in whichever one
-    # loses. That is fine for a single run and for CI's one-runner-per-job
-    # layout; it is a trap for anyone running two suites side by side.
-    filter_sets = [["--filter", "label=lemma.e2e=true"]]
-    if sandboxes_only:
-        filter_sets = [
-            [
-                "--filter",
-                "label=lemma.e2e=true",
-                "--filter",
-                "label=app.kubernetes.io/name=lemma-sandbox",
-            ],
-            ["--filter", "label=managed-by=lemma-workspace"],
-        ]
-    else:
-        filter_sets.append(["--filter", "label=managed-by=lemma-workspace"])
+    filter_sets = sweep_filter_sets(sandboxes_only=sandboxes_only)
 
     container_ids: list[str] = []
     for label_filters in filter_sets:
@@ -584,6 +621,11 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container, worke
     settings.redis_url = test_redis_url
     settings.supertokens_core_url = get_supertokens_url(supertokens_container)
     settings.environment = "testing"
+    # Makes every sandbox this run creates say so, which is what lets the
+    # sweeps above delete ours and nothing else. Set on the settings object
+    # rather than the environment because the config singleton was built when
+    # this module was imported and will not re-read it.
+    workspace_settings.owner_tag = E2E_OWNER_TAG
     settings.debug = True
     # ``api_docs_served()`` is opt-in now (off unless something turns it on) --
     # it used to default to "everywhere except production", which is what kept
@@ -783,12 +825,10 @@ def _import_e2e_models() -> None:
     from app.modules.pod_bundle.infrastructure import models as pod_bundle_models
     from app.modules.schedule.infrastructure import models as schedule_models
     from app.modules.usage.infrastructure import models as usage_models
-    from app.modules.web_login.infrastructure import models as web_login_models
     from app.modules.workflow.infrastructure import models as workflow_models
     from app.modules.workspace.infrastructure import models as workspace_models
 
     _ = (
-        web_login_models,
         workspace_models,
         agent_runtime_models,
         event_models,

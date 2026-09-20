@@ -61,8 +61,10 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.run_dispatch import run_enqueue_suppressed
 from app.modules.agent.services.serialization import message_to_payload
-from app.modules.agent.tools.snooze.models import (
-    build_snooze_result,
+from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
+from app.modules.agent.domain.wait import AgentWaitWakeReason
+from app.modules.agent.tools.waiting.models import (
+    build_wait_result,
     elapsed_seconds,
 )
 
@@ -368,9 +370,9 @@ class TurnCoordinator:
 
         # No active run, but the conversation may still be suspended. Neither
         # pause has a run by construction — both ended cleanly when the tool
-        # paused them — so without these, Stop silently did nothing: the snooze
-        # timer still fired later, and the approval card stayed up.
-        await self._cancel_active_snooze(conversation=conversation)
+        # paused them — so without these, Stop silently did nothing: the wait
+        # still fired later, and the approval card stayed up.
+        await self._cancel_active_wait(conversation=conversation)
         await self._deny_unresolved_pauses(conversation=conversation, user_id=user_id)
         return conversation
 
@@ -381,8 +383,13 @@ class TurnCoordinator:
         # unit of work to exercise paths that never touch the database.
         return AgentConversationWaitRepository(self.uow)
 
-    async def _cancel_active_snooze(self, *, conversation: Conversation) -> None:
-        """Stop a sleeping agent for good: drop the timer, never resume.
+    async def _cancel_active_wait(self, *, conversation: Conversation) -> None:
+        """Stop a waiting agent for good: drop the wait, never resume.
+
+        Whatever it was waiting on is left alone. Stop means stop the agent, and
+        killing someone's build because they stopped a chat is a surprise they
+        did not ask for -- a process dies at its own ceiling anyway, and a child
+        run is stopped by stopping the child.
 
         The CANCELLED tool return is still written, so the paused call is not
         left dangling in history — a tool call with no return is dropped when
@@ -405,10 +412,11 @@ class TurnCoordinator:
             conversation=conversation,
             paused_run_id=wait.agent_run_id,
             tool_call_id=wait.tool_call_id,
-            tool_name="snooze",
-            tool_result=build_snooze_result(
-                woke_because="CANCELLED",
-                slept_seconds=elapsed_seconds((wait.spec or {}).get("started_at")),
+            tool_name=WAIT_TOOL_NAME,
+            tool_result=build_wait_result(
+                wait_type=wait.wait_type,
+                reason=AgentWaitWakeReason.CANCELLED,
+                waited_seconds=elapsed_seconds((wait.spec or {}).get("started_at")),
                 note_to_self=(wait.spec or {}).get("note_to_self"),
             ),
         )
@@ -431,7 +439,7 @@ class TurnCoordinator:
         DENY, never approve, for the reason
         ``supersede_stale_pending_interactions`` gives: this is a response
         synthesized on the user's behalf, not a decision they made. And, as with
-        a snooze, no resume run follows.
+        a wait, no resume run follows.
         """
         superseded = await self.approvals.supersede_stale_pending_interactions(
             conversation=conversation,

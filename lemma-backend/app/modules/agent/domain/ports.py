@@ -21,6 +21,7 @@ from app.modules.agent.domain.run_projections import (
     StaleAgentRunRef,
     StrandedConversationRef,
 )
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentRunApprovalDecision,
@@ -31,7 +32,6 @@ from app.modules.agent.domain.value_objects import (
     ConversationStatus,
     ConversationType,
     HarnessKind,
-    HarnessOptions,
     JsonObject,
     JsonValue,
     MessageDraft,

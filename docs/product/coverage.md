@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 164 |
+| `covered` | 165 |
 | `gap` | 2 |
 | `manual` | 9 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **175** |
+| **total** | **176** |
 
-Scenario tests declaring a promise: 394.
+Scenario tests declaring a promise: 396.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 248 | 260 |
+| OpenAPI operations | 247 | 261 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -72,6 +72,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
 | `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
+| `PS-AGENT-023` A run can wait for something without occupying a turn | `covered` | `test_a_waiting_agent_ends_its_turn_and_returns`, `test_stopping_a_waiting_conversation_ends_the_wait` |
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent`, `test_an_image_is_understood` |
 | `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
@@ -218,7 +219,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_reading_a_bundle_grants_nothing_else`, `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous`, `test_a_stranger_is_sent_nothing` |
+| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_reading_a_bundle_grants_nothing_else`, `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous`, `test_a_personal_resource_is_not_named_in_a_listing`, `test_a_stranger_is_sent_nothing` |
 | `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `covered` | `test_revoking_closes_it_again` |
 | `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `covered` | `test_narrowing_reach_keeps_workload_grants` |
 | `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_approving_cannot_confer_unheld_pod_permissions`, `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
@@ -238,9 +239,9 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-BROWSER-010` An agent that meets a login wall asks, and waits | `gap` | `test_somebody_elses_request_is_not_found` |
 | `PS-BROWSER-011` A person can tell what they are signing in to | `manual` | — |
 | `PS-BROWSER-012` Finishing resumes the run, and says whether it was kept | `covered` | `test_finishing_somebody_elses_request_is_refused` |
-| `PS-BROWSER-020` A saved login is the person's own | `covered` | `test_one_persons_logins_are_not_anothers` |
+| `PS-BROWSER-020` A login is the person's own, and it stays | `covered` | `test_one_persons_logins_are_not_anothers` |
 | `PS-BROWSER-021` A login that has stopped working says so | `manual` | — |
-| `PS-BROWSER-022` A person sees and removes what is saved | `covered` | `test_nothing_saved_is_an_empty_list`, `test_removing_something_that_is_not_there_is_refused`, `test_history_is_answerable_to_its_owner` |
+| `PS-BROWSER-022` A person sees and undoes what their browser holds | `covered` | `test_nothing_saved_is_an_empty_list`, `test_signing_out_without_a_running_browser_is_refused` |
 | `PS-BROWSER-030` A person can watch, and drive, their own browser | `gap` | `test_asking_whether_a_browser_can_be_watched_starts_nothing` |
 
 ## [Surfaces and notifications](journeys/surfaces-and-notifications.md)

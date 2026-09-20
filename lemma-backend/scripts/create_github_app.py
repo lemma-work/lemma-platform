@@ -6,7 +6,7 @@ What it *can* do is carry every field across, so nobody types a callback URL
 into a form and gets it subtly wrong -- which is the failure this exists to
 avoid, and one we hit twice by hand.
 
-    python create_github_app.py --name lemma-dev --base-url https://api.asur.work
+    python create_github_app.py --name lemma-dev --base-url https://api.lemma.work
     python create_github_app.py --name Lemma --base-url https://api.lemma.work \
         --org lemma-work
 
@@ -146,7 +146,7 @@ class _Handler(BaseHTTPRequestHandler):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True)
-    parser.add_argument("--base-url", required=True, help="e.g. https://api.asur.work")
+    parser.add_argument("--base-url", required=True, help="e.g. https://api.lemma.work")
     parser.add_argument("--org", default=None, help="omit to create on your account")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--out-dir", default=".")

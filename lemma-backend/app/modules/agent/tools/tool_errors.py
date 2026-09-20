@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 
+from pydantic_ai import ToolReturn
 from pydantic_ai.exceptions import (
     ApprovalRequired,
     CallDeferred,
@@ -127,6 +128,48 @@ def format_tool_error(name: str, exc: BaseException) -> dict[str, object]:
         "error_type": exc.__class__.__name__,
         "tool": name,
     }
+
+
+def result_is_failure(payload: object) -> bool:
+    """Whether a tool's *returned* payload reports a failure.
+
+    Almost nothing here raises. ``GracefulToolset`` turns a raise into
+    ``format_tool_error``'s ``success: False`` dict so one bad tool call cannot
+    end a run, and the pod and workspace toolsets build the same shape by hand.
+    A caller that only watches for exceptions therefore sees every one of those
+    failures as a success -- which is how a platform came to believe its tool
+    calls almost always succeeded while a large share of them did not.
+
+    This is the one place that reads the uniform contract's verdict, so the two
+    MCP bridges cannot drift apart on what "failed" means.
+
+    ``needs_approval`` is deliberately not a failure. The call stopped because
+    the agent has to ask a person first; that is a step in a working flow and
+    one the model is built to act on, not something to report as broken.
+    """
+    verdict, needs_approval = _uniform_contract_verdict(payload)
+    if needs_approval:
+        return False
+    # `is False` rather than falsiness: a payload with no `success` at all is a
+    # tool that does not use the uniform contract, not a failed one.
+    return verdict is False
+
+
+def _uniform_contract_verdict(payload: object) -> tuple[object, bool]:
+    """``(success, needs_approval)`` read off either shape a tool returns.
+
+    Both are real and neither is going away: the pod and workspace toolsets
+    return pydantic ``BaseToolResponse`` models, while ``format_tool_error`` and
+    ``approval_error_result`` build plain dicts. Reading only the dict shape
+    would have missed most failures, since most tools return the model.
+    """
+    if isinstance(payload, ToolReturn):
+        payload = payload.return_value
+    if isinstance(payload, dict):
+        return payload.get("success"), bool(payload.get("needs_approval"))
+    return getattr(payload, "success", None), bool(
+        getattr(payload, "needs_approval", False)
+    )
 
 
 def approval_error_result(
