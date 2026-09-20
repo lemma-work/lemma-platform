@@ -136,3 +136,48 @@ somebody reports it. Decide before writing code.
 number-pool work, tracing what `binding_key` is actually made of and then
 checking each guard in `verified_sender` against a number that changes hands
 rather than a person who changes number.
+
+### DEV-SURF-003 — A bundle that names an email surface cannot be imported
+**Violates:** nothing written down. No statement says what a bundle's named
+mailbox means for an agent that already has one.
+**Severity:** question
+**Where:** `lemma-backend/app/modules/pod_bundle/infrastructure/surface_apply.py:123`
+and `lemma-backend/app/modules/agent_surfaces/services/credential_uniqueness.py:127`
+**Required:** unwritten, and that is the finding. `PS-PACK-012` says an import
+"either finishes or can be safely retried"; it does not say what happens when
+the bundle declares a thing the schema forbids a second of.
+**Actual:** every agent is given a mailbox as it is created, `agent_id` is
+`NOT NULL`, and `uq_agent_surface_agent_type` is unique on
+`(agent_id, surface_type)` — so an agent holds at most one Resend surface. The
+applier looks for an existing surface *by name*
+(`surface_apply.py:113`), and a bundle naming its mailbox anything other than
+the auto-minted `surface_name_for(agent_name)` finds none, takes the create
+path, and reaches `ensure_one_surface_per_agent`, which raises
+`AgentSurfaceAgentPlatformConflictError` — a 409 naming a surface whoever ran
+the import never created.
+
+Established by reading the call chain (`surface_apply.create_surface` →
+`contracts/provisioning.create_surface` → `create_surface_on_minted_address` →
+`_insert_on_first_free_address` → `AgentSurfaceService.create_surface` →
+`ensure_one_surface_per_agent`), not by running it, and the reason it has not
+been run is the second half of the finding: the only test that covers this
+shape, `test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone`, drives
+a `FakeSurfaceService` that does not enforce a unique index, and no scenario
+imports a bundle containing a `RESEND` surface — verified by grep across
+`tests/scenarios/journeys`. So the contract that test documents is one nothing
+has ever checked against a database.
+**Why it matters:** exporting a pod that has an email surface and importing it
+elsewhere is the whole point of bundles, and the failure arrives as a 409 about
+a surface the operator did not write and cannot see in the bundle.
+**Fix:** three shapes, all product decisions. (a) The applier adopts the agent's
+mailbox and renames it to the bundle's name — needs `update_surface` to accept a
+name, which it does not today. (b) The exporter writes the mailbox under the
+name it actually has, so a round-trip matches and a hand-written bundle is told
+to do the same. (c) It is refused, but with an error that says an agent has one
+mailbox and names the bundle's own surface rather than the auto-minted one.
+Whichever is chosen, the test needs to run against a real schema.
+**How it was found:** widening the Resend adoption to named requests to fix four
+failing scenarios, having reasoned that the unique index left only one candidate
+a name could mean. CI's unit lane — wider than the local `-m unit` lane —
+failed on the bundle test, which is what made the bundle path visible at all.
+The widening was reverted; this is what it had walked into.
