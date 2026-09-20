@@ -24,6 +24,7 @@ Pod membership is deliberately owned by the [pod module](pod.md).
 | `organizations` | Organization name, slug, policy, and owner context |
 | `organization_members` | User membership and organization role |
 | `organization_invitations` | Pending/accepted invitation lifecycle |
+| `identity_email_challenges` | An email verification in progress — purpose, binding hash, the SuperTokens pre-auth session/code/device ids, a three-attempt ceiling, and terminal verified/revoked state. It is durable so a challenge outlives the browser session that started it |
 
 Organization roles are `ORG_OWNER`, `ORG_EDITOR`, and `ORG_MEMBER`. Pod roles
 are a different authorization layer.

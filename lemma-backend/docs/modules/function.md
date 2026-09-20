@@ -19,3 +19,14 @@ The canonical target design is:
 Do not duplicate function runtime, retry, queue, provider, credential, or artifact
 rules here. They belong in the canonical design set. There is no separate legacy
 execution service or fallback path.
+
+## Main data model
+
+| Table | Meaning |
+| --- | --- |
+| `functions` | Pod-scoped definition: name, description, input/output/config schemas, code path, and the revision hash currently promoted |
+| `function_revisions` | One built, executable revision. The artifact and source bytes were always content-addressed; this row is what makes them findable, and it snapshots the schemas so promoting an old revision restores the contract its code actually implements |
+| `function_runs` | One durable attempt: input/output, status, logs, error, deadline, and job handle. The foreign key to `functions` is `SET NULL`, because a run is the record of what the function did and must outlive the definition; the delete path refuses while any run is still in flight |
+
+The table list is inventory, not a runtime contract. Attempt, retry, queue, and
+artifact rules live in the canonical design set above.
