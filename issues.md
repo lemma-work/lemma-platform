@@ -84,3 +84,55 @@ see why nothing is happening. Decide before writing code.
 **How it was found:** tracing `AgentSurfaceStatus.INACTIVE` from
 `domain/entities.py:248` to its readers during the surfaces schema rework, then
 grepping `lemma-frontend/src` for any reference to it and finding none.
+
+### DEV-SURF-002 — A reassigned phone number signs in as the person who had it
+**Violates:** nothing, *as written* — see **Required** below, which is the part
+that needs deciding.
+**Severity:** question
+**Where:** `lemma-backend/app/modules/agent_surfaces/services/onboarding_transport.py:73`
+(`platform_binding_key`) and
+`lemma-backend/app/modules/agent_surfaces/services/onboarding_sender.py:195`
+(`verified_sender`)
+**Required:** PS-SURF-012 says the system "shall give a resolved person exactly
+the access their Lemma identity has, and no more". It also says a message from
+an external identity "shall resolve to a Lemma user where one exists" and that
+the resolution "shall keep stable across later messages" — and those two
+sentences are in tension the moment an identifier changes hands. Nothing in the
+specification says an external identifier names one person for all time; it is
+assumed, and this is the case where the assumption is wrong. Whether the second
+bullet should be read as broken here is a product decision, which is why the
+`Violates:` line above names nothing: marking PS-SURF-012 `gap` would say in
+`coverage.md` that Lemma does not resolve people correctly, which overstates a
+failure confined to a reassigned number.
+**Actual:** `platform_binding_key` hashes `(platform, tenant, installation,
+sender_external_user_id)`, and on WhatsApp the sender's external id *is* their
+phone number. A recycled number therefore produces the same `binding_key` as the
+previous holder's, so `verified_sender` finds their `VerifiedSurfaceIdentity`,
+and the new holder is signed in as them.
+
+The guard already there does not catch it. It revokes when
+`identity.verified_phone` no longer matches the resolved user's
+`mobile_number`, or when that number is no longer verified — which covers the
+previous holder *changing* their number. It does not cover them keeping it in
+their profile while the carrier gives it to somebody else, and there is no
+inbound signal that says so: Meta's Cloud API reports no reassignment.
+
+Telegram is not exposed the same way (the sender id is an account id, not a
+reassignable identifier), and neither is Slack or Teams. The
+`telegram_username` path is a different shape of the same problem and is
+already refused for binding by `_cache_is_attested`.
+**Why it matters:** the new holder of the number reaches the previous holder's
+workspaces, conversations and pod content, having proved nothing. It needs no
+attacker — carriers reassign numbers routinely, and in several countries within
+months. The blast radius is whatever that account could reach.
+**Fix:** unknown, and every option is a product decision about how much friction
+to add to the common case. (a) Expire a verified identity after a period of
+inactivity and make the next message re-verify — needs a number, and the number
+is the whole trade. (b) Re-verify on a change of some observable the platform
+does give us, if one can be found that moves on reassignment. (c) Accept it,
+write it down as accepted, and give an owner a way to revoke a binding when
+somebody reports it. Decide before writing code.
+**How it was found:** an adversarial pass over chat signup during the WhatsApp
+number-pool work, tracing what `binding_key` is actually made of and then
+checking each guard in `verified_sender` against a number that changes hands
+rather than a person who changes number.
