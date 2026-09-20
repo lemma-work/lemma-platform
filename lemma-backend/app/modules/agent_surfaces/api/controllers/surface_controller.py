@@ -53,6 +53,9 @@ from app.modules.agent_surfaces.api.surface_config_resolver import (
     surface_setup_for_reader,
 )
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
+from app.modules.agent_surfaces.services.surface_identity_claim import (
+    create_surface_claiming_identity,
+)
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
     build_available_surfaces,
 )
@@ -268,7 +271,8 @@ async def create_surface(
         config_input=request.config,
         ctx=ctx,
     )
-    surface = await service.create_surface_minting_address(
+    surface = await create_surface_claiming_identity(
+        service,
         pod_id=pod_id,
         agent_id=agent_name_id,
         agent_name=request.default_agent_name or None,

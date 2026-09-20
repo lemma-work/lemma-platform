@@ -102,6 +102,44 @@ async def require_input(
         )
 
 
+async def _flow_id_for(
+    uow,
+    *,
+    platform: SurfacePlatform,
+    destination: ParsedInboundSurfaceEvent,
+    email_step: bool,
+) -> str | None:
+    """Which WhatsApp Flow to show, from the number that received the message.
+
+    Flow assets are **WABA-scoped**, so they belong to the number rather than to
+    the deployment. With one number that distinction is invisible; with a pool
+    spanning two WhatsApp Business Accounts it decides whether the form appears
+    at all -- a flow id minted in one WABA does not resolve in another, and
+    Meta's answer to that is a message the person never sees, because the caller
+    degrades an absent flow to plain text rather than raising.
+
+    Falling back to settings is right for a number that declares none: such a
+    number is under the configured WABA by definition.
+    """
+    configured = (
+        surface_settings.whatsapp_onboarding_email_flow_id
+        if email_step
+        else surface_settings.whatsapp_onboarding_code_flow_id
+    )
+    arrived_on = destination.reply_target.get("phone_number_id")
+    if platform is not SurfacePlatform.WHATSAPP or not arrived_on:
+        return configured
+    number = await WhatsAppNumberRepository(uow).get_by_phone_number_id(str(arrived_on))
+    if number is None:
+        return configured
+    own = (
+        number.onboarding_email_flow_id
+        if email_step
+        else number.onboarding_code_flow_id
+    )
+    return own or configured
+
+
 async def native_prompt_metadata(
     uows: UnitOfWorkFactory,
     *,
@@ -139,29 +177,9 @@ async def native_prompt_metadata(
         label = "Email address" if email_step else "Verification code"
         destination = ParsedInboundSurfaceEvent.model_validate(pending.destination)
         prefill = destination.sender_email or ""
-        flow_id = (
-            surface_settings.whatsapp_onboarding_email_flow_id
-            if email_step
-            else surface_settings.whatsapp_onboarding_code_flow_id
+        flow_id = await _flow_id_for(
+            uow, platform=platform, destination=destination, email_step=email_step
         )
-        # Flow assets are **WABA-scoped**, so they belong to the number and not
-        # to the deployment. With one number that distinction was invisible;
-        # with a pool spanning two WhatsApp Business Accounts it decides whether
-        # the form appears at all -- a flow id minted in one WABA does not
-        # resolve in another, and Meta's answer to that is a message the person
-        # never sees. Falling back to settings is right for a number that
-        # declares none: it is under the configured WABA by definition.
-        arrived_on = destination.reply_target.get("phone_number_id")
-        if platform is SurfacePlatform.WHATSAPP and arrived_on:
-            number = await WhatsAppNumberRepository(uow).get_by_phone_number_id(
-                str(arrived_on)
-            )
-            if number is not None:
-                flow_id = (
-                    number.onboarding_email_flow_id
-                    if email_step
-                    else number.onboarding_code_flow_id
-                ) or flow_id
     if platform == SurfacePlatform.WHATSAPP:
         if not flow_id:
             return {}

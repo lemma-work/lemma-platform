@@ -26,6 +26,9 @@ from uuid import UUID
 from app.core.authorization.context import Context
 from app.core.authorization.delegation import is_pod_default_agent
 from app.modules.agent_surfaces.composition import build_surface_service
+from app.modules.agent_surfaces.services.surface_identity_claim import (
+    create_surface_claiming_identity,
+)
 from app.modules.agent_surfaces.api.schemas import (
     AgentSurfaceResponse,
     SurfaceBehaviorConfigInput,
@@ -122,7 +125,8 @@ async def create_surface(
     agent entity cross three modules to deliver two values and left the contract
     unable to say what it wanted.
     """
-    return await build_surface_service(uow).create_surface_minting_address(
+    return await create_surface_claiming_identity(
+        build_surface_service(uow),
         pod_id=pod_id,
         agent_id=agent_id,
         agent_name=agent_name,

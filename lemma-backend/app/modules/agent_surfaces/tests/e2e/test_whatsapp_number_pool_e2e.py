@@ -573,3 +573,50 @@ async def test_a_stranger_can_sign_up_on_a_pooled_number_and_is_answered_from_it
         "one the person actually wrote to"
     )
     assert transport.credentials["phone_number_id"] == "pooled-signup"
+
+
+async def test_creating_a_surface_through_the_api_takes_a_number(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """The last mile: allocation reachable from the thing people actually use.
+
+    Everything else here drove `provision_pooled_whatsapp_surface` directly,
+    which proved the allocator and proved nothing about whether anyone could
+    reach it. `POST /surfaces` went on making surfaces with no number, so a
+    deployment could add four numbers to the pool and watch every surface keep
+    answering from the one in settings.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    await _number(db_session, phone_number_id="api-allocated", token="t")
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+
+    assert created.status_code == 200, created.text
+    assert created.json()["surface_identity_id"] == "api-allocated", (
+        "a surface created through the API took no number from the pool, so the "
+        "pool is inventory nothing reachable draws from"
+    )
+
+
+async def test_a_deployment_with_no_pool_still_gets_the_shared_line(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """The half that must not change, through the API this time.
+
+    Every deployment alive has no pool rows. If creating a WhatsApp surface
+    started failing -- or started demanding a number that does not exist -- this
+    change would have broken all of them on the way in. No pool means no
+    allocation, no error, and the shared line exactly as before.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+
+    assert created.status_code == 200, created.text
+    assert created.json()["surface_identity_id"] is None

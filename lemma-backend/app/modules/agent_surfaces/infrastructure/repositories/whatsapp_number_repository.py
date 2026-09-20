@@ -103,6 +103,27 @@ class WhatsAppNumberRepository:
         result = await self.session.execute(stmt)
         return [model.to_entity() for model in result.scalars().all()]
 
+    async def any_allocatable(self) -> bool:
+        """Does this deployment have a pool at all?
+
+        The question separates two states that `allocate_for_organization`
+        returning `None` cannot: a deployment that never added a number, and one
+        whose numbers are all held. The first should keep behaving exactly as it
+        did before there was a pool -- the shared line, no allocation, no error
+        -- and the second is a genuine 503. Conflating them would either refuse
+        every existing deployment or silently hand out the shared line to
+        somebody who asked for a number of their own.
+        """
+        found = await self.session.scalar(
+            select(WhatsAppNumber.id)
+            .where(
+                WhatsAppNumber.role == WhatsAppNumberRole.ALLOCATABLE.value,
+                WhatsAppNumber.status == WhatsAppNumberStatus.AVAILABLE.value,
+            )
+            .limit(1)
+        )
+        return found is not None
+
     async def allocate_for_organization(
         self,
         *,

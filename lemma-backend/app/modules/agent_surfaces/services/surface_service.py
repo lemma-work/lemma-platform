@@ -227,53 +227,6 @@ class AgentSurfaceService(
             return
         uow.after_commit(_run)
 
-    async def create_surface_minting_address(
-        self,
-        *,
-        pod_id: UUID,
-        agent_id: UUID | None,
-        agent_name: str | None,
-        platform: SurfacePlatform,
-        name: str | None = None,
-        config: SurfaceConfig | None = None,
-        credential_mode: SurfaceCredentialMode | None = None,
-        account_id: UUID | None = None,
-        ctx: Context | None = None,
-    ) -> AgentSurfaceEntity:
-        """:meth:`create_surface`, minting an address when the platform needs one.
-
-        For the two callers a person drives — the surfaces API and the bundle
-        applier. They bring their own name, config and credentials, so they
-        cannot use ``provision_email_surface``, and calling ``create_surface``
-        straight through is what used to land them on the ``pod-<hex>@``
-        fallback: unreadable, and never screened for reserved local parts.
-
-        Takes the agent's id and name rather than the agent, because those are
-        the two things minting needs and both callers already hold them.
-        """
-        from app.modules.agent_surfaces.services.email_surface_provisioning import (
-            create_surface_on_minted_address,
-        )
-
-        return await create_surface_on_minted_address(
-            self,
-            self.surface_repository.uow,
-            pod_id=pod_id,
-            # No agent named means the pod's own assistant, whose row id is
-            # the pod's. The *name* stays None regardless, because it is what
-            # the address is built from and the assistant's stored name is the
-            # internal `pod_default` -- that would mint `pod-default.acme@` for
-            # a pod that answers at `acme@`.
-            agent_id=agent_id or pod_id,
-            agent_name=agent_name,
-            platform=platform,
-            name=name,
-            config=config or SurfaceConfig(),
-            credential_mode=credential_mode,
-            account_id=account_id,
-            ctx=ctx,
-        )
-
     async def sync_telegram_mini_app(self, surface: AgentSurfaceEntity) -> None:
         """Bind the surface's Mini App to its bot's menu button.
 

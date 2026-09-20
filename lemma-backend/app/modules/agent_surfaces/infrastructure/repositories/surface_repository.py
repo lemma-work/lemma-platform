@@ -254,7 +254,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         # would otherwise 500 the creation of an unrelated surface.
         return model.to_entity_or_none() if model else None
 
-    async def _organization_for_pod(self, pod_id: UUID) -> UUID:
+    async def organization_for_pod(self, pod_id: UUID) -> UUID:
         """The organisation this surface is in, read from the pod that defines it.
 
         Carried on the row rather than joined for, because per-organisation
@@ -288,7 +288,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             created_at=entity.created_at,
             updated_at=entity.updated_at,
             pod_id=entity.pod_id,
-            organization_id=await self._organization_for_pod(entity.pod_id),
+            organization_id=await self.organization_for_pod(entity.pod_id),
             name=entity.name,
             agent_id=entity.agent_id,
             surface_type=entity.surface_type.value,
