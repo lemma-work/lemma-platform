@@ -24,6 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.models import StreamAppendResult
+from app.modules.agent_surfaces.platforms.common import PLATFORM_TRANSPORT_ERRORS
 from app.modules.agent_surfaces.platforms.rendering import sanitize_user_visible_text
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 
@@ -193,11 +194,37 @@ class SurfaceProgress:
         if target is None:
             return False
         indicator_metadata = await self.delivery.egress_metadata(target, metadata)
-        # No connection held for the platform call; see `connection_released`.
-        async with connection_released(self.delivery.uow.session):
-            await target.adapter.add_processing_indicator(
-                credentials=target.credentials,
-                event=target.event,
-                metadata=indicator_metadata,
+        try:
+            # No connection held for the platform call; see `connection_released`.
+            async with connection_released(self.delivery.uow.session):
+                await target.adapter.add_processing_indicator(
+                    credentials=target.credentials,
+                    event=target.event,
+                    metadata=indicator_metadata,
+                )
+        except PLATFORM_TRANSPORT_ERRORS:
+            # The only verb here that was not best-effort, and the one that
+            # could least afford it. `on_run_started` awaits this, and
+            # `notify_run_started` turns any escape into "the observer never
+            # started" -- which means `notify_run_finished` is never called, and
+            # that is what delivers the answer. A typing bubble failing took the
+            # whole reply with it.
+            #
+            # A warning with the traceback, not a debug line: `LOG_LEVEL=INFO`
+            # drops debug before formatting, and this is a platform refusing a
+            # call the run is about to depend on. It is bounded -- the refresh
+            # loop stops on the first `False`, so a dead platform produces two
+            # of these per run rather than one every twenty seconds.
+            #
+            # The platform family rather than `Exception`: this is one HTTP call
+            # to one adapter. The two verbs above catch broadly only because
+            # they predate the family existing. Anything outside it -- a
+            # `KeyError` on a credential dict, say -- is a bug in our own code
+            # and should still be loud.
+            logger.warning(
+                "agent_surfaces.egress.progress_typing_failed.degraded",
+                conversation_id=str(conversation_id),
+                exc_info=True,
             )
-            return True
+            return False
+        return True

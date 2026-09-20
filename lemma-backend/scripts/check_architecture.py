@@ -282,6 +282,22 @@ class _ClassShape(ast.NodeVisitor):
     def __init__(self, relative_path: str) -> None:
         self.relative_path = relative_path
         self.classes: dict[str, dict[str, Any]] = {}
+        #: Local name -> the module it was imported from, for this file. Shared
+        #: by reference with every class entry below, so it is complete by the
+        #: time resolution reads it however late in the file an import sits.
+        self.imported: dict[str, str] = {}
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        # Absolute only. A relative import would have to be resolved against
+        # this file's package to name a module, and it lands in that same
+        # package by construction -- which the same-package tie-breaker in
+        # `resolve` already covers. There are 23 of them against 9,617
+        # absolute, so the resolution they would add is not worth carrying a
+        # package calculation for.
+        if node.module and not node.level:
+            for alias in node.names:
+                self.imported[alias.asname or alias.name] = node.module
+        self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         declared: set[str] = set()
@@ -302,13 +318,21 @@ class _ClassShape(ast.NodeVisitor):
                 declared.add(child.attr)
             else:
                 read.add(child.attr)
-        self.classes[node.name] = {
+        # Keyed by file *and* name. Keyed by name alone, the sixteen duplicate
+        # class names in this tree collided: `AgentRepository` is a Protocol in
+        # `agent/domain/ports.py` and a concrete class in
+        # `agent/infrastructure/repositories/`, and whichever was visited last
+        # replaced the other -- so one of them stopped being measured at all,
+        # and anything inheriting the name resolved through whichever won.
+        self.classes[f"{self.relative_path}:{node.name}"] = {
+            "name": node.name,
             "key": f"{self.relative_path}:{node.name}",
             "bases": [base.id for base in node.bases if isinstance(base, ast.Name)],
             "unresolved_bases": len(node.bases)
             - len([base for base in node.bases if isinstance(base, ast.Name)]),
             "declared": declared,
             "read": read,
+            "imports": self.imported,
         }
         self.generic_visit(node)
 
@@ -316,40 +340,103 @@ class _ClassShape(ast.NodeVisitor):
 def _class_shapes(
     classes: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, int], dict[str, int]]:
-    """Undeclared reads and inheritance depth, resolved across the whole app."""
+    """Undeclared reads and ancestry size, resolved across the whole app.
 
-    def inherited(name: str, seen: frozenset[str]) -> set[str]:
-        entry = classes.get(name)
-        if entry is None or name in seen:
+    Entries are keyed by ``path:name``; a base, written in source, is only a
+    name. So base resolution goes through an index built here, and a name held
+    by more than one class is never resolved to whichever file happened to be
+    walked last.
+
+    Refusing to resolve an ambiguous name outright is the safe reading, but it
+    is not a free one, and the cost runs the wrong way: the chain simply stops,
+    the class measures shallower than it is, and **the ratchet only fails on
+    growth**, so the smaller number becomes the new floor. A second
+    ``DomainEvent`` added anywhere in the tree would silently drop sixty-six
+    units of measured depth across thirty-five subclasses and report success.
+    Ambiguity that costs coverage quietly is how a gate stops measuring the
+    thing it was added for.
+
+    So an ambiguous name is disambiguated by evidence, in descending order of
+    how much the evidence is worth: an actual ``from X import Base`` in the
+    asking file, then a definition in that same file, then one in the same
+    package. Only the first is proof; the other two are proximity, and they are
+    tie-breakers rather than the rule. A name with none of the three stays
+    unresolved, which for `undeclared_self_attributes` means the class is
+    skipped -- the same rule that skips anything inheriting a pydantic model or
+    a Protocol.
+    """
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for entry in classes.values():
+        by_name.setdefault(entry["name"], []).append(entry)
+
+    def _path_of(entry: dict[str, Any]) -> str:
+        return entry["key"].rsplit(":", 1)[0]
+
+    def _defines(entry: dict[str, Any], module: str) -> bool:
+        """Is this candidate the class ``module`` names?"""
+        stem = module.replace(".", "/")
+        path = _path_of(entry)
+        return path.endswith((f"{stem}.py", f"{stem}/__init__.py"))
+
+    def resolve(base: str, asking: dict[str, Any]) -> dict[str, Any] | None:
+        found = by_name.get(base)
+        if not found:
+            return None
+        if len(found) == 1:
+            return found[0]
+        module = asking["imports"].get(base)
+        if module:
+            imported = [entry for entry in found if _defines(entry, module)]
+            if len(imported) == 1:
+                return imported[0]
+        here = _path_of(asking)
+        same_file = [entry for entry in found if _path_of(entry) == here]
+        if len(same_file) == 1:
+            return same_file[0]
+        package = here.rsplit("/", 1)[0]
+        same_package = [
+            entry for entry in found if _path_of(entry).rsplit("/", 1)[0] == package
+        ]
+        if len(same_package) == 1:
+            return same_package[0]
+        return None
+
+    def inherited(entry: dict[str, Any], seen: frozenset[str]) -> set[str]:
+        if entry["key"] in seen:
             return set()
         names = set(entry["declared"])
         for base in entry["bases"]:
-            names |= inherited(base, seen | {name})
+            found = resolve(base, entry)
+            if found is not None:
+                names |= inherited(found, seen | {entry["key"]})
         return names
 
-    def ancestry(name: str, seen: frozenset[str]) -> set[str]:
-        entry = classes.get(name)
-        if entry is None or name in seen:
+    def ancestry(entry: dict[str, Any], seen: frozenset[str]) -> set[str]:
+        if entry["key"] in seen:
             return set()
         found: set[str] = set()
         for base in entry["bases"]:
             found.add(base)
-            found |= ancestry(base, seen | {name})
+            resolved = resolve(base, entry)
+            if resolved is not None:
+                found |= ancestry(resolved, seen | {entry["key"]})
         return found
 
     undeclared: dict[str, int] = {}
     deep: dict[str, int] = {}
-    for name, entry in classes.items():
-        made_of = 1 + len(ancestry(name, frozenset()))
+    for entry in classes.values():
+        made_of = 1 + len(ancestry(entry, frozenset()))
         if made_of > MAX_ANCESTRY:
             deep[entry["key"]] = made_of
         if entry["unresolved_bases"] or any(
-            base not in classes for base in entry["bases"]
+            resolve(base, entry) is None for base in entry["bases"]
         ):
             continue
         known = set(entry["declared"])
         for base in entry["bases"]:
-            known |= inherited(base, frozenset({name}))
+            found = resolve(base, entry)
+            if found is not None:
+                known |= inherited(found, frozenset({entry["key"]}))
         missing = entry["read"] - known
         if missing:
             undeclared[entry["key"]] = len(missing)

@@ -61,6 +61,7 @@ def routing_surfaces(
     surface_type: str,
     *,
     surface_ids: Collection[UUID] | None = None,
+    pod_ids: Collection[UUID] | None = None,
     external_workspace_id: str | None = None,
     system_credentials_only: bool = False,
 ) -> Select:
@@ -84,6 +85,15 @@ def routing_surfaces(
     "any": the two ask different questions, and a surface that has not recorded
     a workspace is not in the one named here.
 
+    ``pod_ids`` is the sender's own pods, and it is the one narrowing that is
+    about *who sent this* rather than about how it arrived. Selection applies it
+    anyway -- a surface in a pod the sender is not in is not a candidate for
+    them -- so pushing it down here is the same predicate, asked before the rows
+    are read instead of after. The shared bot's fan-in is every system-credential
+    surface of the platform in the deployment, one per provisioned person, and
+    that is the read it exists to avoid. Callers pass it only when the sender is
+    already known; an unknown sender has no pods and must see the whole fan-in.
+
     ``system_credentials_only`` is the shared-webhook narrowing. A platform-wide
     webhook arrives on shared system credentials, so a surface bound to its own
     account cannot be what it is for -- and without the narrowing, continuity for
@@ -95,6 +105,8 @@ def routing_surfaces(
     statement = active_surfaces_of_type(surface_type)
     if surface_ids is not None:
         statement = statement.where(AgentSurface.id.in_(list(surface_ids)))
+    if pod_ids is not None:
+        statement = statement.where(AgentSurface.pod_id.in_(list(pod_ids)))
     if external_workspace_id:
         statement = statement.where(
             AgentSurface.external_workspace_id == external_workspace_id

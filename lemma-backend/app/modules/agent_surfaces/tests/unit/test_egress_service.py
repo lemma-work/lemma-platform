@@ -587,3 +587,54 @@ async def test_send_processing_indicator_for_conversation_stops_without_link():
 
     assert sent is False
     adapter.add_processing_indicator.assert_not_awaited()
+
+
+async def test_a_refused_typing_indicator_does_not_cost_the_answer():
+    """The failure that used to take the whole reply with it.
+
+    Every verb on `SurfaceProgress` is best-effort except this one, and it was
+    the one that could least afford not to be. `on_run_started` awaits it;
+    `notify_run_started` turns any escape into "the observer never started";
+    the runner then skips `notify_run_finished`, which is what delivers the
+    answer. So a platform refusing a typing bubble silently cost the person
+    their reply.
+
+    False, not an exception — which is also what the refresh loop reads to stop
+    pinging a platform that is not answering.
+    """
+    surface = _teams_surface()
+    conversation_id = uuid4()
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation_id,
+        platform="TEAMS",
+        external_channel_id="19:channel",
+        external_thread_id="17001",
+        external_user_id="8:orgid:user-1",
+        last_event=ParsedInboundSurfaceEvent(
+            platform="TEAMS",
+            conversation_type=ConversationType.EXTERNAL_GROUP,
+            tenant_id="tenant-123",
+            external_channel_id="19:channel",
+            external_thread_id="17001",
+            external_message_id="17002",
+            sender_external_user_id="8:orgid:user-1",
+            sender_display_name="Asha",
+            message_text="hello",
+            mentioned_agent=True,
+            reply_target={"conversation_id": "conversation-1"},
+        ).model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    # A real platform failure, not a bug in our own code: `show_typing` catches
+    # the transport family, so a `RuntimeError` would rightly still escape.
+    adapter.add_processing_indicator.side_effect = TimeoutError("teams said no")
+    egress = build_egress(adapter=adapter, surfaces=[surface], existing_link=link)
+    egress.delivery.conversation_link_repository.get_by_conversation_id.return_value = (
+        link
+    )
+
+    shown = await egress.progress.show_typing(conversation_id=conversation_id)
+
+    assert shown is False
+    adapter.add_processing_indicator.assert_awaited_once()

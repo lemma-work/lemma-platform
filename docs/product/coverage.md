@@ -18,7 +18,7 @@ only a promise marked `covered` with no test is.
 | `withdrawn` | 0 |
 | **total** | **180** |
 
-Scenario tests declaring a promise: 398.
+Scenario tests declaring a promise: 400.
 
 ## Contract coverage
 
@@ -257,7 +257,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-SURF-006` Nothing about signup appears in a channel | `manual` | — |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
-| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
+| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_sender_is_the_same_person_on_every_message` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_message_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |

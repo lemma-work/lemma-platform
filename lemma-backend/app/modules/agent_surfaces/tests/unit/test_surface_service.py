@@ -10,8 +10,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     SurfaceConfig,
-    SurfaceEventMode,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.services import telegram_mini_app_service
@@ -58,7 +56,6 @@ def _surface_entity(**overrides) -> AgentSurfaceEntity:
         "name": "slack",
         "agent_id": uuid4(),
         "surface_type": SurfacePlatform.SLACK,
-        "mode": SurfaceMode.DM,
         "account_id": uuid4(),
         "config": SurfaceConfig(),
     }
@@ -627,7 +624,6 @@ async def test_toggle_telegram_webhook_surface_deletes_provider_webhook(monkeypa
     entity = _surface_entity(
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
-        event_mode=SurfaceEventMode.WEBHOOK,
         account_id=account_id,
         webhook_secret="surface-secret",
         is_active=True,
@@ -656,7 +652,6 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
     entity = _surface_entity(
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
-        event_mode=SurfaceEventMode.WEBHOOK,
         account_id=account_id,
         webhook_secret="old-secret",
         is_active=False,
@@ -697,7 +692,6 @@ async def test_delete_telegram_webhook_surface_deletes_provider_webhook(monkeypa
     entity = _surface_entity(
         surface_type=SurfacePlatform.TELEGRAM,
         config=SurfaceConfig(),
-        event_mode=SurfaceEventMode.WEBHOOK,
         account_id=uuid4(),
         webhook_secret="surface-secret",
         is_active=False,
@@ -822,27 +816,13 @@ async def test_surface_event_mode_defaults_and_validation():
         config=SurfaceConfig(),
         account_id=uuid4(),
     )
-    # Email still defaults to EMAIL mode, and now receives over a webhook like
-    # everything else -- polling existed only for the Composio mailboxes.
-    assert email.mode is SurfaceMode.EMAIL
-    assert email.event_mode is SurfaceEventMode.WEBHOOK
-
-    telegram = AgentSurfaceEntity.create(
-        surface_type=SurfacePlatform.TELEGRAM,
-        pod_id=uuid4(),
-        agent_id=uuid4(),
-    )
-    assert telegram.mode is SurfaceMode.DM
-    assert telegram.event_mode is SurfaceEventMode.WEBHOOK
-
-    with pytest.raises(AgentSurfaceValidationError, match="EMAIL mode"):
-        AgentSurfaceEntity.create(
-            surface_type=SurfacePlatform.SLACK,
-            pod_id=uuid4(),
-            agent_id=uuid4(),
-            account_id=uuid4(),
-            mode=SurfaceMode.EMAIL,
-        )
+    # "Is this email?" is the platform, and only the platform. There used to be
+    # a `mode` column beside it holding the same answer, a `_resolve_mode` that
+    # derived one from the other, and a validator that raised when the two
+    # disagreed -- a rule guarding a state nothing could produce, since no API
+    # schema carried the field. All three are gone; this is what is left.
+    assert email.surface_type.is_email
+    assert not SurfacePlatform.TELEGRAM.is_email
 
 
 async def test_surface_platform_from_source():

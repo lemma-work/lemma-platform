@@ -15,8 +15,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfaceCredentialMode,
-    SurfaceEventMode,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import (
@@ -42,8 +40,8 @@ from app.modules.agent_surfaces.services.credential_uniqueness import (
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
 )
-from app.modules.agent_surfaces.services.telegram_mini_app_mixin import (
-    TelegramMiniAppSyncMixin,
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    sync_telegram_mini_app,
 )
 from app.modules.agent_surfaces.services.surface_setup_read import (
     SurfaceSetupReadMixin,
@@ -72,7 +70,6 @@ class AgentSurfaceService(
     SurfaceConsentMixin,
     SurfaceTelegramWebhookMixin,
     SurfaceSetupReadMixin,
-    TelegramMiniAppSyncMixin,
 ):
     def __init__(
         self,
@@ -113,8 +110,6 @@ class AgentSurfaceService(
         platform: SurfacePlatform,
         name: str | None = None,
         config: SurfaceConfig | None = None,
-        mode: SurfaceMode | None = None,
-        event_mode: SurfaceEventMode | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         account_id: UUID | None = None,
         external_workspace_id: str | None = None,
@@ -150,8 +145,6 @@ class AgentSurfaceService(
             name=resolved_name,
             agent_id=agent_id,
             config=config,
-            mode=mode,
-            event_mode=event_mode,
             credential_mode=credential_mode,
             account_id=account_id,
             external_workspace_id=external_workspace_id or resolved_workspace_id,
@@ -268,20 +261,22 @@ class AgentSurfaceService(
             ctx=ctx,
         )
 
+    async def sync_telegram_mini_app(self, surface: AgentSurfaceEntity) -> None:
+        """Bind the surface's Mini App to its bot's menu button.
+
+        A plain method. It was a base class of its own -- eighteen lines whose
+        whole content was handing two of this class's own attributes to a free
+        function, which is a call, not an inheritance.
+        """
+        await sync_telegram_mini_app(
+            surface=surface,
+            credential_resolver=self._credential_resolver,
+            uow=self.surface_repository.uow,
+        )
+
     async def get_surface(self, surface_id: UUID) -> AgentSurfaceEntity:
         surface = await self.surface_repository.get(surface_id)
         if surface is None:
-            raise AgentSurfaceNotFoundError(str(surface_id))
-        return surface
-
-    async def get_surface_in_pod(
-        self,
-        *,
-        pod_id: UUID,
-        surface_id: UUID,
-    ) -> AgentSurfaceEntity:
-        surface = await self.get_surface(surface_id)
-        if surface.pod_id != pod_id:
             raise AgentSurfaceNotFoundError(str(surface_id))
         return surface
 
@@ -334,8 +329,6 @@ class AgentSurfaceService(
         agent_id: UUID | None = None,
         update_agent_id: bool = False,
         config: SurfaceConfig | None = None,
-        mode: SurfaceMode | None = None,
-        event_mode: SurfaceEventMode | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         account_id: UUID | None = None,
         external_workspace_id: str | None = None,
@@ -362,8 +355,6 @@ class AgentSurfaceService(
         binding_changes = (
             config,
             account_id,
-            mode,
-            event_mode,
             credential_mode,
             external_workspace_id,
             external_tenant_id,
@@ -374,8 +365,6 @@ class AgentSurfaceService(
                 surface,
                 config=config,
                 account_id=account_id,
-                mode=mode,
-                event_mode=event_mode,
                 credential_mode=credential_mode,
                 external_workspace_id=external_workspace_id,
                 external_tenant_id=external_tenant_id,
@@ -408,8 +397,6 @@ class AgentSurfaceService(
         *,
         config: SurfaceConfig | None,
         account_id: UUID | None,
-        mode: SurfaceMode | None,
-        event_mode: SurfaceEventMode | None,
         credential_mode: SurfaceCredentialMode | None,
         external_workspace_id: str | None,
         external_tenant_id: str | None,
@@ -427,8 +414,6 @@ class AgentSurfaceService(
         surface.update_config(
             config if config is not None else surface.config,
             account_id=account_id,
-            mode=mode,
-            event_mode=event_mode,
             credential_mode=credential_mode,
             external_workspace_id=external_workspace_id or resolved_workspace_id,
             external_tenant_id=external_tenant_id or resolved_tenant_id,
@@ -592,6 +577,3 @@ class AgentSurfaceService(
         await ensure_unique_org_credential_binding(
             surface, surface_repository=self.surface_repository
         )
-
-    def _is_email_surface(self, surface: AgentSurfaceEntity) -> bool:
-        return surface.surface_type.is_email

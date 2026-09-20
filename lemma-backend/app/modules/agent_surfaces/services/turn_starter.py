@@ -21,8 +21,6 @@ from __future__ import annotations
 from contextlib import suppress
 from typing import Any
 
-from sqlalchemy.exc import SQLAlchemyError
-
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
@@ -212,7 +210,15 @@ class SurfaceTurnStarter:
                     event=context.event,
                     title=context.created_conversation_title,
                 )
-            except SQLAlchemyError:
+            except PLATFORM_TRANSPORT_ERRORS:
+                # A platform call, so a platform failure. It caught
+                # `SQLAlchemyError` -- the wrong family entirely, and nothing
+                # here touches the database: Slack's implementation catches only
+                # `SlackApiError`, so a timeout or a dropped connection while
+                # naming the thread escaped, `start_agent_chat` exited before
+                # `write_inbound_message`, and the person's *first* message on a
+                # brand-new conversation was silently dropped along with the run
+                # it should have started.
                 logger.debug(
                     "agent_surfaces.ingress_service.surface_thread_title_set.diagnostic",
                     conversation_id=context.conversation_id,

@@ -32,7 +32,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
@@ -43,7 +42,9 @@ from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
+from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.member_reach import MemberReach
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     AttachmentIngest,
 )
@@ -121,7 +122,6 @@ def _slack_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
         name="slack",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.SLACK,
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         surface_identity_id="U-BOT",
         config=SurfaceConfig(),
@@ -136,7 +136,6 @@ def _teams_surface() -> AgentSurfaceEntity:
         name="teams",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.TEAMS,
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         external_tenant_id="tenant-123",
         external_channel_id="19:channel",
@@ -152,7 +151,6 @@ def _telegram_surface(*, agent_id: UUID | None = None) -> AgentSurfaceEntity:
         name="telegram",
         agent_id=agent_id if agent_id is not None else uuid4(),
         surface_type=SurfacePlatform.TELEGRAM,
-        mode=SurfaceMode.DM,
         account_id=None,
         config=SurfaceConfig(),
         is_active=True,
@@ -378,19 +376,13 @@ def build_ingress_service(
         existing_link=existing_link,
     )
     resolved_surfaces = surfaces or []
-    service = AgentSurfaceIngressService(
-        uow=doubles.uow,
-        surface_repository=doubles.surface_repository,
-        conversation_link_repository=doubles.conversation_link_repository,
-        adapter_registry=_registry(adapter),
-        pod_membership_port=SimpleNamespace(
-            get_user_pod_ids=AsyncMock(
-                return_value=[surface.pod_id for surface in resolved_surfaces]
-            ),
-            get_user_email=AsyncMock(return_value="sender@example.com"),
+    membership = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(
+            return_value=[surface.pod_id for surface in resolved_surfaces]
         ),
+        get_user_email=AsyncMock(return_value="sender@example.com"),
     )
-    service.identity_service = SimpleNamespace(
+    identity = SimpleNamespace(
         resolve=AsyncMock(
             return_value=resolved_user
             or ResolvedSurfaceUser(
@@ -401,16 +393,39 @@ def build_ingress_service(
             )
         )
     )
-    service.credential_resolver = SimpleNamespace(
+    credentials = SimpleNamespace(
         for_surface=AsyncMock(return_value={}),
         for_platform=AsyncMock(return_value={}),
     )
-    service._resolve_account_credentials = AsyncMock(return_value={})
-    service.event_dedup_store = SimpleNamespace(
-        claim_message=AsyncMock(return_value=True),
-        claim_stranger_reply=AsyncMock(return_value=True),
+    # Real objects over doubled collaborators, and the two it reaches into are
+    # constructor arguments now rather than bases it inherited -- so a test can
+    # replace routing without replacing ingress.
+    router = SurfaceRouter(
+        uow=doubles.uow,
+        surface_repository=doubles.surface_repository,
+        conversation_link_repository=doubles.conversation_link_repository,
+        pod_membership_port=membership,
+        identity_service=identity,
+        credential_resolver=credentials,
     )
-    return service
+    binder = ConversationBinder(
+        uow=doubles.uow,
+        surface_repository=doubles.surface_repository,
+        conversation_link_repository=doubles.conversation_link_repository,
+    )
+    return AgentSurfaceIngressService(
+        uow=doubles.uow,
+        router=router,
+        binder=binder,
+        surface_repository=doubles.surface_repository,
+        conversation_link_repository=doubles.conversation_link_repository,
+        adapter_registry=_registry(adapter),
+        credential_resolver=credentials,
+        event_dedup_store=SimpleNamespace(
+            claim_message=AsyncMock(return_value=True),
+            claim_stranger_reply=AsyncMock(return_value=True),
+        ),
+    )
 
 
 def build_egress(
@@ -489,7 +504,6 @@ def _resend_surface() -> AgentSurfaceEntity:
         agent_id=uuid4(),
         name="resend",
         surface_type=SurfacePlatform.RESEND,
-        mode=SurfaceMode.EMAIL,
         config=SurfaceConfig(),
         surface_identity_email="agent.pod@ops.test",
         is_active=True,

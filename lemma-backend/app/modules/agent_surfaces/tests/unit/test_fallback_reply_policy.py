@@ -19,7 +19,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
@@ -61,7 +60,6 @@ def _email_surface() -> AgentSurfaceEntity:
         name="mailbox",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.RESEND,
-        mode=SurfaceMode.EMAIL,
         account_id=uuid4(),
         config=SurfaceConfig(),
         is_active=True,
@@ -230,7 +228,6 @@ def _slack_surface() -> AgentSurfaceEntity:
         name="slack",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.SLACK,
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         config=SurfaceConfig(),
         is_active=True,

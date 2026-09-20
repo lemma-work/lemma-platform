@@ -52,12 +52,22 @@ from app.modules.agent_surfaces.infrastructure.repositories.external_user_reposi
 from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (
     NotificationRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
 )
+from app.modules.agent_surfaces.services.app_event_handler import AppEventHandler
+from app.modules.agent_surfaces.services.configuration_access import (
+    ConfigurationAccess,
+)
+from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
+)
+from app.modules.agent_surfaces.services.identity_resolution_service import (
+    SurfaceIdentityResolutionService,
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.services.egress_progress import SurfaceProgress
@@ -82,6 +92,7 @@ from app.modules.agent_surfaces.services.surface_connection_resolver import (
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagerService,
@@ -154,13 +165,66 @@ def build_member_reach(uow: SqlAlchemyUnitOfWork) -> MemberReach:
     )
 
 
-def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressService:
-    """The request-mode ingress service: every collaborator bound to one session."""
-    return AgentSurfaceIngressService(
+def build_app_event_handler(uow: SqlAlchemyUnitOfWork) -> AppEventHandler:
+    """The set-up and lifecycle flows a person drives from inside the chat app.
+
+    Two objects rather than three mixins on the ingress service: the
+    authorization half answers a question and has no edge back, so it is a
+    collaborator rather than a base class.
+    """
+    external_users = ExternalSurfaceUserRepository(uow)
+    membership = SqlAlchemySurfaceRoutingResolutionAdapter(uow)
+    repository = build_surface_repository(uow)
+    resolver = SurfaceCredentialResolver(uow=uow)
+    return AppEventHandler(
+        uow=uow,
+        surface_repository=repository,
+        adapter_registry=SurfacePlatformAdapterRegistry(),
+        credential_resolver=resolver,
+        pod_membership_port=membership,
+        external_user_repository=external_users,
+        access=ConfigurationAccess(
+            uow=uow,
+            surface_repository=repository,
+            pod_membership_port=membership,
+            identity_service=SurfaceIdentityResolutionService(uow, external_users),
+            external_user_repository=external_users,
+            credential_resolver=resolver,
+        ),
+    )
+
+
+def build_surface_router(uow: SqlAlchemyUnitOfWork) -> SurfaceRouter:
+    """Which surface an inbound event belongs to, and who sent it."""
+    external_users = ExternalSurfaceUserRepository(uow)
+    return SurfaceRouter(
         uow=uow,
         surface_repository=build_surface_repository(uow),
         conversation_link_repository=SurfaceConversationLinkRepository(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+        identity_service=SurfaceIdentityResolutionService(uow, external_users),
+        credential_resolver=SurfaceCredentialResolver(uow=uow),
+    )
+
+
+def build_conversation_binder(uow: SqlAlchemyUnitOfWork) -> ConversationBinder:
+    """Find or open the conversation a surface thread belongs to."""
+    return ConversationBinder(
+        uow=uow,
+        surface_repository=build_surface_repository(uow),
+        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+    )
+
+
+def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressService:
+    """The request-mode ingress service: every collaborator bound to one session."""
+    return AgentSurfaceIngressService(
+        uow=uow,
+        router=build_surface_router(uow),
+        binder=build_conversation_binder(uow),
+        surface_repository=build_surface_repository(uow),
+        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+        credential_resolver=SurfaceCredentialResolver(uow=uow),
     )
 
 

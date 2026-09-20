@@ -36,16 +36,29 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfaceChannelRoute,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.domain.ports import (
+from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
 )
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
+from app.modules.agent_surfaces.domain.ports import (
+    SurfaceInstallationRepositoryPort,
+    SurfacePodMembershipPort,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
+    SurfaceConversationLinkRepository,
+)
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+)
+from app.modules.agent_surfaces.services.identity_resolution_service import (
+    SurfaceIdentityResolutionService,
+)
 
 logger = get_logger(__name__)
 
@@ -57,8 +70,35 @@ def _addressed(parsed: ParsedInboundSurfaceEvent) -> bool:
     return bool(parsed.mentioned_agent or parsed.metadata.get("is_thread_reply"))
 
 
-class SurfaceRoutingMixin:
-    async def _match_surface_for_user(
+class SurfaceRouter:
+    """Which surface an inbound event belongs to, and who sent it.
+
+    An object rather than a mixin because it is the bottom of the module's
+    dependency graph: inbound and interactions both reach into it and it reaches
+    into neither. Flattening it onto one service is what made those two callers
+    unable to see their own collaborators -- `self._resolve_sender_identity`
+    resolves to nothing for a type checker, so its non-optional return type was
+    invisible and every use of the result read as possibly-None.
+    """
+
+    def __init__(
+        self,
+        *,
+        uow: SqlAlchemyUnitOfWork,
+        surface_repository: SurfaceInstallationRepositoryPort,
+        conversation_link_repository: SurfaceConversationLinkRepository,
+        pod_membership_port: SurfacePodMembershipPort,
+        identity_service: SurfaceIdentityResolutionService,
+        credential_resolver: SurfaceCredentialResolver,
+    ) -> None:
+        self.uow = uow
+        self.surface_repository = surface_repository
+        self.conversation_link_repository = conversation_link_repository
+        self.pod_membership_port = pod_membership_port
+        self.identity_service = identity_service
+        self.credential_resolver = credential_resolver
+
+    async def matches_user(
         self,
         surfaces: list[AgentSurfaceEntity],
         resolved_user: ResolvedSurfaceUser | None,
@@ -102,20 +142,21 @@ class SurfaceRoutingMixin:
         """
         if not candidates:
             return None
-        return await self._select_surface(
+        return await self.select_surface(
             candidates=candidates,
             resolved_user=ResolvedSurfaceUser(internal_user_id=user_id),
             parsed=parsed,
             platform=platform.value,
         )
 
-    async def _select_surface(
+    async def select_surface(
         self,
         *,
         candidates: list[AgentSurfaceEntity],
         resolved_user: ResolvedSurfaceUser | None,
         parsed: ParsedInboundSurfaceEvent,
         platform: str,
+        user_pod_ids: set[UUID] | None = None,
     ) -> AgentSurfaceEntity | None:
         """Pick which candidate surface an inbound event belongs to.
 
@@ -144,18 +185,27 @@ class SurfaceRoutingMixin:
         """
         # Resolve continuity once — it is both a fallback for unresolved senders
         # and the tie-decider when no valid default is set.
+        #
+        # Narrowed to the candidates, which changes an answer and not just a
+        # cost. Unnarrowed this returns the freshest link for this chat anywhere
+        # on the platform, and the `next(...)` below then keeps it only if it is
+        # a candidate — so a *fresher link on a non-candidate surface* returned
+        # an id that was immediately discarded, and the person's real ongoing
+        # conversation on a candidate surface was never looked for. The chat
+        # fell through to the tiebreak and was answered by a different pod. See
+        # `find_surface_id_for_external_thread`.
+        candidates_by_id = {surface.id: surface for surface in candidates}
         continuity_id = (
             await self.conversation_link_repository.find_surface_id_for_external_thread(
                 platform=platform,
                 external_channel_id=parsed.external_channel_id,
                 external_thread_id=parsed.external_thread_id,
                 external_user_id=parsed.sender_external_user_id,
+                surface_ids=list(candidates_by_id),
             )
         )
         continuity_surface = (
-            next((s for s in candidates if s.id == continuity_id), None)
-            if continuity_id is not None
-            else None
+            candidates_by_id.get(continuity_id) if continuity_id is not None else None
         )
 
         # Unresolved / no-membership-port senders: continuity is all we have.
@@ -167,7 +217,11 @@ class SurfaceRoutingMixin:
             return continuity_surface
 
         user_id = resolved_user.internal_user_id
-        user_pod_ids = set(await self.pod_membership_port.get_user_pod_ids(user_id))
+        # Already in hand when the shared bot's fan-in was narrowed by it; the
+        # narrowing and this filter are the same question, so asking twice is
+        # one indexed round trip on the busiest path for no new answer.
+        if user_pod_ids is None:
+            user_pod_ids = set(await self.pod_membership_port.get_user_pod_ids(user_id))
         member_candidates = [s for s in candidates if s.pod_id in user_pod_ids]
         if not member_candidates:
             # No pod the user belongs to; keep continuity if any (membership is
@@ -271,7 +325,7 @@ class SurfaceRoutingMixin:
                 user_id=user_id,
             )
 
-    async def _telegram_text_mention_enrich(
+    async def enrich_telegram_mention(
         self,
         parsed: ParsedInboundSurfaceEvent,
         surface: AgentSurfaceEntity,
@@ -320,14 +374,14 @@ class SurfaceRoutingMixin:
                 return parsed.model_copy(update={"mentioned_agent": True})
         return parsed
 
-    async def _resolve_route(
+    async def resolve_route(
         self,
         *,
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
     ) -> ResolvedSurfaceRoute | None:
         """Which agent answers this event, and under what conversation key."""
-        if parsed.is_dm or surface.mode is SurfaceMode.EMAIL:
+        if parsed.is_dm or surface.surface_type.is_email:
             return await self._direct_route(surface=surface, parsed=parsed)
         if surface.surface_type is SurfacePlatform.TELEGRAM:
             return await self._telegram_group_route(surface=surface, parsed=parsed)
@@ -343,7 +397,7 @@ class SurfaceRoutingMixin:
     ) -> ResolvedSurfaceRoute:
         """A DM or an email: the surface's agent, which is the only one it has."""
         agent_id = surface.agent_id
-        is_email = surface.mode is SurfaceMode.EMAIL
+        is_email = surface.surface_type.is_email
         return ResolvedSurfaceRoute(
             pod_id=surface.pod_id,
             agent_id=agent_id,
@@ -446,12 +500,8 @@ class SurfaceRoutingMixin:
     ) -> str | None:
         return await agent_name_for_agent_id(self.uow, agent_id)
 
-    def _resolve_platform(self, source: str) -> str | None:
-        platform = SurfacePlatform.from_source(source)
-        return platform.value if platform else None
-
     @staticmethod
-    def _scoped_fallback_surface(
+    def scoped_fallback_surface(
         request: SurfacePlatformWebhookIngress,
         surfaces: list[AgentSurfaceEntity],
     ) -> AgentSurfaceEntity | None:
@@ -459,7 +509,7 @@ class SurfaceRoutingMixin:
             return surfaces[0]
         return None
 
-    async def _resolve_sender_identity(
+    async def resolve_sender(
         self,
         *,
         adapter: SurfacePlatformAdapterPort,
@@ -496,7 +546,7 @@ class SurfaceRoutingMixin:
             )
         return resolved_user
 
-    def _is_self_email_event(
+    def is_self_addressed(
         self,
         *,
         surface: AgentSurfaceEntity,

@@ -11,7 +11,6 @@ from __future__ import annotations
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
-    SurfaceEventMode,
     SurfacePlatform,
 )
 
@@ -24,7 +23,6 @@ def telegram_requires_webhook_setup(surface: AgentSurfaceEntity) -> bool:
     """True when this surface needs a Telegram ``setWebhook`` registration."""
     return (
         surface.surface_type is SurfacePlatform.TELEGRAM
-        and surface.event_mode is SurfaceEventMode.WEBHOOK
         and surface.account_id is not None
         and not telegram_polling_enabled()
     )

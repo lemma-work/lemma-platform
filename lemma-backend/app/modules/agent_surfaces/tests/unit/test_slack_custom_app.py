@@ -11,7 +11,6 @@ from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
@@ -33,7 +32,6 @@ def _surface(*, webhook_secret: str | None = None) -> AgentSurfaceEntity:
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         config=SurfaceConfig(),
         is_active=True,

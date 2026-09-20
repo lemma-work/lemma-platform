@@ -123,15 +123,18 @@ async def _require_live_access(
 
 
 class ConversationLinker(Protocol):
-    """The one thing context-building needs from the ingress service.
+    """The one thing context-building needs: bind a thread to a conversation.
 
     Named here rather than imported so this module keeps to the services layer.
     Reaching for `api.dependencies` to get the handler put the module's own
-    FastAPI wiring on a service's import path, which is the wrong direction and
-    the only real import cycle this change introduced.
+    FastAPI wiring on a service's import path, which is the wrong direction.
+
+    `ConversationBinder` satisfies it, and it is the whole of what a caller has
+    to pass -- it used to be satisfied by an eight-mixin ingress service, which
+    is to say by ninety-two methods of which this is one.
     """
 
-    async def _get_or_create_conversation_link(
+    async def bind_conversation(
         self,
         *,
         surface: AgentSurfaceEntity,
@@ -176,7 +179,7 @@ async def prepare_personal_dm_context(
         conversation_kind="DM",
         route_key=f"personal:{route.id}",
     )
-    link, title = await linker._get_or_create_conversation_link(
+    link, title = await linker.bind_conversation(
         surface=installation, parsed=event, resolved_user=resolved, route=assistant
     )
     return SurfaceChatContext(

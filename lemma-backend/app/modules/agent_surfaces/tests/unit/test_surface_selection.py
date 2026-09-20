@@ -18,9 +18,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceConfig,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
-)
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 
 pytestmark = pytest.mark.asyncio
 
@@ -81,14 +79,17 @@ def _service(
             return_value=[saved_default] if saved_default is not None else []
         )
     )
-    # A unit of work is required now rather than optional, so this says so
-    # instead of passing `uow_factory=lambda: None` to dodge the check. Surface
-    # selection never touches the session; the doubles above answer everything.
-    service = AgentSurfaceIngressService(
+    # Selection is `SurfaceRouter`'s, and the router is the subject here. It
+    # used to be reached through an eight-mixin ingress service built with
+    # `uow_factory=lambda: None` -- a half-object, for a method that never
+    # touches a session.
+    service = SurfaceRouter(
         uow=SimpleNamespace(session=None),
-        conversation_link_repository=link_repo,
         surface_repository=surfaces,
+        conversation_link_repository=link_repo,
         pod_membership_port=membership,
+        identity_service=SimpleNamespace(),
+        credential_resolver=SimpleNamespace(),
     )
     # Expose the membership double for assertions.
     service._test_membership = membership  # type: ignore[attr-defined]
@@ -107,7 +108,7 @@ async def test_continuity_reuses_prior_surface_over_ordering():
         member_pod_ids={pod_a, pod_b},
         default_surface_id=None,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a, surf_b],
         resolved_user=user,
         parsed=_event(),
@@ -126,7 +127,7 @@ async def test_user_default_wins_when_multiple_member_pods():
         member_pod_ids={pod_a, pod_b},
         default_surface_id=surf_b.id,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a, surf_b],
         resolved_user=user,
         parsed=_event(),
@@ -145,7 +146,7 @@ async def test_deterministic_tiebreak_when_no_default():
         member_pod_ids={pod_a, pod_b},
         default_surface_id=None,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a, surf_b],
         resolved_user=user,
         parsed=_event(),
@@ -165,7 +166,7 @@ async def test_single_member_candidate_selected():
         member_pod_ids={pod_b},  # only member of pod B
         default_surface_id=None,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a, surf_b],
         resolved_user=user,
         parsed=_event(),
@@ -183,7 +184,7 @@ async def test_none_when_sender_not_a_member():
         member_pod_ids=set(),
         default_surface_id=None,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a],
         resolved_user=user,
         parsed=_event(),
@@ -200,7 +201,7 @@ async def test_none_when_unresolved_user_and_no_continuity():
         member_pod_ids={pod_a},
         default_surface_id=None,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a],
         resolved_user=ResolvedSurfaceUser(internal_user_id=None),
         parsed=_event(),
@@ -222,7 +223,7 @@ async def test_valid_default_wins_over_continuity():
         member_pod_ids={pod_a, pod_b},
         default_surface_id=surf_b.id,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a, surf_b],
         resolved_user=user,
         parsed=_event(),
@@ -246,7 +247,7 @@ async def test_stale_default_is_cleared_and_falls_back_to_continuity():
         default_surface_id=stale_surface_id,
         default_surface_pod_id=pod_left,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a, surf_b],
         resolved_user=user,
         parsed=_event(),
@@ -267,7 +268,7 @@ async def test_a_default_on_a_surface_that_is_gone_is_cleared():
         default_surface_id=uuid4(),
         default_surface_pod_id=None,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a],
         resolved_user=user,
         parsed=_event(),
@@ -297,7 +298,7 @@ async def test_a_default_another_bot_serves_is_not_treated_as_stale():
         # candidates this particular receiver delivered.
         default_surface_pod_id=pod_a,
     )
-    chosen = await service._select_surface(
+    chosen = await service.select_surface(
         candidates=[surf_a],
         resolved_user=user,
         parsed=_event(),
@@ -305,3 +306,46 @@ async def test_a_default_another_bot_serves_is_not_treated_as_stale():
     )
     assert chosen is surf_a  # routed here, because this is where it arrived
     service._test_membership.clear_user_default_surface_id.assert_not_awaited()
+
+
+async def test_continuity_is_the_freshest_thread_among_the_candidates():
+    """A link on a surface that is no longer a candidate must not mask one.
+
+    The continuity lookup used to return the freshest link for this chat
+    *anywhere on the platform*, and the caller then kept it only if it was a
+    candidate. So a shared-bot sender whose most recent thread is on a surface
+    that has since gone -- switched off, or served by a bot that did not deliver
+    this event -- got an id the caller discarded, and their real ongoing
+    conversation, on a candidate surface, was never looked for. The message fell
+    through to the deterministic tiebreak and was answered by whichever pod
+    sorted first.
+
+    The narrowing is the fix, and this asserts the shape of it: the candidate
+    ids reach the repository, so the answer cannot be a surface outside them.
+    """
+    member_pod = uuid4()
+    theirs = _surface(member_pod, uuid4())
+    stale_elsewhere = uuid4()
+
+    service = _service(
+        # What the database would return unnarrowed: the freshest link, on a
+        # surface this delivery has no candidate for.
+        continuity_id=stale_elsewhere,
+        member_pod_ids=[member_pod],
+        default_surface_id=None,
+    )
+    chosen = await service.select_surface(
+        candidates=[theirs],
+        resolved_user=ResolvedSurfaceUser(internal_user_id=uuid4()),
+        parsed=_event(),
+        platform=SurfacePlatform.TELEGRAM.value,
+    )
+
+    asked = service.conversation_link_repository.find_surface_id_for_external_thread
+    assert asked.await_args.kwargs["surface_ids"] == [theirs.id], (
+        "the candidates never reached the continuity lookup, so a link on a "
+        "surface outside them can still be returned and then discarded"
+    )
+    # The tiebreak still answers, and it is the member candidate — the point is
+    # that nothing outside the candidate set was consulted to get there.
+    assert chosen is not None and chosen.id == theirs.id

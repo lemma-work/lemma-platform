@@ -41,7 +41,7 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface

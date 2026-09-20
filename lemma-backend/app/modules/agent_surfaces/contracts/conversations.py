@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
 

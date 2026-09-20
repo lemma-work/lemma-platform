@@ -1,0 +1,247 @@
+<!-- Lemma finding widget v1. Lead with the judgement; the distribution supports it.
+     Replace every uppercase placeholder except __LEMMA_CONFIG__ before display. -->
+<style>
+/* Lemma widget tokens v1 — take this whole block verbatim, like the SDK loader.
+ *
+ * Every name is `var(--lemma-widget-*, <fallback>)`. The fallback is not
+ * decoration: the host delivers the palette by postMessage, so it arrives
+ * AFTER first paint, and it never arrives at all when the widget is opened
+ * standalone — promoted to an app, or followed from a share link. A bare
+ * `var(--lemma-widget-surface)` renders colourless there.
+ *
+ * The fallbacks are Lemma's own stock. The ground is paper, not screen: none
+ * of these neutrals is #ffffff, because a warm white on cream is a different
+ * material and needs no border to be found, where white on grey has to be
+ * outlined to exist. Dark is the same stock under less light.
+ */
+:root {
+  color-scheme: var(--lemma-widget-color-scheme, light);
+
+  /* Ground and surface */
+  --w-canvas:    var(--lemma-widget-bg, #f4f3ed);
+  --w-paper:     var(--lemma-widget-surface, #fffefa);
+  --w-chrome:    var(--lemma-widget-subtle, #ecebe1);
+  --w-raised:    var(--lemma-widget-raised, #f8f6fe);
+
+  /* Ink — three weights of it, and never a fourth */
+  --w-ink:       var(--lemma-widget-text, #20211f);
+  --w-ink-2:     var(--lemma-widget-muted, #55564e);
+  --w-ink-3:     var(--lemma-widget-faint, #6a6b62);
+
+  /* Rules. Translucent, so they modulate whatever they are laid over. */
+  --w-line:      var(--lemma-widget-border, rgb(32 33 31 / 0.05));
+  --w-line-2:    var(--lemma-widget-border-strong, rgb(32 33 31 / 0.10));
+
+  /* The accent means "you can act here". It should appear about four times
+     in a view, not forty. Every fill of it is written in `--w-on-accent`,
+     never in white: on a light accent in dark mode, white measures 1.2:1. */
+  --w-accent:      var(--lemma-widget-accent, #6b4fe0);
+  --w-on-accent:   var(--lemma-widget-on-accent, #fffefa);
+  --w-accent-soft: var(--lemma-widget-accent-soft, rgb(107 79 224 / 0.09));
+  --w-accent-line: var(--lemma-widget-accent-line, rgb(107 79 224 / 0.26));
+
+  /* State does not move with the accent. "Danger" is not a matter of taste,
+     and a status that borrows the accent has said nothing about itself. */
+  --w-ok:        var(--lemma-widget-success, #2f7d57);
+  --w-on-ok:     var(--lemma-widget-on-success, #fffefa);
+  --w-warn:      var(--lemma-widget-warning, #8a5f0f);
+  --w-bad:       var(--lemma-widget-danger, #b3261e);
+  --w-on-bad:    var(--lemma-widget-on-danger, #ffffff);
+  --w-bad-soft:  var(--lemma-widget-danger-soft, #fef2f2);
+  --w-info:      var(--lemma-widget-info, #2563a8);
+
+  /* A categorical ramp, in the host's order. */
+  --w-chart-1:   var(--lemma-widget-chart-1, #6b4fe0);
+  --w-chart-2:   var(--lemma-widget-chart-2, #2563a8);
+  --w-chart-3:   var(--lemma-widget-chart-3, #2f7d57);
+  --w-chart-4:   var(--lemma-widget-chart-4, #b5811f);
+  --w-chart-5:   var(--lemma-widget-chart-5, #6a6b62);
+
+  --w-r-sm:      var(--lemma-widget-radius-sm, 7px);
+  --w-r-md:      var(--lemma-widget-radius-md, 10px);
+  --w-r-lg:      var(--lemma-widget-radius, 14px);
+
+  /* Shadow carries the weight, so a card is an object resting on the page
+     rather than a rectangle someone drew a line around. */
+  --w-depth: var(--lemma-widget-shadow-rest,
+    0 1px 2px rgb(25 23 18 / 0.03), 0 4px 14px rgb(25 23 18 / 0.05), 0 10px 28px rgb(25 23 18 / 0.04));
+  --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.30);
+
+  /* Two faces. Figures take the mono one so columns of them line up and can
+     actually be compared; everything else takes the UI face. */
+  --w-ui:   var(--lemma-widget-font, "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif);
+  --w-mono: var(--lemma-widget-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: var(--lemma-widget-color-scheme, dark);
+    --w-canvas:    var(--lemma-widget-bg, #141310);
+    --w-paper:     var(--lemma-widget-surface, #1e1c17);
+    --w-chrome:    var(--lemma-widget-subtle, #272520);
+    --w-raised:    var(--lemma-widget-raised, #17161f);
+    --w-ink:       var(--lemma-widget-text, #f6f4ec);
+    --w-ink-2:     var(--lemma-widget-muted, #aaa79a);
+    --w-ink-3:     var(--lemma-widget-faint, #8b8878);
+    --w-line:      var(--lemma-widget-border, rgb(246 244 236 / 0.07));
+    --w-line-2:    var(--lemma-widget-border-strong, rgb(246 244 236 / 0.12));
+    --w-accent:      var(--lemma-widget-accent, #a08cff);
+    --w-on-accent:   var(--lemma-widget-on-accent, #1b1a18);
+    --w-accent-soft: var(--lemma-widget-accent-soft, rgb(160 140 255 / 0.14));
+    --w-accent-line: var(--lemma-widget-accent-line, rgb(160 140 255 / 0.32));
+    --w-ok:        var(--lemma-widget-success, #6ecf9c);
+    --w-on-ok:     var(--lemma-widget-on-success, #1b1a18);
+    --w-warn:      var(--lemma-widget-warning, #dcb06a);
+    --w-bad:       var(--lemma-widget-danger, #f08a7e);
+    --w-on-bad:    var(--lemma-widget-on-danger, #2a1512);
+    --w-bad-soft:  var(--lemma-widget-danger-soft, #331919);
+    --w-info:      var(--lemma-widget-info, #7fb4e8);
+    --w-chart-1:   var(--lemma-widget-chart-1, #a08cff);
+    --w-chart-2:   var(--lemma-widget-chart-2, #7fb4e8);
+    --w-chart-3:   var(--lemma-widget-chart-3, #6ecf9c);
+    --w-chart-4:   var(--lemma-widget-chart-4, #dcb06a);
+    --w-chart-5:   var(--lemma-widget-chart-5, #8b8878);
+    --w-depth: var(--lemma-widget-shadow-rest,
+      0 1px 2px rgb(0 0 0 / 0.22), 0 4px 14px rgb(0 0 0 / 0.26), 0 10px 28px rgb(0 0 0 / 0.22));
+    --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  }
+}
+
+/* Shared by every view: the card, the rules, the figures. */
+.w { font: 400 15px/1.5 var(--w-ui); color: var(--w-ink); display: block; }
+.w *, .w *::before, .w *::after { box-sizing: border-box; }
+.w [hidden] { display: none !important; }
+.w-card { background: var(--w-paper); border-radius: var(--w-r-lg); box-shadow: var(--w-depth), var(--w-lit); padding: 20px 22px; }
+/* Weight never exceeds 500. Hierarchy comes from size and the space above. */
+.w h2, .w h3 { margin: 0; font-weight: 500; letter-spacing: -0.025em; }
+.w-kicker { margin: 0 0 10px; font: 400 11px/1 var(--w-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--w-ink-3); }
+.w-num { font-family: var(--w-mono); font-variant-numeric: tabular-nums; }
+.w-state { padding: 18px; border-radius: var(--w-r-md); background: var(--w-chrome); color: var(--w-ink-2); text-align: center; font-size: 14px; }
+.w-state[data-kind="error"] { background: var(--w-bad-soft); color: var(--w-bad); }
+/* Nothing is offered that cannot be acted on, and the fill takes its own ink. */
+.w-ask { padding: 8px 15px; border: 0; border-radius: 999px; background: var(--w-accent); color: var(--w-on-accent); font: 400 13.5px/1 var(--w-ui); cursor: pointer; }
+.w-ask:hover { filter: brightness(1.07); }
+
+  /* ── this view ─────────────────────────────────────────────── */
+  .wf__lede { font-size: 26px; line-height: 1.18; }
+  .wf__lede b { font-weight: 500; font-family: var(--w-mono); font-variant-numeric: tabular-nums; }
+  .wf__sub { margin: 7px 0 0; font-size: 14.5px; color: var(--w-ink-2); }
+  /* One ruled bar rather than five cards: a share is a length, and five equal
+     boxes say every number matters the same, which is never why you asked. */
+  .wf__bar { display: flex; gap: 2px; height: 9px; margin: 21px 0 12px; }
+  .wf__bar i { display: block; min-width: 3px; border-radius: 2px; }
+  .wf__bar i:first-child { border-radius: 99px 2px 2px 99px; }
+  .wf__bar i:last-child { border-radius: 2px 99px 99px 2px; }
+  .wf__keys { display: flex; flex-wrap: wrap; gap: 5px 20px; margin: 0; padding: 0; list-style: none; }
+  .wf__keys li { display: flex; align-items: baseline; gap: 7px; font-size: 13.5px; color: var(--w-ink-2); }
+  .wf__keys s { width: 7px; height: 7px; flex: none; border-radius: 2px; transform: translateY(-1px); }
+  .wf__keys em { font: 500 14px/1 var(--w-mono); font-style: normal; font-variant-numeric: tabular-nums; color: var(--w-ink); }
+  .wf__note { display: flex; align-items: baseline; gap: 10px; margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--w-line-2); font-size: 14px; color: var(--w-ink-2); }
+  .wf__note b { font: 500 13px/1 var(--w-mono); color: var(--w-bad); }
+  @media (max-width: 420px) { .wf__lede { font-size: 22px; } }
+</style>
+
+<section class="w" data-lemma-widget-version="1">
+  <div id="wf-state" class="w-state">Loading…</div>
+  <div id="wf-card" class="w-card" hidden>
+    <p class="w-kicker">__WIDGET_SCOPE__</p>
+    <h2 class="wf__lede"><b id="wf-figure">—</b> <span id="wf-claim">__FOCUS_CLAIM__</span></h2>
+    <p id="wf-share" class="wf__sub"></p>
+    <div id="wf-bar" class="wf__bar" role="img" aria-labelledby="wf-keys"></div>
+    <ul id="wf-keys" class="wf__keys"></ul>
+    <p class="wf__note"><b>__FOCUS_DELTA__</b><span>__FOCUS_NOTE__</span></p>
+  </div>
+</section>
+
+<script>
+  (function () {
+    var stateEl = document.getElementById("wf-state");
+    var cardEl = document.getElementById("wf-card");
+
+    function fail(message) {
+      stateEl.hidden = false; stateEl.dataset.kind = "error";
+      stateEl.textContent = message || "Unable to load this view."; cardEl.hidden = true;
+    }
+    // Not an error. The widget is a cross-site iframe and the browser SDK
+    // authenticates by cookie, which some browsers and local HTTP setups
+    // withhold — the person is usually signed in, so this must not shout.
+    function notice(message) {
+      stateEl.hidden = false; delete stateEl.dataset.kind;
+      stateEl.textContent = message; cardEl.hidden = true;
+    }
+    function num(value) { return new Intl.NumberFormat().format(Number(value) || 0); }
+    function text(el, value) { document.getElementById(el).textContent = value; }
+
+    // Status owns a colour. A view where "done" and "blocked" are the same
+    // accent pill has told you nothing it could not have told you in prose.
+    // Anything unrecognised falls to the categorical ramp rather than guessing.
+    var MEANING = {
+      ok: /^(done|closed|resolved|complete|completed|shipped|passed|active|healthy)$/i,
+      bad: /^(blocked|failed|error|rejected|cancelled|canceled|overdue|down)$/i,
+      warn: /^(waiting|pending|review|in.?review|paused|stalled|at.?risk|queued)$/i,
+      info: /^(open|new|todo|to.?do|backlog|draft|in.?progress|running)$/i
+    };
+    function colour(key, index) {
+      for (var name in MEANING) if (MEANING[name].test(String(key))) return "var(--w-" + name + ")";
+      return "var(--w-chart-" + ((index % 5) + 1) + ")";
+    }
+
+    function render(groups, truncated) {
+      if (!groups.length) { notice("No __EMPTY_LABEL__ yet."); return; }
+
+      // Only a complete group list sums to a real total. When the row cap cut
+      // the groups short this is a floor, and the line below says so rather
+      // than printing a number that is simply false.
+      var total = groups.reduce(function (running, row) { return running + (Number(row.group_count) || 0); }, 0);
+      var focus = groups.filter(function (row) { return String(row.group_key) === "__FOCUS_VALUE__"; })[0];
+      var count = focus ? Number(focus.group_count) || 0 : 0;
+
+      text("wf-figure", num(count));
+      document.getElementById("wf-share").textContent =
+        (total ? (Math.round((count / total) * 1000) / 10) + "% of " : "") +
+        num(total) + " __EMPTY_LABEL__" + (truncated ? " across the groups shown" : "");
+
+      document.getElementById("wf-bar").innerHTML = groups.map(function (row, index) {
+        return '<i style="flex:' + (Number(row.group_count) || 0) + ';background:' + colour(row.group_key, index) + '"></i>';
+      }).join("");
+
+      document.getElementById("wf-keys").innerHTML = groups.slice(0, 6).map(function (row, index) {
+        var label = row.group_key == null ? "Unspecified" : String(row.group_key);
+        var safe = document.createElement("span");
+        safe.textContent = label;
+        return '<li><s style="background:' + colour(row.group_key, index) + '"></s>' +
+          '<em>' + num(row.group_count) + "</em>" + safe.innerHTML + "</li>";
+      }).join("");
+
+      cardEl.hidden = false; stateEl.hidden = true;
+    }
+
+    async function boot() {
+      try {
+        var client = new window.LemmaClient.LemmaClient();
+        var auth = await client.initialize();
+        if (!auth || auth.status !== "authenticated") {
+          notice("This view can't load pod data in this browser."); return;
+        }
+        // Grouped in SQL rather than counted over a page of records:
+        // `records.list` serves at most one capped page, so counting what came
+        // back would report a slice of the table as if it were the whole of it.
+        var response = await client.datastore.query(
+          "select __GROUP_FIELD__ as group_key, count(*) as group_count" +
+          " from __TABLE_NAME__ group by __GROUP_FIELD__ order by group_count desc"
+        );
+        render((response && response.items) || [], !!(response && response.truncated));
+      } catch (error) {
+        fail(error && error.message ? error.message : "Unable to load live pod data.");
+      }
+    }
+
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    if (!cfg.apiUrl) { fail("Lemma runtime configuration is unavailable."); return; }
+    var sdk = document.createElement("script");
+    sdk.src = cfg.apiUrl.replace(/\/$/, "") + "/public/sdk/lemma-client.js";
+    sdk.onload = boot;
+    sdk.onerror = function () { fail("Could not load the Lemma browser SDK."); };
+    document.head.appendChild(sdk);
+  })();
+</script>

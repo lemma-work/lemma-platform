@@ -5,7 +5,7 @@ answer and neither owns it: routing names the agent while it builds an inbound
 context, and delivery names it when notification delivery opens a conversation
 for a recipient.
 
-It used to be a ``SurfaceRoutingMixin`` method that ``NotificationEgress``
+It used to be a routing method that ``NotificationEgress``
 reached through ``self.egress`` -- which is why
 :class:`SurfaceNotificationEgressPort`, a port describing *sending*, requires a
 routing method. That worked only because both mixins were flattened onto one

@@ -92,7 +92,6 @@ async def _surface(db_session, pod_id, agent_id, platform: str) -> AgentSurface:
         agent_id=sibling.id,
         name=f"{platform.lower()}-{uuid4().hex[:8]}",
         surface_type=platform,
-        mode="DM",
         event_mode="WEBHOOK",
         credential_mode="SYSTEM",
         config={},
@@ -148,13 +147,25 @@ def _index_names(plan: dict) -> set[str]:
 
 
 def _rows_read(plan: dict, relation: str) -> int:
-    """Rows the scan on one relation actually touched, loops included."""
+    """Rows the scan on one relation actually touched, loops included.
+
+    Emitted *and* rejected. `Actual Rows` alone counts only what a node handed
+    upwards, which is the wrong number for this question: a scan that inspects
+    two hundred links and rejects all of them reports zero, exactly like an
+    index lookup that visited one. `Rows Removed by Filter` is the part that
+    grows with the deployment, so it is the part worth holding still.
+    """
     return sum(
-        int(node.get("Actual Rows", 0)) * int(node.get("Actual Loops", 1))
+        (int(node.get("Actual Rows", 0)) + int(node.get("Rows Removed by Filter", 0)))
+        * int(node.get("Actual Loops", 1))
         for node in _nodes(plan)
         if node.get("Relation Name") == relation
     )
 
+
+#: What one continuity lookup may touch, however many other chats exist. It
+#: finds a single thread; anything above a handful means the index was not used.
+_CONTINUITY_ROW_CEILING = 5
 
 _CONTINUITY_SQL = """
 SELECT surface_id FROM agent_surface_conversation_links
@@ -185,6 +196,23 @@ async def test_continuity_reads_an_index_not_the_platforms_whole_history(
         "channel": "the-chat-under-test",
         "user": "the-person-under-test",
     }
+    # The chat under test has to exist, or both plans emit nothing and the
+    # comparison below is two zeros. The first version of this test seeded only
+    # the crowd, so it held nothing still.
+    db_session.add(
+        AgentSurfaceConversationLinkModel(
+            id=uuid7(),
+            surface_id=surface.id,
+            conversation_id=conversation_id,
+            platform=_PLATFORM,
+            external_channel_id=params["channel"],
+            external_thread_id=params["thread"],
+            external_user_id=params["user"],
+            conversation_kind="DM",
+            last_event={},
+        )
+    )
+    await db_session.commit()
 
     await _seed_threads(db_session, surface.id, conversation_id, 5, prefix="few")
     await db_session.execute(text("ANALYZE agent_surface_conversation_links"))
@@ -199,9 +227,22 @@ async def test_continuity_reads_an_index_not_the_platforms_whole_history(
     )
     read_few = _rows_read(few, "agent_surface_conversation_links")
     read_many = _rows_read(many, "agent_surface_conversation_links")
-    assert read_many == read_few, (
+    assert read_few >= 1, (
+        "the chat under test was not found at all, so this measured nothing: "
+        f"{read_few} rows"
+    )
+    # Not equality. At six links a sequential scan is genuinely the cheaper
+    # plan and Postgres takes it, touching all six; at two hundred and six it
+    # switches to the index and touches one. The property is that the work does
+    # not *grow* with other people's chats -- so "no more than before", and a
+    # constant rather than a fraction of the table.
+    assert read_many <= read_few, (
         "the continuity read grew with the platform's other chats: "
-        f"{read_few} rows at 5 threads, {read_many} at 205"
+        f"{read_few} rows at 6 links, {read_many} at 206"
+    )
+    assert read_many <= _CONTINUITY_ROW_CEILING, (
+        f"the continuity read touched {read_many} rows at 206 links; it is "
+        "meant to find one thread, not scan the platform's history"
     )
 
 

@@ -34,7 +34,7 @@ from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     PrivateDeliveryUnavailable,
 )
 from app.modules.connectors.contracts.surfaces import account_with_secrets
-from app.modules.pod.contracts.agent_access import pod_organization_id
+from app.modules.pod.contracts.agent_access import pod_organization_ids
 
 #: Where a platform-wide webhook arrives on Lemma's own shared bot, so a surface
 #: bound to a customer's own account cannot be what it is for. Mirrors
@@ -230,11 +230,15 @@ async def _installation_transport(
             "The company installation could not be resolved"
         )
     async with uow_factory() as uow:
-        ownership = [
-            (surface, await pod_organization_id(uow, surface.pod_id))
-            for surface in surfaces
-        ]
-        organization_ids = {organization_id for _, organization_id in ownership}
+        # One statement, not one per surface. This asked `pod_organization_id`
+        # inside the comprehension purely to build the set below, so a workspace
+        # with twenty surfaces paid twenty round trips to answer "do they all
+        # belong to one organization" -- on the path a person's first private
+        # message takes.
+        by_pod = await pod_organization_ids(
+            uow, {surface.pod_id for surface in surfaces}
+        )
+        organization_ids = {by_pod.get(surface.pod_id) for surface in surfaces}
         account_ids = {surface.account_id for surface in surfaces}
         if (
             len(organization_ids) != 1
@@ -245,7 +249,7 @@ async def _installation_transport(
                 "The company installation ownership is ambiguous"
             )
         installation = min(surfaces, key=lambda surface: str(surface.id))
-        organization_id = ownership[0][1]
+        organization_id = by_pod[installation.pod_id]
         credentials = TypeAdapter(dict[str, JsonValue]).validate_python(
             native_credentials(platform, surface=installation)
         )

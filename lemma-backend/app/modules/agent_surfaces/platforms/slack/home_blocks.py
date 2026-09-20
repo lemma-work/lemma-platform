@@ -172,7 +172,7 @@ def _agent_blocks(agents: list) -> list[dict[str, Any]]:
     ]
 
 
-def _app_blocks(apps: list) -> list[dict[str, Any]]:
+def _app_blocks(apps: list[tuple[str, str]]) -> list[dict[str, Any]]:
     """One card per app, each a way out to the browser."""
     if not apps:
         return []
@@ -271,7 +271,7 @@ def app_home_view(
     agent_name: str,
     channel_ids: list[str],
     agents: list | None = None,
-    apps: list | None = None,
+    apps: list[tuple[str, str]] | None = None,
     workspace_url: str | None = None,
     logo_url: str | None = None,
     surface_choices: list[tuple[str, str]] | None = None,

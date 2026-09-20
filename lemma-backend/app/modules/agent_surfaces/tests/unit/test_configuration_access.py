@@ -8,14 +8,13 @@ from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.services.surface_configuration import (
-    SurfaceConfigurationMixin,
+from app.modules.agent_surfaces.services.configuration_access import (
+    ConfigurationAccess,
 )
 from app.modules.agent_surfaces.services.surface_consent import SurfaceConsentMixin
 from app.modules.agent_surfaces.services.surface_setup_read import SurfaceSetupReadMixin
@@ -26,8 +25,30 @@ from app.modules.test_support.surface_routing_double import (
 pytestmark = pytest.mark.asyncio
 
 
-class _Harness(SurfaceConfigurationMixin):
-    pass
+def _access(
+    *,
+    surface_repository=None,
+    external_user_repository=None,
+    identity_service=None,
+    pod_membership_port=None,
+    uow=None,
+) -> ConfigurationAccess:
+    """A real `ConfigurationAccess` over whichever doubles a test needs.
+
+    It was `class _Harness(SurfaceConfigurationMixin): pass` with the
+    collaborators assigned afterwards -- which meant a test could construct a
+    configuration object that had no repository at all, and each test picked its
+    own subset. The constructor takes them all, so a test that forgets one says
+    so here rather than at the first call that happens to need it.
+    """
+    return ConfigurationAccess(
+        uow=uow if uow is not None else SimpleNamespace(),
+        surface_repository=surface_repository or SimpleNamespace(),
+        pod_membership_port=pod_membership_port or SimpleNamespace(),
+        identity_service=identity_service or SimpleNamespace(),
+        external_user_repository=external_user_repository or SimpleNamespace(),
+        credential_resolver=SimpleNamespace(),
+    )
 
 
 def _surface(*, pod_id, surface_id=None):
@@ -51,26 +72,25 @@ async def test_configuration_candidates_are_scoped_to_verified_receiver_and_memb
     cross_app_surface = _surface(pod_id=member_pod)
     other_pod_surface = _surface(pod_id=other_pod)
 
-    harness = _Harness()
-    harness.surface_repository = SimpleNamespace(
-        list_active_for_routing=routing_surfaces_double(
-            [allowed_surface, cross_app_surface, other_pod_surface]
-        )
+    harness = _access(
+        surface_repository=SimpleNamespace(
+            list_active_for_routing=routing_surfaces_double(
+                [allowed_surface, cross_app_surface, other_pod_surface]
+            )
+        ),
+        external_user_repository=SimpleNamespace(
+            get_by_identity=AsyncMock(
+                return_value=SimpleNamespace(resolved_user_id=user_id)
+            )
+        ),
+        pod_membership_port=SimpleNamespace(
+            get_user_pod_ids=AsyncMock(return_value=[member_pod])
+        ),
     )
-    harness.external_user_repository = SimpleNamespace(
-        get_by_identity=AsyncMock(
-            return_value=SimpleNamespace(resolved_user_id=user_id)
-        )
-    )
-    harness.identity_service = SimpleNamespace()
-    harness.pod_membership_port = SimpleNamespace(
-        get_user_pod_ids=AsyncMock(return_value=[member_pod])
-    )
-    harness.uow = SimpleNamespace()
     context = SimpleNamespace(can=AsyncMock(return_value=True))
     auth_data = SimpleNamespace(build_user_context=AsyncMock(return_value=context))
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_configuration_authorization.create_authorization_data_service",
+        "app.modules.agent_surfaces.services.configuration_access.create_authorization_data_service",
         lambda _uow: auth_data,
     )
     request = SurfacePlatformWebhookIngress(
@@ -106,23 +126,22 @@ async def test_configuration_requires_the_same_agent_permission_as_http(
     user_id = uuid4()
     pod_id = uuid4()
     surface = _surface(pod_id=pod_id)
-    harness = _Harness()
-    harness.surface_repository = SimpleNamespace(
-        list_active_for_routing=routing_surfaces_double([surface])
+    harness = _access(
+        surface_repository=SimpleNamespace(
+            list_active_for_routing=routing_surfaces_double([surface])
+        ),
+        external_user_repository=SimpleNamespace(
+            get_by_identity=AsyncMock(
+                return_value=SimpleNamespace(resolved_user_id=user_id)
+            )
+        ),
+        pod_membership_port=SimpleNamespace(
+            get_user_pod_ids=AsyncMock(return_value=[pod_id])
+        ),
     )
-    harness.external_user_repository = SimpleNamespace(
-        get_by_identity=AsyncMock(
-            return_value=SimpleNamespace(resolved_user_id=user_id)
-        )
-    )
-    harness.identity_service = SimpleNamespace()
-    harness.pod_membership_port = SimpleNamespace(
-        get_user_pod_ids=AsyncMock(return_value=[pod_id])
-    )
-    harness.uow = SimpleNamespace()
     context = SimpleNamespace(can=AsyncMock(return_value=False))
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_configuration_authorization.create_authorization_data_service",
+        "app.modules.agent_surfaces.services.configuration_access.create_authorization_data_service",
         lambda _uow: SimpleNamespace(
             build_user_context=AsyncMock(return_value=context)
         ),
@@ -150,8 +169,7 @@ async def test_explicit_or_default_surface_replaces_first_row_selection():
     membership = SimpleNamespace(
         get_user_default_surface_id=AsyncMock(return_value=second.id)
     )
-    harness = _Harness()
-    harness.pod_membership_port = membership
+    harness = _access(pod_membership_port=membership)
     authorized = [(first, context), (second, context)]
 
     explicit = await harness._pick_configuration_surface(
@@ -178,7 +196,6 @@ def _whatsapp_surface(*, pod_id):
         name="whatsapp",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         config=SurfaceConfig(),
         is_active=True,

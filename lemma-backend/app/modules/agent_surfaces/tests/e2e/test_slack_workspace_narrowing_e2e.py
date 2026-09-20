@@ -83,7 +83,6 @@ async def _slack_surface(db_session, pod_id, agent_id, *, workspace: str | None)
         agent_id=await _sibling_agent(db_session, agent_id),
         name=f"slack-{uuid4().hex[:8]}",
         surface_type=SurfacePlatform.SLACK.value,
-        mode="DM",
         event_mode="WEBHOOK",
         credential_mode="SYSTEM",
         config={},

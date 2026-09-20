@@ -31,7 +31,7 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceChatContext,
 )
-from app.modules.agent_surfaces.domain.ports import (
+from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
 )
 from app.modules.agent_surfaces.services.pending_interaction_resume import (

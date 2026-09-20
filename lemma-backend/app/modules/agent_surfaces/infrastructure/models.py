@@ -31,8 +31,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     ExternalSurfaceUserEntity,
     SurfaceCredentialMode,
-    SurfaceEventMode,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.notification import (
@@ -43,6 +41,15 @@ from app.modules.agent_surfaces.domain.notification import (
 )
 
 logger = get_logger(__name__)
+
+
+#: The one value `event_mode` can hold and still name a live way to receive.
+#: An allow-list rather than a list of retired values, so a row holding anything
+#: unexpected reads as absent instead of as a webhook surface: `COMPOSIO_TRIGGER`
+#: went with the polled mailboxes, and no migration deletes those rows on
+#: purpose -- they are configuration somebody chose. This was a one-member enum,
+#: which is a longer way of writing a constant.
+_LIVE_EVENT_MODE = "WEBHOOK"
 
 
 class AgentSurface(UUIDAuditBase):
@@ -58,25 +65,19 @@ class AgentSurface(UUIDAuditBase):
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_agent_surface_pod_name"),
         # One agent reaches a platform in exactly one place: one Slack app, one
-        # WhatsApp number, one Telegram bot. Mirrors migration 0040; declared
-        # here too so a schema built from metadata carries the same guarantee,
-        # and so autogenerate does not emit a DROP for a constraint it cannot
-        # see. The WhatsApp numbers come from a pool and each surface takes one,
-        # so without this an agent could quietly hold two of a scarce thing.
+        # WhatsApp number, one Telegram bot. Declared here as well as in the
+        # migration that creates it, so a schema built from metadata carries the
+        # same guarantee and autogenerate does not emit a DROP for a constraint
+        # it cannot see. The WhatsApp numbers come from a pool and each surface
+        # takes one, so without this an agent could quietly hold two of a scarce
+        # thing.
         UniqueConstraint(
             "agent_id", "surface_type", name="uq_agent_surface_agent_type"
         ),
-        # Mirrors migration 0016. Declared here too so a schema built from
-        # metadata (tests, a fresh non-Alembic environment) carries the same
-        # guarantee — address allocation inserts and retries on conflict, which
-        # is only safe with this present, and autogenerate would otherwise emit
-        # a DROP for an index it cannot see. Functional and partial to match the
-        # lookup exactly: inbound routing compares lower(...), and most surfaces
-        # are not email and hold NULL here.
-        # One agent per pooled WhatsApp number. Mirrors migration 0041; the
-        # arriving number is the routing key once the numbers come from a pool,
-        # so two surfaces claiming one is an inbound with no answer to "which
-        # agent". Scoped to WhatsApp -- a Slack or Teams bot id may repeat.
+        # One agent per pooled WhatsApp number: the arriving number is the
+        # routing key once the numbers come from a pool, so two surfaces
+        # claiming one is an inbound with no answer to "which agent". Scoped to
+        # WhatsApp -- a Slack or Teams bot id may repeat.
         Index(
             "uq_agent_pooled_whatsapp_number",
             "surface_identity_id",
@@ -85,6 +86,11 @@ class AgentSurface(UUIDAuditBase):
                 "surface_type = 'WHATSAPP' AND surface_identity_id IS NOT NULL"
             ),
         ),
+        # Address allocation inserts and retries on conflict, which is only safe
+        # with this present, and autogenerate would otherwise emit a DROP for an
+        # index it cannot see. Functional and partial to match the lookup
+        # exactly: inbound routing compares lower(...), and most surfaces are
+        # not email and hold NULL here.
         Index(
             "uq_agent_surface_identity_email",
             func.lower(text("surface_identity_email")),
@@ -133,15 +139,22 @@ class AgentSurface(UUIDAuditBase):
 
     # Leading column of `ix_agent_surface_routing`; see there.
     surface_type: Mapped[str] = mapped_column(String(50))
-    # The three below are two- and three-member enums, and no query selects on
-    # any of them alone. `credential_mode` appears twice, both times as an extra
-    # predicate on a read already narrowed by platform and organisation; an
-    # index whose most common value matches most of the table is read cost on
-    # the write path and nothing on the read path.
-    mode: Mapped[str] = mapped_column(String(50), default="DM", server_default="DM")
+    # `mode` is gone. It was a two-member enum *derived* from `surface_type`,
+    # *validated* against it, then read back to re-derive it -- and nothing
+    # outside this module could set it: no API schema had the field, and
+    # `SurfaceCreateRequest` forbids extras, so the one place that documented
+    # sending `mode=DM` documented a 422.
+    #
+    # `event_mode` stays as a column and loses its enum: it still filters a row
+    # naming a retired way to receive (see `_LIVE_EVENT_MODE`), which is a fact
+    # about stored data rather than about the entity.
     event_mode: Mapped[str] = mapped_column(
         String(50), default="WEBHOOK", server_default="WEBHOOK"
     )
+    # No index: `credential_mode` appears in two queries, both times as an extra
+    # predicate on a read already narrowed by platform and organisation; an
+    # index whose most common value matches most of the table is read cost on
+    # the write path and nothing on the read path.
     credential_mode: Mapped[str] = mapped_column(
         String(50), default="SYSTEM", server_default="SYSTEM"
     )
@@ -207,11 +220,9 @@ class AgentSurface(UUIDAuditBase):
         if SurfacePlatform.from_source(raw_type) is None:
             self._log_retired_value("surface_type", raw_type)
             return None
-        raw_event_mode = self.event_mode or SurfaceEventMode.WEBHOOK.value
-        try:
-            SurfaceEventMode(raw_event_mode)
-        except ValueError:
-            self._log_retired_value("event_mode", str(raw_event_mode))
+        raw_event_mode = str(self.event_mode or _LIVE_EVENT_MODE).upper()
+        if raw_event_mode != _LIVE_EVENT_MODE:
+            self._log_retired_value("event_mode", raw_event_mode)
             return None
         return self.to_entity()
 
@@ -236,10 +247,6 @@ class AgentSurface(UUIDAuditBase):
             name=self.name or surface_type_raw.lower(),
             agent_id=self.agent_id,
             surface_type=SurfacePlatform(surface_type_raw.upper()),
-            mode=SurfaceMode(self.mode or SurfaceMode.DM.value),
-            event_mode=SurfaceEventMode(
-                self.event_mode or SurfaceEventMode.WEBHOOK.value
-            ),
             credential_mode=SurfaceCredentialMode(
                 self.credential_mode or SurfaceCredentialMode.SYSTEM.value
             ),
@@ -260,11 +267,12 @@ class AgentSurface(UUIDAuditBase):
 class AgentSurfaceExternalUser(UUIDAuditBase):
     __tablename__ = "agent_surface_external_users"
     __table_args__ = (
-        # NULLS NOT DISTINCT, mirroring migration 0041: Telegram writes no
-        # tenant, and by default Postgres would treat every one of those NULLs
-        # as a different value -- so the uniqueness this index exists for never
-        # applied to it. Declared here too so a schema built from metadata
-        # carries the same guarantee.
+        # NULLS NOT DISTINCT: Telegram writes no tenant, and by default
+        # Postgres would treat every one of those NULLs as a different value --
+        # so the uniqueness this index exists for never applied to it. Declared
+        # here too so a schema built from metadata carries the same guarantee.
+        # Why the repository cannot work without it is recorded on
+        # `ExternalSurfaceUserRepository`, which is what depends on it.
         Index(
             "ix_agent_surface_external_user_platform_tenant_external",
             "platform",

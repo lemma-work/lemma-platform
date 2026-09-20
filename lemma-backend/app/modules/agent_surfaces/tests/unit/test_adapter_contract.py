@@ -1,6 +1,6 @@
 """The adapter contract: what shared code may call on any platform.
 
-`SurfaceConfigurationMixin` and the ingress service reach for an adapter by
+`AppEventHandler` and the ingress service reach for an adapter by
 platform and call methods on whatever comes back. Nothing checked that every
 adapter could answer those calls, so #303 added `parse_channel_setup` to Slack
 alone and every Telegram and WhatsApp webhook raised `AttributeError` in the

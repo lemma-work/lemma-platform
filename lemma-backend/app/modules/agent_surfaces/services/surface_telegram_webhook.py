@@ -56,9 +56,9 @@ class _TelegramWebhookTransition:
     """What has to happen to Telegram's webhook because of an update.
 
     Telegram allows one webhook per bot token, so a surface that changes its
-    account or its event mode has to give the old registration up before the new
-    one is made. That is why both halves are decided together rather than each
-    looking at the surface on its own.
+    account has to give the old registration up before the new one is made.
+    That is why both halves are decided together rather than each looking at the
+    surface on its own.
     """
 
     register: bool
@@ -70,10 +70,9 @@ def _telegram_transition(
 ) -> _TelegramWebhookTransition:
     was_enabled = previous.is_active and telegram_requires_webhook_setup(previous)
     is_enabled = current.is_active and telegram_requires_webhook_setup(current)
-    binding_changed = (
-        previous.account_id != current.account_id
-        or previous.event_mode != current.event_mode
-    )
+    # The account, and only the account. This also compared `event_mode`, which
+    # had one member -- so the second half of the `or` was always False.
+    binding_changed = previous.account_id != current.account_id
     return _TelegramWebhookTransition(
         register=is_enabled
         and (not was_enabled or binding_changed or not current.webhook_secret),

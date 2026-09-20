@@ -30,7 +30,7 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
-from app.modules.agent_surfaces.services.surface_conversation_links import (
+from app.modules.agent_surfaces.services.conversation_binder import (
     should_start_a_new_conversation,
 )
 from app.modules.agent_surfaces.services.notification_delivery import (

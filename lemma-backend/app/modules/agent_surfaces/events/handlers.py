@@ -29,6 +29,7 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_worker,
 )
 from app.modules.agent_surfaces.composition import (
+    build_app_event_handler,
     build_surface_ingress,
     build_surface_service,
     build_surface_turn_starter,
@@ -264,10 +265,11 @@ async def _process_surface_webhook(
         # they are answered and stopped before the interaction/message paths.
         # Channel setup is time-critical: Slack expires the modal trigger in
         # ~3 seconds, so it runs before anything slower.
-        if await handler.try_handle_channel_setup(ingress_request):
+        app_events = build_app_event_handler(uow)
+        if await app_events.try_handle_channel_setup(ingress_request):
             return
 
-        if await handler.try_handle_lifecycle(ingress_request):
+        if await app_events.try_handle_lifecycle(ingress_request):
             return
 
         from app.modules.agent_surfaces.services.onboarding_inputs import (

@@ -9,7 +9,6 @@ from pydantic import BaseModel, ValidationError
 from app.core.config import settings
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
-    SurfaceEventMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
@@ -100,8 +99,6 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
     surface-specific URL (each account has its own webhook secret/verify
     token); the other platform webhooks share a platform-level URL.
     """
-    if surface.event_mode is not SurfaceEventMode.WEBHOOK:
-        return None
     if not public_https_api_url_available():
         return None
     base = settings.api_url.rstrip("/")

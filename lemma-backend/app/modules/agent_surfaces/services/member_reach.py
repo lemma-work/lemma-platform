@@ -34,7 +34,7 @@ from app.modules.agent_surfaces.domain.ports import SurfacePodMembershipPort
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
 from app.modules.agent_surfaces.services.egress_service import SurfaceEgress
