@@ -16,6 +16,9 @@ from sandbox_runtime.paths import HOME_ROOT
 @dataclass(frozen=True, slots=True)
 class QuiesceResult:
     terminated_unmanaged_processes: int
+    #: False when the browser was still running and could not be stopped, so
+    #: its runtime directory was deliberately left in place. See `quiesce`.
+    swept_browser_runtime: bool = True
 
 
 class WorkspaceQuiescer:
@@ -108,8 +111,27 @@ class WorkspaceQuiescer:
             # take the sandbox down with the browser. There, the close above
             # is the whole of the cleanup, which is why it reports itself.
             terminated = int(closed)
-        for path in self._directories:
-            shutil.rmtree(path, ignore_errors=True)
+        # **Only sweep the browser's own state once the browser is actually
+        # gone.** Every path in `_directories` is the agent-browser daemon's
+        # runtime -- its socket, its pid file, the target it is attached to.
+        #
+        # This is safe in the case it was written for, because a suspend ends
+        # every process. It is not safe when the close fails and nothing is
+        # terminated, which is reachable on the fabric that has no blanket
+        # sweep: the daemon keeps running against a runtime directory that no
+        # longer exists. Reproduced on the workspace image -- delete these
+        # while Chrome and the daemon are alive and the next
+        # `agent-browser open` cannot start Chrome at all, which is a
+        # sandbox whose browser is dead until something restarts it.
+        #
+        # Leaving them costs nothing: they are ephemeral by construction and
+        # the next start rewrites them. The files below are not the browser's
+        # -- an X lock naming a dead process does block the next Xvfb -- so
+        # they go either way.
+        swept = closed or terminated > 0
+        if swept:
+            for path in self._directories:
+                shutil.rmtree(path, ignore_errors=True)
         for path in self._files:
             path.unlink(missing_ok=True)
         # No lock-file cleanup. This removed `SingletonLock`,
@@ -123,7 +145,10 @@ class WorkspaceQuiescer:
         # record of a running browser's port, so removing it while one was up
         # left a browser nothing could find -- which is exactly what happened
         # when `start-browser` did the same thing on every call.
-        return QuiesceResult(terminated_unmanaged_processes=terminated)
+        return QuiesceResult(
+            terminated_unmanaged_processes=terminated,
+            swept_browser_runtime=swept,
+        )
 
     @staticmethod
     async def _terminate_unmanaged_processes() -> int:

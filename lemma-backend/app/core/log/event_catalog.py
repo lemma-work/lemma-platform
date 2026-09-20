@@ -826,7 +826,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.browser_view.accept_before_close_failed.observed': EventSpec('debug', frozenset({'doing', 'error_type'})),
     'workspace.browser_view.browser_start_failed.degraded': EventSpec('warning', frozenset({'reason'})),
     'workspace.browser_view.close_not_delivered.observed': EventSpec('debug', frozenset({'close_code', 'doing', 'error_type'})),
-    'workspace.browser_view.origin_refused.denied': EventSpec('warning', frozenset()),
+    'workspace.browser_view.origin_refused.denied': EventSpec('warning', frozenset({'origin_hint'})),
     'workspace.browser_view.public_sandbox_refused.denied': EventSpec('warning', frozenset()),
     'workspace.browser_view.relay_absent.degraded': EventSpec('warning', frozenset({'error_type'})),
     'workspace.browser_view.resize_failed.degraded': EventSpec('warning', frozenset({'error_type'})),
@@ -867,4 +867,5 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workspace.sandbox_sweeper.released_idle_sandboxes.observed': EventSpec('info', frozenset({'released_count'})),
     'workspace.sandbox_sweeper.released_unreachable_sandbox.observed': EventSpec('info', frozenset({'error_type', 'idle_after_seconds', 'sandbox_id'})),
     'workspace.sandbox_sweeper.unattributed_objects': EventSpec('info', frozenset({'count', 'sample'})),
+    'workspace.ws_bridge.origin_pattern_invalid.denied': EventSpec('warning', frozenset()),
 }

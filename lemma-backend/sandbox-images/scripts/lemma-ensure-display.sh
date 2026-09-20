@@ -456,10 +456,55 @@ else
   set -- about:blank
   opened_cold=1
 fi
-if agent-browser open "$@" >"$open_log" 2>&1; then
+# A daemon whose CDP session has gone stale cannot be talked out of it, and
+# on a sandbox with a proxy it fails in the worst available way: installing
+# the network controls is also what answers Chrome's `Fetch.authRequired`,
+# so when that call fails with
+#
+#     Failed to install browser network controls:
+#       CDP error (Fetch.enable): Session with given id not found.
+#
+# every request through a perfectly healthy credentialed proxy comes back
+# 407 and no page ever loads. Seen in production: the browser worked, a
+# person was handed the wheel, and every open after that failed this way --
+# an agent then spent twenty commands trying to reason its way out, because
+# nothing in the message says the daemon is the thing that is wrong.
+#
+# So it is retried exactly once, against a daemon that has been stopped
+# first. `close --all` is the stop, because it is the only one that commits
+# Chrome's cookie store, and `--all` because the stale session may belong to
+# a named sign-in session rather than this one. One retry, not a loop: if a
+# fresh daemon fails the same way the fault is not staleness and a second
+# attempt only delays the error reaching somebody.
+# The command *is* the function's exit status. Written as an `if` with a
+# `return $?` in the else branch, it always returned 0 -- the `if` statement
+# had completed by then and `$?` was its own success.
+run_open() {
+  agent-browser open "$@" >"$open_log" 2>&1
+}
+
+if run_open "$@"; then
   open_status=0
 else
   open_status=$?
+  # Both halves, not either. An alternation here meant any failure that
+  # merely mentioned the network controls -- a permanent one included --
+  # closed every session in the sandbox and retried, which costs a person
+  # whatever else was open for a fault a retry cannot fix.
+  if grep -qiF 'Failed to install browser network controls' "$open_log" 2>/dev/null &&
+    grep -qiF 'Session with given id not found' "$open_log" 2>/dev/null; then
+    echo "lemma-ensure-display: the browser daemon's session is stale;" \
+      "restarting it and trying once more" >&2
+    agent-browser close --all >/dev/null 2>&1 || true
+    if run_open "$@"; then
+      open_status=0
+    else
+      open_status=$?
+      echo "lemma-ensure-display: still failing after a daemon restart." \
+        "If a proxy is configured, requests will return 407 because the" \
+        "network controls that answer its auth challenge are not installed." >&2
+    fi
+  fi
 fi
 if [ "$open_status" = "0" ]; then
   mkdir -p "$(dirname "$PROXY_STAMP")"
