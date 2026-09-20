@@ -272,7 +272,7 @@ async def _published_whatsapp_verification(
     extra work.
     """
     verification = parse_reserved_verification_message(payload)
-    if verification is None or not is_whatsapp_verification_configured():
+    if verification is None or not await is_whatsapp_verification_configured():
         return False
     code, sender_wa_id, destination_id, message_id = verification
     if destination_id != surface_settings.whatsapp_phone_number_id:

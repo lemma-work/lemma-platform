@@ -620,3 +620,92 @@ async def test_a_deployment_with_no_pool_still_gets_the_shared_line(
 
     assert created.status_code == 200, created.text
     assert created.json()["surface_identity_id"] is None
+
+
+async def test_the_shared_line_can_live_entirely_in_the_pool(
+    db_session, monkeypatch
+) -> None:
+    """Settings are a pool of one, and the pool is settings of many.
+
+    A deployment that puts every number in `surface_whatsapp_numbers` and sets
+    no `WHATSAPP_*` variables owns a shared line just as much as one configured
+    the old way. Answering "not configured" for it would leave mobile
+    verification switched off with working credentials sitting in a table --
+    findable only by someone who already suspected it.
+    """
+    from app.modules.agent_surfaces.contracts.whatsapp import (
+        global_whatsapp_configuration,
+    )
+    from app.modules.identity.services.whatsapp_mobile_verification import (
+        is_whatsapp_verification_configured,
+    )
+    from app.modules.identity.config import identity_settings
+
+    for unset in (
+        "whatsapp_access_token",
+        "whatsapp_phone_number_id",
+        "whatsapp_app_secret",
+        "whatsapp_verify_token",
+        "whatsapp_display_phone_number",
+    ):
+        monkeypatch.setattr(surface_settings, unset, None)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", True
+    )
+
+    await WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session)).create(
+        WhatsAppNumberEntity(
+            phone_number_id="shared-in-pool",
+            display_phone_number="+15550009999",
+            waba_id="waba-shared",
+            access_token="pool-token",
+            app_secret="pool-secret",
+            verify_token="pool-verify",
+            role=WhatsAppNumberRole.SHARED,
+        )
+    )
+    await db_session.commit()
+
+    resolved = await global_whatsapp_configuration()
+
+    assert resolved.phone_number_id == "shared-in-pool", (
+        "a deployment configured entirely through the pool had no shared line, "
+        "so identity could neither send nor receive a verification"
+    )
+    assert resolved.access_token == "pool-token"
+    assert await is_whatsapp_verification_configured() is True
+
+
+async def test_settings_still_win_where_they_are_set(db_session, monkeypatch) -> None:
+    """The old way keeps working, and keeps winning.
+
+    Every deployment alive is configured through the environment. If a `SHARED`
+    row could quietly override it, adding a number to the pool for some other
+    reason would move the line identity verifies on -- silently, and only for
+    the deployments that had both.
+    """
+    from app.modules.agent_surfaces.contracts.whatsapp import (
+        global_whatsapp_configuration,
+    )
+
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "env-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "env-pn")
+    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "env-secret")
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "env-verify")
+
+    await WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session)).create(
+        WhatsAppNumberEntity(
+            phone_number_id="pool-shared",
+            display_phone_number="+15550008888",
+            waba_id="waba-other",
+            access_token="pool-token",
+            role=WhatsAppNumberRole.SHARED,
+        )
+    )
+    await db_session.commit()
+
+    resolved = await global_whatsapp_configuration()
+
+    assert resolved.phone_number_id == "env-pn"
+    assert resolved.access_token == "env-token"

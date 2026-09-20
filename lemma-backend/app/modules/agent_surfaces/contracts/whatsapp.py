@@ -21,11 +21,23 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.whatsapp_numbers import (
+    WhatsAppNumberEntity,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.client import (
     WhatsAppApiError,
     WhatsAppClient,
 )
+
+
+logger = get_logger(__name__)
 
 
 class GlobalWhatsAppDeliveryError(RuntimeError):
@@ -44,8 +56,71 @@ class GlobalWhatsAppConfiguration:
     webhook_security_enabled: bool
 
 
-def global_whatsapp_configuration() -> GlobalWhatsAppConfiguration:
-    """Return the single surface-owned configuration used by identity."""
+async def global_whatsapp_configuration() -> GlobalWhatsAppConfiguration:
+    """The deployment's shared WhatsApp line: settings, or the `SHARED` pool row.
+
+    **Settings are a pool of one.** Before there was a pool, the shared line was
+    whatever `WHATSAPP_*` named, and that has to keep being true -- every
+    deployment alive is configured that way and none of them should notice a
+    pool arriving. But the reverse has to work too: a deployment that puts all
+    of its numbers in the pool and sets no environment variables owns a shared
+    line just as much, and refusing to see it would leave mobile verification
+    quietly switched off with the credentials sitting in a table.
+
+    So settings win where present and the `SHARED` row answers where they are
+    not, field by field rather than whole-record -- a deployment that moved its
+    token to the pool but left `WHATSAPP_PHONE_NUMBER_ID` in place gets the
+    obvious answer instead of an arbitrary one.
+
+    Async because the fallback is a read, and it opens its own session because
+    the callers are identity's and identity has no SQL unit of work -- it is a
+    Redis-backed service. Called once per verification start or status, so the
+    session is not on a hot path.
+    """
+    if _settings_are_complete():
+        return _from_settings()
+    shared = await _shared_row()
+    if shared is None:
+        return _from_settings()
+    return GlobalWhatsAppConfiguration(
+        access_token=surface_settings.whatsapp_access_token or shared.access_token,
+        phone_number_id=(
+            surface_settings.whatsapp_phone_number_id or shared.phone_number_id
+        ),
+        display_phone_number=(
+            surface_settings.whatsapp_display_phone_number
+            or shared.display_phone_number
+        ),
+        app_secret=surface_settings.whatsapp_app_secret or shared.app_secret,
+        verify_token=surface_settings.whatsapp_verify_token or shared.verify_token,
+        webhook_security_enabled=surface_settings.surface_webhook_security_enabled,
+    )
+
+
+async def _shared_row() -> WhatsAppNumberEntity | None:
+    """The `SHARED` pool row, or nothing if it cannot be read.
+
+    Fails soft on purpose. This is a *configuration* resolver on the path of
+    every mobile verification, and the answer it exists to improve is one that
+    settings can already give. A database that is unreachable, a migration not
+    yet run, a caller with no database at all -- none of those should turn
+    "verification works from settings" into an exception, which is what a bare
+    read here would do to any deployment whose settings are merely incomplete.
+    """
+    try:
+        async with async_session_maker() as session:
+            return await WhatsAppNumberRepository(
+                SqlAlchemyUnitOfWork(session)
+            ).shared_number()
+    except Exception:
+        logger.warning(
+            "agent_surfaces.whatsapp_contract.shared_number_unreadable.degraded",
+            exc_info=True,
+        )
+        return None
+
+
+def _from_settings() -> GlobalWhatsAppConfiguration:
     return GlobalWhatsAppConfiguration(
         access_token=surface_settings.whatsapp_access_token,
         phone_number_id=surface_settings.whatsapp_phone_number_id,
@@ -56,6 +131,21 @@ def global_whatsapp_configuration() -> GlobalWhatsAppConfiguration:
     )
 
 
+def _settings_are_complete() -> bool:
+    """Everything the shared line needs, already in the environment.
+
+    Checked before the read rather than after, so the overwhelmingly common
+    deployment -- one number, in settings, no pool at all -- pays nothing for a
+    feature it is not using.
+    """
+    return bool(
+        surface_settings.whatsapp_access_token
+        and surface_settings.whatsapp_phone_number_id
+        and surface_settings.whatsapp_app_secret
+        and surface_settings.whatsapp_verify_token
+    )
+
+
 async def send_global_whatsapp_text(
     *,
     to: str,
@@ -63,7 +153,7 @@ async def send_global_whatsapp_text(
     reply_to_message_id: str | None = None,
 ) -> bool:
     """Send identity feedback through the existing global WhatsApp transport."""
-    whatsapp = global_whatsapp_configuration()
+    whatsapp = await global_whatsapp_configuration()
     if not whatsapp.access_token or not whatsapp.phone_number_id:
         return False
     client = WhatsAppClient(
