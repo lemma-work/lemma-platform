@@ -302,7 +302,14 @@ class _ClassShape(ast.NodeVisitor):
                 declared.add(child.attr)
             else:
                 read.add(child.attr)
-        self.classes[node.name] = {
+        # Keyed by file *and* name. Keyed by name alone, the sixteen duplicate
+        # class names in this tree collided: `AgentRepository` is a Protocol in
+        # `agent/domain/ports.py` and a concrete class in
+        # `agent/infrastructure/repositories/`, and whichever was visited last
+        # replaced the other -- so one of them stopped being measured at all,
+        # and anything inheriting the name resolved through whichever won.
+        self.classes[f"{self.relative_path}:{node.name}"] = {
+            "name": node.name,
             "key": f"{self.relative_path}:{node.name}",
             "bases": [base.id for base in node.bases if isinstance(base, ast.Name)],
             "unresolved_bases": len(node.bases)
@@ -316,40 +323,60 @@ class _ClassShape(ast.NodeVisitor):
 def _class_shapes(
     classes: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, int], dict[str, int]]:
-    """Undeclared reads and inheritance depth, resolved across the whole app."""
+    """Undeclared reads and ancestry size, resolved across the whole app.
 
-    def inherited(name: str, seen: frozenset[str]) -> set[str]:
-        entry = classes.get(name)
-        if entry is None or name in seen:
+    Entries are keyed by ``path:name``; a base, written in source, is only a
+    name. So base resolution goes through an index built here, and a name held
+    by more than one class is *unresolvable* rather than resolved to whichever
+    file happened to be walked last. An unresolvable base already means the
+    class is skipped for `undeclared_self_attributes` -- the same rule that
+    skips anything inheriting a pydantic model or a Protocol -- so an ambiguous
+    name costs coverage and never costs correctness.
+    """
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for entry in classes.values():
+        by_name.setdefault(entry["name"], []).append(entry)
+
+    def resolve(base: str) -> dict[str, Any] | None:
+        found = by_name.get(base)
+        return found[0] if found is not None and len(found) == 1 else None
+
+    def inherited(entry: dict[str, Any], seen: frozenset[str]) -> set[str]:
+        if entry["key"] in seen:
             return set()
         names = set(entry["declared"])
         for base in entry["bases"]:
-            names |= inherited(base, seen | {name})
+            found = resolve(base)
+            if found is not None:
+                names |= inherited(found, seen | {entry["key"]})
         return names
 
-    def ancestry(name: str, seen: frozenset[str]) -> set[str]:
-        entry = classes.get(name)
-        if entry is None or name in seen:
+    def ancestry(entry: dict[str, Any], seen: frozenset[str]) -> set[str]:
+        if entry["key"] in seen:
             return set()
         found: set[str] = set()
         for base in entry["bases"]:
             found.add(base)
-            found |= ancestry(base, seen | {name})
+            resolved = resolve(base)
+            if resolved is not None:
+                found |= ancestry(resolved, seen | {entry["key"]})
         return found
 
     undeclared: dict[str, int] = {}
     deep: dict[str, int] = {}
-    for name, entry in classes.items():
-        made_of = 1 + len(ancestry(name, frozenset()))
+    for entry in classes.values():
+        made_of = 1 + len(ancestry(entry, frozenset()))
         if made_of > MAX_ANCESTRY:
             deep[entry["key"]] = made_of
         if entry["unresolved_bases"] or any(
-            base not in classes for base in entry["bases"]
+            resolve(base) is None for base in entry["bases"]
         ):
             continue
         known = set(entry["declared"])
         for base in entry["bases"]:
-            known |= inherited(base, frozenset({name}))
+            found = resolve(base)
+            if found is not None:
+                known |= inherited(found, frozenset({entry["key"]}))
         missing = entry["read"] - known
         if missing:
             undeclared[entry["key"]] = len(missing)

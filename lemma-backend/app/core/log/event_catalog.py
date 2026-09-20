@@ -200,6 +200,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.egress.progress_clear_failed.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.egress.progress_finish_failed.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.egress.progress_no_target.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
+    'agent_surfaces.egress.progress_typing_failed.degraded': EventSpec('warning', frozenset({'conversation_id'})),
     'agent_surfaces.egress.progress_update_failed.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.egress.sign_in_not_delivered.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.egress.skipped_invalid_last.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
