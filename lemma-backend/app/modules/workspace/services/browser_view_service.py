@@ -13,6 +13,8 @@ from the request and had to defend it.
 
 from __future__ import annotations
 
+import asyncio
+
 from contextlib import suppress
 from uuid import UUID
 
@@ -131,12 +133,21 @@ class BrowserViewService:
         handle = await service.ensure(sandbox.id)
         provider, instance = service.reach(handle)
         relay = BrowserRelayClient(provider, instance)
-        await relay.deliver_token()
         # Beside the token, and for the same reason: written on every use
         # rather than asked about. This is what makes withdrawing a proxy
         # server-side actually reach a sandbox -- it used to be baked in at
         # create and could never be taken back.
-        await relay.deliver_browser_proxy(sandbox.id, sandbox.kind)
+        #
+        # Together, because they are two independent writes to two paths and
+        # each is a round trip into the sandbox. Serially they put one more
+        # of those in front of every single viewer attach, on a path where
+        # the round trip is the cost: measured against a local Docker
+        # fabric, one exec is ~50ms against ~22ms for the whole warm
+        # display check the attach is actually here to run.
+        await asyncio.gather(
+            relay.deliver_token(),
+            relay.deliver_browser_proxy(sandbox.id, sandbox.kind),
+        )
         return relay
 
     async def status(self, user_id: UUID) -> BrowserStatus:

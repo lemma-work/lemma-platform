@@ -32,6 +32,7 @@ from supertokens_python.recipe.session.asyncio import (
 
 from app.core.api.dependencies import CurrentUser
 from app.core.request_context import create_inherited_task
+
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.workspace.services.browser_relay_client import (
@@ -50,6 +51,8 @@ from app.modules.workspace.services.ws_bridge import (
     bridge,
     connect_upstream,
     origin_is_allowed,
+    origins_from,
+    origin_refusal_hint,
 )
 from sandbox_runtime.errors import SandboxCapabilityUnsupported
 
@@ -108,16 +111,43 @@ class BrowserStatusResponse(BaseModel):
 def allowed_origins() -> tuple[str, ...]:
     """Where a browser may legitimately open this socket from.
 
+    **`cors_origins` is the list, and that is the fix.** This used to name
+    three settings of its own -- `frontend_url`, `api_url`,
+    `auth_frontend_url` -- and a deployment that serves the app on more than
+    one hostname then had a browser-view allowlist narrower than the
+    allowlist every other request in the process is checked against. Watched
+    in production: the app was served on an apex and a `www.` host, both in
+    `cors_origins`, while this permitted only the `frontend_url` host. A
+    person handed the wheel for a sign-in had their socket refused six times
+    and never saw a screen, and the agent reported that they had chosen not
+    to sign in.
+
+    The three settings stay in, because one of them can legitimately be
+    absent from `cors_origins` on a single-host deployment, and dropping a
+    door somebody is already coming through is not a fix. They go through
+    `_origin_of` now, so a configured URL that carries a path contributes
+    the origin it is on rather than a string no browser can match.
+
     A dependency rather than a module function so a test can supply its own,
     which is injection rather than reaching into the module under test and
     replacing part of it.
     """
-    candidates = (
+    return origins_from(
+        settings.cors_origins,
         settings.frontend_url,
         settings.api_url,
         getattr(settings, "auth_frontend_url", None),
     )
-    return tuple(str(c) for c in candidates if c)
+
+
+def allowed_origin_pattern() -> str | None:
+    """`cors_origin_regex`, for deployments whose frontends are per-tenant.
+
+    The same argument as above: a deployment that needs a pattern to serve
+    its app needs it to watch a browser too. Kept a separate dependency so
+    a test can supply one without also supplying the list.
+    """
+    return settings.cors_origin_regex
 
 
 def _engine_error() -> type[Exception]:
@@ -422,6 +452,7 @@ async def browser_view(
     websocket: WebSocket,
     service: Annotated[BrowserViewService, Depends(browser_view_service)],
     origins: Annotated[tuple[str, ...], Depends(allowed_origins)],
+    origin_pattern: Annotated[str | None, Depends(allowed_origin_pattern)],
     mode: str = Query(default=MODE_VIEW),
     origin: str | None = Query(default=None),
     conversation: UUID | None = Query(default=None),
@@ -443,11 +474,19 @@ async def browser_view(
     whole shared display, not a session-scoped tab, so there is nothing else
     here to name.
     """
-    if not origin_is_allowed(websocket.headers.get("origin"), allowed=origins):
+    sent = websocket.headers.get("origin")
+    if not origin_is_allowed(sent, allowed=origins, pattern=origin_pattern):
         # Browsers do not apply same-origin to WebSockets but do send cookies,
         # so without this any page could open this socket as the signed-in
         # person and both watch their screen and type into it.
-        logger.warning("workspace.browser_view.origin_refused.denied")
+        #
+        # The hint is parsed and scrubbed, never the raw header -- but it is
+        # *there*, which it was not. A refusal that logged nothing cost a
+        # person their sign-in and left no way to tell why from the record.
+        logger.warning(
+            "workspace.browser_view.origin_refused.denied",
+            origin_hint=origin_refusal_hint(sent, allowed=origins),
+        )
         await _refuse(websocket, CLOSE_ORIGIN_REFUSED)
         return
 

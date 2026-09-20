@@ -15,8 +15,10 @@ import pytest
 
 from app.modules.workspace.api.controllers import browser_view_controller as view
 from app.modules.workspace.services.ws_bridge import (
+    origins_from,
     MAX_FRAME_BYTES,
     origin_is_allowed,
+    origin_refusal_hint,
 )
 
 
@@ -42,6 +44,128 @@ def test_a_page_on_another_site_cannot_open_the_socket() -> None:
 def test_a_trailing_slash_or_case_does_not_decide_the_answer() -> None:
     allowed = ("https://app.lemma.test/",)
     assert origin_is_allowed("https://APP.lemma.test", allowed=allowed) is True
+
+
+class TestTheListIsTheOneTheRestOfTheAppUses:
+    """The refusal that cost somebody a sign-in.
+
+    `browser_sign_in` hands a person the wheel through this socket. Watched
+    in production: the app was served on an apex host and a `www.` host,
+    both configured in `cors_origins`, while this allowlist was built from
+    `frontend_url` / `api_url` / `auth_frontend_url` alone and permitted a
+    third host only. Six refusals in two minutes, no screen for the person,
+    and the agent reported that they had declined to sign in.
+    """
+
+    #: The deployment that failed: the app served on an apex and a `www.`
+    #: host, both configured, while `frontend_url` named a third and
+    #: `auth_frontend_url` carried a path.
+    CONFIGURED = (
+        "https://lemma.test",
+        "https://www.lemma.test",
+        "http://localhost:3000",
+    )
+    URLS = (
+        "https://train.lemma.test/",
+        "https://api.lemma.test",
+        "https://train.lemma.test/auth",
+    )
+
+    def _allowed(self) -> tuple[str, ...]:
+        # The pure builder, not a patched `settings`: a double inside the
+        # subject would survive a rename of the settings this is about.
+        return origins_from(self.CONFIGURED, *self.URLS)
+
+    def test_every_host_the_app_is_served_on_can_watch(self) -> None:
+        allowed = self._allowed()
+
+        for origin in (
+            "https://lemma.test",
+            "https://www.lemma.test",
+            "https://train.lemma.test",
+            "http://localhost:3000",
+        ):
+            assert origin_is_allowed(origin, allowed=allowed) is True, origin
+
+    def test_a_configured_url_contributes_its_origin_not_its_path(self) -> None:
+        """`auth_frontend_url` is a sign-in *page*, and on the deployment
+        that failed it read `https://<host>/auth`. No browser ever sends
+        that as an `Origin`, so as a candidate it was dead weight that
+        looked like coverage."""
+        allowed = self._allowed()
+
+        assert "https://train.lemma.test/auth" not in allowed
+        assert "https://train.lemma.test" in allowed
+
+    def test_widening_the_list_does_not_widen_it_to_everyone(self) -> None:
+        allowed = self._allowed()
+
+        for origin in (
+            "https://evil.test",
+            "https://lemma.test.evil.test",
+            "https://wwwXlemma.test",
+        ):
+            assert origin_is_allowed(origin, allowed=allowed) is False, origin
+
+
+class TestThePatternForPerTenantFrontends:
+    def test_a_tenant_host_matches_the_configured_pattern(self) -> None:
+        pattern = r"^https://[a-z0-9-]+\.workspaces\.lemma\.test$"
+
+        assert (
+            origin_is_allowed(
+                "https://abc.workspaces.lemma.test", allowed=(), pattern=pattern
+            )
+            is True
+        )
+
+    def test_an_unanchored_pattern_is_anchored_anyway(self) -> None:
+        """`re.fullmatch`, not `search`. A pattern written without anchors is
+        the ordinary way a regex allowlist lets in
+        `https://evil.test/?x=abc.workspaces.lemma.test`."""
+        pattern = r"https://[a-z0-9-]+\.workspaces\.lemma\.test"
+
+        assert (
+            origin_is_allowed(
+                "https://evil.test/?x=abc.workspaces.lemma.test",
+                allowed=(),
+                pattern=pattern,
+            )
+            is False
+        )
+
+    def test_a_pattern_that_will_not_compile_refuses(self) -> None:
+        """The alternative is an allowlist that has silently stopped
+        narrowing anything."""
+        assert (
+            origin_is_allowed("https://any.test", allowed=(), pattern="([unclosed")
+            is False
+        )
+
+
+class TestTheRefusalSaysEnoughToDiagnose:
+    """It said nothing at all, on the sound principle that an `Origin` is
+    attacker-controlled and a newline in it forges a log line. The cost was
+    six refusals in the record with no way to tell which origin or how many
+    were configured -- the answer had to be rebuilt from deployment config.
+    """
+
+    def test_the_hint_carries_the_shape_and_the_size_of_the_list(self) -> None:
+        hint = origin_refusal_hint(
+            "https://www.lemma.test/x?y=1", allowed=("https://a.test", "https://b.test")
+        )
+
+        assert "lemma.test" in hint
+        assert "2" in hint
+
+    def test_the_hint_never_carries_what_a_stranger_sent(self) -> None:
+        hint = origin_refusal_hint(
+            "https://evil.test/\n\rFAKE level=info event=allowed", allowed=()
+        )
+
+        assert "\n" not in hint and "\r" not in hint
+        assert "FAKE" not in hint
+        assert "?" not in hint and "/" not in hint.split("//", 1)[-1]
 
 
 def test_a_client_that_sends_no_origin_is_allowed() -> None:

@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Mapping
+import re
+from collections.abc import Iterable, Mapping
+from urllib.parse import urlsplit
 
 from fastapi import WebSocket, WebSocketDisconnect
 
+from app.core.log.log import get_logger
 from app.core.request_context import create_inherited_task
+
+logger = get_logger(__name__)
 
 #: A frame larger than this is not a screencast frame or a keystroke, it is
 #: something wrong. `max_size=None` -- which is what the port proxy carried --
@@ -112,7 +117,42 @@ async def bridge(client: WebSocket, upstream, *, name: str = "workspace") -> Non
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def origin_is_allowed(origin: str | None, *, allowed: tuple[str, ...]) -> bool:
+def _origin_of(url: str) -> str | None:
+    """`scheme://host[:port]`, which is all an `Origin` header ever carries.
+
+    Configured URLs are not origins. `auth_frontend_url` is a sign-in *page*
+    and on at least one deployment reads `https://<host>/auth`, which cannot
+    equal any `Origin` a browser sends -- so as a candidate it was dead
+    weight that looked like coverage.
+    """
+    parsed = urlsplit(url.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}".lower()
+
+
+def origins_from(configured: Iterable[str], *urls: str | None) -> tuple[str, ...]:
+    """The allowlist, as a function of its inputs and nothing else.
+
+    Separate from the dependency below so a test can hand it a deployment's
+    shape directly. Patching `settings` to test this would be a double
+    inside the subject -- it would survive a rename of the very settings
+    this is about.
+    """
+    found: list[str] = []
+    for candidate in (*configured, *urls):
+        origin = _origin_of(str(candidate)) if candidate else None
+        if origin and origin not in found:
+            found.append(origin)
+    return tuple(found)
+
+
+def origin_is_allowed(
+    origin: str | None,
+    *,
+    allowed: tuple[str, ...],
+    pattern: str | None = None,
+) -> bool:
     """Whether a WebSocket handshake came from somewhere we serve.
 
     Browsers do not apply the same-origin policy to WebSockets, and they do send
@@ -123,8 +163,47 @@ def origin_is_allowed(origin: str | None, *, allowed: tuple[str, ...]) -> bool:
 
     A missing Origin is allowed: it is what a non-browser client sends, and the
     CLI and the tests are non-browser clients. A *present* one has to match.
+
+    `pattern` is `cors_origin_regex`, for deployments whose frontends are
+    per-tenant and cannot be listed. Anchored at both ends here whatever the
+    configured string does, because an unanchored pattern matching anywhere in
+    the origin is how `https://evil.test/?x=app.example.com` gets in.
     """
     if origin is None:
         return True
     normalized = origin.rstrip("/").lower()
-    return any(normalized == candidate.rstrip("/").lower() for candidate in allowed)
+    if any(normalized == candidate.rstrip("/").lower() for candidate in allowed):
+        return True
+    if not pattern:
+        return False
+    try:
+        return re.fullmatch(pattern, origin) is not None
+    except re.error:
+        # A misconfigured pattern refuses rather than admits. The alternative
+        # is an allowlist that silently stops narrowing anything.
+        logger.warning("workspace.ws_bridge.origin_pattern_invalid.denied")
+        return False
+
+
+def origin_refusal_hint(origin: str | None, *, allowed: tuple[str, ...]) -> str:
+    """Enough to diagnose a refusal without logging what a stranger sent.
+
+    The refusal used to log nothing at all, on the sound principle that an
+    `Origin` header is attacker-controlled and a newline in it forges a log
+    line. The cost was paid in production: six refusals in two minutes, and
+    nothing in the record said which origin or how many were configured, so
+    the answer had to be reconstructed from deployment config.
+
+    So: the scheme and the *registrable shape* of the host, both drawn from a
+    parse rather than the raw string, plus how many origins were on the list.
+    No path, no query, no port-scan surface, and nothing that reaches a log
+    line unparsed.
+    """
+    if origin is None:
+        return "no origin, allowed"
+    parsed = urlsplit(origin)
+    scheme = parsed.scheme if parsed.scheme in ("http", "https") else "other"
+    host = parsed.hostname or ""
+    shape = ".".join(host.rsplit(".", 2)[-2:]) if "." in host else "opaque"
+    safe = re.sub(r"[^a-z0-9.-]", "", shape.lower())[:60] or "opaque"
+    return f"{scheme}://…{safe} against {len(allowed)} configured"

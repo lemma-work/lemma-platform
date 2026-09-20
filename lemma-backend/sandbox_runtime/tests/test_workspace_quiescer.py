@@ -25,10 +25,14 @@ async def test_quiescer_removes_only_declared_ephemeral_state(tmp_path: Path) ->
         isolated_process_namespace=False,
         # Never the real one: it matches agent-browser and Xvfb, which a
         # developer running this suite plausibly has open.
-        shed_browser_processes=lambda: 0,
+        # A close that worked, which is the ordinary path and the only one
+        # in which the browser's runtime may be swept at all. The failed
+        # close has its own test below.
+        shed_browser_processes=lambda: 1,
     ).quiesce()
 
-    assert result.terminated_unmanaged_processes == 0
+    assert result.terminated_unmanaged_processes == 1
+    assert result.swept_browser_runtime is True
     assert not ephemeral_directory.exists()
     assert not ephemeral_file.exists()
     assert durable_file.read_text() == "durable"
@@ -143,3 +147,39 @@ async def test_an_isolated_namespace_still_closes_the_browser(monkeypatch) -> No
     ).quiesce()
 
     assert sheds == [1], "the browser must be closed before the sweep signals it"
+
+
+@pytest.mark.asyncio
+async def test_a_browser_that_would_not_close_keeps_its_runtime(tmp_path: Path) -> None:
+    """The sandbox that came back with a browser that could not start.
+
+    Every ephemeral *directory* here is the agent-browser daemon's runtime --
+    its socket, its pid file, the target it is attached to. Deleting that is
+    safe before a suspend, because a suspend ends every process. It is not
+    safe when the close failed and nothing was terminated, which is reachable
+    on the fabric with no blanket sweep: the daemon lives on with its runtime
+    directory gone.
+
+    Reproduced on the workspace image before this was written -- delete these
+    while Chrome and the daemon are alive and the next `agent-browser open`
+    cannot start Chrome at all. Leaving them costs nothing, because they are
+    ephemeral by construction and the next start rewrites them.
+    """
+    runtime = tmp_path / "browser"
+    runtime.mkdir()
+    (runtime / "workspace.sock").write_text("")
+    x_lock = tmp_path / "X99-lock"
+    x_lock.write_text("1234")
+
+    result = await WorkspaceQuiescer(
+        ephemeral_directories=(runtime,),
+        ephemeral_files=(x_lock,),
+        isolated_process_namespace=False,
+        shed_browser_processes=lambda: 0,
+    ).quiesce()
+
+    assert result.swept_browser_runtime is False
+    assert runtime.exists(), "a live daemon must keep the runtime it is using"
+    # The X lock is not the browser's, and one naming a dead process really
+    # does stop the next Xvfb, so it goes either way.
+    assert not x_lock.exists()
