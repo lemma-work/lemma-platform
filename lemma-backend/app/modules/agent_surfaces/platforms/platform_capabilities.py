@@ -278,7 +278,14 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         supports_native_choices=True,
         supports_native_files=True,
         is_email=False,
-        is_channel_capable=False,
+        # True, and the adapter is what says so: `TelegramSurfaceAdapter`
+        # implements `fetch_thread_context`, the router has a group route, and
+        # the parser sets `mentioned_agent` from a bot command. This read False
+        # for as long as nothing checked, because nothing in production reads
+        # this field -- it only reaches the standing guidance the agent is given,
+        # so being wrong here withheld the channel-context section from the one
+        # chat platform whose group history is actually fetched and injected.
+        is_channel_capable=True,
         markdown_mode="markdownv2_converted",
         formatting_style=_TELEGRAM_FORMATTING,
         soft_char_limit=3500,

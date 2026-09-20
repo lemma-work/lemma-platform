@@ -18,8 +18,8 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceMode,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
+from app.modules.agent_surfaces.services.surface_conversation_links import (
+    should_start_a_new_conversation,
 )
 
 
@@ -50,8 +50,7 @@ def _link(
 
 
 def _should_reset(surface, link) -> bool:
-    service = AgentSurfaceIngressService(uow_factory=lambda: None)
-    return service._should_start_a_new_conversation(surface=surface, link=link)
+    return should_start_a_new_conversation(surface=surface, link=link)
 
 
 def test_reset_when_inactive_beyond_window():
@@ -123,7 +122,6 @@ def test_a_different_agent_starts_a_new_conversation_on_every_shape():
     from types import SimpleNamespace
 
     surface = _surface(reset_hours=0)
-    service = AgentSurfaceIngressService(uow_factory=lambda: None)
     for kind in ("DM", "CHANNEL", "EMAIL"):
         link = _link(updated_at=datetime.now(timezone.utc), conversation_kind=kind)
         link.routed_agent_id = uuid4()
@@ -133,8 +131,6 @@ def test_a_different_agent_starts_a_new_conversation_on_every_shape():
             pod_id=surface.pod_id, agent_id=uuid4(), conversation_kind=kind
         )
         assert (
-            service._should_start_a_new_conversation(
-                surface=surface, link=link, route=route
-            )
+            should_start_a_new_conversation(surface=surface, link=link, route=route)
             is True
         ), kind

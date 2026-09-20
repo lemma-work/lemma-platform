@@ -25,7 +25,7 @@ from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.authorization.delegation import is_pod_default_agent
-from app.modules.agent_surfaces.api.dependencies import get_surface_service
+from app.modules.agent_surfaces.composition import build_surface_service
 from app.modules.agent_surfaces.api.schemas import (
     AgentSurfaceResponse,
     SurfaceBehaviorConfigInput,
@@ -80,7 +80,9 @@ def surface_response(
 
 async def list_surfaces(uow, *, pod_id: UUID) -> list[AgentSurfaceEntity]:
     """Every surface configured on the pod."""
-    surfaces, _ = await get_surface_service(uow).list_surfaces_by_pod(pod_id, limit=100)
+    surfaces, _ = await build_surface_service(uow).list_surfaces_by_pod(
+        pod_id, limit=100
+    )
     return list(surfaces)
 
 
@@ -93,7 +95,7 @@ async def get_surface_by_name(
     keying this by platform made a second Slack surface look like the first.
     """
     try:
-        return await get_surface_service(uow).get_surface_by_name_in_pod(
+        return await build_surface_service(uow).get_surface_by_name_in_pod(
             pod_id=pod_id, name=name
         )
     except AgentSurfaceNotFoundError:
@@ -120,7 +122,7 @@ async def create_surface(
     agent entity cross three modules to deliver two values and left the contract
     unable to say what it wanted.
     """
-    return await get_surface_service(uow).create_surface_minting_address(
+    return await build_surface_service(uow).create_surface_minting_address(
         pod_id=pod_id,
         agent_id=agent_id,
         agent_name=agent_name,
@@ -146,7 +148,7 @@ async def update_surface(
     ctx: Context,
 ) -> AgentSurfaceEntity:
     """Change a configured surface."""
-    return await get_surface_service(uow).update_surface(
+    return await build_surface_service(uow).update_surface(
         surface_id=surface_id,
         agent_id=agent_id,
         update_agent_id=update_agent_id,

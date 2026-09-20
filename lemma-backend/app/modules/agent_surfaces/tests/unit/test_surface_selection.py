@@ -81,8 +81,11 @@ def _service(
             return_value=[saved_default] if saved_default is not None else []
         )
     )
+    # A unit of work is required now rather than optional, so this says so
+    # instead of passing `uow_factory=lambda: None` to dodge the check. Surface
+    # selection never touches the session; the doubles above answer everything.
     service = AgentSurfaceIngressService(
-        uow_factory=lambda: None,
+        uow=SimpleNamespace(session=None),
         conversation_link_repository=link_repo,
         surface_repository=surfaces,
         pod_membership_port=membership,

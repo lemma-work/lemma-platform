@@ -43,7 +43,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _ensure_connector_account,
@@ -266,7 +266,7 @@ class SurfaceStage:
 
     async def _submit(self, payload: dict[str, Any]) -> None:
         uow = SqlAlchemyUnitOfWork(self.db_session)
-        handled = await build_surface_event_handler(uow).try_handle_interaction(
+        handled = await build_surface_ingress(uow).try_handle_interaction(
             SurfacePlatformWebhookIngress(
                 source=self.platform.value.lower(), payload=payload, headers={}
             )

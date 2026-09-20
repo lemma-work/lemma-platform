@@ -103,7 +103,7 @@ class SurfaceConfigurationMixin(
             )
             return True
         surface, ctx = selected
-        credentials = await self._resolve_credentials(surface)
+        credentials = await self.credential_resolver.for_surface(surface)
         try:
             await self._dispatch_configuration_action(
                 kind=kind,
@@ -143,7 +143,7 @@ class SurfaceConfigurationMixin(
         await self._publish_home(
             surface=surface,
             adapter=adapter,
-            credentials=await self._resolve_credentials(surface),
+            credentials=await self.credential_resolver.for_surface(surface),
             external_user_id=str(setup.get("actor_external_user_id") or ""),
             ctx=ctx,
         )
@@ -157,7 +157,7 @@ class SurfaceConfigurationMixin(
         prompt_surface = authorized[0][0] if authorized else candidates[0]
         async with connection_released(self.uow.session):
             await adapter.send_channel_setup_prompt(
-                credentials=await self._resolve_credentials(prompt_surface),
+                credentials=await self.credential_resolver.for_surface(prompt_surface),
                 channel_id=channel_id,
                 user_id=actor,
                 surface_choices=(

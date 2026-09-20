@@ -117,5 +117,5 @@ async def _resolve_link_delivery(ingress, parsed, link):
     adapter = ingress.adapter_registry.get(surface.surface_type)
     if adapter is None:
         return None
-    credentials = await ingress._resolve_credentials(surface)
+    credentials = await ingress.credential_resolver.for_surface(surface)
     return link, surface, adapter, credentials

@@ -27,7 +27,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.api.dependencies import get_surface_service
+from app.modules.agent_surfaces.composition import build_surface_service
 from app.modules.agent_surfaces.services.email_surface_provisioning import (
     provision_email_surface,
 )
@@ -43,7 +43,7 @@ async def provision_agent_email_surface(
     failed — both are survivable, and both are logged rather than raised.
     """
     surface, _ = await provision_email_surface(
-        get_surface_service(uow),
+        build_surface_service(uow),
         uow.session,
         pod_id=pod_id,
         agent_id=agent_id,
@@ -79,7 +79,7 @@ async def provision_pod_assistant_email_surface(
     configured or provisioning failed, and both are survivable.
     """
     surface, _ = await provision_email_surface(
-        get_surface_service(uow),
+        build_surface_service(uow),
         uow.session,
         pod_id=pod_id,
         agent_id=pod_id,
@@ -111,7 +111,7 @@ async def teardown_agent_surfaces(
     propagates and aborts the deletion, because reporting an agent deleted while
     its mailbox is still receiving is the state this exists to prevent.
     """
-    return await get_surface_service(uow).delete_surfaces_for_agent(pod_id, agent_id)
+    return await build_surface_service(uow).delete_surfaces_for_agent(pod_id, agent_id)
 
 
 async def release_pod_inbound_addresses(
@@ -129,7 +129,7 @@ async def release_pod_inbound_addresses(
     catch-all webhook and has no provider call to make on the way out. The
     pod-deleted event still tears down everything else.
     """
-    return await get_surface_service(uow).delete_email_surfaces_for_pod(pod_id)
+    return await build_surface_service(uow).delete_email_surfaces_for_pod(pod_id)
 
 
 __all__ = [

@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
@@ -276,7 +276,7 @@ async def test_a_spoofed_sender_gets_neither_the_members_identity_nor_a_reply(
 
     victim = fixed_test_user["email"]
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(
             source="resend",

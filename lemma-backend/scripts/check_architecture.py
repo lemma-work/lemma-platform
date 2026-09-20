@@ -41,6 +41,11 @@ ALLOWED_PUBLIC_SURFACES = {"contracts"}
 CORE_MODULE_IMPORT_EXEMPT = {"app/core/registry/installed.py"}
 MAX_FILE_LINES = 600
 MAX_COMPLEXITY = 15
+# How many classes an object is made of, counting itself. Above this it is worth
+# naming in the baseline. Deliberately the size of the ancestry rather than the
+# length of the longest chain: eight mixins side by side are a chain two deep and
+# an object made of nine classes, and it is the nine a reader has to hold.
+MAX_ANCESTRY = 3
 # Generated files are exempt from the size rule. `event_catalog.py` is one line
 # per logging event, emitted by scripts/generate_logging_event_catalogs.py, and
 # it was already 128 lines over the limit -- so adding a single `logger.info`
@@ -252,6 +257,105 @@ class _FunctionMetrics(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class _ClassShape(ast.NodeVisitor):
+    """What a class reaches for that it never declared, and how deep it inherits.
+
+    `MAX_FILE_LINES` caps the page and `MAX_COMPLEXITY` caps the function. Both
+    are satisfied by splitting, and that is how one class here reached ninety-two
+    methods across fourteen files while recording zero violations of either:
+    every file sat under six hundred lines, every method under the complexity
+    cap, and the object they compose was never measured at all. `services/` grew
+    to eighty-six files under exactly that incentive.
+
+    `undeclared_self_attributes` is the number splitting cannot improve. A mixin
+    that reads `self.surface_repository` without declaring it is not a unit; it
+    is a fragment of some other object, and moving it into a file of its own
+    makes this worse rather than better. A class with a constructor scores zero.
+
+    Classes with a base this pass cannot resolve -- `BaseModel`, `Protocol`,
+    anything from a library -- are skipped rather than guessed at, because their
+    attributes come from a metaclass we cannot read and every one of them would
+    count as undeclared. That exemption costs nothing here: the shape this
+    measures is mixins, which have no bases at all.
+    """
+
+    def __init__(self, relative_path: str) -> None:
+        self.relative_path = relative_path
+        self.classes: dict[str, dict[str, Any]] = {}
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        declared: set[str] = set()
+        read: set[str] = set()
+        for statement in node.body:
+            if isinstance(statement, ast.AnnAssign) and isinstance(
+                statement.target, ast.Name
+            ):
+                declared.add(statement.target.id)
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                declared.add(statement.name)
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Attribute):
+                continue
+            if not isinstance(child.value, ast.Name) or child.value.id != "self":
+                continue
+            if isinstance(child.ctx, (ast.Store, ast.Del)):
+                declared.add(child.attr)
+            else:
+                read.add(child.attr)
+        self.classes[node.name] = {
+            "key": f"{self.relative_path}:{node.name}",
+            "bases": [base.id for base in node.bases if isinstance(base, ast.Name)],
+            "unresolved_bases": len(node.bases)
+            - len([base for base in node.bases if isinstance(base, ast.Name)]),
+            "declared": declared,
+            "read": read,
+        }
+        self.generic_visit(node)
+
+
+def _class_shapes(
+    classes: dict[str, dict[str, Any]],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Undeclared reads and inheritance depth, resolved across the whole app."""
+
+    def inherited(name: str, seen: frozenset[str]) -> set[str]:
+        entry = classes.get(name)
+        if entry is None or name in seen:
+            return set()
+        names = set(entry["declared"])
+        for base in entry["bases"]:
+            names |= inherited(base, seen | {name})
+        return names
+
+    def ancestry(name: str, seen: frozenset[str]) -> set[str]:
+        entry = classes.get(name)
+        if entry is None or name in seen:
+            return set()
+        found: set[str] = set()
+        for base in entry["bases"]:
+            found.add(base)
+            found |= ancestry(base, seen | {name})
+        return found
+
+    undeclared: dict[str, int] = {}
+    deep: dict[str, int] = {}
+    for name, entry in classes.items():
+        made_of = 1 + len(ancestry(name, frozenset()))
+        if made_of > MAX_ANCESTRY:
+            deep[entry["key"]] = made_of
+        if entry["unresolved_bases"] or any(
+            base not in classes for base in entry["bases"]
+        ):
+            continue
+        known = set(entry["declared"])
+        for base in entry["bases"]:
+            known |= inherited(base, frozenset({name}))
+        missing = entry["read"] - known
+        if missing:
+            undeclared[entry["key"]] = len(missing)
+    return undeclared, deep
+
+
 def snapshot() -> dict[str, Any]:
     forbidden: dict[str, int] = defaultdict(int)
     dependency_graph: dict[str, set[str]] = defaultdict(set)
@@ -260,6 +364,7 @@ def snapshot() -> dict[str, Any]:
     broad_catches: dict[str, int] = {}
     untyped_escapes: dict[str, int] = {}
     core_module_imports: dict[str, int] = defaultdict(int)
+    classes: dict[str, dict[str, Any]] = {}
 
     for path in _python_files():
         relative = path.relative_to(ROOT).as_posix()
@@ -274,6 +379,10 @@ def snapshot() -> dict[str, Any]:
         metrics.visit(tree)
         complex_functions.update(metrics.complex)
         broad_catches.update(metrics.broad_catches)
+
+        shapes = _ClassShape(relative)
+        shapes.visit(tree)
+        classes.update(shapes.classes)
 
         escapes = _UntypedEscapes(relative)
         escapes.visit(tree)
@@ -303,6 +412,7 @@ def snapshot() -> dict[str, Any]:
                     # indistinguishable from the tangle it is leaving.
                     dependency_graph[source].add(target)
 
+    undeclared_self, deep_inheritance = _class_shapes(classes)
     return {
         "forbidden_imports": dict(sorted(forbidden.items())),
         "core_module_imports": dict(sorted(core_module_imports.items())),
@@ -311,6 +421,8 @@ def snapshot() -> dict[str, Any]:
         "complex_functions": _aggregate_by_module(complex_functions),
         "broad_catches": _aggregate_by_module(broad_catches),
         "untyped_escapes": _aggregate_by_module(untyped_escapes),
+        "undeclared_self_attributes": _aggregate_by_module(undeclared_self),
+        "ancestry_size": _aggregate_by_module(deep_inheritance),
     }
 
 
@@ -405,6 +517,8 @@ def check(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
         ("complex function", "complex_functions"),
         ("broad catch count", "broad_catches"),
         ("untyped escape count", "untyped_escapes"),
+        ("undeclared self attribute count", "undeclared_self_attributes"),
+        ("ancestry size", "ancestry_size"),
     ):
         for name, (before, after) in _growth(
             current[key], baseline.get(key, {})

@@ -63,15 +63,6 @@ EDIT_BUCKET = {
 }
 
 
-@pytest.fixture
-def platform_fake(fake_slack, fake_teams, fake_telegram):
-    return {
-        SurfacePlatform.SLACK: fake_slack,
-        SurfacePlatform.TEAMS: fake_teams,
-        SurfacePlatform.TELEGRAM: fake_telegram,
-    }
-
-
 @pytest.fixture(autouse=True)
 def _stream_every_comment(monkeypatch):
     """Both comments stream: the inter-update throttle is off for these tests."""

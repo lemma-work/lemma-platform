@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
-from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
@@ -85,7 +85,7 @@ async def replay_onboarding(
                     uow,
                     route_id=route_id,
                     event=event,
-                    linker=get_surface_event_handler(uow),
+                    linker=build_surface_ingress(uow),
                 )
             else:
                 context = await _shared_replay_context(uow, state, event, user)
@@ -109,7 +109,7 @@ async def _shared_replay_context(
     event: ParsedInboundSurfaceEvent,
     user: UserEntity,
 ) -> AgentSurfaceContext:
-    handler = get_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     # Resolved rather than read back. This used to load the surface saved in the
     # user's preferences and raise when it had gone -- and it can have gone by
     # the time a replay runs: the pod deleted, the person removed from it,

@@ -68,7 +68,7 @@ class SurfaceConfigurationAuthorizationMixin:
         # that follows is an HTTP call to the platform, so the connection goes
         # back for it. Only reads have happened at this point, so the release is
         # a plain commit -- `safe_to_release` declines it otherwise.
-        credentials = await self._resolve_credentials(first)
+        credentials = await self.credential_resolver.for_surface(first)
         try:
             async with connection_released(self.uow.session):
                 profile = await adapter.fetch_sender_profile(

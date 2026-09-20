@@ -38,9 +38,9 @@ def _service(uow):
     # the notification service to hold; that shim is gone, and the operations
     # it stood in front of are `agent.contracts.conversations_for_surfaces`,
     # which the notification service reaches per call.
-    from app.modules.agent_surfaces.api.dependencies import get_notification_service
+    from app.modules.agent_surfaces.composition import build_notification_service
 
-    return get_notification_service(uow)
+    return build_notification_service(uow)
 
 
 async def resolve_recipient(*, pod_id: UUID, reference: str) -> UUID | None:

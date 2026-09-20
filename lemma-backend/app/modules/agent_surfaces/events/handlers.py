@@ -28,10 +28,10 @@ from app.core.infrastructure.jobs.streaq_runtime import (
     streaq_task,
     streaq_worker,
 )
-from app.modules.agent_surfaces.api import dependencies as surface_dependencies
-from app.modules.agent_surfaces.api.dependencies import (
-    get_surface_service,
-    surface_repository_factory,
+from app.modules.agent_surfaces.composition import (
+    build_surface_ingress,
+    build_surface_service,
+    build_surface_turn_starter,
 )
 from app.modules.agent_surfaces.domain.events import (
     SurfaceWebhookReceivedEvent,
@@ -51,20 +51,11 @@ from app.modules.agent_surfaces.domain.onboarding_state import OnboardingIngress
 from app.modules.agent_surfaces.domain.job_payloads import (
     SurfaceProcessMessageTaskPayload,
 )
-from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
-    SqlAlchemySurfaceRoutingResolutionAdapter,
-)
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceConversationLinkRepository,
-)
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
 from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
     get_surface_event_dedup_store,
-)
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
 )
 from app.modules.agent_surfaces.services.surface_inbound import (
     release_ingress_claim,
@@ -112,15 +103,6 @@ async def handle_onboarding_ready(
         )
 
     await inbox.process("agent-surfaces.onboarding", event, process)
-
-
-def build_surface_event_handler(uow):
-    return AgentSurfaceIngressService(
-        uow=uow,
-        surface_repository=surface_repository_factory(uow),
-        conversation_link_repository=SurfaceConversationLinkRepository(uow),
-        pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-    )
 
 
 def provide_onboarding_handler(
@@ -214,7 +196,7 @@ async def _context_for_delivery(
         if onboarding.handled:
             return onboarding.context
     async with uow_factory() as uow:
-        return await build_surface_event_handler(uow).prepare_ingress(part)
+        return await build_surface_ingress(uow).prepare_ingress(part)
 
 
 async def _release_claim_for_retry(
@@ -276,7 +258,7 @@ async def _process_surface_webhook(
         )
 
     async with uow_factory() as uow:
-        handler = build_surface_event_handler(uow)
+        handler = build_surface_ingress(uow)
         # Lifecycle events (the bot joined a channel, someone opened the app
         # home) are about the app itself: they never become a conversation, so
         # they are answered and stopped before the interaction/message paths.
@@ -370,7 +352,7 @@ async def on_pod_deleted(
     async def process() -> None:
         parsed = PodDeletedEvent.model_validate(event)
         async with uow_factory() as uow:
-            await get_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
+            await build_surface_service(uow).delete_all_surfaces_for_pod(parsed.pod_id)
 
     await inbox.process("agent-surfaces.pod-deletion", event, process)
 
@@ -424,11 +406,9 @@ async def process_surface_message(
 ):
     worker_ctx: AppWorkerContext = streaq_worker.context
     task_payload = SurfaceProcessMessageTaskPayload.model_validate(payload)
-    # The service scopes its own short UoWs (credential read + message-write
+    # The starter scopes its own short UoWs (credential read + message-write
     # tail) around the long external I/O inside execute_chat — platform API
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
-    service = surface_dependencies.build_surface_event_handler_with_factory(
-        worker_ctx.uow_factory
-    )
-    await service.execute_chat(task_payload.context)
+    starter = build_surface_turn_starter(worker_ctx.uow_factory)
+    await starter.execute_chat(task_payload.context)
