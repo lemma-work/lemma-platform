@@ -92,7 +92,6 @@ async def _surface(db_session, pod_id, agent_id, platform: str) -> AgentSurface:
         agent_id=sibling.id,
         name=f"{platform.lower()}-{uuid4().hex[:8]}",
         surface_type=platform,
-        mode="DM",
         event_mode="WEBHOOK",
         credential_mode="SYSTEM",
         config={},

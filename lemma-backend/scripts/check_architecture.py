@@ -282,6 +282,16 @@ class _ClassShape(ast.NodeVisitor):
     def __init__(self, relative_path: str) -> None:
         self.relative_path = relative_path
         self.classes: dict[str, dict[str, Any]] = {}
+        #: Local name -> the module it was imported from, for this file. Shared
+        #: by reference with every class entry below, so it is complete by the
+        #: time resolution reads it however late in the file an import sits.
+        self.imported: dict[str, str] = {}
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.module and not node.level:
+            for alias in node.names:
+                self.imported[alias.asname or alias.name] = node.module
+        self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         declared: set[str] = set()
@@ -316,6 +326,7 @@ class _ClassShape(ast.NodeVisitor):
             - len([base for base in node.bases if isinstance(base, ast.Name)]),
             "declared": declared,
             "read": read,
+            "imports": self.imported,
         }
         self.generic_visit(node)
 
@@ -327,26 +338,69 @@ def _class_shapes(
 
     Entries are keyed by ``path:name``; a base, written in source, is only a
     name. So base resolution goes through an index built here, and a name held
-    by more than one class is *unresolvable* rather than resolved to whichever
-    file happened to be walked last. An unresolvable base already means the
-    class is skipped for `undeclared_self_attributes` -- the same rule that
-    skips anything inheriting a pydantic model or a Protocol -- so an ambiguous
-    name costs coverage and never costs correctness.
+    by more than one class is never resolved to whichever file happened to be
+    walked last.
+
+    Refusing to resolve an ambiguous name outright is the safe reading, but it
+    is not a free one, and the cost runs the wrong way: the chain simply stops,
+    the class measures shallower than it is, and **the ratchet only fails on
+    growth**, so the smaller number becomes the new floor. A second
+    ``DomainEvent`` added anywhere in the tree would silently drop sixty-six
+    units of measured depth across thirty-five subclasses and report success.
+    Ambiguity that costs coverage quietly is how a gate stops measuring the
+    thing it was added for.
+
+    So an ambiguous name is disambiguated by evidence, in descending order of
+    how much the evidence is worth: an actual ``from X import Base`` in the
+    asking file, then a definition in that same file, then one in the same
+    package. Only the first is proof; the other two are proximity, and they are
+    tie-breakers rather than the rule. A name with none of the three stays
+    unresolved, which for `undeclared_self_attributes` means the class is
+    skipped -- the same rule that skips anything inheriting a pydantic model or
+    a Protocol.
     """
     by_name: dict[str, list[dict[str, Any]]] = {}
     for entry in classes.values():
         by_name.setdefault(entry["name"], []).append(entry)
 
-    def resolve(base: str) -> dict[str, Any] | None:
+    def _path_of(entry: dict[str, Any]) -> str:
+        return entry["key"].rsplit(":", 1)[0]
+
+    def _defines(entry: dict[str, Any], module: str) -> bool:
+        """Is this candidate the class ``module`` names?"""
+        stem = module.replace(".", "/")
+        path = _path_of(entry)
+        return path.endswith((f"{stem}.py", f"{stem}/__init__.py"))
+
+    def resolve(base: str, asking: dict[str, Any]) -> dict[str, Any] | None:
         found = by_name.get(base)
-        return found[0] if found is not None and len(found) == 1 else None
+        if not found:
+            return None
+        if len(found) == 1:
+            return found[0]
+        module = asking["imports"].get(base)
+        if module:
+            imported = [entry for entry in found if _defines(entry, module)]
+            if len(imported) == 1:
+                return imported[0]
+        here = _path_of(asking)
+        same_file = [entry for entry in found if _path_of(entry) == here]
+        if len(same_file) == 1:
+            return same_file[0]
+        package = here.rsplit("/", 1)[0]
+        same_package = [
+            entry for entry in found if _path_of(entry).rsplit("/", 1)[0] == package
+        ]
+        if len(same_package) == 1:
+            return same_package[0]
+        return None
 
     def inherited(entry: dict[str, Any], seen: frozenset[str]) -> set[str]:
         if entry["key"] in seen:
             return set()
         names = set(entry["declared"])
         for base in entry["bases"]:
-            found = resolve(base)
+            found = resolve(base, entry)
             if found is not None:
                 names |= inherited(found, seen | {entry["key"]})
         return names
@@ -357,7 +411,7 @@ def _class_shapes(
         found: set[str] = set()
         for base in entry["bases"]:
             found.add(base)
-            resolved = resolve(base)
+            resolved = resolve(base, entry)
             if resolved is not None:
                 found |= ancestry(resolved, seen | {entry["key"]})
         return found
@@ -369,12 +423,12 @@ def _class_shapes(
         if made_of > MAX_ANCESTRY:
             deep[entry["key"]] = made_of
         if entry["unresolved_bases"] or any(
-            resolve(base) is None for base in entry["bases"]
+            resolve(base, entry) is None for base in entry["bases"]
         ):
             continue
         known = set(entry["declared"])
         for base in entry["bases"]:
-            found = resolve(base)
+            found = resolve(base, entry)
             if found is not None:
                 known |= inherited(found, frozenset({entry["key"]}))
         missing = entry["read"] - known

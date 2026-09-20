@@ -44,16 +44,29 @@ pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 _OTHER_PEOPLE = 25
 
 
-async def _provision_other_people(sessions, *, organization_id, owner_id) -> None:
+async def _provision_other_people(sessions, *, organization_id) -> None:
     """Other people's personal pods, each with its own shared-bot surface.
 
     They are nobody's concern on this message and every one of them used to be
     read for it.
+
+    Each pod gets its **own** owner, and that is the whole point of the fixture
+    rather than a detail of it. Hanging them off the sender instead would put
+    all twenty-five inside the sender's own pod set, where the narrowing is
+    supposed to keep them -- so the scoped read would stay flat because the
+    crowd was never foreign, and the assertion below would pass with the
+    narrowing removed.
     """
     async with sessions() as session:
         for index in range(_OTHER_PEOPLE):
+            somebody_else = User(
+                email=f"somebody-else-{index}-{uuid4().hex[:8]}@example.com",
+                is_verified=True,
+            )
+            session.add(somebody_else)
+            await session.flush()
             pod = Pod(
-                user_id=owner_id,
+                user_id=somebody_else.id,
                 organization_id=organization_id,
                 name=f"somebody else {index} {uuid4().hex[:6]}",
                 config={},
@@ -64,7 +77,7 @@ async def _provision_other_people(sessions, *, organization_id, owner_id) -> Non
                 AgentModel(
                     id=pod.id,
                     pod_id=pod.id,
-                    user_id=owner_id,
+                    user_id=somebody_else.id,
                     name="pod_default",
                     kind="POD_DEFAULT",
                     instruction="",
@@ -83,7 +96,6 @@ def _shared_surface(pod_id: UUID) -> AgentSurface:
         agent_id=pod_id,
         name=f"lemma-whatsapp-{uuid4().hex[:8]}",
         surface_type="WHATSAPP",
-        mode="DM",
         event_mode="WEBHOOK",
         credential_mode="SYSTEM",
         config={},
@@ -146,11 +158,7 @@ async def test_a_known_sender_routes_past_everybody_elses_surfaces(
     phone = await _known_sender(
         sessions, user_id=fixed_test_user["id"], pod_id=UUID(test_pod["id"])
     )
-    await _provision_other_people(
-        sessions,
-        organization_id=UUID(fixed_test_org["id"]),
-        owner_id=UUID(str(fixed_test_user["id"])),
-    )
+    await _provision_other_people(sessions, organization_id=UUID(fixed_test_org["id"]))
 
     context = await _ingest(sessions, sender_phone=phone)
 
@@ -188,20 +196,23 @@ async def test_the_read_is_the_senders_pods_not_the_deployments(
             )
             return len(found)
 
-    async with sessions() as session:
-        mine = set(
-            await SqlAlchemySurfaceRoutingResolutionAdapter(
-                SqlAlchemyUnitOfWork(session)
-            ).get_user_pod_ids(UUID(str(fixed_test_user["id"])))
-        )
+    async def my_pods() -> set:
+        """Re-asked on each side, never captured once.
 
-    unscoped_before, scoped_before = await rows(None), await rows(mine)
-    await _provision_other_people(
-        sessions,
-        organization_id=UUID(fixed_test_org["id"]),
-        owner_id=UUID(str(fixed_test_user["id"])),
-    )
-    unscoped_after, scoped_after = await rows(None), await rows(mine)
+        A set captured before provisioning would assert against itself: if the
+        crowd ever landed in the sender's own pods, the scoped count would hold
+        still because the *filter* was stale, not because the narrowing worked.
+        """
+        async with sessions() as session:
+            return set(
+                await SqlAlchemySurfaceRoutingResolutionAdapter(
+                    SqlAlchemyUnitOfWork(session)
+                ).get_user_pod_ids(UUID(str(fixed_test_user["id"])))
+            )
+
+    unscoped_before, scoped_before = await rows(None), await rows(await my_pods())
+    await _provision_other_people(sessions, organization_id=UUID(fixed_test_org["id"]))
+    unscoped_after, scoped_after = await rows(None), await rows(await my_pods())
 
     # The shape of the problem: unscoped grows with everybody who signs up.
     assert unscoped_after - unscoped_before == _OTHER_PEOPLE

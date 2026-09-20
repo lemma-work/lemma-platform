@@ -52,9 +52,9 @@ routing path. A plain ``CREATE INDEX`` holds a ``SHARE`` lock for the whole
 build and a plain ``DROP INDEX`` holds ``ACCESS EXCLUSIVE``, so twenty-two drops
 and five builds against a populated deployment would stall inbound message
 processing for as long as they take. ``0018`` says CONCURRENTLY "cannot run
-inside Alembic's transaction"; that is stale -- ``script.py.mako`` wraps every
-migration in ``op.get_context().autocommit_block()`` and ``0032`` uses one
-directly.
+inside Alembic's transaction"; that is stale -- ``script.py.mako`` wraps the
+migrations it generates in ``op.get_context().autocommit_block()``, and ``0032``
+opens one directly, which is what this hand-written revision does below.
 
 The cost is that concurrent DDL is **not atomic**: interrupt a
 ``CREATE INDEX CONCURRENTLY`` and Postgres leaves the index behind marked
@@ -211,16 +211,23 @@ _ADDED = (
 
 
 def upgrade() -> None:
-    for name, table, body in _ADDED:
-        op.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table} {body}")
-    # After the replacements exist, so no read is left without an index for the
-    # length of the transaction.
-    for name, _table, _body in _DROPPED:
-        op.execute(f"DROP INDEX IF EXISTS {name}")
+    # Neither concurrent form may run inside a transaction, and this revision is
+    # hand-written rather than generated, so it opens the block itself.
+    with op.get_context().autocommit_block():
+        for name, table, body in _ADDED:
+            op.execute(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} {body}"
+            )
+        # After the replacements exist, so no read is left without an index.
+        for name, _table, _body in _DROPPED:
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
 
 
 def downgrade() -> None:
-    for name, table, body in _DROPPED:
-        op.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table} {body}")
-    for name, _table, _body in _ADDED:
-        op.execute(f"DROP INDEX IF EXISTS {name}")
+    with op.get_context().autocommit_block():
+        for name, table, body in _DROPPED:
+            op.execute(
+                f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} {body}"
+            )
+        for name, _table, _body in _ADDED:
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
