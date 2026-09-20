@@ -28,12 +28,16 @@ import type { Plan } from "@/lib/billing/types";
 export function PlanOptions({
     plans,
     loading,
+    error,
+    onRetry,
     currentPlanId,
     busyPlanId,
     onSelect,
 }: {
     plans: Plan[] | undefined;
     loading: boolean;
+    error?: unknown;
+    onRetry?: () => void;
     currentPlanId?: string | null;
     busyPlanId?: string | null;
     onSelect: (plan: Plan) => void;
@@ -47,6 +51,25 @@ export function PlanOptions({
                     <Skeleton className="h-56 w-full" />
                     <Skeleton className="h-56 w-full" />
                 </div>
+            </section>
+        );
+    }
+
+    // A failed request is not an empty catalogue. Both pages pass `undefined`
+    // for plans when the query errors, which read as "we have nothing to sell
+    // you" -- with no way to retry.
+    if (error) {
+        return (
+            <section className="space-y-3">
+                <PlansHeading />
+                <SettingsHelpText>
+                    Plans could not be loaded.
+                </SettingsHelpText>
+                {onRetry ? (
+                    <Button variant="secondary" size="sm" onClick={onRetry}>
+                        Try again
+                    </Button>
+                ) : null}
             </section>
         );
     }

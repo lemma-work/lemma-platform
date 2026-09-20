@@ -50,14 +50,19 @@ export function CheckoutReturn({
               ? "state-surface-success"
               : "state-surface-running";
 
+    // `checkout=success` is a query parameter, so anyone can put it in the
+    // address bar. Only the fetched subscription going active confirms that
+    // money actually arrived, so nothing here claims a payment until it has --
+    // and when polling gives up, it says the activation was not confirmed
+    // rather than insisting the payment was received.
     const message =
         outcome === "cancelled"
             ? "Checkout was cancelled. Nothing has been charged."
             : active
               ? "Payment received — your plan is active."
               : stalled
-                ? "Payment received. Activation is taking longer than usual; it will finish on its own and this page will show the new plan."
-                : "Payment received. Activating your plan…";
+                ? "Activation could not be confirmed. If you completed payment it will finish on its own, and this page will show the new plan."
+                : "Waiting for payment confirmation…";
 
     return (
         <aside

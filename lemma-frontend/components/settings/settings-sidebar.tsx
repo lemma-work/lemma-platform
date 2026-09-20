@@ -13,11 +13,7 @@ import { PanelLeftOpen } from '@/components/ui/icons';
 import { useProfile } from '@/lib/hooks/use-user';
 import { OrgSidebarSection } from './org-sidebar-section';
 import { OrgSwitcher } from './org-switcher';
-
-/** The organization whose settings the current route belongs to, if any. */
-function activeOrganizationIdFrom(pathname: string): string | undefined {
-    return pathname.match(/^\/organizations\/([^/]+)\//)?.[1];
-}
+import { activeOrganizationIdFrom } from '@/lib/organizations/active-organization';
 
 function SettingsSidebarContent({ onNavigate }: { onNavigate: () => void }) {
     const pathname = usePathname();

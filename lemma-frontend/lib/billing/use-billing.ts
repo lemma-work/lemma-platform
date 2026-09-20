@@ -51,12 +51,19 @@ export function useBillingAvailable() {
     });
 
     const unavailable = query.error instanceof BillingUnavailableError;
+    // A 401, a 500 or a dropped connection leaves the retries exhausted with
+    // neither a success nor a 404, so `available` stayed undefined while
+    // `isLoading` was false -- which both billing pages read as "still
+    // loading" and rendered as a skeleton that never resolved. The error is
+    // returned so a page can say so and offer the retry.
+    const error = unavailable ? null : (query.error ?? null);
     return {
         // Undecided until the probe answers, so nothing flashes into view and
         // back out on a slow network.
         available: query.isSuccess ? true : unavailable ? false : undefined,
         status: query.data,
         isLoading: query.isLoading,
+        error,
         refetch: query.refetch,
     };
 }
@@ -209,8 +216,14 @@ export function useAwaitActivation(
         retry: false,
         // Stop as soon as it is active; give up after roughly a minute so a
         // webhook that never arrives does not poll forever.
+        //
+        // Both counters, because `dataUpdateCount` only advances on a
+        // *successful* update: a subscription endpoint erroring on every poll
+        // never moved it, so the three-second interval ran indefinitely
+        // against an endpoint that was failing.
         refetchInterval: (query) =>
-            query.state.data?.status === "active" || query.state.dataUpdateCount > 20
+            query.state.data?.status === "active" ||
+            query.state.dataUpdateCount + query.state.errorUpdateCount > 20
                 ? false
                 : 3000,
     });

@@ -10,7 +10,9 @@ import {
     describeStatus,
     formatCents,
     formatDate,
+    formatPlanPrice,
     intervalNoun,
+    isContactSales,
 } from "@/lib/billing/format";
 import type { SubscriptionWithPlan } from "@/lib/billing/types";
 
@@ -107,6 +109,11 @@ function PlanFacts({
     const seats = seatCount ?? subscription.seat_count;
     const unit = subscription.plan.features.price_unit;
     const per = intervalNoun(subscription.plan.features.billing_interval);
+    // A contracted plan has no list price; the catalog carries 0 as a
+    // placeholder. Multiplying it by seats and rendering the result said the
+    // plan cost "$0" and that the next payment would be "$0" -- advertising a
+    // negotiated plan as free. `PlanOptions` already refuses to price these.
+    const contracted = isContactSales(subscription.plan);
     // Per-unit plans price the whole subscription, not one unit of it.
     const total = unit
         ? subscription.plan.price_cents * Math.max(seats, 1)
@@ -136,9 +143,15 @@ function PlanFacts({
 
                 <p className="flex items-baseline gap-1.5">
                     <span className="text-3xl text-[var(--text-primary)] tabular-nums">
-                        {formatCents(total, subscription.plan.currency)}
+                        {contracted
+                            ? formatPlanPrice(subscription.plan)
+                            : formatCents(total, subscription.plan.currency)}
                     </span>
-                    <span className="text-sm text-[var(--text-tertiary)]">/ {per}</span>
+                    {contracted ? null : (
+                        <span className="text-sm text-[var(--text-tertiary)]">
+                            / {per}
+                        </span>
+                    )}
                 </p>
 
                 {unit ? (
@@ -155,7 +168,9 @@ function PlanFacts({
                     <SettingsHelpText>
                         {subscription.cancel_at_period_end
                             ? `Runs until ${nextDate}.`
-                            : `Your next payment is ${formatCents(total, subscription.plan.currency)} on ${nextDate}.`}
+                            : contracted
+                              ? `Renews on ${nextDate}.`
+                              : `Your next payment is ${formatCents(total, subscription.plan.currency)} on ${nextDate}.`}
                     </SettingsHelpText>
                 ) : null}
             </div>

@@ -1,5 +1,8 @@
 'use client';
 
+import { usePathname } from 'next/navigation';
+
+import { activeOrganizationIdFrom } from '@/lib/organizations/active-organization';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useOrganizations } from '@/lib/hooks/use-organizations';
 import { useLemmaAuth } from '@/lib/hooks/use-lemma-auth';
@@ -30,6 +33,25 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     const { data: orgsData, isLoading: isLoadingOrganizations } = useOrganizations({ enabled: hasSession });
     const organizations = useMemo(() => orgsData?.items || [], [orgsData?.items]);
     const [currentOrgId, setCurrentOrgId] = useState<string | null>(() => getStoredOrgId());
+    const pathname = usePathname();
+    const routeOrganizationId = activeOrganizationIdFrom(pathname);
+
+    // A route that names an organization is a stronger statement about which
+    // one the user is working in than whatever localStorage remembers. Without
+    // this, following a direct link to organization A's settings left "current"
+    // on B -- and `CreatePodScreen` sends `currentOrg.id`, so a pod created
+    // from that page was filed under the wrong organization.
+    //
+    // Derived rather than copied into state by an effect: the effect version
+    // rendered one frame with the old organization before correcting itself,
+    // and cascaded a re-render on every navigation.
+    //
+    // Guarded on membership: an id in the URL the user cannot reach must not
+    // become the organization the rest of the app acts on.
+    const effectiveOrgId =
+        routeOrganizationId && organizations.some((org) => org.id === routeOrganizationId)
+            ? routeOrganizationId
+            : currentOrgId;
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -46,26 +68,26 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
             return;
         }
 
-        if (!currentOrgId) {
+        if (!effectiveOrgId) {
             return;
         }
 
-        const orgStillExists = organizations.some((org) => org.id === currentOrgId);
+        const orgStillExists = organizations.some((org) => org.id === effectiveOrgId);
         if (orgStillExists) {
-            window.localStorage.setItem(ORG_STORAGE_KEY, currentOrgId);
+            window.localStorage.setItem(ORG_STORAGE_KEY, effectiveOrgId);
             return;
         }
 
         window.localStorage.removeItem(ORG_STORAGE_KEY);
-    }, [currentOrgId, hasSession, organizations]);
+    }, [effectiveOrgId, hasSession, organizations]);
 
     const currentOrg = useMemo(() => {
         if (!hasSession) return null;
         if (organizations.length === 0) return null;
-        if (!currentOrgId) return organizations[0];
+        if (!effectiveOrgId) return organizations[0];
 
-        return organizations.find((org) => org.id === currentOrgId) || organizations[0];
-    }, [hasSession, organizations, currentOrgId]);
+        return organizations.find((org) => org.id === effectiveOrgId) || organizations[0];
+    }, [hasSession, organizations, effectiveOrgId]);
 
     const setCurrentOrg = (org: Organization) => {
         if (typeof window !== 'undefined') {

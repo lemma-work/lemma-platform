@@ -76,6 +76,13 @@ export function UsageOverview({
     0,
     ...buckets.map((bucket) => bucket.system_cost_usd),
   );
+  // The same denominator the share beside each bar is computed from, so the
+  // bar and its label cannot disagree.
+  const periodTotal =
+    typeof summary.data?.system_cost_usd === "number" &&
+    summary.data.system_cost_usd > 0
+      ? summary.data.system_cost_usd
+      : 0;
   return (
     <div className="space-y-6">
       <section className="surface-panel p-5">
@@ -214,10 +221,19 @@ export function UsageOverview({
                         day: "numeric",
                       })}
                     </span>
+                    {/* Scaled by the period total, which is what the label
+                        beside it is a share of. Scaling by the busiest day
+                        instead drew that day full width next to text reading
+                        "20%". Falls back to the busiest day only when the
+                        total is unavailable. */}
                     <meter
-                      aria-label={`Share of the period on ${bucket.bucket}`}
+                      aria-label={
+                        periodTotal
+                          ? `Share of the period on ${bucket.bucket}`
+                          : `Activity on ${bucket.bucket}, relative to the busiest day`
+                      }
                       min={0}
-                      max={maxCost || 1}
+                      max={periodTotal || maxCost || 1}
                       value={bucket.system_cost_usd}
                       className="h-2 w-full [&::-webkit-meter-bar]:border-0 [&::-webkit-meter-bar]:bg-[var(--surface-2)] [&::-webkit-meter-optimum-value]:bg-[var(--action-primary)]"
                     />

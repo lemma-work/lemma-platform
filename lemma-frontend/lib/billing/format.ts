@@ -86,10 +86,15 @@ export function formatPeriod(start: string): string {
 
 export function formatDate(value: string | null): string | null {
     if (!value) return null;
+    // UTC, as `formatPeriod` already does. These are billing timestamps, and a
+    // period that ends at 2026-10-01T00:00:00Z reads as 30 Sept to anyone west
+    // of UTC -- so a renewal date, a cancellation date and a cycle range could
+    // each show the day before the one the invoice is dated.
     return new Intl.DateTimeFormat("en-US", {
         day: "numeric",
         month: "short",
         year: "numeric",
+        timeZone: "UTC",
     }).format(new Date(value));
 }
 

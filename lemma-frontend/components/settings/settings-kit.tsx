@@ -136,7 +136,10 @@ export function SettingsChoiceList<TValue extends string>({
                                     </span>
                                 ) : null}
                             </span>
-                            {option.meta ? (
+                            {/* Not truthiness: `meta` is a ReactNode and is
+                                often a count, so "0 pods" was suppressed
+                                exactly where it is worth saying. */}
+                            {option.meta !== undefined && option.meta !== null ? (
                                 <span className="shrink-0 text-sm tabular-nums text-[var(--text-secondary)]">
                                     {option.meta}
                                 </span>

@@ -43,7 +43,11 @@ function OrganizationBilling({ organizationId }: { organizationId: string }) {
               : null;
 
     const { data: organization } = useOrganizationDetails(organizationId);
-    const { available } = useBillingAvailable();
+    const {
+        available,
+        error: availabilityError,
+        refetch: refetchAvailability,
+    } = useBillingAvailable();
     const enabled = available === true;
 
     const subscription = useOrganizationSubscription(organizationId, { enabled });
@@ -161,7 +165,18 @@ function OrganizationBilling({ organizationId }: { organizationId: string }) {
 
             <PlanOptions
                 plans={plans.data?.items}
-                loading={available === undefined || plans.isLoading}
+                // Not "available is undecided", which stays undefined forever
+                // when the probe ends on a 401 or a 500 -- that rendered a
+                // skeleton with no error and no way out.
+                loading={
+                    (available === undefined && !availabilityError) ||
+                    plans.isLoading
+                }
+                error={plans.error ?? availabilityError}
+                onRetry={() => {
+                    if (availabilityError) void refetchAvailability();
+                    void plans.refetch();
+                }}
                 currentPlanId={subscription.data?.plan_id}
                 busyPlanId={busyPlanId}
                 onSelect={choose}

@@ -15,7 +15,9 @@
 import { buildApiUrl } from "@/components/auth/portal/auth/config";
 import type {
     BillingHistoryResponse,
+    BillingInvoice,
     CancelSubscriptionResponse,
+    Plan,
     PlanListResponse,
     PlanType,
     SeatInfo,
@@ -103,9 +105,46 @@ export function fetchPersonalSubscriptionStatus(): Promise<SubscriptionStatusRes
     );
 }
 
+/**
+ * Read a paginated billing list to the end.
+ *
+ * Both list routes are keyset-paginated and answer at most 100 rows. Reading
+ * only the first page truncated them silently -- and for the catalogue that
+ * means a plan a customer could have bought simply never being offered.
+ *
+ * Bounded, because a server that keeps handing back a token should not be able
+ * to spin the client forever. On hitting the bound the unused token is
+ * returned rather than dropped, so the result says it is incomplete instead of
+ * claiming to be the whole list.
+ */
+const MAX_PAGES = 20;
+
+async function readAllPages<
+    Item,
+    Response extends { items: Item[]; next_page_token: string | null },
+>(page: (pageToken: string | null) => Promise<Response>): Promise<Response> {
+    const first = await page(null);
+    let items = first.items;
+    let token = first.next_page_token;
+    for (let fetched = 1; token && fetched < MAX_PAGES; fetched += 1) {
+        const next = await page(token);
+        items = [...items, ...next.items];
+        token = next.next_page_token;
+    }
+    return { ...first, items, next_page_token: token };
+}
+
+function withPageToken(path: string, pageToken: string | null): string {
+    if (!pageToken) return path;
+    const separator = path.includes("?") ? "&" : "?";
+    return `${path}${separator}page_token=${encodeURIComponent(pageToken)}`;
+}
+
 export function fetchPlans(planType?: PlanType): Promise<PlanListResponse> {
-    const query = planType ? `?plan_type=${planType}&only_active=true` : "?only_active=true";
-    return billingFetch<PlanListResponse>(`/billing/plans${query}`);
+    const query = planType ? `plan_type=${planType}&only_active=true` : "only_active=true";
+    return readAllPages<Plan, PlanListResponse>((pageToken) =>
+        billingFetch<PlanListResponse>(withPageToken(`/billing/plans?${query}`, pageToken)),
+    );
 }
 
 export function fetchPersonalSubscription(): Promise<SubscriptionWithPlan> {
@@ -174,7 +213,12 @@ export function fetchSeatInfo(organizationId: string): Promise<SeatInfo> {
 export function fetchBillingHistory(
     organizationId: string,
 ): Promise<BillingHistoryResponse> {
-    return billingFetch<BillingHistoryResponse>(
-        `/billing/organizations/${organizationId}/billing-history`,
+    return readAllPages<BillingInvoice, BillingHistoryResponse>((pageToken) =>
+        billingFetch<BillingHistoryResponse>(
+            withPageToken(
+                `/billing/organizations/${organizationId}/billing-history`,
+                pageToken,
+            ),
+        ),
     );
 }
