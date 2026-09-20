@@ -67,6 +67,34 @@ export function formatPlanPrice(plan: Plan): string {
         : `${price} / ${per}`;
 }
 
+/**
+ * What a per-seat plan costs this buyer, when that is not the price on the card.
+ *
+ * The card prices one seat, because that is how the plan is sold. A fourteen-
+ * person team reading "$200 / seat / month" and then meeting $2,800 at the
+ * checkout has been told the truth and surprised anyway -- the multiplication
+ * was never shown. Saying "for 14 seats" also states plainly that this is a
+ * team plan priced per person.
+ *
+ * Null when there is nothing to add: a plan not sold per unit, a single seat
+ * (where the total is the number already above it), or a plan whose price is
+ * not a price -- a contracted plan carries 0 as a placeholder, and "$0 / month
+ * for 14 seats" advertises a negotiated plan as free.
+ */
+export function planTotalForSeats(
+    plan: Plan,
+    seats: number | undefined | null,
+): string | null {
+    const unit = plan.features.price_unit;
+    if (!unit || isContactSales(plan) || plan.price_cents <= 0) return null;
+    if (typeof seats !== "number" || !Number.isFinite(seats) || seats <= 1) {
+        return null;
+    }
+    const total = formatCents(plan.price_cents * seats, plan.currency);
+    const per = intervalNoun(plan.features.billing_interval);
+    return `${total} / ${per} for ${seats} ${unit}s`;
+}
+
 /** Just the cadence half, for a price already rendered large. */
 export function planPriceSuffix(plan: Plan): string {
     const per = intervalNoun(plan.features.billing_interval);

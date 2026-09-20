@@ -178,6 +178,10 @@ function OrganizationBilling({ organizationId }: { organizationId: string }) {
                     void plans.refetch();
                 }}
                 currentPlanId={subscription.data?.plan_id}
+                // What buying this plan would cost: the people in the
+                // organization, not the seats it has already paid for, which
+                // is zero for everyone standing in front of these cards.
+                seatCount={seats.data?.member_count}
                 busyPlanId={busyPlanId}
                 onSelect={choose}
             />
