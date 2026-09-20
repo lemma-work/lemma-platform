@@ -187,7 +187,9 @@ async def test_a_deployment_with_no_rows_has_no_cold_open_line_of_its_own():
     every one-number deployment is already in and must keep working from."""
     repository = WhatsAppNumberRepository(_Uow())
 
-    assert await repository.oldest_available_number() is None
+    oldest = await repository.oldest_available_number()
+
+    assert oldest is None
 
 
 async def test_secrets_are_encrypted_on_the_way_in_and_readable_on_the_way_out():
@@ -378,7 +380,9 @@ async def test_removing_a_number_that_is_already_gone_says_so():
     timeout is the common case, not an error."""
     repository = WhatsAppNumberRepository(_Uow())
 
-    assert await repository.remove("pn-1") is False
+    removed = await repository.remove("pn-1")
+
+    assert removed is False
 
 
 async def test_an_integrity_failure_that_is_not_the_number_reaches_the_caller():

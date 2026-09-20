@@ -85,26 +85,25 @@ async def _list() -> int:
     for number in numbers:
         # Which credentials the row carries, not what they are.
         #
-        # `bool(...)` at the point the tuple is built rather than a truthiness
-        # test on the secret itself further down. The two are the same answer,
-        # but only one of them keeps the secret out of the expression that
-        # reaches `print` -- and CodeQL read the other as
-        # `py/clear-text-logging-sensitive-data`, correctly in the sense that it
-        # could not see the value was never printed. A shape the analyser can
-        # read beats an allowlist entry that has to be re-argued on every scan.
-        declared = ",".join(
-            name
-            for name, carries in (
-                ("access_token", bool(number.access_token)),
-                ("app_secret", bool(number.app_secret)),
-                ("verify_token", bool(number.verify_token)),
-            )
-            if carries
-        )
+        # Built by appending literals under an `if`, rather than filtering a
+        # sequence that holds the secrets. Both answer the same question, and
+        # the first attempt at this -- pairing each name with `bool(value)` --
+        # read the same way to a person and not to CodeQL, which still followed
+        # the value into the printed string and raised
+        # `py/clear-text-logging-sensitive-data`. Here the secret appears only
+        # in a branch condition, so there is no flow into `print` to follow and
+        # nothing to argue about on the next scan.
+        declared: list[str] = []
+        if number.access_token:
+            declared.append("access_token")
+        if number.app_secret:
+            declared.append("app_secret")
+        if number.verify_token:
+            declared.append("verify_token")
         print(
             f"{number.phone_number_id}\t{number.display_phone_number}\t"
             f"{number.waba_id}\t{number.status.value}\t"
-            f"own:[{declared}]\t{number.notes or ''}"
+            f"own:[{','.join(declared)}]\t{number.notes or ''}"
         )
     return 0
 
