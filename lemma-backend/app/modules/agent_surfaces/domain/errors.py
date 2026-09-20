@@ -97,6 +97,35 @@ class AgentSurfaceAlreadyExistsError(AgentSurfaceError):
         )
 
 
+class AgentSurfaceAgentPlatformConflictError(AgentSurfaceError):
+    """This agent already reaches this platform somewhere else.
+
+    The database says the same thing through ``uq_agent_surface_agent_type``.
+    Without this the constraint was the only thing saying it, and an
+    IntegrityError arrives after the transaction is already unusable -- so a
+    person creating a second Slack surface for one agent got a 500 instead of
+    being told what the rule is.
+    """
+
+    def __init__(self, *, platform: str, pod_id: UUID, surface_name: str):
+        super().__init__(
+            message=(
+                f"This agent already has a {platform.title()} surface "
+                f"('{surface_name}'). An agent reaches a platform in one place: "
+                "one Slack app, one WhatsApp number, one Telegram bot. Pick "
+                "another agent, or change the surface it already has."
+            ),
+            code="AGENT_SURFACE_AGENT_PLATFORM_CONFLICT",
+            status_code=409,
+        )
+        self.details = {
+            "conflicting_surface": {
+                "pod_id": str(pod_id),
+                "name": surface_name,
+            },
+        }
+
+
 class AgentSurfacePlatformError(AgentSurfaceError):
     def __init__(self, platform: str, message: str):
         super().__init__(

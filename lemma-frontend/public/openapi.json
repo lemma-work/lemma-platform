@@ -32727,7 +32727,7 @@
         }
       },
       "post": {
-        "description": "Create a surface. ``name`` defaults to the lowercased platform — pass an\nexplicit name to create a second surface of the same platform (e.g. a\nsecond bot routed to a different agent).",
+        "description": "Create a surface. ``name`` defaults to the lowercased platform and is the\npod-unique handle the API addresses it by. A second surface of the same\nplatform has to belong to a different agent: one agent reaches a platform in\none place — one Slack app, one WhatsApp number, one Telegram bot.",
         "operationId": "agent.surface.create",
         "parameters": [
           {

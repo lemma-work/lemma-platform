@@ -36,6 +36,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
 from app.modules.agent_surfaces.services.credential_uniqueness import (
+    ensure_one_surface_per_agent,
     ensure_unique_org_credential_binding,
 )
 from app.modules.agent_surfaces.services.event_receiver_service import (
@@ -180,6 +181,7 @@ class AgentSurfaceService(
                 )
             entity.surface_identity_email = surface_identity_email
         self._validate_runtime_supported(entity)
+        await self._ensure_one_surface_per_agent(entity)
         await self._ensure_unique_org_credential_binding(entity)
         telegram_credentials: dict[str, Any] | None = None
         if telegram_requires_webhook_setup(entity):
@@ -345,6 +347,11 @@ class AgentSurfaceService(
 
         if update_agent_id:
             surface.update_agent(agent_id)
+            # Only when the agent changes: re-checking otherwise would refuse
+            # every ordinary edit to a surface, since the surface it conflicts
+            # with is itself -- and `id` excludes it only because it already has
+            # one. A surface being created does not.
+            await self._ensure_one_surface_per_agent(surface)
 
         # Any one of these touches the account binding, and the binding has to be
         # re-resolved as a whole rather than field by field.
@@ -579,6 +586,14 @@ class AgentSurfaceService(
         surface: AgentSurfaceEntity,
     ) -> None:
         await ensure_unique_org_credential_binding(
+            surface, surface_repository=self.surface_repository
+        )
+
+    async def _ensure_one_surface_per_agent(
+        self,
+        surface: AgentSurfaceEntity,
+    ) -> None:
+        await ensure_one_surface_per_agent(
             surface, surface_repository=self.surface_repository
         )
 

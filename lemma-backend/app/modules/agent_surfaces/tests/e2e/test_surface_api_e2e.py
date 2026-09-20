@@ -510,7 +510,7 @@ async def test_platform_webhook_verification_endpoints_and_signature_rejection(
     assert missing_signature.status_code == 401
 
 
-async def test_shared_bots_allow_personal_pods_but_customer_accounts_remain_unique(
+async def test_a_system_credential_is_claimed_once_per_organization(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -518,6 +518,19 @@ async def test_shared_bots_allow_personal_pods_but_customer_accounts_remain_uniq
     fake_slack,
     monkeypatch,
 ):
+    """Both halves of "one credential, one owner", through HTTP.
+
+    This asserted the opposite for the shared bot until the WhatsApp/Telegram
+    exemption came out. The exemption covered the two platforms whose system
+    credential is most plainly an identity -- one number, one bot -- so two
+    organizations could each hold the same one and an inbound message had no
+    predictable answer to whose it was. It also put the catalog and the writer
+    into disagreement: `_system_claim` never had the exemption, so it reported
+    the option as taken while the write went through anyway.
+
+    Onboarding still gives each personal pod its own shared surface; it writes
+    through the repository and does not come through this path.
+    """
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -548,10 +561,11 @@ async def test_shared_bots_allow_personal_pods_but_customer_accounts_remain_uniq
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
-    assert duplicate_system.status_code == 200, duplicate_system.text
-    assert duplicate_system.json()["pod_id"] == sibling_pod_id
-    assert duplicate_system.json()["id"] != system_created.json()["id"]
+    assert duplicate_system.status_code == 409, duplicate_system.text
+    assert duplicate_system.json()["details"]["kind"] == "SYSTEM"
 
+    # And the catalog says the same thing before anybody tries, which is the
+    # agreement the exemption broke.
     catalog = await authenticated_client.get(
         f"/pods/{sibling_pod_id}/available-surfaces"
     )
@@ -560,9 +574,9 @@ async def test_shared_bots_allow_personal_pods_but_customer_accounts_remain_uniq
         row for row in catalog.json()["surfaces"] if row["platform"] == "WHATSAPP"
     )
     assert whatsapp_row["system_claim"] == {
-        "available": True,
-        "claimed_by_pod_id": None,
-        "claimed_by_surface_name": None,
+        "available": False,
+        "claimed_by_pod_id": primary_pod_id,
+        "claimed_by_surface_name": "whatsapp",
     }
 
     deleted_system = await authenticated_client.delete(
@@ -570,11 +584,13 @@ async def test_shared_bots_allow_personal_pods_but_customer_accounts_remain_uniq
     )
     assert deleted_system.status_code == 204, deleted_system.text
 
+    # Released, not spent: the next pod to ask gets it.
     reused_system = await authenticated_client.post(
-        f"/pods/{primary_pod_id}/surfaces",
+        f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
     assert reused_system.status_code == 200, reused_system.text
+    assert reused_system.json()["pod_id"] == sibling_pod_id
 
     account = await _ensure_connector_account(
         db_session,

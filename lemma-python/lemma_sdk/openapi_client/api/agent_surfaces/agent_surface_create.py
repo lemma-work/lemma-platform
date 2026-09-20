@@ -73,9 +73,10 @@ def sync_detailed(
 ) -> Response[AgentSurfaceResponse | ErrorResponse]:
     """Create Surface
 
-     Create a surface. ``name`` defaults to the lowercased platform — pass an
-    explicit name to create a second surface of the same platform (e.g. a
-    second bot routed to a different agent).
+     Create a surface. ``name`` defaults to the lowercased platform and is the
+    pod-unique handle the API addresses it by. A second surface of the same
+    platform has to belong to a different agent: one agent reaches a platform in
+    one place — one Slack app, one WhatsApp number, one Telegram bot.
 
     Args:
         pod_id (UUID):
@@ -117,9 +118,10 @@ def sync(
 ) -> AgentSurfaceResponse | ErrorResponse | None:
     """Create Surface
 
-     Create a surface. ``name`` defaults to the lowercased platform — pass an
-    explicit name to create a second surface of the same platform (e.g. a
-    second bot routed to a different agent).
+     Create a surface. ``name`` defaults to the lowercased platform and is the
+    pod-unique handle the API addresses it by. A second surface of the same
+    platform has to belong to a different agent: one agent reaches a platform in
+    one place — one Slack app, one WhatsApp number, one Telegram bot.
 
     Args:
         pod_id (UUID):
@@ -156,9 +158,10 @@ async def asyncio_detailed(
 ) -> Response[AgentSurfaceResponse | ErrorResponse]:
     """Create Surface
 
-     Create a surface. ``name`` defaults to the lowercased platform — pass an
-    explicit name to create a second surface of the same platform (e.g. a
-    second bot routed to a different agent).
+     Create a surface. ``name`` defaults to the lowercased platform and is the
+    pod-unique handle the API addresses it by. A second surface of the same
+    platform has to belong to a different agent: one agent reaches a platform in
+    one place — one Slack app, one WhatsApp number, one Telegram bot.
 
     Args:
         pod_id (UUID):
@@ -198,9 +201,10 @@ async def asyncio(
 ) -> AgentSurfaceResponse | ErrorResponse | None:
     """Create Surface
 
-     Create a surface. ``name`` defaults to the lowercased platform — pass an
-    explicit name to create a second surface of the same platform (e.g. a
-    second bot routed to a different agent).
+     Create a surface. ``name`` defaults to the lowercased platform and is the
+    pod-unique handle the API addresses it by. A second surface of the same
+    platform has to belong to a different agent: one agent reaches a platform in
+    one place — one Slack app, one WhatsApp number, one Telegram bot.
 
     Args:
         pod_id (UUID):

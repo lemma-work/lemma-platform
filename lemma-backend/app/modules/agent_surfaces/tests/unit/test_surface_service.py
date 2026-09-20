@@ -28,11 +28,27 @@ from app.modules.agent_surfaces.services.surface_service import (
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
 )
+from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceAgentPlatformConflictError,
+)
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountInfo,
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+def _repo() -> AsyncMock:
+    """A surface repository double with the reads every write path makes.
+
+    `list_by_pod` returns a (page, cursor) pair, and the per-agent uniqueness
+    check reads it before every create. A bare `AsyncMock` answers that with a
+    mock, which fails as "not enough values to unpack" a long way from the test
+    that set it up. Tests that care about the page set their own.
+    """
+    repo = AsyncMock()
+    repo.list_by_pod.return_value = ([], None)
+    return repo
 
 
 def _surface_entity(**overrides) -> AgentSurfaceEntity:
@@ -55,7 +71,7 @@ def _surface_entity(**overrides) -> AgentSurfaceEntity:
 async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
     monkeypatch,
 ):
-    repo = AsyncMock()
+    repo = _repo()
     credential_resolver = AsyncMock()
     credential_resolver.for_surface.return_value = {"bot_token": "secret"}
     service = AgentSurfaceService(
@@ -156,7 +172,7 @@ async def test_a_telegram_outage_no_longer_discards_the_surface() -> None:
 
 async def test_missing_credentials_still_abort_before_the_commit(monkeypatch):
     """The error a user can act on must keep rolling the write back."""
-    repo = AsyncMock()
+    repo = _repo()
     deferred: list = []
     repo.uow.after_commit = deferred.append
     credential_resolver = AsyncMock()
@@ -179,7 +195,7 @@ async def test_missing_credentials_still_abort_before_the_commit(monkeypatch):
 
 
 async def test_create_surface(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -219,7 +235,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
     """A surface is addressed by its pod-unique name (defaults to the
     lowercased platform); several surfaces of the same platform can coexist
     under distinct names, but the same name cannot be reused in a pod."""
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -273,7 +289,7 @@ async def test_create_surface_name_defaults_and_is_pod_unique(monkeypatch):
 async def test_create_telegram_surface_uses_built_in_credentials_without_account(
     monkeypatch,
 ):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -303,7 +319,7 @@ async def test_create_telegram_surface_uses_built_in_credentials_without_account
 
 
 async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     account_port = AsyncMock()
     service = AgentSurfaceService(
@@ -342,7 +358,7 @@ async def test_create_telegram_webhook_surface_rejects_local_api_url(monkeypatch
 async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
     monkeypatch,
 ):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     account_port = AsyncMock()
     service = AgentSurfaceService(
@@ -387,7 +403,7 @@ async def test_create_telegram_webhook_surface_registers_per_surface_webhook(
 
 
 async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     account_port = AsyncMock()
     service = AgentSurfaceService(
@@ -422,8 +438,14 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
     repo.create.assert_not_awaited()
 
 
-async def test_create_shared_surface_allows_another_personal_pod(monkeypatch):
-    repo = AsyncMock()
+async def test_create_shared_surface_refuses_a_second_org_claim(monkeypatch):
+    """A system number answers for one organization, or for nobody predictably.
+
+    This asserted the opposite until the exemption came out: WhatsApp and
+    Telegram skipped the check entirely, so `create_surface` never even asked.
+    Onboarding's per-pod provisioning does not come through this path.
+    """
+    repo = _repo()
     enricher = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -445,22 +467,21 @@ async def test_create_shared_surface_allows_another_personal_pod(monkeypatch):
         "https://api.example.test",
     )
 
-    pod_id, agent_id = uuid4(), uuid4()
-    surface = await service.create_surface(
-        platform=SurfacePlatform.WHATSAPP,
-        pod_id=pod_id,
-        agent_id=agent_id,
-        config=config,
-    )
-    assert surface.pod_id == pod_id
-    assert surface.agent_id == agent_id
-    assert surface.account_id is None
-    repo.create.assert_awaited_once()
-    repo.get_system_credential_conflict_in_org.assert_not_awaited()
+    with pytest.raises(AgentSurfaceCredentialConflictError, match="System") as raised:
+        await service.create_surface(
+            platform=SurfacePlatform.WHATSAPP,
+            pod_id=uuid4(),
+            agent_id=uuid4(),
+            config=config,
+        )
+
+    assert raised.value.details["kind"] == "SYSTEM"
+    assert raised.value.details["conflicting_surface"]["name"] == "whatsapp"
+    repo.create.assert_not_awaited()
 
 
 async def test_create_account_surface_rejects_org_level_account_conflict(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -502,7 +523,7 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
 
 
 async def test_create_teams_surface_with_account_awaits_admin_consent(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -567,7 +588,7 @@ async def test_create_telegram_surface():
 
 
 async def test_get_surface_raises_not_found():
-    repo = AsyncMock()
+    repo = _repo()
     repo.get.return_value = None
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -579,7 +600,7 @@ async def test_get_surface_raises_not_found():
 
 
 async def test_toggle_surface():
-    repo = AsyncMock()
+    repo = _repo()
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=AsyncMock(),
@@ -597,7 +618,7 @@ async def test_toggle_surface():
 
 
 async def test_toggle_telegram_webhook_surface_deletes_provider_webhook(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=AsyncMock(),
@@ -624,7 +645,7 @@ async def test_toggle_telegram_webhook_surface_deletes_provider_webhook(monkeypa
 
 
 async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     account_port = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -668,7 +689,7 @@ async def test_resume_telegram_webhook_surface_registers_provider_webhook(monkey
 
 
 async def test_delete_telegram_webhook_surface_deletes_provider_webhook(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=AsyncMock(),
@@ -692,7 +713,7 @@ async def test_delete_telegram_webhook_surface_deletes_provider_webhook(monkeypa
 
 
 async def test_list_surfaces_by_pod():
-    repo = AsyncMock()
+    repo = _repo()
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=AsyncMock(),
@@ -713,7 +734,7 @@ async def test_list_surfaces_by_pod():
 
 
 async def test_delete_all_surfaces_for_pod_paginates_and_deletes():
-    repo = AsyncMock()
+    repo = _repo()
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=AsyncMock(),
@@ -734,7 +755,7 @@ async def test_delete_all_surfaces_for_pod_paginates_and_deletes():
 
 
 async def test_delete_all_surfaces_for_pod_continues_past_failure():
-    repo = AsyncMock()
+    repo = _repo()
     service = AgentSurfaceService(
         surface_repository=repo,
         account_binding_resolver=AsyncMock(),
@@ -754,7 +775,7 @@ async def test_delete_all_surfaces_for_pod_continues_past_failure():
 
 
 async def test_update_surface_updates_account_metadata(monkeypatch):
-    repo = AsyncMock()
+    repo = _repo()
     enricher = AsyncMock()
     service = AgentSurfaceService(
         surface_repository=repo,
@@ -972,3 +993,101 @@ async def test_resend_surface_rejected_on_local_url_without_polling(monkeypatch)
 
     with pytest.raises(AgentSurfaceValidationError, match="public HTTPS API URL"):
         _runtime_service()._validate_runtime_supported(surface)
+
+
+async def test_a_second_surface_of_one_platform_for_one_agent_is_refused(monkeypatch):
+    """`uq_agent_surface_agent_type`, said before the database has to say it.
+
+    An IntegrityError arrives with the transaction already unusable and reaches
+    the caller as a 500, so the rule was real and unsayable at the same time.
+    """
+    repo = _repo()
+    enricher = AsyncMock()
+    enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
+    monkeypatch.setattr("app.core.config.settings.api_url", "https://api.example.test")
+    service = AgentSurfaceService(
+        surface_repository=repo, account_binding_resolver=enricher
+    )
+    pod_id, agent_id = uuid4(), uuid4()
+    held = _surface_entity(
+        pod_id=pod_id,
+        agent_id=agent_id,
+        name="slack",
+        surface_type=SurfacePlatform.SLACK,
+    )
+    repo.list_by_pod.return_value = ([held], None)
+
+    with pytest.raises(AgentSurfaceAgentPlatformConflictError) as raised:
+        await service.create_surface(
+            platform=SurfacePlatform.SLACK,
+            pod_id=pod_id,
+            agent_id=agent_id,
+            name="slack-second",
+            account_id=uuid4(),
+        )
+
+    assert raised.value.status_code == 409
+    # The refusal names the surface holding the place, or it is a dead end.
+    assert raised.value.details["conflicting_surface"]["name"] == "slack"
+    repo.create.assert_not_awaited()
+
+
+async def test_another_agent_in_the_same_pod_may_hold_the_same_platform(monkeypatch):
+    """The rule is per agent, not per pod: two agents, two Slack apps."""
+    repo = _repo()
+    enricher = AsyncMock()
+    enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
+    monkeypatch.setattr("app.core.config.settings.api_url", "https://api.example.test")
+    repo.create.side_effect = lambda entity: entity
+    repo.get_account_conflict_in_org.return_value = None
+    service = AgentSurfaceService(
+        surface_repository=repo, account_binding_resolver=enricher
+    )
+    pod_id = uuid4()
+    # The pod's other agent already has one; `list_by_pod` is asked with
+    # `match_agent`, so it answers for this agent and finds nothing.
+    repo.list_by_pod.return_value = ([], None)
+
+    created = await service.create_surface(
+        platform=SurfacePlatform.SLACK,
+        pod_id=pod_id,
+        agent_id=uuid4(),
+        name="slack-second",
+        account_id=uuid4(),
+    )
+
+    assert created.surface_type is SurfacePlatform.SLACK
+    _, kwargs = repo.list_by_pod.await_args
+    assert kwargs["match_agent"] is True
+
+
+async def test_moving_a_surface_onto_an_agent_that_has_one_is_refused():
+    """The other write path: the agent changes, and the rule follows it."""
+    repo = _repo()
+    service = AgentSurfaceService(
+        surface_repository=repo, account_binding_resolver=AsyncMock()
+    )
+    pod_id, busy_agent = uuid4(), uuid4()
+    moving = _surface_entity(
+        pod_id=pod_id, surface_type=SurfacePlatform.SLACK, account_id=None
+    )
+    repo.get.return_value = moving
+    repo.list_by_pod.return_value = (
+        [
+            _surface_entity(
+                pod_id=pod_id,
+                agent_id=busy_agent,
+                name="slack",
+                surface_type=SurfacePlatform.SLACK,
+                account_id=None,
+            )
+        ],
+        None,
+    )
+
+    with pytest.raises(AgentSurfaceAgentPlatformConflictError):
+        await service.update_surface(
+            surface_id=moving.id, agent_id=busy_agent, update_agent_id=True
+        )
+
+    repo.update.assert_not_awaited()

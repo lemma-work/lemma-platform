@@ -20,6 +20,9 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.errors import (
+    AgentSurfaceCredentialConflictError,
+)
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_unique_org_credential_binding,
 )
@@ -61,12 +64,27 @@ class _Repository:
 @pytest.mark.parametrize(
     "platform", [SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM]
 )
-async def test_shared_bot_allows_personal_pods_with_independent_sender_routes(platform):
+async def test_the_shared_bot_is_claimable_once_per_organization(platform):
+    """The exemption that made this rule unreachable where it mattered most.
+
+    WhatsApp and Telegram were skipped, on the grounds that shared-bot routing
+    authorizes the sender and the personal pod separately. But one number and
+    one bot are precisely the credentials that *are* an identity: with two
+    organizations holding the same one, an inbound message has no predictable
+    answer to whose it is.
+
+    Onboarding still gives every personal pod its own shared surface. It writes
+    through the repository and does not come through here, which is deliberate
+    and written down where the exemption used to be.
+    """
     repository = _Repository(_surface(platform))
-    await ensure_unique_org_credential_binding(
-        _surface(platform), surface_repository=repository
-    )
-    assert repository.system_lookups == 0
+
+    with pytest.raises(AgentSurfaceCredentialConflictError, match="System"):
+        await ensure_unique_org_credential_binding(
+            _surface(platform), surface_repository=repository
+        )
+
+    assert repository.system_lookups == 1
 
 
 async def test_email_is_exempt_because_its_credential_is_not_an_identity():
