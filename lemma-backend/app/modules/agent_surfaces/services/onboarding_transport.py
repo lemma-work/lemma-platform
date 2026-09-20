@@ -56,6 +56,15 @@ class OnboardingTransport:
     organization_id: UUID | None
     credentials: dict[str, JsonValue] = field(repr=False)
     binding_key: str
+    #: Which surfaces the bot that delivered this event serves, as the request
+    #: gave them -- a native receiver (Telegram polling, the Slack socket) names
+    #: its own, a direct webhook is the one it arrived on, and a platform-wide
+    #: webhook names none. Carried because it is authorization, not a detail of
+    #: delivery: two installations can share one Slack workspace, so the tenant
+    #: alone does not say which of them may serve this message. Anything asking
+    #: "could this person be served here" has to ask it of the same set
+    #: ingestion will use, or it answers for a bot that is not listening.
+    receiver_surface_ids: list[UUID] | None = None
 
 
 def platform_binding_key(
@@ -83,6 +92,11 @@ async def resolve_onboarding_transport(
     uow_factory: UnitOfWorkFactory,
     adapters: SurfacePlatformAdapterRegistry,
 ) -> OnboardingTransport | None:
+    receiver_ids = (
+        [request.surface_id]
+        if isinstance(request, SurfaceDirectWebhookIngress)
+        else request.receiver_surface_ids
+    )
     loaded = await _transport_candidates(request, uow_factory)
     if loaded is None:
         return None
@@ -97,9 +111,7 @@ async def resolve_onboarding_transport(
         platform=platform,
         uows=uow_factory,
         adapters=adapters,
-        receiver_ids=[request.surface_id]
-        if isinstance(request, SurfaceDirectWebhookIngress)
-        else request.receiver_surface_ids,
+        receiver_ids=receiver_ids,
     )
     if parsed is None:
         parsed = await adapter.parse_inbound_event(request.payload, request.headers)
@@ -113,8 +125,8 @@ async def resolve_onboarding_transport(
         and surface.matches_tenant(parsed.tenant_id)
     ]
     if platform in (SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM):
-        return _shared_transport(request, surfaces, parsed)
-    return await _installation_transport(surfaces, parsed, uow_factory)
+        return _shared_transport(request, surfaces, parsed, receiver_ids)
+    return await _installation_transport(surfaces, parsed, uow_factory, receiver_ids)
 
 
 async def _transport_candidates(
@@ -143,6 +155,14 @@ async def _transport_candidates(
             # production caller by design; reaching for it here would put that
             # read back on the path every inbound message takes.
             receiver_surface_ids = request.receiver_surface_ids
+            if receiver_surface_ids is None and _has_shared_system_bot(platform):
+                # The shared bot's transport is its system credentials, and
+                # `_shared_transport` consults this list only to refuse a
+                # *receiver-scoped* delivery -- which this is not. Loading it
+                # read every system surface of the platform in the deployment on
+                # the way to not using one, on every message a shared-bot sender
+                # ever sends.
+                return platform, []
             surfaces = await repository.list_active_for_routing(
                 platform.value,
                 surface_ids=receiver_surface_ids,
@@ -159,6 +179,7 @@ def _shared_transport(
     request: SurfaceIngressRequest,
     surfaces: list[AgentSurfaceEntity],
     parsed: ParsedInboundSurfaceEvent,
+    receiver_ids: list[UUID] | None,
 ) -> OnboardingTransport | None:
     platform = parsed.platform
     if not parsed.is_dm:
@@ -193,6 +214,7 @@ def _shared_transport(
         None,
         credentials,
         platform_binding_key(parsed, None),
+        receiver_ids,
     )
 
 
@@ -200,6 +222,7 @@ async def _installation_transport(
     surfaces: list[AgentSurfaceEntity],
     parsed: ParsedInboundSurfaceEvent,
     uow_factory: UnitOfWorkFactory,
+    receiver_ids: list[UUID] | None,
 ) -> OnboardingTransport:
     platform = parsed.platform
     if not parsed.tenant_id or not surfaces:
@@ -243,4 +266,5 @@ async def _installation_transport(
         organization_id,
         credentials,
         platform_binding_key(parsed, installation.account_id or installation.id),
+        receiver_ids,
     )

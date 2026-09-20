@@ -167,6 +167,7 @@ async def has_somewhere_to_talk(
     platform: SurfacePlatform,
     parsed: ParsedInboundSurfaceEvent,
     system_credentials_only: bool,
+    receiver_surface_ids: list[UUID] | None,
 ) -> bool:
     """Is there a surface on this platform this person can actually chat on?
 
@@ -193,10 +194,14 @@ async def has_somewhere_to_talk(
     surface, not on the identity row, so there is no stored route to short it
     out the way an installation has.
 
-    `system_credentials_only` matches how the transport narrowed the same
-    lookup: a message on the shared bot can only be served by a
-    system-credential surface, while one on a company's own installation is not
-    restricted that way.
+    `system_credentials_only` and `receiver_surface_ids` are how ingestion
+    narrows the same lookup, and both are authorization rather than detail. The
+    first: a message on the shared bot can only be served by a
+    system-credential surface. The second: two installations can share one Slack
+    workspace, so the tenant does not say which of them is listening -- without
+    it, access through the other company's bot suppressed the question for a
+    message their bot will never see. An empty list means "none of them", as it
+    does for ingestion.
     """
     pod_ids = await SqlAlchemySurfaceRoutingResolutionAdapter(uow).get_user_pod_ids(
         user_id
@@ -205,7 +210,9 @@ async def has_somewhere_to_talk(
         return False
     result = await uow.session.execute(
         routing_surfaces(
-            platform.value, system_credentials_only=system_credentials_only
+            platform.value,
+            surface_ids=receiver_surface_ids,
+            system_credentials_only=system_credentials_only,
         ).where(AgentSurface.pod_id.in_(pod_ids))
     )
     return any(

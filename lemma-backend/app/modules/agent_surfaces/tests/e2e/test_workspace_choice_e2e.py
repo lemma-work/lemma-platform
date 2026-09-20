@@ -46,6 +46,7 @@ from app.modules.agent_surfaces.services.chat_onboarding import (
     ChatOnboardingCoordinator,
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import (
+    _create_agent,
     _create_agent_surface,
     _ensure_connector_account,
     _load_slack_dm_fixture,
@@ -416,6 +417,7 @@ async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
                 platform=SurfacePlatform.WHATSAPP,
                 parsed=event,
                 system_credentials_only=True,
+                receiver_surface_ids=None,
             )
             is False
         ), "a surface in a pod they are not in counted as somewhere to talk"
@@ -427,6 +429,7 @@ async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
                 platform=SurfacePlatform.WHATSAPP,
                 parsed=event,
                 system_credentials_only=True,
+                receiver_surface_ids=None,
             )
             is True
         )
@@ -484,6 +487,7 @@ async def test_a_surface_in_another_slack_workspace_is_not_somewhere_to_talk(
                 platform=SurfacePlatform.SLACK,
                 parsed=event,
                 system_credentials_only=False,
+                receiver_surface_ids=None,
             )
             is False
         ), "a surface in another Slack workspace counted as somewhere to talk"
@@ -594,6 +598,16 @@ async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
             )
         )
         assert done.step == OnboardingStep.READY
+        # And the proof of who they are survived the refusal. It was written in
+        # the same unit of work the conflicting surface rolled back, so the next
+        # message found no binding and asked for another email code.
+        identity = await session.scalar(
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.binding_key == binding_key
+            )
+        )
+        assert identity is not None, "recovering from the conflict lost the binding"
+        assert identity.revoked_at is None
 
 
 async def test_a_sender_with_no_organization_can_still_name_a_workspace(
@@ -680,3 +694,137 @@ async def test_a_sender_with_no_organization_can_still_name_a_workspace(
         )
         pods = {surface.pod_id for surface in made}
     assert pods, "no workspace was created for them to talk in"
+
+
+async def test_another_bot_in_the_same_workspace_is_not_somewhere_to_talk(
+    authenticated_client, db_session, test_pod, fixed_test_user
+) -> None:
+    """The tenant says which workspace; it does not say which bot is listening.
+
+    Two installations can share one Slack workspace, so a surface can pass the
+    tenant filter and still belong to an app that will never see this message.
+    Ingestion narrows to the surfaces the delivering bot serves; this check did
+    not, so access through the other company's bot suppressed the question for a
+    message only theirs could have answered.
+    """
+    from app.modules.agent_surfaces.services.onboarding_pod_choice import (
+        has_somewhere_to_talk,
+    )
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    workspace_id = f"T-SHARED-{uuid4().hex[:6]}"
+    # A second agent, because one agent reaches a platform in one place -- which
+    # is exactly why two installations in a workspace are two agents' surfaces.
+    second_agent = await _create_agent(authenticated_client, test_pod["id"])
+    async with sessions() as session:
+        listening = AgentSurface(
+            pod_id=UUID(test_pod["id"]),
+            agent_id=UUID(test_pod["id"]),
+            name=f"slack-a-{uuid4().hex[:6]}",
+            surface_type="SLACK",
+            mode="DM",
+            event_mode="WEBHOOK",
+            credential_mode="CUSTOM",
+            external_workspace_id=workspace_id,
+            config={},
+        )
+        # Same Slack workspace, same pod, a different installation: the tenant
+        # filter cannot tell these two apart, and only one took delivery.
+        other_bot = AgentSurface(
+            pod_id=UUID(test_pod["id"]),
+            agent_id=UUID(second_agent["id"]),
+            name=f"slack-b-{uuid4().hex[:6]}",
+            surface_type="SLACK",
+            mode="DM",
+            event_mode="WEBHOOK",
+            credential_mode="CUSTOM",
+            external_workspace_id=workspace_id,
+            config={},
+        )
+        session.add_all([listening, other_bot])
+        await session.commit()
+        listening_id, other_id = listening.id, other_bot.id
+
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.SLACK,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="D1",
+        external_thread_id="D1",
+        sender_external_user_id="U1",
+        external_message_id=uuid4().hex,
+        tenant_id=workspace_id,
+        message_text="hello",
+        is_dm=True,
+    )
+
+    async def reachable(receiver_surface_ids):
+        async with sessions() as session:
+            return await has_somewhere_to_talk(
+                SqlAlchemyUnitOfWork(session),
+                user_id=UUID(str(fixed_test_user["id"])),
+                platform=SurfacePlatform.SLACK,
+                parsed=event,
+                system_credentials_only=False,
+                receiver_surface_ids=receiver_surface_ids,
+            )
+
+    # Scoped to the bot that took delivery, both ways round.
+    assert await reachable([listening_id]) is True
+    assert await reachable([other_id]) is True
+    # And a receiver serving neither has nowhere to put this message, however
+    # much of the workspace the sender can otherwise reach.
+    assert await reachable([]) is False
+
+
+async def test_a_shared_bot_webhook_reads_no_surface_list_to_find_its_transport(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """The shared bot's transport is its system credentials, and nothing else.
+
+    `_shared_transport` consults the candidate list only to refuse a
+    receiver-scoped delivery. A platform-wide webhook is not one, so the list
+    was read -- every system surface of the platform in the deployment -- and
+    then not used, on every message a shared-bot sender ever sends.
+    """
+    from app.modules.agent_surfaces.services.onboarding_transport import (
+        _transport_candidates,
+    )
+    from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-transport")
+
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with sessions() as session:
+        # A live system surface exists, so an unscoped read would find one.
+        session.add(
+            AgentSurface(
+                pod_id=UUID(test_pod["id"]),
+                agent_id=UUID(test_pod["id"]),
+                name=f"whatsapp-{uuid4().hex[:6]}",
+                surface_type="WHATSAPP",
+                mode="DM",
+                event_mode="WEBHOOK",
+                credential_mode="SYSTEM",
+                config={},
+            )
+        )
+        await session.commit()
+
+    request = SurfacePlatformWebhookIngress(
+        source="whatsapp",
+        payload=_whatsapp_payload(
+            text="hello",
+            message_id=uuid4().hex,
+            phone_number_id="1234567890",
+            waba_id="waba-transport",
+            sender_phone="15559990000",
+        ),
+    )
+    loaded = await _transport_candidates(request, SessionUnitOfWorkFactory(sessions))
+    assert loaded is not None
+    platform, surfaces = loaded
+    assert platform is SurfacePlatform.WHATSAPP
+    assert surfaces == [], "the shared webhook read a surface list it cannot use"

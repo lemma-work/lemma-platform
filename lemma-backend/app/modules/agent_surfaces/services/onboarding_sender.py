@@ -305,6 +305,7 @@ async def offer_workspace_choice(
             platform=event.platform,
             parsed=event,
             system_credentials_only=transport.surface is None,
+            receiver_surface_ids=transport.receiver_surface_ids,
         ):
             return None
     async with uows() as uow:

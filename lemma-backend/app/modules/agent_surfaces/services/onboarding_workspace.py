@@ -29,6 +29,7 @@ from app.modules.agent_surfaces.services.onboarding_transport import (
 )
 from app.modules.identity.contracts.onboarding import (
     ChallengeRejected,
+    UserEntity,
     active_chat_user,
     ensure_chat_organization,
     ensure_chat_workspace,
@@ -129,6 +130,60 @@ async def _provision_and_bind(
         full_name=transport.event.sender_display_name,
         installation_organization_id=transport.organization_id,
     )
+    user = await record_verified_identity(uows, transport, state)
+    async with uows() as uow:
+        pending = await uow.session.get(PendingChatOnboarding, state.id)
+        assert pending is not None
+        if workspace.status == "organization_access_required":
+            pending.step = OnboardingStep.ORGANIZATION_ACCESS_REQUIRED
+            return True
+        assert workspace.pod_id is not None and workspace.assistant_id is not None
+        if transport.surface is not None:
+            # The destination goes on the identity row, which by now exists:
+            # one write, and nothing that can outlive a revocation.
+            identity = await uow.session.scalar(
+                select(VerifiedSurfaceIdentity).where(
+                    VerifiedSurfaceIdentity.binding_key == state.binding_key
+                )
+            )
+            assert identity is not None
+            identity.installation_surface_id = transport.surface.id
+            identity.pod_id = workspace.pod_id
+        else:
+            await _ensure_shared_surface(
+                uow,
+                pod_id=workspace.pod_id,
+                assistant_id=workspace.assistant_id,
+                user_id=user.id,
+                platform=transport.event.platform,
+            )
+        pending.step = OnboardingStep.READY
+        if pending.ready_at is None:
+            pending.ready_at = datetime.now(timezone.utc)
+            uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
+    return False
+
+
+async def record_verified_identity(
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
+) -> UserEntity:
+    """Write down who this is, before anything tries to find them a desk.
+
+    Its own unit of work, and that is the whole point. This used to share one
+    with destination allocation, and allocation can refuse -- a workspace whose
+    assistant already reaches the platform on its own connection -- so the
+    rollback that undid the destination also undid the proof of identity.
+    The next message found no binding and started signup over, asking a person
+    who had just given an email code to give another one. `PS-SURF-005` promises
+    they resume "without asking for another email code, while their verified
+    identity holds", and the identity held; only the write did not.
+
+    Committing it early loses nothing. An identity with no destination is
+    exactly the recognised-with-nowhere-to-talk state the workspace choice
+    exists to answer, and the row is shaped to say so -- both destination
+    columns are nullable, and `is_routable` reads that pair as "no route".
+    """
+    assert state.user_id is not None
     async with uows() as uow:
         user = await active_chat_user(uow, state.user_id)
         if user is None:
@@ -151,31 +206,7 @@ async def _provision_and_bind(
             uow.session.add(identity)
         identity.verified_phone = state.verified_phone
         identity.revoked_at = None
-        pending = await uow.session.get(PendingChatOnboarding, state.id)
-        assert pending is not None
-        if workspace.status == "organization_access_required":
-            pending.step = OnboardingStep.ORGANIZATION_ACCESS_REQUIRED
-        else:
-            assert workspace.pod_id is not None and workspace.assistant_id is not None
-            if transport.surface is not None:
-                # The destination goes on the identity, which is the row
-                # `identity` already is: one write, and nothing that can
-                # outlive a revocation.
-                identity.installation_surface_id = transport.surface.id
-                identity.pod_id = workspace.pod_id
-            else:
-                await _ensure_shared_surface(
-                    uow,
-                    pod_id=workspace.pod_id,
-                    assistant_id=workspace.assistant_id,
-                    user_id=user.id,
-                    platform=transport.event.platform,
-                )
-            pending.step = OnboardingStep.READY
-            if pending.ready_at is None:
-                pending.ready_at = datetime.now(timezone.utc)
-                uow.collect_events([SurfaceOnboardingReadyEvent(pending_id=pending.id)])
-    return workspace.status == "organization_access_required"
+    return user
 
 
 async def _ensure_shared_surface(
@@ -271,12 +302,17 @@ async def attach_chosen_workspace(
     an account: no organization is provisioned and no pod is invented, because
     they chose. Returns a message to send back when the choice could not be
     honoured, and None when it was.
+
+    The proof of identity is recorded first, on the same reasoning as there.
+    Both ways into the workspace choice carry a *proven* `user_id` -- one from
+    an existing binding, one from `require_proven_identity` on a verified phone
+    -- but only the first left a row behind, so somebody recognised by their
+    number and picking a company workspace was told to verify again, which is
+    the one thing recognition exists to avoid.
     """
     assert state.user_id is not None
+    user = await record_verified_identity(uows, transport, state)
     async with uows() as uow:
-        user = await active_chat_user(uow, state.user_id)
-        if user is None:
-            raise ChallengeRejected("This account cannot chat")
         pod_id = choice.pod_id
         if pod_id is None:
             assert choice.new_name is not None
@@ -323,6 +359,9 @@ async def attach_chosen_workspace(
                 )
             )
             if identity is None:
+                # Recorded above and not revoked since, so this is a race with a
+                # revocation rather than a missing binding -- and a revocation
+                # means exactly what this says.
                 return "That account needs to verify again before it can chat."
             identity.installation_surface_id = transport.surface.id
             identity.pod_id = pod_id
