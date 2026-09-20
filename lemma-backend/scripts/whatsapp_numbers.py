@@ -84,14 +84,22 @@ async def _list() -> int:
         return 0
     for number in numbers:
         # Which credentials the row carries, not what they are.
+        #
+        # `bool(...)` at the point the tuple is built rather than a truthiness
+        # test on the secret itself further down. The two are the same answer,
+        # but only one of them keeps the secret out of the expression that
+        # reaches `print` -- and CodeQL read the other as
+        # `py/clear-text-logging-sensitive-data`, correctly in the sense that it
+        # could not see the value was never printed. A shape the analyser can
+        # read beats an allowlist entry that has to be re-argued on every scan.
         declared = ",".join(
             name
-            for name, value in (
-                ("access_token", number.access_token),
-                ("app_secret", number.app_secret),
-                ("verify_token", number.verify_token),
+            for name, carries in (
+                ("access_token", bool(number.access_token)),
+                ("app_secret", bool(number.app_secret)),
+                ("verify_token", bool(number.verify_token)),
             )
-            if value
+            if carries
         )
         print(
             f"{number.phone_number_id}\t{number.display_phone_number}\t"
