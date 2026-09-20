@@ -125,7 +125,9 @@ class SurfaceIdentityResolutionService:
 
     Resolution order
     ----------------
-    1. Cache hit — ExternalSurfaceUser row already has a resolved_user_id.
+    1. Cache hit — ExternalSurfaceUser row already has a resolved_user_id, and
+       that user is still live. Skipped entirely when the caller asked for a
+       proven identity: the row does not record what proved it.
     2. Telegram username — a Telegram sender whose @username matches a user's
        ``telegram_username`` resolves directly (no contact-share needed).
     3. Email match — profile email (fetched from platform API) matched against
@@ -149,6 +151,7 @@ class SurfaceIdentityResolutionService:
             [ParsedInboundSurfaceEvent], Awaitable[ResolvedSurfaceUser | None]
         ]
         | None = None,
+        live_user_lookup: Callable[[UUID], Awaitable[UUID | None]] | None = None,
     ):
         self.uow = uow
         self.external_user_repository = external_user_repository
@@ -156,6 +159,12 @@ class SurfaceIdentityResolutionService:
         self._verified_identity_lookup = (
             verified_identity_lookup or self._resolve_verified_identity
         )
+        self._live_user_lookup = live_user_lookup or self._resolve_live_user
+
+    async def _resolve_live_user(self, user_id: UUID) -> UUID | None:
+        from app.modules.identity.contracts.surfaces import live_user_id
+
+        return await live_user_id(self.uow, user_id)
 
     async def _resolve_verified_identity(
         self, event: ParsedInboundSurfaceEvent
@@ -210,8 +219,31 @@ class SurfaceIdentityResolutionService:
         external_user = None
         if known.external_user_id:
             external_user = await self._upsert(event, known)
-            # Cache hit — previously resolved, skip DB lookup.
-            if external_user.resolved_user_id:
+            # Cache hit — previously resolved, skip the matching lookups.
+            #
+            # Two things the bare short-circuit got wrong, both of them because
+            # it answered above every check rather than beside them:
+            #
+            # *Liveness.* Each fresh lookup below excludes deactivated and
+            # deleted accounts, because a match is what the agent run then
+            # executes as. A cached id skipped all of that, so deactivating
+            # somebody did not take their chat access away -- their next message
+            # resolved from here and ran as them. One indexed read by primary
+            # key re-asks identity the only question that can have changed.
+            #
+            # *Proof.* `require_proven_identity` means the caller is about to
+            # write a permanent binding between a platform account and a Lemma
+            # user, so it may only use a match that proved ownership. This row
+            # does not record how it was matched, and an ordinary group message
+            # can fill it from a self-asserted Telegram handle -- so on that
+            # path there is no cached answer this can honestly supply, and it
+            # falls through to `_match_proven_sender` instead of consuming an
+            # unproven write through a proven read.
+            if (
+                external_user.resolved_user_id
+                and not require_proven_identity
+                and await self._live_user_lookup(external_user.resolved_user_id)
+            ):
                 return ResolvedSurfaceUser(
                     internal_user_id=external_user.resolved_user_id,
                     external_user_id=external_user.external_user_id,

@@ -13,20 +13,19 @@ inventory, not a surface -- and because ``models.py`` is already close to the
 
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, Index, String, Text, text
+from sqlalchemy import CheckConstraint, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
-    WhatsAppNumberRole,
     WhatsAppNumberStatus,
 )
 
 
 class WhatsAppNumber(UUIDAuditBase):
-    """One number the deployment owns, allocatable or shared.
+    """One number the deployment owns.
 
     No column records who holds it. The holder is the surface --
     ``agent_surfaces.organization_id`` plus ``surface_identity_id``, unique
@@ -36,30 +35,17 @@ class WhatsAppNumber(UUIDAuditBase):
 
     __tablename__ = "surface_whatsapp_numbers"
     __table_args__ = (
-        # The enums live in the database as well as in the domain, and that is
+        # The enum lives in the database as well as in the domain, and that is
         # what lets `to_entity` refuse an unknown value loudly instead of
         # tolerating it: a row cannot hold one.
         CheckConstraint(
-            "role IN ('SHARED', 'ALLOCATABLE')", name="ck_whatsapp_number_role"
-        ),
-        CheckConstraint(
             "status IN ('AVAILABLE', 'RETIRED')", name="ck_whatsapp_number_status"
         ),
-        # One shared line, not one row per claim to be it. Identity's phone
-        # verification and every personal pod ride the same number, so two of
-        # them is a state with no right answer -- and a partial unique index is
-        # the only way to say "at most one row with this value" in the schema
-        # rather than in whoever writes next.
-        Index(
-            "uq_whatsapp_number_shared",
-            "role",
-            unique=True,
-            postgresql_where=text("role = 'SHARED'"),
-        ),
-        # Allocation's whole predicate: "an AVAILABLE ALLOCATABLE number". The
+        # Allocation's whole predicate on this table -- "an AVAILABLE number" --
+        # and the cold-open fallback's, which wants the oldest of them. The
         # "this org does not hold it" half is answered by `agent_surfaces`, not
         # here, so it is not in this index.
-        Index("ix_whatsapp_number_allocatable", "role", "status"),
+        Index("ix_whatsapp_number_allocatable", "status", "created_at"),
     )
 
     # Unique, and no index of its own beyond that: every read starts from it --
@@ -94,7 +80,6 @@ class WhatsAppNumber(UUIDAuditBase):
         String(64), nullable=True
     )
     # Leading column of `ix_whatsapp_number_allocatable`, so no index of its own.
-    role: Mapped[str] = mapped_column(String(16), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -112,7 +97,6 @@ class WhatsAppNumber(UUIDAuditBase):
             verify_token=get_secret_cipher().decrypt_str(self.verify_token),
             onboarding_email_flow_id=self.onboarding_email_flow_id,
             onboarding_code_flow_id=self.onboarding_code_flow_id,
-            role=WhatsAppNumberRole(self.role),
             status=WhatsAppNumberStatus(self.status),
             notes=self.notes,
         )

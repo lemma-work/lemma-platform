@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 from collections.abc import Mapping
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -15,6 +14,7 @@ from app.modules.agent_surfaces.config import (
     surface_settings,
     surface_webhook_verification_enabled,
 )
+from app.core.webhooks.signatures import constant_time_equals
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.api.dependencies import get_uow_factory
@@ -70,7 +70,7 @@ async def handle_telegram_manager_webhook(
             status_code=503,
             detail="Telegram manager webhook is not configured",
         )
-    if not provided or not hmac.compare_digest(provided, expected):
+    if not constant_time_equals(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
     payload = _decode_webhook_payload(await request.body(), dict(request.headers))
     try:
@@ -379,10 +379,13 @@ def _token_matches(provided: str | None, expected: str | None) -> bool:
     A missing expected token is never a match. Otherwise an unconfigured
     deployment would accept `hub.verify_token` absent as equal to absent and
     hand out its challenge.
+
+    Through the shared helper rather than `hmac.compare_digest` directly: this
+    token arrives as a query parameter, so it is whatever the caller typed, and
+    `compare_digest` on two `str`s raises `TypeError` the moment either one
+    leaves ASCII. That turned a wrong token into an unauthenticated 500.
     """
-    if not provided or not expected:
-        return False
-    return hmac.compare_digest(provided, expected)
+    return constant_time_equals(provided, expected)
 
 
 def _webhook_verification_response(

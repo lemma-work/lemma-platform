@@ -30,7 +30,7 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
-    get_platform_capabilities,
+    system_credential_claim_applies,
 )
 
 
@@ -93,8 +93,19 @@ async def ensure_unique_org_credential_binding(
     # created in an organization silently blocked every mailbox after it,
     # including further agents in the same pod, since this query does not
     # exclude the surface's own pod either.
-    capabilities = get_platform_capabilities(surface.surface_type.value)
-    if capabilities is not None and not capabilities.system_credential_is_identity:
+    #
+    # WhatsApp fails it *conditionally*, which is why the identity this surface
+    # holds is part of the question. A surface holding a pooled number has its
+    # own identity and `uq_agent_org_whatsapp_number` keeps it exclusive. A
+    # surface holding none — every WhatsApp surface in a deployment that owns no
+    # pool — is on the single number in settings, and that index is partial on
+    # `surface_identity_id IS NOT NULL`, so it does not constrain it. Exempting
+    # those too left the shared number claimable by every pod in an
+    # organization, with nothing at all to say otherwise.
+    if not system_credential_claim_applies(
+        surface.surface_type.value,
+        holds_own_identity=bool(surface.surface_identity_id),
+    ):
         return
 
     conflict = await surface_repository.get_system_credential_conflict_in_org(

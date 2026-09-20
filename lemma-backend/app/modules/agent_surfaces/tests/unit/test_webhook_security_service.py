@@ -392,3 +392,76 @@ async def test_the_right_verify_token_still_gets_its_challenge(monkeypatch):
     )
 
     assert answer.body == b"1234"
+
+
+async def test_a_non_ascii_app_id_is_refused_rather_than_raising(monkeypatch):
+    """A field lifted out of an unverified body must not be able to 500 us.
+
+    `api_app_id` is read from the JSON before anything has been authenticated,
+    so it is whatever the sender wrote. Compared as two `str`s it reached
+    `hmac.compare_digest`, which refuses non-ASCII with a `TypeError` -- an
+    unauthenticated 500 on the Slack ingress, from one byte, with no signature
+    check ever run.
+    """
+    from app.modules.agent_surfaces.services.webhook_security_service import (
+        SlackWebhookVerificationCandidate,
+    )
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    service = SurfaceWebhookSecurityService()
+    candidate = SlackWebhookVerificationCandidate(
+        app_id="A123",
+        signing_secret="s3cret",
+        receiver_surface_ids=(uuid4(),),
+    )
+
+    with pytest.raises(SurfaceWebhookAuthenticationError):
+        service.verify_slack_request(
+            headers={},
+            raw_body=b"{}",
+            api_app_id="Ä123",
+            candidates=[candidate],
+        )
+
+
+async def test_a_matching_app_id_still_narrows_to_its_candidate(monkeypatch):
+    """The byte comparison must not have cost the narrowing it replaces."""
+    from app.modules.agent_surfaces.services.webhook_security_service import (
+        SlackWebhookVerificationCandidate,
+    )
+
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    service = SurfaceWebhookSecurityService()
+    wanted = uuid4()
+    timestamp = str(int(time.time()))
+    body = b'{"type":"event_callback"}'
+    signature = (
+        "v0="
+        + hmac.new(
+            b"right-secret",
+            f"v0:{timestamp}:".encode() + body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+
+    verified = service.verify_slack_request(
+        headers={
+            "x-slack-request-timestamp": timestamp,
+            "x-slack-signature": signature,
+        },
+        raw_body=body,
+        api_app_id="A123",
+        candidates=[
+            SlackWebhookVerificationCandidate(
+                app_id="A999", signing_secret="wrong", receiver_surface_ids=(uuid4(),)
+            ),
+            SlackWebhookVerificationCandidate(
+                app_id="A123",
+                signing_secret="right-secret",
+                receiver_surface_ids=(wanted,),
+            ),
+        ],
+    )
+
+    assert verified.app_id == "A123"
+    assert verified.receiver_surface_ids == (wanted,)

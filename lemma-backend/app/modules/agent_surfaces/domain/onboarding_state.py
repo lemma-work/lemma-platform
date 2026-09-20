@@ -48,6 +48,13 @@ class OnboardingStep(StrEnum):
     READY = "ready"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
+    #: Stopped on a refusal that signup itself has no answer for: the account
+    #: cannot chat, or the phone or the platform identity is proven to belong
+    #: to somebody else. Terminal on purpose. Left on the step it was refused
+    #: from, the same message re-entered the same branch and was refused in the
+    #: same words with no way out; from here the next message is a stranger's
+    #: again, which is a signup that can at least be finished differently.
+    REFUSED = "refused"
 
 
 class PendingState(BaseModel):

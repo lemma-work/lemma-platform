@@ -459,3 +459,29 @@ def test_a_per_number_callback_stays_unauthenticated():
     assert f"/surfaces/webhooks/whatsapp/numbers/{_POOLED_NUMBER_ID}".startswith(
         EXCLUDED_PATHS
     )
+
+
+async def test_a_non_ascii_verify_token_is_a_403_and_not_a_500(monkeypatch):
+    """`hub.verify_token` is whatever the caller typed, including a `ü`.
+
+    Compared as two `str`s it reached `hmac.compare_digest`, which refuses
+    anything outside ASCII with a `TypeError`. The route is unauthenticated by
+    necessity -- a platform has to be able to reach it -- so one byte turned
+    every wrong token into a 500 and put the whole webhook surface's error rate
+    in the hands of whoever sent it.
+    """
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-token")
+
+    with _pool_returning(_pooled()), pytest.raises(HTTPException) as raised:
+        await verify_whatsapp_number_webhook(
+            _POOLED_NUMBER_ID,
+            _request(
+                query="hub.mode=subscribe&hub.challenge=nonce-1"
+                "&hub.verify_token=p%C3%BColed-verify-token",
+                method="GET",
+            ),
+            uow_factory=_UowFactory(),
+        )
+
+    assert raised.value.status_code == 403

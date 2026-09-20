@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
-from slack_sdk.errors import SlackApiError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -13,6 +12,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
+from app.modules.agent_surfaces.events.handlers import _context_for_delivery
 from app.modules.agent_surfaces.infrastructure.onboarding_models import (
     PendingChatOnboarding,
     VerifiedSurfaceIdentity,
@@ -92,7 +92,7 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
     )
     actor = "U" + uuid4().hex[:10]
 
-    async def say(text, *, channel=False, ts=None):
+    def delivery(text, *, channel=False, ts=None):
         payload = _load_slack_dm_fixture(text=text, ts=ts or uuid4().hex)
         payload["event"].update(
             {
@@ -104,14 +104,39 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
         if channel:
             payload["event"]["type"] = "app_mention"
             payload["event"]["text"] = f"<@U0AGSSTQZLH> {text}"
-        return await coordinator.handle(
-            SurfacePlatformWebhookIngress(source="slack", payload=payload)
-        )
+        return SurfacePlatformWebhookIngress(source="slack", payload=payload)
+
+    async def say(text, *, channel=False, ts=None):
+        return await coordinator.handle(delivery(text, channel=channel, ts=ts))
 
     if initial_dm_refused:
+        # A workspace whose app was installed without `im:write`. Slack answers
+        # `conversations.open` with `missing_scope` and the SDK raises.
+        #
+        # This used to assert that `SlackApiError` came straight back out, and
+        # that expectation was the bug written down. Nothing above the
+        # coordinator catches that type: it left the subscriber, so the rest of
+        # the delivery never ran and the inbox retried a message that could
+        # never succeed -- on every message that person would ever send,
+        # because a missing scope does not heal. `_context_for_delivery` is
+        # where the difference shows, because only `PrivateDeliveryUnavailable`
+        # reaches its fall-through, so that is what this drives now.
+        #
+        # What comes back is still None, and honestly so: ordinary ingestion
+        # declines an unrecognised sender in a *channel* (selection finds no
+        # surface for a sender it cannot resolve, and the unrouted fallback is
+        # DM-only), so the "please sign up" reply the fall-through exists for is
+        # not reachable from here either way. The fix buys the other half, and
+        # it is the half that was costing a person every message they sent:
+        # the refusal is answered instead of thrown, ingestion gets its turn,
+        # and the delivery is acknowledged rather than retried forever.
         fake_slack.conversations_open_error = "missing_scope"
-        with pytest.raises(SlackApiError):
-            await say("Help with my forecast", channel=True)
+        refused = await _context_for_delivery(
+            delivery("Help with my forecast", channel=True),
+            onboarding_handler=coordinator.handle,
+            uow_factory=factory,
+        )
+        assert refused is None
         assert message_store.get_all("SLACK") == []
         assert codes == []
         async with factory() as uow:
@@ -201,3 +226,82 @@ async def test_channel_signup_waits_for_admin_and_resumes_in_installation_org(
     again = await say("What is on my plate?", ts=redelivered)
     assert first.handled and first.context is not None
     assert again.handled and again.context is None
+
+
+async def test_a_channel_mention_during_signup_is_answered_where_the_room_cannot_read_it(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    message_store,
+):
+    """Silence for the whole TTL was the old answer, and it explained nothing.
+
+    A pending signup returns handled-with-no-context for anything that is not a
+    DM, which is right as far as routing goes -- nothing may reach an agent
+    while nobody has proved who sent it. It was also the *entire* answer, so
+    somebody who missed the DM and asked again in the channel got nothing back
+    from a bot that was, from where they stood, simply broken.
+
+    PS-SURF-006 is why this is an ephemeral rather than a message: nothing
+    about the signup appears in the channel, and nobody else learns that this
+    person is halfway through one. It names no address, no code and no account
+    status -- only that a DM is waiting.
+    """
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-channel-notice",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "team_id": "T0123456",
+                "bot_user_id": "U0AGSSTQZLH",
+                "api_base_url": fake_slack.base_url,
+            },
+        },
+    )
+    await _create_agent_surface(
+        authenticated_client,
+        test_pod["id"],
+        config={"type": "SLACK", "account_id": str(account.id)},
+    )
+    fake_slack._test_user_email = f"colleague-{uuid4().hex}@gmail.com"
+    factory = SessionUnitOfWorkFactory(
+        async_sessionmaker(db_session.bind, expire_on_commit=False)
+    )
+    coordinator = ChatOnboardingCoordinator(factory)
+    actor = "U" + uuid4().hex[:10]
+
+    async def say(text, *, channel=False):
+        payload = _load_slack_dm_fixture(text=text, ts=uuid4().hex)
+        payload["event"].update(
+            {
+                "user": actor,
+                "channel": "Ccompany" if channel else f"D{actor}",
+                "channel_type": "channel" if channel else "im",
+            }
+        )
+        if channel:
+            payload["event"]["type"] = "app_mention"
+            payload["event"]["text"] = f"<@U0AGSSTQZLH> {text}"
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(source="slack", payload=payload)
+        )
+
+    assert (await say("Help with my forecast", channel=True)).handled
+    message_store.get_all("SLACK_EPHEMERAL").clear()
+
+    assert (await say("hello? are you there", channel=True)).handled
+
+    ephemerals = message_store.get_all("SLACK_EPHEMERAL")
+    assert ephemerals, "the second channel mention was answered with nothing at all"
+    assert ephemerals[-1]["user"] == actor
+    assert ephemerals[-1]["channel"] == "Ccompany"
+    assert "direct message" in ephemerals[-1]["text"]
+    # And the room itself is told nothing, then or now.
+    assert all(
+        item["channel"] == f"D{actor}" for item in message_store.get_all("SLACK")
+    )

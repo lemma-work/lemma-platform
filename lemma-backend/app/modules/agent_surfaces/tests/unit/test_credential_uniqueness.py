@@ -30,10 +30,19 @@ from app.modules.agent_surfaces.services.credential_uniqueness import (
 pytestmark = pytest.mark.asyncio
 
 
-def _surface(platform: SurfacePlatform, *, agent_id=None) -> AgentSurfaceEntity:
+def _surface(
+    platform: SurfacePlatform,
+    *,
+    agent_id=None,
+    holding: str | None = None,
+) -> AgentSurfaceEntity:
     # A surface has exactly one owner. `agent_id=None` here means the caller
     # does not care which -- the pod's own assistant is the honest default, and
     # its row id is the pod's.
+    #
+    # `holding` is the identity this surface carries of its own: a pooled
+    # WhatsApp number. Whether it has one is part of what this rule asks, so it
+    # has to be sayable here.
     pod_id = uuid4()
     return AgentSurfaceEntity(
         id=uuid4(),
@@ -43,6 +52,7 @@ def _surface(platform: SurfacePlatform, *, agent_id=None) -> AgentSurfaceEntity:
         config=SurfaceConfig(),
         agent_id=agent_id or pod_id,
         credential_mode=SurfaceCredentialMode.SYSTEM,
+        surface_identity_id=holding,
     )
 
 
@@ -103,13 +113,19 @@ async def test_a_pooled_number_is_not_claimed_by_the_whole_organization():
     that could. Keeping this rule as well would refuse the second number the
     pool exists to hand out.
 
+    A surface *holding a number* is what earns the exemption, and the test says
+    so rather than leaving it implicit: the index that replaced this rule is
+    partial on `surface_identity_id IS NOT NULL`, so a surface holding nothing
+    is not covered by it -- see the scenario below.
+
     The lookup is not performed at all, for the same reason Resend's is not:
     there is nothing it could usefully answer.
     """
-    repository = _Repository(_surface(SurfacePlatform.WHATSAPP))
+    repository = _Repository(_surface(SurfacePlatform.WHATSAPP, holding="pool-a"))
 
     await ensure_unique_org_credential_binding(
-        _surface(SurfacePlatform.WHATSAPP), surface_repository=repository
+        _surface(SurfacePlatform.WHATSAPP, holding="pool-b"),
+        surface_repository=repository,
     )
 
     assert repository.system_lookups == 0, (
@@ -161,5 +177,50 @@ async def test_a_custom_credential_surface_is_not_subject_to_the_system_rule():
     repository = _Repository(_surface(SurfacePlatform.WHATSAPP))
 
     await ensure_unique_org_credential_binding(surface, surface_repository=repository)
+
+    assert repository.system_lookups == 0
+
+
+async def test_the_one_number_a_deployment_without_a_pool_has_is_still_claimed_once():
+    """The exemption is about the number a surface holds, not about WhatsApp.
+
+    A deployment that has added no pool rows gives its surfaces no number, so
+    `surface_identity_id` is NULL and `uq_agent_org_whatsapp_number` -- partial
+    on that column being present -- does not see them. Exempting them from this
+    rule as well left the deployment's single shared number with nothing at all
+    constraining it: two pods in one organization could each take it, and the
+    first inbound message would have no answerable owner.
+
+    That is every deployment running today, which is what makes this the case
+    worth a test rather than the exotic one.
+    """
+    holder = _surface(SurfacePlatform.WHATSAPP)
+    repository = _Repository(holder)
+
+    with pytest.raises(AgentSurfaceCredentialConflictError) as refused:
+        await ensure_unique_org_credential_binding(
+            _surface(SurfacePlatform.WHATSAPP), surface_repository=repository
+        )
+
+    assert repository.system_lookups == 1
+    assert refused.value.details["kind"] == "SYSTEM"
+    assert refused.value.details["conflicting_surface"]["pod_id"] == str(holder.pod_id)
+
+
+async def test_a_mailbox_is_exempt_even_with_no_address_yet():
+    """Resend's exemption is unconditional, and stays that way.
+
+    WhatsApp's became conditional on holding a number, and the two platforms
+    share the branch -- so the risk of the change is that Resend quietly
+    inherits the condition and the bug this rule already had comes back. Its
+    identity is minted for every surface rather than drawn from finite
+    inventory, so there is no state in which the deployment's key is the
+    identity.
+    """
+    repository = _Repository(_surface(SurfacePlatform.RESEND))
+
+    await ensure_unique_org_credential_binding(
+        _surface(SurfacePlatform.RESEND), surface_repository=repository
+    )
 
     assert repository.system_lookups == 0

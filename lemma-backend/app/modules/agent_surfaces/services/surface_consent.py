@@ -25,6 +25,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
 from app.modules.connectors.contracts import AuthConfigSource
 from app.modules.agent_surfaces.domain.setup_guides import (
     SurfacePlatformSetupGuide,
@@ -77,8 +80,31 @@ def _get_consent_cache() -> RedisJsonCache:
     return _consent_check_cache
 
 
+if TYPE_CHECKING:
+    from app.modules.agent_surfaces.domain.ports import (
+        SurfaceAccountPort,
+        SurfaceAuthConfigPort,
+        SurfaceInstallationRepositoryPort,
+    )
+    from app.modules.agent_surfaces.services.credential_resolver import (
+        SurfaceCredentialResolver,
+    )
+
+
 class SurfaceConsentMixin:
-    """Split out of :class:`AgentSurfaceService`; see the module docstring."""
+    """Split out of :class:`AgentSurfaceService`; see the module docstring.
+
+    The four collaborators below are declared, not assigned: they belong to
+    `AgentSurfaceService`, which composes this. Declaring them is what lets a
+    type checker see through the composition -- an attribute that resolves to
+    nothing type-checks as nothing, and the reads in this file were the module's
+    largest single source of baselined type errors.
+    """
+
+    surface_repository: SurfaceInstallationRepositoryPort
+    _account_port: SurfaceAccountPort | None
+    _auth_config_port: SurfaceAuthConfigPort | None
+    _credential_resolver: SurfaceCredentialResolver | None
 
     def get_platform_setup_guide(self, platform: str) -> SurfacePlatformSetupGuide:
         resolved_platform = SurfacePlatform.from_source(platform)
@@ -125,16 +151,22 @@ class SurfaceConsentMixin:
     ) -> str | None:
         """The verify token to show the user for pasting into Meta's console.
 
-        A connected account's own ``verify_token`` (from its stored
-        credentials) — the value the backend actually checks incoming
-        ``hub.verify_token`` requests against for that surface. Falls back to
-        the system-wide token for account-less (Lemma-managed) surfaces.
+        Whatever the backend will actually check that surface's incoming
+        ``hub.verify_token`` against, and in the same order the routes resolve
+        it, because the only useful value here is the one that will match.
+
+        A connected account answers with its own stored ``verify_token``. A
+        surface holding a pooled number answers with that number's, falling back
+        to the system-wide token exactly as
+        ``verify_whatsapp_number_webhook`` does -- showing the system-wide token
+        for a number that declares its own is how an operator came to paste a
+        value the handshake then refused, with nothing on either side saying
+        which of the two was wrong. Everything else is on the deployment's one
+        number, and that is the system-wide token.
         """
-        if (
-            surface.surface_type is SurfacePlatform.WHATSAPP
-            and surface.account_id is not None
-            and self._credential_resolver is not None
-        ):
+        if surface.surface_type is not SurfacePlatform.WHATSAPP:
+            return surface_settings.whatsapp_verify_token
+        if surface.account_id is not None and self._credential_resolver is not None:
             try:
                 credentials = await self._credential_resolver.for_account(
                     surface.account_id
@@ -147,6 +179,12 @@ class SurfaceConsentMixin:
                 )
                 return None
             return credentials.get("verify_token")
+        if surface.surface_identity_id:
+            number = await WhatsAppNumberRepository(
+                self.surface_repository.uow
+            ).get_by_phone_number_id(surface.surface_identity_id)
+            if number is not None and number.verify_token:
+                return number.verify_token
         return surface_settings.whatsapp_verify_token
 
     async def _surface_admin_consent(

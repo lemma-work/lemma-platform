@@ -14,7 +14,15 @@ See ``migrations/versions/2026-09-21_whatsapp_number_pool_0039.py`` for why
 Who *holds* a number is deliberately not here. The holder is the surface, on
 ``agent_surfaces.surface_identity_id``, scoped by ``organization_id``: a second
 copy on this row would be two places that can disagree about who holds a scarce
-thing. So this entity is inventory, not an allocation.
+thing. So this entity is inventory, not an allocation. Several organisations may
+hold one number at the same time -- routing narrows on the sender first and uses
+the number only as a further predicate -- so "held" is never exclusive
+deployment-wide, only within an organisation.
+
+Nor is there anything saying what a number is *for*. Every row is a number this
+deployment owns and sends from, and they behave identically; the only question
+the inventory answers about a row is whether allocation may still offer it,
+which is ``status``.
 """
 
 from __future__ import annotations
@@ -22,20 +30,6 @@ from __future__ import annotations
 from enum import StrEnum
 
 from app.core.domain.entity import Entity
-
-
-class WhatsAppNumberRole(StrEnum):
-    """What a number is *for*, which is not the same as whether it is free.
-
-    Mirrors ``ck_whatsapp_number_role``.
-    """
-
-    #: The line in settings: personal pods ride it, identity's phone
-    #: verification uses it. Exactly one exists (``uq_whatsapp_number_shared``)
-    #: and it is never handed to an organisation.
-    SHARED = "SHARED"
-    #: The pool proper. One organisation at a time, several over its lifetime.
-    ALLOCATABLE = "ALLOCATABLE"
 
 
 class WhatsAppNumberStatus(StrEnum):
@@ -59,12 +53,11 @@ class WhatsAppNumberEntity(Entity):
     because ``surface_type`` and ``event_mode`` are free ``String`` columns
     whose enums lost members, so a stored row can legitimately name something
     this code no longer knows -- and one such row must not take a whole page
-    with it. Here both ``role`` and ``status`` are held to their members by
-    CHECK constraints in the database, so an unknown value is not a
-    configuration somebody chose and outlived; it is corruption or a migration
-    that was not run, and ``ValueError`` from the enum is the right, loud
-    answer. If a member is ever retired, that reasoning changes and this is
-    where the tolerance belongs.
+    with it. Here ``status`` is held to its members by a CHECK constraint in the
+    database, so an unknown value is not a configuration somebody chose and
+    outlived; it is corruption or a migration that was not run, and
+    ``ValueError`` from the enum is the right, loud answer. If a member is ever
+    retired, that reasoning changes and this is where the tolerance belongs.
     """
 
     #: The routing key and the Graph API address. Opaque -- never the E.164
@@ -84,7 +77,6 @@ class WhatsAppNumberEntity(Entity):
     #: deployment.
     onboarding_email_flow_id: str | None = None
     onboarding_code_flow_id: str | None = None
-    role: WhatsAppNumberRole = WhatsAppNumberRole.ALLOCATABLE
     status: WhatsAppNumberStatus = WhatsAppNumberStatus.AVAILABLE
     #: Free text for whoever runs the pool: where the number came from, what it
     #: is reserved for, why it was retired.
@@ -92,11 +84,14 @@ class WhatsAppNumberEntity(Entity):
 
     @property
     def is_allocatable(self) -> bool:
-        """Free to be handed to an organisation that does not already hold it."""
-        return (
-            self.role is WhatsAppNumberRole.ALLOCATABLE
-            and self.status is WhatsAppNumberStatus.AVAILABLE
-        )
+        """Free to be handed to an organisation that does not already hold it.
+
+        Only ``status``, because there is nothing else to ask. A number that is
+        not retired may be offered to any organisation not already holding it,
+        including one already held elsewhere -- several organisations holding
+        one number is the design, not a collision.
+        """
+        return self.status is WhatsAppNumberStatus.AVAILABLE
 
     def credential_overrides(self) -> dict[str, str]:
         """What this number answers with, for laying over the settings defaults.

@@ -48,6 +48,17 @@ async def live_user_ids_by_mobile_numbers(
     )
 
 
+async def live_user_id(uow, user_id: UUID) -> UUID | None:
+    """This id back, if it still names a live person; otherwise nobody.
+
+    The same question as the three lookups above, asked of an id the surfaces
+    module already holds because it cached the answer once. A cached
+    ``resolved_user_id`` is a resolution nobody re-derived, so without this it
+    is the one path into an agent run that no liveness filter covers.
+    """
+    return await UserRepository(uow).get_live_id(user_id)
+
+
 async def user_preferences(uow, user_id: UUID) -> UserPreferences:
     """This user's stored preferences, empty when they have none or are gone."""
     user = await UserRepository(uow).get(user_id)
@@ -64,6 +75,7 @@ async def set_user_preferences(
 
 
 __all__ = [
+    "live_user_id",
     "live_user_id_by_email",
     "live_user_id_by_telegram_username",
     "live_user_ids_by_mobile_numbers",

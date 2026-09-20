@@ -25,6 +25,7 @@ from app.core.domain.uow import IUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
+    SurfaceConfig,
     SurfaceCredentialMode,
     SurfacePlatform,
 )
@@ -47,6 +48,7 @@ async def provision_pooled_whatsapp_surface(
     agent_id: UUID,
     organization_id: UUID,
     name: str | None = None,
+    config: SurfaceConfig | None = None,
     ctx=None,
 ) -> AgentSurfaceEntity:
     """Create a WhatsApp surface holding a number of this organisation's own.
@@ -60,6 +62,14 @@ async def provision_pooled_whatsapp_surface(
     decides. Each attempt runs in its own savepoint inside the repository, so a
     number taken between the candidate read and the write costs one retry rather
     than this whole unit of work.
+
+    ``config`` is carried through for the same reason the email branch carries
+    it: the caller is ``POST /surfaces`` or the bundle applier, and what they
+    sent is a send policy, an identity allow-list and a channel list that the
+    person chose. Dropping it here did not fail -- ``create_surface`` has a
+    default for every field -- so the API answered 200 with a surface configured
+    as nothing was asked for, which is the worst shape a bug of this kind can
+    take.
     """
     created: list[AgentSurfaceEntity] = []
 
@@ -70,6 +80,7 @@ async def provision_pooled_whatsapp_surface(
                 agent_id=agent_id,
                 platform=SurfacePlatform.WHATSAPP,
                 name=name,
+                config=config,
                 credential_mode=SurfaceCredentialMode.SYSTEM,
                 surface_identity_id=number.phone_number_id,
                 ctx=ctx,

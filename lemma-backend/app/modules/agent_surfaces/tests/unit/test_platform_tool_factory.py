@@ -185,3 +185,94 @@ async def test_an_email_surface_builds_no_platform_toolset(platform):
     )
 
     assert platform not in _TOOLSET_BUILDERS
+
+
+@pytest.mark.asyncio
+async def test_a_pooled_surfaces_tools_are_built_with_that_numbers_credentials(
+    monkeypatch,
+):
+    """The fast path that skipped the pool, and so skipped the whole feature.
+
+    `has_native_credentials` is true for any deployment with WhatsApp settings
+    at all, which is all of them, so the factory took a shortcut straight to
+    `native_credentials` -- a pure function over settings that has never heard
+    of the pool. Every tool an agent called on a surface holding a pooled number
+    was therefore built with the *deployment's* token and phone number id, and
+    sent as a number the person had never written to.
+
+    The resolver is the one place that layers a held number's credentials over
+    the settings ones, so the fix is to go through it. `prefer_native` is the
+    shortcut, kept as a flag rather than as a second code path.
+    """
+    from datetime import datetime, timezone
+
+    from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (
+        WhatsAppNumber,
+    )
+    from app.modules.test_support.mappers import configure_test_mappers
+
+    configure_test_mappers()
+
+    row = WhatsAppNumber(
+        id=uuid4(),
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        phone_number_id="pool-b",
+        display_phone_number="+15550001111",
+        waba_id="waba-b",
+        access_token="the-pools-token",
+        status="AVAILABLE",
+    )
+
+    class _Result:
+        def scalar_one_or_none(self):
+            return row
+
+    class _Session:
+        async def execute(self, _statement):
+            return _Result()
+
+    class _PooledUoW:
+        def __init__(self) -> None:
+            self.session = _Session()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    surface = AgentSurfaceEntity.create(
+        surface_type=SurfacePlatform.WHATSAPP,
+        pod_id=uuid4(),
+        agent_id=uuid4(),
+        config=SurfaceConfig(),
+        surface_identity_id="pool-b",
+    )
+
+    async def fake_get(self, surface_id):
+        return surface
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory.SurfaceRepository.get",
+        fake_get,
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "deployment-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "deployment-pn")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "deployment-waba")
+
+    built: list[dict] = []
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory._TOOLSET_BUILDERS",
+        {"WHATSAPP": lambda *, credentials: built.append(credentials) or object()},
+    )
+
+    factory = SurfacePlatformToolFactory(uow_factory=lambda: _PooledUoW())
+    await factory.build_toolsets(conversation=_conversation_for_surface(surface))
+
+    assert built, "no WhatsApp toolset was built at all"
+    assert built[0]["access_token"] == "the-pools-token", (
+        "the agent's tools were handed the deployment's token, so every send "
+        "went out as a number the recipient has never seen"
+    )
+    assert built[0]["phone_number_id"] == "pool-b"

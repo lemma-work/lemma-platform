@@ -23,7 +23,6 @@ from sqlalchemy.exc import IntegrityError
 from app.core.crypto import get_secret_cipher
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
-    WhatsAppNumberRole,
     WhatsAppNumberStatus,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
@@ -110,7 +109,6 @@ class _Uow:
 def _row(
     phone_number_id: str,
     *,
-    role: WhatsAppNumberRole = WhatsAppNumberRole.ALLOCATABLE,
     status: WhatsAppNumberStatus = WhatsAppNumberStatus.AVAILABLE,
     access_token: str | None = None,
 ) -> WhatsAppNumber:
@@ -124,9 +122,29 @@ def _row(
         display_phone_number=f"+1555{phone_number_id}",
         waba_id="waba-1",
         access_token=access_token,
-        role=role.value,
         status=status.value,
     )
+
+
+class _PostgresError(Exception):
+    """asyncpg's shape: the constraint it refused on, named on the exception."""
+
+    def __init__(self, constraint_name: str):
+        super().__init__(f"duplicate key value violates {constraint_name}")
+        self.constraint_name = constraint_name
+
+
+def _violation(constraint_name: str) -> IntegrityError:
+    """What the caller's claim raises when the database refuses its write.
+
+    Built with a named constraint rather than a bare message because that is the
+    only thing separating "somebody took this number" from every other integrity
+    failure a surface write can produce, and the retry loop now reads it.
+    """
+    return IntegrityError("INSERT", {}, _PostgresError(constraint_name))
+
+
+_NUMBER_TAKEN = "uq_agent_org_whatsapp_number"
 
 
 def _sql(statement) -> str:
@@ -137,32 +155,39 @@ def _sql(statement) -> str:
     )
 
 
-async def test_the_shared_line_is_found_by_role_alone():
-    """The one number personal pods and phone verification ride.
+async def test_the_cold_open_line_is_the_oldest_number_still_available():
+    """No row claims to be the shared line; the oldest available one answers.
 
-    It is selected by ``role``, never by "the row that happens to be first":
-    ``uq_whatsapp_number_shared`` is what makes exactly one exist, so the query
-    may lean on it -- but it must actually ask for SHARED, or a deployment whose
-    pool rows outnumber its shared line gets an allocatable number back as the
-    shared one.
+    A `SHARED` flag was a second place for "which number do we send from" to be
+    recorded, and two places that can disagree about one fact is the shape of
+    every bug this table was drawn to avoid. So the question is answered by
+    ordering rather than by a claim -- which also makes it deterministic, so two
+    replicas asked a second apart answer the same.
+
+    Retired is excluded, and that is the half worth pinning: retiring a number
+    means stop using it, and a cold open is a use. A query that ordered without
+    filtering would send identity's verification codes from a number the
+    deployment has given up.
     """
-    uow = _Uow([_row("shared-1", role=WhatsAppNumberRole.SHARED)])
+    uow = _Uow([_row("oldest-1")])
     repository = WhatsAppNumberRepository(uow)
 
-    found = await repository.shared_number()
+    found = await repository.oldest_available_number()
 
     assert found is not None
-    assert found.phone_number_id == "shared-1"
-    assert found.role is WhatsAppNumberRole.SHARED
-    assert "role = 'SHARED'" in _sql(uow.session.statements[0])
+    assert found.phone_number_id == "oldest-1"
+    sql = _sql(uow.session.statements[0])
+    assert "status = 'AVAILABLE'" in sql
+    assert "ORDER BY surface_whatsapp_numbers.created_at" in sql
+    assert "LIMIT 1" in sql
 
 
-async def test_a_deployment_with_no_rows_has_no_shared_line():
+async def test_a_deployment_with_no_rows_has_no_cold_open_line_of_its_own():
     """Absent is ordinary: it means "fall back to settings", which is the state
     every one-number deployment is already in and must keep working from."""
     repository = WhatsAppNumberRepository(_Uow())
 
-    assert await repository.shared_number() is None
+    assert await repository.oldest_available_number() is None
 
 
 async def test_secrets_are_encrypted_on_the_way_in_and_readable_on_the_way_out():
@@ -231,8 +256,7 @@ async def test_a_number_this_organisation_already_holds_is_not_offered():
     )
     # The anti-join half: keep only the numbers that found no holder.
     assert "agent_surfaces.id IS NULL" in sql
-    # The pool half: allocatable, and not one that was retired.
-    assert "role = 'ALLOCATABLE'" in sql
+    # The pool half: not one that was retired.
     assert "status = 'AVAILABLE'" in sql
 
 
@@ -249,7 +273,7 @@ async def test_a_number_taken_between_the_read_and_the_claim_moves_to_the_next()
     async def _claim(number):
         claimed.append(number.phone_number_id)
         if number.phone_number_id == "pn-1":
-            raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+            raise _violation(_NUMBER_TAKEN)
 
     uow = _Uow([_row("pn-1"), _row("pn-2")])
     repository = WhatsAppNumberRepository(uow)
@@ -298,7 +322,7 @@ async def test_every_candidate_lost_to_a_race_reads_as_exhausted_too():
     survives it: each attempt rolled back its own savepoint and no more."""
 
     async def _claim(_number):
-        raise IntegrityError("INSERT", {}, Exception("duplicate key"))
+        raise _violation(_NUMBER_TAKEN)
 
     uow = _Uow([_row("pn-1"), _row("pn-2")])
     repository = WhatsAppNumberRepository(uow)
@@ -355,3 +379,51 @@ async def test_removing_a_number_that_is_already_gone_says_so():
     repository = WhatsAppNumberRepository(_Uow())
 
     assert await repository.remove("pn-1") is False
+
+
+async def test_an_integrity_failure_that_is_not_the_number_reaches_the_caller():
+    """Only ``uq_agent_org_whatsapp_number`` means "taken". Nothing else does.
+
+    The claim is a whole surface write, so it can violate the one-surface-per-
+    agent index, the composite organisation foreign key, or the pod-unique name
+    -- none of which the next candidate would fix. Swallowing them retried
+    twenty-five times and then answered ``None``, which the caller turns into a
+    503 telling the operator to buy numbers they already have, for a bug that
+    had nothing to do with the pool.
+
+    The savepoint still rolled back, so what reaches the caller is the real
+    cause on a transaction it can still use.
+    """
+    uow = _Uow([_row("pn-1"), _row("pn-2")])
+    repository = WhatsAppNumberRepository(uow)
+    attempts: list[str] = []
+
+    async def _claim(number):
+        attempts.append(number.phone_number_id)
+        raise _violation("uq_agent_surface_agent_type")
+
+    with pytest.raises(IntegrityError):
+        await repository.allocate_for_organization(
+            organization_id=uuid4(), claim=_claim
+        )
+
+    assert attempts == ["pn-1"], "an unrelated failure must not walk the pool"
+    assert uow.session.savepoint_rollbacks == 1
+
+
+async def test_an_integrity_failure_the_database_did_not_name_reaches_the_caller():
+    """Silence is not consent. An unnamed constraint is not the one we tolerate.
+
+    Reading nothing and retrying anyway is the same bug in a quieter form: it
+    reports whatever went wrong as an empty pool. Failing towards the caller
+    means an unexpected driver shape shows up as itself.
+    """
+    repository = WhatsAppNumberRepository(_Uow([_row("pn-1")]))
+
+    async def _claim(_number):
+        raise IntegrityError("INSERT", {}, Exception("something else entirely"))
+
+    with pytest.raises(IntegrityError):
+        await repository.allocate_for_organization(
+            organization_id=uuid4(), claim=_claim
+        )

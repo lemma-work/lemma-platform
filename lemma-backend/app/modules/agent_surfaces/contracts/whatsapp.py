@@ -149,7 +149,7 @@ async def _shared_row() -> WhatsAppNumberEntity | None:
         async with async_session_maker() as session:
             return await WhatsAppNumberRepository(
                 SqlAlchemyUnitOfWork(session)
-            ).shared_number()
+            ).oldest_available_number()
     except SQLAlchemyError:
         # The database, specifically -- unreachable, or a migration not yet run.
         # Not `Exception`: a `TypeError` here is a bug in this resolver, and

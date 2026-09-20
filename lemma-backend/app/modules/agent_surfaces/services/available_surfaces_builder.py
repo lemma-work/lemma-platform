@@ -40,8 +40,11 @@ from app.modules.agent_surfaces.domain.surface_connectors import (
 from app.modules.agent_surfaces.services.credential_resolver import (
     has_native_credentials,
 )
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
-    get_platform_capabilities,
+    system_credential_claim_applies,
 )
 from app.modules.connectors.contracts.surfaces import SurfaceConnector
 
@@ -94,6 +97,35 @@ async def _connect_descriptor(
     return descriptor, True, connector.title, connector.description, connector.icon
 
 
+async def _would_hold_its_own_identity(
+    platform: SurfacePlatform,
+    *,
+    surface_repository: SurfaceInstallationRepositoryPort,
+) -> bool:
+    """Would a surface created here and now get an identity of its own?
+
+    The write side asks this of a surface it is holding; the catalog has to ask
+    it of a surface that does not exist yet, which for WhatsApp means asking
+    whether there is a pool to draw one from — the same question
+    ``_wants_a_pooled_number`` asks a moment later when the person actually
+    clicks. Every other platform's answer is a constant.
+
+    Best-effort like the conflict read below it, and False on a failure: that
+    keeps the claim rule applying, so a catalog that could not read the pool
+    greys an option out rather than offering one that then fails to save.
+    """
+    if platform is not SurfacePlatform.WHATSAPP:
+        return True
+    try:
+        return await WhatsAppNumberRepository(surface_repository.uow).any_allocatable()
+    except SQLAlchemyError:
+        logger.debug(
+            "agent_surfaces.available_surfaces_builder.pool_lookup_failed.diagnostic",
+            platform=platform.value,
+        )
+        return False
+
+
 async def _system_claim(
     platform: SurfacePlatform,
     *,
@@ -104,24 +136,30 @@ async def _system_claim(
     """Who, if anyone, already holds this platform's Lemma-managed identity.
 
     The shared bot/number is claimable once per organization (enforced on write
-    by ``_ensure_unique_org_credential_binding``); returning it here lets the
+    by ``ensure_unique_org_credential_binding``); returning it here lets the
     setup UI disable the option up front rather than surfacing a failed save.
     Only meaningful when the platform actually has a SYSTEM mode; best-effort,
     because a catalog read must not fail on a repository hiccup.
 
-    Nothing to claim when the credential is not an identity — Resend hands every
-    pod and every agent its own address off one key. This mirrors the write-side
-    exemption on purpose: a catalog that disagrees with the writer either offers
-    something that then fails, or hides something that would have worked. The
-    WhatsApp/Telegram exemption that used to sit beside it is gone on both sides
-    for the same reason — one number and one bot are the clearest identities
-    there are, and exempting them left the rule applying to nothing."""
+    Nothing to claim when the surface will have an identity of its own — Resend
+    hands every pod and every agent its own address off one key, and WhatsApp
+    hands out a number per surface wherever a pool exists. This mirrors the
+    write-side exemption on purpose, condition for condition: a catalog that
+    disagrees with the writer either offers something that then fails, or hides
+    something that would have worked. Where there is no pool, WhatsApp is back
+    to one number for the whole deployment and the claim applies again — which
+    is the case this branch used to get wrong in the permissive direction, so
+    the UI offered the shared number to every pod in an organization."""
     if SurfaceCredentialMode.SYSTEM not in modes:
         return None
-    capabilities = get_platform_capabilities(platform.value)
-    if capabilities is not None and not capabilities.system_credential_is_identity:
-        return SurfaceSystemClaim(available=True)
     if pod_id is None or surface_repository is None:
+        return SurfaceSystemClaim(available=True)
+    if not system_credential_claim_applies(
+        platform.value,
+        holds_own_identity=await _would_hold_its_own_identity(
+            platform, surface_repository=surface_repository
+        ),
+    ):
         return SurfaceSystemClaim(available=True)
     try:
         conflict = await surface_repository.get_system_credential_conflict_in_org(

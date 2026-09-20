@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import httpx
 from pydantic import BaseModel, JsonValue
+from slack_sdk.errors import SlackApiError
 
 from app.core.net.http_client import get_shared_http_client
 from app.modules.agent_surfaces.domain.entities import (
@@ -15,7 +17,21 @@ from app.modules.agent_surfaces.platforms.teams import client as teams_client
 
 
 class PrivateDeliveryUnavailable(RuntimeError):
-    pass
+    """This person cannot be taken aside, so signup cannot happen here.
+
+    Raised for every reason a private conversation cannot be opened, including
+    the provider saying no. That last part is the point: the shape checks below
+    raised this and the actual calls raised ``SlackApiError`` and
+    ``httpx.HTTPStatusError``, which is the same fact wearing two types the one
+    caller that matters did not both catch.
+
+    ``events.handlers._context_for_delivery`` catches this and falls through to
+    ordinary ingestion, which answers a stranger with "please sign up". A
+    workspace whose app was installed without ``im:write`` took the other path:
+    the error propagated out of the handler, ingestion never ran, and the reply
+    never fired -- on every message that person ever sent, forever. Silence was
+    the one outcome worth ruling out, and it was the one they got.
+    """
 
 
 class _ConversationCreated(BaseModel):
@@ -38,7 +54,15 @@ async def private_onboarding_destination(
         )
     if event.platform == SurfacePlatform.SLACK:
         slack = await build_slack_client(credentials)
-        response = await slack.conversations_open(users=actor)
+        try:
+            response = await slack.conversations_open(users=actor)
+        except SlackApiError as refused:
+            # ``missing_scope`` (no ``im:write``), ``user_not_found``,
+            # ``cannot_dm_bot`` -- all of them mean the same thing here, and
+            # none of them gets better on a retry.
+            raise PrivateDeliveryUnavailable(
+                f"Slack refused to open a personal conversation: {refused}"
+            ) from refused
         channel = response.get("channel")
         if not isinstance(channel, dict) or not isinstance(channel.get("id"), str):
             raise PrivateDeliveryUnavailable(
@@ -73,7 +97,16 @@ async def private_onboarding_destination(
                 "channelData": {"tenant": {"id": event.tenant_id}},
             },
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as refused:
+            # Only the answered-and-refused case. A timeout or a connection
+            # error is a different fact -- the Bot Framework may well be there
+            # on the next attempt -- so those still propagate and are retried.
+            raise PrivateDeliveryUnavailable(
+                "Teams refused to create the personal conversation: "
+                f"{refused.response.status_code}"
+            ) from refused
         destination_id = _ConversationCreated.model_validate(response.json()).id
         reply_target = {"service_url": service_url, "conversation_id": destination_id}
     else:

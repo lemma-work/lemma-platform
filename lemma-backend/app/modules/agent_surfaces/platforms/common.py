@@ -97,7 +97,8 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
     None unless the surface uses WEBHOOK event mode and the API is publicly
     reachable. Telegram and WhatsApp with a connected account get a
     surface-specific URL (each account has its own webhook secret/verify
-    token); the other platform webhooks share a platform-level URL.
+    token); a WhatsApp surface holding a pooled number gets that number's own;
+    the other platform webhooks share a platform-level URL.
     """
     if not public_https_api_url_available():
         return None
@@ -107,6 +108,17 @@ def computed_webhook_url(surface: AgentSurfaceEntity) -> str | None:
         and surface.account_id is not None
     ):
         return f"{base}/surfaces/{surface.id}/webhook"
+    # A pooled number receives on a callback of its own, because the handshake
+    # carries nothing that could select a token on the shared URL -- so the path
+    # is the identifier. The number is the one this surface holds, which is what
+    # `scripts/whatsapp_numbers.py` tells the operator to register with Meta.
+    # Returning the shared URL here published a different address than the one
+    # the pool's own GET route answers on, and an operator who pasted it failed
+    # the handshake against a token that was never checked.
+    if surface.surface_type is SurfacePlatform.WHATSAPP and surface.surface_identity_id:
+        return (
+            f"{base}/surfaces/webhooks/whatsapp/numbers/{surface.surface_identity_id}"
+        )
     # Slack is deliberately absent here: a surface running the org's own app
     # receives on the same shared endpoint as everyone else, because the secret
     # that verifies a request is chosen from the workspace in the payload

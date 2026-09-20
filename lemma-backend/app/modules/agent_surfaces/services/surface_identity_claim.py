@@ -115,6 +115,7 @@ async def create_surface_claiming_identity(
                 pod_id
             ),
             name=name,
+            config=config,
             ctx=ctx,
         )
 

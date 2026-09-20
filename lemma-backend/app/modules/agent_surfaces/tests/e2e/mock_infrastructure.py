@@ -195,6 +195,7 @@ class FakeSlackServer:
         )
         app.router.add_route("*", "/api/conversations.list", self._conversations_list)
         app.router.add_route("*", "/api/chat.postMessage", self._chat_post_message)
+        app.router.add_route("*", "/api/chat.postEphemeral", self._chat_post_ephemeral)
         app.router.add_route("*", "/api/chat.update", self._chat_update)
         app.router.add_route("*", "/api/chat.delete", self._chat_delete)
         app.router.add_route("*", "/api/chat.startStream", self._chat_start_stream)
@@ -370,6 +371,18 @@ class FakeSlackServer:
         return web.json_response(
             {"ok": True, "ts": ts, "channel": params.get("channel")}
         )
+
+    async def _chat_post_ephemeral(self, request: web.Request) -> web.Response:
+        """Its own bucket, because an ephemeral is not a channel message.
+
+        PS-SURF-006 turns on exactly that distinction -- nothing about a person's
+        signup may appear *in* a channel -- and a store that could not tell
+        the two calls apart would read "answered one person, unread by the
+        room" as "posted it for everyone".
+        """
+        params = await self._collect_params(request)
+        self._store.add("SLACK_EPHEMERAL", params)
+        return web.json_response({"ok": True, "message_ts": "1700000000.000001"})
 
     async def _chat_update(self, request: web.Request) -> web.Response:
         params = await self._collect_params(request)

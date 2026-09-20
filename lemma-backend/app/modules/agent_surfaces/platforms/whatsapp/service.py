@@ -160,8 +160,14 @@ class WhatsAppPlatformService:
         note = (text or "").strip()
         if not note or not show_alert:
             return
-        sender_wa_id = (interaction.reply_target or {}).get("sender_wa_id")
-        phone_number_id = self._phone_number_id
+        reply_target = interaction.reply_target or {}
+        sender_wa_id = reply_target.get("sender_wa_id")
+        # The number it arrived on wins over the one this adapter was configured
+        # with, exactly as `stream_progress` and the send paths do it. With a
+        # pool the two differ, and the configured one is a number the person has
+        # never written to -- so the acknowledgement for their own tap arrives
+        # from somewhere else, outside the thread they are looking at.
+        phone_number_id = reply_target.get("phone_number_id") or self._phone_number_id
         if not sender_wa_id or not phone_number_id or not self._access_token:
             return
         try:

@@ -21,7 +21,6 @@ from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
-    WhatsAppNumberRole,
     WhatsAppNumberStatus,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
@@ -48,6 +47,38 @@ _MAX_ALLOCATION_ATTEMPTS = 25
 #: outgrown a list.
 _MAX_POOL_PAGE = 500
 
+#: The one constraint whose violation means "somebody else took this number".
+#: Named here because the claim is a whole surface write, and a surface write can
+#: violate several other things.
+_NUMBER_TAKEN_CONSTRAINT = "uq_agent_org_whatsapp_number"
+
+
+def _violated_constraint(error: IntegrityError) -> str | None:
+    """Which constraint the database refused on, if it said.
+
+    Three places to look, because the driver stack moves it. SQLAlchemy's
+    asyncpg dialect does not re-raise asyncpg's own `UniqueViolationError`: it
+    translates it into a DBAPI-shaped `IntegrityError` carrying only `sqlstate`,
+    and chains the original underneath. So `error.orig` is the translation and
+    `error.orig.__cause__` is the exception that actually knows the name.
+    `.diag` is psycopg's spelling, checked because the migration and test
+    tooling reach Postgres through it.
+
+    `None` means the database did not say. That is treated as "not the
+    constraint we tolerate", which is the safe direction: a mysterious integrity
+    failure reaches the caller instead of being retried twenty-five times and
+    reported as an empty pool.
+    """
+    original = error.orig
+    for candidate in (original, getattr(original, "__cause__", None)):
+        named = getattr(candidate, "constraint_name", None)
+        if isinstance(named, str) and named:
+            return named
+        named = getattr(getattr(candidate, "diag", None), "constraint_name", None)
+        if isinstance(named, str) and named:
+            return named
+    return None
+
 
 class WhatsAppNumberRepository:
     """The `surface_whatsapp_numbers` table, as entities."""
@@ -70,18 +101,34 @@ class WhatsAppNumberRepository:
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
-    async def shared_number(self) -> WhatsAppNumberEntity | None:
-        """The one SHARED line, or None when the deployment declares none.
+    async def oldest_available_number(self) -> WhatsAppNumberEntity | None:
+        """The pool's answer for the cold-open line, or None when it has none.
 
-        None is ordinary and means "fall back to settings": a deployment with a
-        single number has no rows at all, which is the state every deployment
-        starts in.
+        The deployment's cold-open line -- what identity's phone verification
+        sends from, and what a surface holding no number of its own answers with
+        -- is the number in settings. This is the fallback for where settings
+        are silent: a deployment that keeps its credentials in the pool and sets
+        no `WHATSAPP_*` variables owns a line just as much, and answering "not
+        configured" for it would leave verification switched off with working
+        credentials sitting in a table.
 
-        `uq_whatsapp_number_shared` makes "the one" true in the schema, so this
-        does not have to choose between two.
+        There is no row that *claims* to be the line, and deliberately so: a
+        `SHARED` flag was a second place for the same fact to be wrong, and it
+        made "which number do we send from" answerable two ways that could
+        disagree. Oldest available instead -- deterministic, so two replicas
+        answering the question a second apart answer it the same, and stable,
+        because the oldest row is the one least likely to be the one just added.
+
+        `RETIRED` is excluded because retirement means "stop using this number",
+        and a cold open is a use. None is ordinary and means "fall back to
+        settings": a deployment with a single number has no rows at all, which
+        is the state every deployment starts in.
         """
-        stmt = select(WhatsAppNumber).where(
-            WhatsAppNumber.role == WhatsAppNumberRole.SHARED.value
+        stmt = (
+            select(WhatsAppNumber)
+            .where(WhatsAppNumber.status == WhatsAppNumberStatus.AVAILABLE.value)
+            .order_by(WhatsAppNumber.created_at, WhatsAppNumber.id)
+            .limit(1)
         )
         result = await self.session.execute(stmt)
         model = result.scalars().first()
@@ -116,10 +163,7 @@ class WhatsAppNumberRepository:
         """
         found = await self.session.scalar(
             select(WhatsAppNumber.id)
-            .where(
-                WhatsAppNumber.role == WhatsAppNumberRole.ALLOCATABLE.value,
-                WhatsAppNumber.status == WhatsAppNumberStatus.AVAILABLE.value,
-            )
+            .where(WhatsAppNumber.status == WhatsAppNumberStatus.AVAILABLE.value)
             .limit(1)
         )
         return found is not None
@@ -149,7 +193,10 @@ class WhatsAppNumberRepository:
         and the claim another request can take the same number; the arbiter is
         `uq_agent_org_whatsapp_number` on `agent_surfaces`, and a pre-check
         would still race. So the caller's own write decides, and an
-        `IntegrityError` from it means "taken -- try the next one".
+        `IntegrityError` naming `uq_agent_org_whatsapp_number` means "taken --
+        try the next one". Any *other* constraint is re-raised: the claim writes
+        a whole surface, so it can fail for reasons no other candidate would fix,
+        and swallowing those turns a bug into a false report of an empty pool.
 
         Each attempt gets its own savepoint. A unique violation aborts a
         Postgres transaction outright, so without one the second attempt would
@@ -168,7 +215,19 @@ class WhatsAppNumberRepository:
             try:
                 async with self.session.begin_nested():
                     await claim(number)
-            except IntegrityError:
+            except IntegrityError as error:
+                if _violated_constraint(error) != _NUMBER_TAKEN_CONSTRAINT:
+                    # Not a number being taken. The claim is a whole surface
+                    # write, and it can violate `uq_agent_surface_agent_type`,
+                    # the composite organisation foreign key, or the pod-unique
+                    # name -- none of which another candidate can fix. Treating
+                    # them all as "taken" retried twenty-five times and then
+                    # reported an unrelated bug as pool exhaustion, which sends
+                    # the operator to buy numbers they already have.
+                    #
+                    # The savepoint has rolled back either way, so this reaches
+                    # the caller with a usable transaction and the real cause.
+                    raise
                 # Somebody else holds this number for this organisation now.
                 # The savepoint rolled back, so the caller's transaction is
                 # still usable and the next candidate is a real attempt.
@@ -181,9 +240,9 @@ class WhatsAppNumberRepository:
     ) -> list[WhatsAppNumberEntity]:
         """Numbers that may be handed to this organisation, oldest first.
 
-        "May" is three predicates: allocatable at all, not retired, and not
-        already held here. The third is answered by `agent_surfaces`, because
-        that is where holding is recorded -- and the join is spelled to match
+        "May" is two predicates: not retired, and not already held here. The
+        second is answered by `agent_surfaces`, because that is where holding is
+        recorded -- and the join is spelled to match
         `uq_agent_org_whatsapp_number` exactly, so what this offers and what
         the index will accept cannot drift apart.
 
@@ -210,7 +269,6 @@ class WhatsAppNumberRepository:
             .outerjoin(AgentSurface, already_held)
             .where(
                 AgentSurface.id.is_(None),
-                WhatsAppNumber.role == WhatsAppNumberRole.ALLOCATABLE.value,
                 WhatsAppNumber.status == WhatsAppNumberStatus.AVAILABLE.value,
             )
             # Oldest first: a number that has been in the pool longest is the
@@ -240,7 +298,6 @@ class WhatsAppNumberRepository:
             verify_token=cipher.encrypt_str(entity.verify_token),
             onboarding_email_flow_id=entity.onboarding_email_flow_id,
             onboarding_code_flow_id=entity.onboarding_code_flow_id,
-            role=entity.role.value,
             status=entity.status.value,
             notes=entity.notes,
         )

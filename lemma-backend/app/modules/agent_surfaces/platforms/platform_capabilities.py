@@ -136,6 +136,22 @@ class PlatformCapabilities:
     # address off one key *is* the design, so applying the identity rule here
     # let the first mailbox in an organization block every one after it.
     system_credential_is_identity: bool = True
+    # Can a surface here end up on the system credential with *no* identity of
+    # its own?
+    #
+    # Only meaningful where the field above is False, and it is the whole
+    # difference between the two platforms that answer False. Resend mints an
+    # address for every surface it creates, so one always exists and the
+    # exemption is unconditional. A WhatsApp surface is given a number only when
+    # the deployment owns a pool to draw from; with no pool it sits on the one
+    # number in settings, which is the deployment-wide identity the coarse rule
+    # was written for in the first place.
+    #
+    # Exempting it anyway left nothing constraining it at all: the replacement
+    # index `uq_agent_org_whatsapp_number` is partial on `surface_identity_id IS
+    # NOT NULL`, so it does not see a surface holding no number either, and two
+    # pods in one organization could both take the shared line.
+    system_identity_may_be_absent: bool = False
 
     @property
     def delivery_cardinality(self) -> DeliveryCardinality:
@@ -292,6 +308,11 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # hand out. Resend answers `False` for the same shape of reason: a
         # shared key, an identity allocated per surface.
         system_credential_is_identity=False,
+        # Unlike Resend, though, the identity is not always there. A number is
+        # bought, so a deployment can own none to allocate -- and a surface
+        # holding none is back on the single number in settings, where the old
+        # once-per-organization rule is exactly right. See the field.
+        system_identity_may_be_absent=True,
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
@@ -344,6 +365,33 @@ def get_platform_capabilities(platform: str | None) -> PlatformCapabilities | No
     if not platform:
         return None
     return PLATFORM_CAPABILITIES.get(str(platform).upper())
+
+
+def system_credential_claim_applies(
+    platform: str | None, *, holds_own_identity: bool
+) -> bool:
+    """Does "claimable once per organization" apply to this system credential?
+
+    The write-side refusal and the catalog that greys the option out both ask
+    this, and they have to agree: a catalog that disagrees with the writer
+    either offers something that then fails, or hides something that would have
+    worked.
+
+    Two facts decide it. ``system_credential_is_identity`` says whether the
+    deployment's credential *is* the thing inbound is keyed on, and where it is,
+    the rule always applies. Where it is not, the surface has an identity of its
+    own instead -- and ``holds_own_identity`` says whether this one actually got
+    one, because on WhatsApp that depends on there being a pool to draw from.
+    A surface that got none is on the deployment's single number, so the rule
+    applies to it after all.
+
+    An unknown platform gets the rule. Not knowing what a credential is, is not
+    a reason to stop guarding it.
+    """
+    capabilities = get_platform_capabilities(platform)
+    if capabilities is None or capabilities.system_credential_is_identity:
+        return True
+    return capabilities.system_identity_may_be_absent and not holds_own_identity
 
 
 # Platforms whose native voice note wants OGG/Opus (a proper voice bubble);

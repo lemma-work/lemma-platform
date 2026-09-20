@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hmac
 import json
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -19,6 +18,7 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.core.webhooks.signatures import (
+    constant_time_equals,
     hex_digest_signature_matches,
     shared_secret_matches,
     slack_signature_matches,
@@ -289,7 +289,7 @@ class SurfaceWebhookSecurityService:
             [
                 candidate
                 for candidate in candidates
-                if hmac.compare_digest(candidate.app_id, normalized_app_id)
+                if constant_time_equals(normalized_app_id, candidate.app_id)
             ]
             if normalized_app_id
             else list(candidates)

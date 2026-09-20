@@ -34,7 +34,6 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
-    WhatsAppNumberRole,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
@@ -60,7 +59,6 @@ async def _number(session, *, phone_number_id: str, token: str) -> None:
             display_phone_number=f"+1555{uuid4().int % 10_000_000:07d}",
             waba_id=f"waba-{phone_number_id}",
             access_token=token,
-            role=WhatsAppNumberRole.ALLOCATABLE,
         )
     )
     await session.commit()
@@ -413,15 +411,23 @@ async def test_two_pods_in_one_organisation_may_each_have_a_whatsapp_surface(
     credentials are already used by another surface in this organization",
     because one number made the credential and the identity the same thing.
     With a pool they are different things and the second pod is entitled to its
-    own number, so the organisation-wide claim had to stop applying -- and
+    own number, so the organisation-wide claim stops applying -- and
     `test_surface_api_e2e` moved its 409 case to Telegram, which still has the
     single shared bot that rule was written for.
+
+    **With a pool**, and the two numbers below are the point rather than
+    scaffolding. What lifts the claim is each surface holding a number of its
+    own, not the platform being WhatsApp: a deployment that owns no pool has one
+    number and two pods taking it is the collision the rule always described.
+    See `test_the_one_number_a_deployment_without_a_pool_has_is_still_claimed_once`.
 
     Over HTTP rather than through the service, because the 409 this replaces
     reached people as an API response and a catalog that greyed the option out.
     """
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
     monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "system-phone")
+    await _number(db_session, phone_number_id="two-pods-a", token="a")
+    await _number(db_session, phone_number_id="two-pods-b", token="b")
 
     sibling = await authenticated_client.post(
         "/pods",
@@ -444,6 +450,13 @@ async def test_two_pods_in_one_organisation_may_each_have_a_whatsapp_surface(
         "the second pod in this organisation was refused a WhatsApp surface, "
         f"so the pool cannot hand it a number of its own: {second.text}"
     )
+    assert {
+        first.json()["surface_identity_id"],
+        second.json()["surface_identity_id"],
+    } == {
+        "two-pods-a",
+        "two-pods-b",
+    }, "the two pods did not end up on two different numbers"
 
     catalog = await authenticated_client.get(
         f"/pods/{sibling.json()['id']}/available-surfaces"
@@ -622,16 +635,20 @@ async def test_a_deployment_with_no_pool_still_gets_the_shared_line(
     assert created.json()["surface_identity_id"] is None
 
 
-async def test_the_shared_line_can_live_entirely_in_the_pool(
+async def test_the_cold_open_line_can_live_entirely_in_the_pool(
     db_session, monkeypatch
 ) -> None:
     """Settings are a pool of one, and the pool is settings of many.
 
     A deployment that puts every number in `surface_whatsapp_numbers` and sets
-    no `WHATSAPP_*` variables owns a shared line just as much as one configured
-    the old way. Answering "not configured" for it would leave mobile
+    no `WHATSAPP_*` variables owns a cold-open line just as much as one
+    configured the old way. Answering "not configured" for it would leave mobile
     verification switched off with working credentials sitting in a table --
     findable only by someone who already suspected it.
+
+    No row declares itself the line; the oldest available one is it. That is the
+    point of having dropped `role`: one fact, in one place, derived rather than
+    claimed.
     """
     from app.modules.agent_surfaces.contracts.whatsapp import (
         global_whatsapp_configuration,
@@ -662,7 +679,6 @@ async def test_the_shared_line_can_live_entirely_in_the_pool(
             access_token="pool-token",
             app_secret="pool-secret",
             verify_token="pool-verify",
-            role=WhatsAppNumberRole.SHARED,
         )
     )
     await db_session.commit()
@@ -680,10 +696,10 @@ async def test_the_shared_line_can_live_entirely_in_the_pool(
 async def test_settings_still_win_where_they_are_set(db_session, monkeypatch) -> None:
     """The old way keeps working, and keeps winning.
 
-    Every deployment alive is configured through the environment. If a `SHARED`
-    row could quietly override it, adding a number to the pool for some other
-    reason would move the line identity verifies on -- silently, and only for
-    the deployments that had both.
+    Every deployment alive is configured through the environment. If a pool row
+    could quietly override it, adding a number to the pool for some other reason
+    would move the line identity verifies on -- silently, and only for the
+    deployments that had both.
     """
     from app.modules.agent_surfaces.contracts.whatsapp import (
         global_whatsapp_configuration,
@@ -700,7 +716,6 @@ async def test_settings_still_win_where_they_are_set(db_session, monkeypatch) ->
             display_phone_number="+15550008888",
             waba_id="waba-other",
             access_token="pool-token",
-            role=WhatsAppNumberRole.SHARED,
         )
     )
     await db_session.commit()
@@ -709,3 +724,152 @@ async def test_settings_still_win_where_they_are_set(db_session, monkeypatch) ->
 
     assert resolved.phone_number_id == "env-pn"
     assert resolved.access_token == "env-token"
+
+
+async def test_the_config_the_caller_sent_survives_taking_a_number(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """Allocating a number is not a reason to forget what was asked for.
+
+    `POST /surfaces` carries a `SurfaceConfig` -- a send policy, an identity
+    allow-list, channel routes -- and the pooled branch did not take one, so it
+    called `create_surface` without it and every field fell to its default. It
+    returned 200, because nothing was missing as far as `create_surface` could
+    tell: a surface configured as nobody asked, reported as success.
+
+    The allow-list is the half that makes this worth a test rather than a
+    tidy-up. A surface the caller restricted to one domain was created open to
+    everyone, and the only way to notice was to go and look.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    await _number(db_session, phone_number_id="config-allocated", token="t")
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces",
+        json={
+            "platform": "WHATSAPP",
+            "config": {
+                "send_policy": {"allow_send": True},
+                "identity": {"allowed_domains": ["acme.test"]},
+                "dm_conversation_reset_after_hours": 6,
+            },
+        },
+    )
+
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["surface_identity_id"] == "config-allocated"
+    assert body["config"]["send_policy"]["allow_send"] is True, (
+        "the send policy the caller sent was dropped on the way through "
+        "allocation, and the API reported success anyway"
+    )
+    assert body["config"]["identity"]["allowed_domains"] == ["acme.test"]
+    assert body["config"]["dm_conversation_reset_after_hours"] == 6
+
+
+async def test_the_setup_panel_names_this_numbers_own_callback_and_token(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """What the operator is told to paste has to be what the handshake checks.
+
+    A pooled number receives on a callback of its own -- the shared URL carries
+    nothing that could select a verify token, which is why that route exists --
+    and `verify_whatsapp_number_webhook` checks the number's own token. The
+    setup read answered with the shared URL and the deployment-wide token, so an
+    operator following it configured a URL Lemma does not use with a token it
+    would not have accepted anyway, and got back a handshake failure naming
+    neither.
+
+    Both halves here, because they are one instruction sheet and either one
+    being wrong fails the same way.
+    """
+    from app.core.config import settings
+    from app.modules.agent_surfaces.composition import build_surface_service
+
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.test")
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-verify")
+
+    await WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session)).create(
+        WhatsAppNumberEntity(
+            phone_number_id="setup-number",
+            display_phone_number="+15550007777",
+            waba_id="waba-setup",
+            access_token="numbers-token",
+            verify_token="numbers-own-verify",
+        )
+    )
+    await db_session.commit()
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["surface_identity_id"] == "setup-number"
+
+    setup = await authenticated_client.get(
+        f"/pods/{test_pod['id']}/surfaces/whatsapp/setup"
+    )
+    assert setup.status_code == 200, setup.text
+    assert setup.json()["webhook_url"] == (
+        "https://api.lemma.test/surfaces/webhooks/whatsapp/numbers/setup-number"
+    ), "the panel published the shared callback for a number that receives on its own"
+
+    service = build_surface_service(SqlAlchemyUnitOfWork(db_session))
+    surface = await service.get_surface_by_name_in_pod(
+        pod_id=UUID(test_pod["id"]), name="whatsapp"
+    )
+    token = await service._whatsapp_verify_token_for_setup(surface)
+
+    assert token == "numbers-own-verify", (
+        "the setup read offered the deployment-wide token for a number that "
+        "declares its own, and the per-number handshake would have refused it"
+    )
+
+
+async def test_a_pool_with_nothing_marked_special_still_answers_cold_opens(
+    db_session, monkeypatch
+) -> None:
+    """No row claims to be the line, so the oldest available one is it.
+
+    The pool used to carry a `role`, and the cold-open line was the single row
+    flagged `SHARED`. Every number is a system number and behaves identically,
+    so the flag changed nothing except which row this question found -- and an
+    operator who added numbers without flagging one left identity's phone
+    verification switched off, holding working credentials, with the only
+    symptom being "not configured".
+    """
+    from app.modules.agent_surfaces.contracts.whatsapp import (
+        global_whatsapp_configuration,
+    )
+
+    for unset in (
+        "whatsapp_access_token",
+        "whatsapp_phone_number_id",
+        "whatsapp_app_secret",
+        "whatsapp_verify_token",
+        "whatsapp_display_phone_number",
+    ):
+        monkeypatch.setattr(surface_settings, unset, None)
+
+    repository = WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session))
+    for phone_number_id in ("cold-open-first", "cold-open-second"):
+        await repository.create(
+            WhatsAppNumberEntity(
+                phone_number_id=phone_number_id,
+                display_phone_number=f"+1555000{uuid4().int % 10_000:04d}",
+                waba_id="waba-cold-open",
+                access_token=f"{phone_number_id}-token",
+            )
+        )
+        await db_session.commit()
+
+    resolved = await global_whatsapp_configuration()
+
+    assert resolved.phone_number_id == "cold-open-first", (
+        "a pool where no row was singled out had no cold-open line at all, so "
+        "mobile verification was off with credentials sitting in the table"
+    )
+    assert resolved.access_token == "cold-open-first-token"

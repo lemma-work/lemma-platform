@@ -68,6 +68,22 @@ class SharedSurfaceUnavailable(ChallengeRejected):
         self.pod_id = pod_id
 
 
+class WorkspaceChoiceAsked(ChallengeRejected):
+    """A refusal that has already moved the signup onto its own next question.
+
+    Every other `ChallengeRejected` leaving this module is a dead stop, and the
+    coordinator now ends the signup when it sees one so the next message can
+    start a fresh one. This one must not be treated that way: the row is
+    already parked on AWAITING_POD and the offer is in the message, so ending
+    the signup here would throw away the question in the act of asking it.
+
+    A distinct type rather than re-reading the step afterwards, because the step
+    at the moment of the raise is not the step the coordinator dispatched on --
+    `_code` advances to VERIFIED before it provisions -- so "did anything move"
+    cannot be answered by comparing the two.
+    """
+
+
 async def complete_onboarding_workspace(
     uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
 ) -> bool:
@@ -78,7 +94,7 @@ async def complete_onboarding_workspace(
         # Raised from inside a unit of work, so the park has to happen after it
         # has rolled back -- and `_step` turns what comes out of here into the
         # reply, so the offer travels on the message.
-        raise ChallengeRejected(
+        raise WorkspaceChoiceAsked(
             await _park_on_another_workspace(uows, transport, state, conflict)
         ) from conflict
 
@@ -204,7 +220,27 @@ async def record_verified_identity(
             )
         )
         if identity is not None and identity.user_id != user.id:
-            raise ChallengeRejected("This platform identity belongs to another account")
+            if identity.revoked_at is None:
+                raise ChallengeRejected(
+                    "This platform identity belongs to another account"
+                )
+            # Revoked is not "somebody else's", it is "nobody's". `verified_
+            # sender` reads a revoked row as an unrecognised sender and
+            # `recognize_sender` sends them through a fresh signup on purpose;
+            # refusing here made that invitation a trap -- the flow asked a
+            # person to prove who they are and then refused to finish, in the
+            # same words every time, with no exit. The commonest way in is a
+            # reused phone number or a handed-on work account: the platform
+            # actor is the same string, the person is not.
+            #
+            # Nothing of the previous owner's survives the reassignment. The
+            # destination columns are already NULL -- `ck_surface_identity_
+            # route_is_live` refuses a revoked row that carries one -- and the
+            # phone is cleared here, because `resolve_shared_verified_identity`
+            # matches WhatsApp and Telegram senders on exactly that column and
+            # a leftover number would answer the wrong person.
+            identity.user_id = user.id
+            identity.verified_phone = None
         if identity is None:
             identity = VerifiedSurfaceIdentity(
                 binding_key=state.binding_key,

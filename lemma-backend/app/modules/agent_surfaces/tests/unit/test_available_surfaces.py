@@ -142,7 +142,14 @@ async def test_no_lemma_capability_does_not_raise(monkeypatch):
     assert surface.connect is None
 
 
-def _claim_repository(conflict=None, *, raises=False) -> AsyncMock:
+def _claim_repository(conflict=None, *, raises=False, pool: bool = True) -> AsyncMock:
+    """The repository the claim lookup runs on, and the pool it can see.
+
+    ``pool`` says whether this deployment owns an allocatable WhatsApp number.
+    The claim question is "will this surface have an identity of its own", and
+    for WhatsApp that is the pool -- so it is a parameter here rather than an
+    accident of what a mock happens to return.
+    """
     repo = AsyncMock()
     if raises:
         repo.get_system_credential_conflict_in_org.side_effect = OperationalError(
@@ -150,6 +157,8 @@ def _claim_repository(conflict=None, *, raises=False) -> AsyncMock:
         )
     else:
         repo.get_system_credential_conflict_in_org.return_value = conflict
+    # `any_allocatable` reads one id through the session this uow carries.
+    repo.uow.session.scalar.return_value = uuid4() if pool else None
     return repo
 
 
@@ -301,8 +310,11 @@ async def test_an_allocated_identity_is_never_claimed_by_the_organization(
     resp = await build_available_surfaces(
         read_connector=_catalog(),
         pod_id=uuid4(),
-        # A repository that reports a conflict for *every* platform.
-        surface_repository=_claim_repository(holder),
+        # A repository that reports a conflict for *every* platform, and a
+        # deployment that owns a pool -- which is what makes WhatsApp's identity
+        # per-surface rather than deployment-wide. See the scenario below for
+        # the deployment that owns none.
+        surface_repository=_claim_repository(holder, pool=True),
     )
 
     by_platform = _by_platform(resp)
@@ -353,3 +365,58 @@ async def test_no_email_domain_without_the_key_that_makes_it_work(monkeypatch):
     )
     surfaces = _by_platform(await build_available_surfaces(read_connector=_catalog()))
     assert surfaces[SurfacePlatform.RESEND].email_domain is None
+
+
+async def test_without_a_pool_the_one_whatsapp_number_shows_as_taken(monkeypatch):
+    """The catalog has to say what the writer will do, and it stopped.
+
+    WhatsApp's exemption from the organization-wide claim is earned by the
+    surface having a number of its own, which it gets from the pool. A
+    deployment that owns no pool has one number, in settings, and a second pod
+    taking it is the collision the rule was always about -- so the writer
+    refuses it. The catalog offered it anyway, which is the disagreement that
+    turns into a 409 the person only meets after committing to the choice.
+
+    Every deployment running today owns no pool, so this is the ordinary case
+    rather than the edge one.
+    """
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    monkeypatch.setattr(mod, "AgentSurfaceEntity", SimpleNamespace)
+    holder = SimpleNamespace(pod_id=uuid4(), name="whatsapp")
+
+    resp = await build_available_surfaces(
+        read_connector=_catalog(),
+        pod_id=uuid4(),
+        surface_repository=_claim_repository(holder, pool=False),
+    )
+
+    claim = _by_platform(resp)[SurfacePlatform.WHATSAPP].system_claim
+    assert claim is not None
+    assert claim.available is False, (
+        "the catalog offered the shared number to a second pod, which the "
+        "writer then refuses with a 409"
+    )
+    assert claim.claimed_by_surface_name == "whatsapp"
+
+
+async def test_a_pool_that_cannot_be_read_keeps_the_claim_rule(monkeypatch):
+    """Unreadable inventory is not evidence that a number is waiting.
+
+    The conflict lookup beside this one degrades towards ``available`` because
+    the writer still enforces the claim. This one degrades the other way for the
+    same reason: failing to read the pool must not *lift* a rule, or a database
+    hiccup would silently offer the shared number to everyone.
+    """
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    monkeypatch.setattr(mod, "AgentSurfaceEntity", SimpleNamespace)
+    holder = SimpleNamespace(pod_id=uuid4(), name="whatsapp")
+    repository = _claim_repository(holder)
+    repository.uow.session.scalar.side_effect = OperationalError(
+        "SELECT 1", {}, Exception("connection reset")
+    )
+
+    resp = await build_available_surfaces(
+        read_connector=_catalog(), pod_id=uuid4(), surface_repository=repository
+    )
+
+    assert _by_platform(resp)[SurfacePlatform.WHATSAPP].system_claim.available is False

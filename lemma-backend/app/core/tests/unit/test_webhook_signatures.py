@@ -16,6 +16,7 @@ import pytest
 
 from app.core.webhooks.signatures import (
     MAX_TIMESTAMP_SKEW_SECONDS,
+    constant_time_equals,
     hex_digest_signature_matches,
     shared_secret_matches,
     slack_signature_matches,
@@ -202,6 +203,54 @@ class TestSharedSecret:
         assert not shared_secret_matches(None, ["tok"])
         assert not shared_secret_matches("", ["tok"])
         assert not shared_secret_matches("tok", [None, ""])
+
+
+class TestNonAsciiInput:
+    """A byte over 0x7f used to be a 500 rather than a rejection.
+
+    `hmac.compare_digest` refuses two `str`s unless both are pure ASCII, and
+    everything on these paths is attacker-supplied. Starlette decodes headers as
+    latin-1, so `X-Telegram-Bot-Api-Secret-Token: tök` arrives as a non-ASCII
+    `str`; a query parameter and a field lifted from an unverified JSON body are
+    whatever was sent. Each of them raised `TypeError` inside the comparison
+    that existed to turn them away -- an unauthenticated 500 on every webhook
+    route, from one byte, before any signature was checked.
+    """
+
+    def test_a_non_ascii_shared_secret_is_rejected_and_does_not_raise(self):
+        assert not shared_secret_matches("tök", ["tok"])
+        assert not shared_secret_matches("tok", ["tök"])
+
+    def test_a_non_ascii_signature_header_is_rejected_and_does_not_raise(self):
+        assert not hex_digest_signature_matches("sha256=ü" * 8, BODY, ["s3cret"])
+        assert not slack_signature_matches("v0=ü" * 8, int(time.time()), BODY, ["s"])
+        assert not svix_signature_matches(
+            "v1,ü" * 8,
+            "msg_1",
+            1700000000,
+            BODY,
+            ["whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"],
+        )
+
+    def test_a_lone_surrogate_is_rejected_and_does_not_raise(self):
+        """A JSON body decodes an escaped surrogate that UTF-8 will not encode.
+
+        Built with `chr` rather than written as a literal, because a module
+        holding one does not compile. An input that cannot be encoded is still
+        an input that does not match, and the comparison has to say so rather
+        than raise.
+        """
+        lone_surrogate = "tok" + chr(0xD800)
+        assert not shared_secret_matches(lone_surrogate, ["tok"])
+        assert not constant_time_equals(lone_surrogate, "tok")
+
+    def test_constant_time_equals_still_matches_and_still_refuses_absence(self):
+        assert constant_time_equals("tok", "tok")
+        assert constant_time_equals("tök", "tök")
+        assert not constant_time_equals("tok", "token")
+        assert not constant_time_equals(None, "tok")
+        assert not constant_time_equals("tok", None)
+        assert not constant_time_equals("", "")
 
 
 class TestSupportingParts:

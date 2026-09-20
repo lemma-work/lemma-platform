@@ -1,7 +1,7 @@
 """Administer the WhatsApp number pool on a running deployment.
 
 The pool is deployment inventory: rows saying which numbers this installation
-owns and which of them may be handed to an organisation. They have no pod and
+owns and which of them may still be handed to an organisation. They have no pod and
 no organisation, so there is nobody who could be authorised to edit them
 through the API -- "the deployment operator" is not a principal this platform
 has -- and inventing a super-admin to expose four writes would be a much larger
@@ -52,7 +52,6 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.whatsapp_numbers import (
     WhatsAppNumberEntity,
-    WhatsAppNumberRole,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
     WhatsAppNumberRepository,
@@ -96,7 +95,7 @@ async def _list() -> int:
         )
         print(
             f"{number.phone_number_id}\t{number.display_phone_number}\t"
-            f"{number.waba_id}\t{number.role.value}\t{number.status.value}\t"
+            f"{number.waba_id}\t{number.status.value}\t"
             f"own:[{declared}]\t{number.notes or ''}"
         )
     return 0
@@ -112,7 +111,6 @@ async def _add(arguments: argparse.Namespace) -> int:
         verify_token=_from_environment(_VERIFY_TOKEN_VAR),
         onboarding_email_flow_id=arguments.onboarding_email_flow_id,
         onboarding_code_flow_id=arguments.onboarding_code_flow_id,
-        role=WhatsAppNumberRole(arguments.role),
         notes=arguments.notes,
     )
     async with async_session_maker() as session:
@@ -174,11 +172,6 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--phone-number-id", required=True)
     add.add_argument("--display-phone-number", required=True)
     add.add_argument("--waba-id", required=True)
-    add.add_argument(
-        "--role",
-        choices=[role.value for role in WhatsAppNumberRole],
-        default=WhatsAppNumberRole.ALLOCATABLE.value,
-    )
     add.add_argument("--onboarding-email-flow-id")
     add.add_argument("--onboarding-code-flow-id")
     add.add_argument("--notes")

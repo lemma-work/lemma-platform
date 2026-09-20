@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from uuid import UUID
 
 
 from app.core.helpers.identifiers import normalize_mobile_e164
+from app.core.log.log import get_logger
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -25,7 +28,14 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (
 from app.modules.agent_surfaces.services.onboarding_private_delivery import (
     private_onboarding_destination,
 )
-from app.modules.agent_surfaces.services.onboarding_inputs import native_prompt_metadata
+from app.modules.agent_surfaces.services.onboarding_outcomes import (
+    OnboardingOutcomes,
+)
+from app.modules.agent_surfaces.services.onboarding_replies import (
+    initial_prompt_for,
+    room_notice,
+    say_privately,
+)
 from app.modules.agent_surfaces.services.onboarding_pod_choice import (
     offer_text,
     read_choice,
@@ -59,6 +69,17 @@ from app.modules.agent_surfaces.services.onboarding_sender import (
     require_state,
 )
 
+logger = get_logger(__name__)
+
+#: What "done" sounds like. Both completion paths used to say nothing at all:
+#: the only sign of success was the replayed request coming back answered, and
+#: `replay_onboarding` has several raises that dead-letter after their retries
+#: -- so a failure there left somebody who had just proved their email with no
+#: acknowledgement and no answer, and nothing to tell that apart from being
+#: ignored. The confirmation is cheap and it is sent before the replay, so the
+#: flow is never silent even when the replay is.
+READY_MESSAGE = "You're all set. Picking up your message now."
+
 
 class ChatOnboardingCoordinator:
     def __init__(
@@ -72,6 +93,15 @@ class ChatOnboardingCoordinator:
         self._adapters = SurfacePlatformAdapterRegistry()
         self._challenges = challenges
         self._event_dedup_store = event_dedup_store or get_surface_event_dedup_store()
+
+    @property
+    def _outcomes(self) -> OnboardingOutcomes:
+        """The three ways a signup ends; see `onboarding_outcomes`."""
+        return OnboardingOutcomes(
+            uows=self._uows,
+            adapters=self._adapters,
+            challenge_service=self._challenge_service,
+        )
 
     def _challenge_service(self, platform: str) -> EmailChallengeService:
         return self._challenges or email_challenge_service(platform)
@@ -123,7 +153,7 @@ class ChatOnboardingCoordinator:
         destination = ParsedInboundSurfaceEvent.model_validate(state.destination)
         if not event.is_dm:
             # Once handed off, only private submissions can advance signup.
-            return OnboardingIngressResult(True)
+            return await self._room_notice(transport)
         if state.expires_at <= datetime.now(timezone.utc) and state.user_id is None:
             return await self._expire(transport, state, destination)
         text = event.message_text.strip()
@@ -132,6 +162,40 @@ class ChatOnboardingCoordinator:
         if state.step == OnboardingStep.AWAITING_PHONE:
             return await self._contact(transport, state, destination)
         return await self._step(transport, state, destination)
+
+    async def _room_notice(
+        self, transport: OnboardingTransport
+    ) -> OnboardingIngressResult:
+        """Answer the room; see `onboarding_replies.room_notice` for where."""
+        await room_notice(self._adapters, transport)
+        return OnboardingIngressResult(True)
+
+    async def _cancel(
+        self,
+        transport: OnboardingTransport,
+        state: PendingState,
+        destination: ParsedInboundSurfaceEvent,
+    ) -> OnboardingIngressResult:
+        await self._outcomes.cancelled(transport, state, destination)
+        return OnboardingIngressResult(True)
+
+    async def _expire(
+        self,
+        transport: OnboardingTransport,
+        state: PendingState,
+        destination: ParsedInboundSurfaceEvent,
+    ) -> OnboardingIngressResult:
+        await self._outcomes.expired(transport, state, destination)
+        return OnboardingIngressResult(True)
+
+    async def _refused(
+        self,
+        transport: OnboardingTransport,
+        state: PendingState,
+        destination: ParsedInboundSurfaceEvent,
+        error: ChallengeRejected,
+    ) -> None:
+        await self._outcomes.refused(transport, state, destination, error)
 
     async def _step(
         self,
@@ -155,10 +219,20 @@ class ChatOnboardingCoordinator:
             if state.user_id is not None:
                 await self._complete(transport, state, destination)
         except ChallengeRejected as error:
-            await self._reply(transport, destination, error.message)
+            # Only the challenge service's refusals reach here, and every one of
+            # them is about the answer just given: a wrong code, an expired one,
+            # a resend asked for too soon. The step is the question they are
+            # still on, so saying so and staying put is the whole answer. The
+            # refusals that are *not* like that -- the ones with no next message
+            # that could help -- are caught where they arise, in `_complete` and
+            # `_pod`, because only there is it known that they are permanent.
+            await self._reply(transport, destination, error.message, step=state.step)
         except RateLimitExceeded:
             await self._reply(
-                transport, destination, "Too many code requests. Try again later."
+                transport,
+                destination,
+                "Too many code requests. Try again later.",
+                step=state.step,
             )
         return OnboardingIngressResult(True)
 
@@ -180,35 +254,73 @@ class ChatOnboardingCoordinator:
         choice = read_choice(transport.event.message_text, state.offered_pods)
         if choice is None:
             await self._reply(
-                transport, destination, offer_text(state.offered_pods or [])
+                transport,
+                destination,
+                offer_text(state.offered_pods or []),
+                step=OnboardingStep.AWAITING_POD,
             )
             return OnboardingIngressResult(True)
-        refusal = await attach_chosen_workspace(self._uows, transport, state, choice)
-        if refusal is not None:
-            await self._reply(transport, destination, refusal)
+        try:
+            refusal = await attach_chosen_workspace(
+                self._uows, transport, state, choice
+            )
+        except ChallengeRejected as error:
+            # `attach_chosen_workspace` records the identity first, so the two
+            # permanent refusals reach here as well -- and a question is no
+            # better an exit than a step: every workspace they could name is
+            # refused by the same check, in the same words.
+            await self._refused(transport, state, destination, error)
+            return OnboardingIngressResult(True)
+        # Success says so. The row is READY by now and the ready event is
+        # published, so this reply is not guarded the way `_email` is: undoing
+        # it is not available, and it does not need to be -- the replay the
+        # event starts answers the person's original message either way, and a
+        # failed confirmation only costs them the "all set" line.
+        await self._reply(
+            transport,
+            destination,
+            refusal if refusal is not None else READY_MESSAGE,
+            step=OnboardingStep.AWAITING_POD if refusal is not None else None,
+        )
         return OnboardingIngressResult(True)
 
-    async def _cancel(
-        self,
-        transport: OnboardingTransport,
-        state: PendingState,
-        destination: ParsedInboundSurfaceEvent,
-    ) -> OnboardingIngressResult:
-        event = transport.event
-        if state.challenge_id is not None:
-            await self._challenge_service(event.platform.value).cancel_challenge(
-                challenge_id=state.challenge_id,
-                binding=state.binding_key,
-                purpose="chat_onboarding",
-            )
+    async def _write(self, state_id: UUID, values: dict[str, object]) -> None:
         async with self._uows() as uow:
-            row = await uow.session.get(PendingChatOnboarding, state.id)
+            row = await uow.session.get(PendingChatOnboarding, state_id)
             assert row is not None
-            row.original_event = None
-            row.step = OnboardingStep.CANCELLED
-            row.handed_off_at = datetime.now(timezone.utc)
-        await self._reply(transport, destination, "Setup cancelled.")
-        return OnboardingIngressResult(True)
+            for column, value in values.items():
+                setattr(row, column, value)
+
+    async def _advance_if_delivered(
+        self,
+        state: PendingState,
+        advanced: dict[str, object],
+        send: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Move the row on, and move it back if the person is never told.
+
+        Every step here writes before it sends, and it has to: the private
+        destination and the step are what `native_prompt_metadata` reads to
+        build the native form the message carries. So the write cannot wait for
+        the send, and the only honest alternative is to undo it.
+
+        Without that, a reply that failed left the row on a step the person had
+        never been asked to answer -- sitting on AWAITING_CODE with no idea a
+        code was wanted, their next message read as a wrong code. The inbox
+        retries the delivery, and a retry is only worth anything if it re-runs
+        the step from the top, prompt included.
+
+        `finally` rather than `except` so a cancellation counts too.
+        """
+        before = {column: getattr(state, column) for column in advanced}
+        await self._write(state.id, advanced)
+        delivered = False
+        try:
+            await send()
+            delivered = True
+        finally:
+            if not delivered:
+                await self._write(state.id, before)
 
     async def _reply(
         self,
@@ -216,40 +328,10 @@ class ChatOnboardingCoordinator:
         destination: ParsedInboundSurfaceEvent,
         message: str,
         *,
-        contact: bool = False,
+        step: str | None = None,
     ) -> None:
-        if not destination.is_dm:
-            raise ValueError("Onboarding replies require a private destination")
-        adapter = self._adapters.get(destination.platform)
-        assert adapter is not None
-        metadata = await native_prompt_metadata(
-            self._uows, binding_key=transport.binding_key, platform=destination.platform
-        )
-        metadata["private_onboarding"] = True
-        if destination.platform == SurfacePlatform.TELEGRAM:
-            metadata["reply_markup"] = (
-                {
-                    "keyboard": [
-                        [{"text": "Share my contact", "request_contact": True}]
-                    ],
-                    "resize_keyboard": True,
-                    "one_time_keyboard": True,
-                }
-                if contact
-                else {
-                    "keyboard": [
-                        [{"text": "Resend"}, {"text": "Change email"}],
-                        [{"text": "Cancel"}],
-                    ],
-                    "resize_keyboard": True,
-                    "one_time_keyboard": True,
-                }
-            )
-        await adapter.send_message(
-            credentials=transport.credentials,
-            event=destination,
-            message=message,
-            metadata=metadata,
+        await say_privately(
+            self._adapters, self._uows, transport, destination, message, step=step
         )
 
     async def _complete(
@@ -259,15 +341,38 @@ class ChatOnboardingCoordinator:
         destination: ParsedInboundSurfaceEvent,
     ) -> None:
         from app.modules.agent_surfaces.services.onboarding_workspace import (
+            WorkspaceChoiceAsked,
             complete_onboarding_workspace,
         )
 
-        if await complete_onboarding_workspace(self._uows, transport, state):
+        try:
+            waiting_on_an_admin = await complete_onboarding_workspace(
+                self._uows, transport, state
+            )
+        except WorkspaceChoiceAsked as parked:
+            # The one refusal that has already asked its own next question: the
+            # row is parked on AWAITING_POD and the offer is in the message, so
+            # sending it is the whole job. Ahead of the arm below, which would
+            # end the signup and throw the question away in the act of asking
+            # it.
             await self._reply(
                 transport,
                 destination,
-                "Your account is ready. Ask your team admin to add you to this Lemma organization.",
+                parked.message,
+                step=OnboardingStep.AWAITING_POD,
             )
+            return
+        except ChallengeRejected as error:
+            await self._refused(transport, state, destination, error)
+            return
+        await self._reply(
+            transport,
+            destination,
+            "Your account is ready. Ask your team admin to add you to this "
+            "Lemma organization."
+            if waiting_on_an_admin
+            else READY_MESSAGE,
+        )
 
     async def _handoff(
         self, transport: OnboardingTransport, state: PendingState
@@ -288,22 +393,13 @@ class ChatOnboardingCoordinator:
             if event.platform == SurfacePlatform.TELEGRAM
             else OnboardingStep.AWAITING_EMAIL
         )
-        async with self._uows() as uow:
-            row = await uow.session.get(PendingChatOnboarding, state.id)
-            assert row is not None
-            row.destination = destination.model_dump(mode="json")
-            row.step = step
-        delivered = False
-        try:
-            await self._send_initial_prompt(transport, destination, step)
-            delivered = True
-        finally:
-            if not delivered:
-                # Retry private delivery before accepting any signup submission.
-                async with self._uows() as uow:
-                    row = await uow.session.get(PendingChatOnboarding, state.id)
-                    assert row is not None
-                    row.step = OnboardingStep.HANDOFF
+        # Retry private delivery before accepting any signup submission: the
+        # shape every other advancing step now shares.
+        await self._advance_if_delivered(
+            state,
+            {"destination": destination.model_dump(mode="json"), "step": step},
+            lambda: self._send_initial_prompt(transport, destination, step),
+        )
         return OnboardingIngressResult(True)
 
     async def _send_initial_prompt(
@@ -312,14 +408,7 @@ class ChatOnboardingCoordinator:
         destination: ParsedInboundSurfaceEvent,
         step: str,
     ) -> None:
-        await self._reply(
-            transport,
-            destination,
-            "Share your own contact using the button below."
-            if step == OnboardingStep.AWAITING_PHONE
-            else "What's your email address? I'll send a code to verify it.",
-            contact=step == OnboardingStep.AWAITING_PHONE,
-        )
+        await self._reply(transport, destination, initial_prompt_for(step), step=step)
 
     async def _contact(
         self,
@@ -336,7 +425,7 @@ class ChatOnboardingCoordinator:
                 transport,
                 destination,
                 "Use Share my contact. Typed numbers and other people's contacts cannot verify your phone.",
-                contact=True,
+                step=OnboardingStep.AWAITING_PHONE,
             )
             return OnboardingIngressResult(True)
         phone = normalize_mobile_e164("+" + event.sender_phone.lstrip("+"))
@@ -360,6 +449,7 @@ class ChatOnboardingCoordinator:
             transport,
             destination,
             "What's your email address? I'll send a code to verify it.",
+            step=OnboardingStep.AWAITING_EMAIL,
         )
         return OnboardingIngressResult(True)
 
@@ -377,6 +467,7 @@ class ChatOnboardingCoordinator:
                 transport,
                 destination,
                 "Send one email address so I can send your verification code.",
+                step=OnboardingStep.AWAITING_EMAIL,
             )
             return OnboardingIngressResult(True)
         receipt = await self._challenge_service(event.platform.value).start_challenge(
@@ -385,15 +476,19 @@ class ChatOnboardingCoordinator:
             purpose="chat_onboarding",
             sender_key=state.binding_key,
         )
-        async with self._uows() as uow:
-            row = await uow.session.get(PendingChatOnboarding, state.id)
-            assert row is not None
-            row.challenge_id = receipt.id
-            row.step = OnboardingStep.AWAITING_CODE
-        await self._reply(
-            transport,
-            destination,
-            "Check your email and send the six-digit code here. You can also change email or cancel.",
+        # Rolling back to AWAITING_EMAIL costs the retry a second code email,
+        # and that is the cheap side of the trade: left on AWAITING_CODE with
+        # no prompt ever delivered, the address they send again is read as a
+        # wrong code and answered as one.
+        await self._advance_if_delivered(
+            state,
+            {"challenge_id": receipt.id, "step": OnboardingStep.AWAITING_CODE},
+            lambda: self._reply(
+                transport,
+                destination,
+                "Check your email and send the six-digit code here. You can also change email or cancel.",
+                step=OnboardingStep.AWAITING_CODE,
+            ),
         )
         return OnboardingIngressResult(True)
 
@@ -414,14 +509,17 @@ class ChatOnboardingCoordinator:
                 purpose="chat_onboarding",
                 sender_key=state.binding_key,
             )
-            async with self._uows() as uow:
-                row = await uow.session.get(PendingChatOnboarding, state.id)
-                assert row is not None
-                row.challenge_id = receipt.id
-            await self._reply(
-                transport,
-                destination,
-                "A new code is on its way. The previous code no longer works.",
+            # Safe to put back: `resend_challenge` accepts an already-revoked
+            # challenge, so the retry that re-runs this reaches the same place.
+            await self._advance_if_delivered(
+                state,
+                {"challenge_id": receipt.id},
+                lambda: self._reply(
+                    transport,
+                    destination,
+                    "A new code is on its way. The previous code no longer works.",
+                    step=OnboardingStep.AWAITING_CODE,
+                ),
             )
             return OnboardingIngressResult(True)
         if text.lower() == "change email":
@@ -431,6 +529,12 @@ class ChatOnboardingCoordinator:
                 binding=state.binding_key,
                 purpose="chat_onboarding",
             )
+            # Not guarded, and deliberately. The challenge is already
+            # cancelled, so putting the row back on AWAITING_CODE would point
+            # it at a dead code -- and the advance needs no prompt to be
+            # coherent: on AWAITING_EMAIL the next message is read as an
+            # address, and anything that is not one is answered by `_email`
+            # with the very instruction this reply carries.
             async with self._uows() as uow:
                 row = await uow.session.get(PendingChatOnboarding, state.id)
                 assert row is not None
@@ -440,6 +544,7 @@ class ChatOnboardingCoordinator:
                 transport,
                 destination,
                 "Send the email address you want to use.",
+                step=OnboardingStep.AWAITING_EMAIL,
             )
             return OnboardingIngressResult(True)
         assert state.challenge_id is not None
@@ -454,6 +559,11 @@ class ChatOnboardingCoordinator:
             challenge_id=state.challenge_id,
             binding=state.binding_key,
         )
+        # Also unguarded: `complete_chat_account` has already created or
+        # resolved the account, so VERIFIED is a fact about the world and not a
+        # question waiting on an answer. `_complete` below both provisions and
+        # confirms, and its own reply failing leaves the row READY -- which the
+        # next message resolves through `recognize_sender`, not through here.
         async with self._uows() as uow:
             row = await uow.session.get(PendingChatOnboarding, state.id)
             assert row is not None
@@ -462,37 +572,4 @@ class ChatOnboardingCoordinator:
         state = await self._require_state(transport.binding_key)
         assert state is not None
         await self._complete(transport, state, destination)
-        return OnboardingIngressResult(True)
-
-    async def _expire(
-        self,
-        transport: OnboardingTransport,
-        state: PendingState,
-        destination: ParsedInboundSurfaceEvent,
-    ) -> OnboardingIngressResult:
-        event = transport.event
-        if state.challenge_id is not None:
-            try:
-                await self._challenge_service(event.platform.value).cancel_challenge(
-                    challenge_id=state.challenge_id,
-                    binding=state.binding_key,
-                    purpose="chat_onboarding",
-                )
-            except ChallengeRejected:
-                # Expiry is the caller here, and the challenge being already
-                # revoked, already used or itself expired is the ordinary way
-                # to arrive: the point of the call is that no live code is left
-                # behind, and all three refusals mean there is none.
-                pass
-        async with self._uows() as uow:
-            row = await uow.session.get(PendingChatOnboarding, state.id)
-            assert row is not None
-            row.original_event = None
-            row.step = OnboardingStep.EXPIRED
-            row.handed_off_at = datetime.now(timezone.utc)
-        await self._reply(
-            transport,
-            destination,
-            "Setup expired. Send a fresh request to start again.",
-        )
         return OnboardingIngressResult(True)

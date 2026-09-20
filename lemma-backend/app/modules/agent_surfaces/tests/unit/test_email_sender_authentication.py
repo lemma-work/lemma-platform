@@ -164,11 +164,19 @@ def _service(cached_user_id):
         get_id_by_email_insensitive=AsyncMock(return_value=cached_user_id),
         get_ids_by_mobile_numbers=AsyncMock(return_value=[]),
     )
+
+    async def still_here(user_id):
+        return user_id
+
     service = SurfaceIdentityResolutionService(
         None,
         SimpleNamespace(),
         user_directory=directory,
         verified_identity_lookup=AsyncMock(return_value=None),
+        # Everyone here is live. These tests are about whether the *sender* is
+        # believable, and a cached id is now re-checked against identity before
+        # it is returned -- a question with no database to answer it here.
+        live_user_lookup=still_here,
     )
     service._upsert = AsyncMock(  # type: ignore[method-assign]
         return_value=SimpleNamespace(
