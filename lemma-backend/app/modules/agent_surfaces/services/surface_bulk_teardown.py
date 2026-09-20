@@ -64,7 +64,17 @@ async def delete_matching_surfaces(
                 await service.delete_surface(surface.id)
                 deleted += 1
             except Exception:
+                # Each one, with its traceback. The count alone used to be the
+                # only record, which said a teardown had gone wrong and nothing
+                # about which surface or why -- and a provider that starts
+                # refusing everything looked identical to one flaky row.
                 failure_count += 1
+                logger.warning(
+                    "surface.cleanup.surface_failed.degraded",
+                    pod_id=pod_id,
+                    surface_id=surface.id,
+                    exc_info=True,
+                )
         if cursor is None:
             break
     if failure_count:

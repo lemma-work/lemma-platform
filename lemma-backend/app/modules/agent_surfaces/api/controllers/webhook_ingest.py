@@ -15,6 +15,9 @@ from typing import Any
 from uuid import UUID
 
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
@@ -251,19 +254,34 @@ async def _handle_resend_webhook(
     return {"message": "Webhook received"}
 
 
-async def _published_whatsapp_verification(payload: dict[str, Any]) -> bool:
+async def _published_whatsapp_verification(
+    payload: dict[str, Any], uow_factory: UnitOfWorkFactory
+) -> bool:
     """Publish a reserved verification message, when that is what arrived.
 
     Verification commands are identity traffic, not agent messages. This is
     reached only after Meta's raw-body signature succeeds, and only acts when
-    the message targets Lemma's configured global phone-number id.
+    the message targets a number this deployment owns.
+
+    "Owns" used to mean the one in settings, because there was one. Every
+    pooled number is a system number and behaves the same, so a person who sends
+    their code to whichever of our numbers they happen to be talking to gets
+    verified -- telling them "wrong number, use the other one" would be a
+    distinction only we can see. The pool is consulted only when the arriving
+    number is not the configured one, so a single-number deployment does no
+    extra work.
     """
     verification = parse_reserved_verification_message(payload)
     if verification is None or not is_whatsapp_verification_configured():
         return False
     code, sender_wa_id, destination_id, message_id = verification
     if destination_id != surface_settings.whatsapp_phone_number_id:
-        return False
+        async with uow_factory() as uow:
+            owned = await WhatsAppNumberRepository(uow).get_by_phone_number_id(
+                destination_id
+            )
+        if owned is None:
+            return False
 
     identity_event = WhatsAppMobileVerificationReceivedEvent(
         event_id=stable_event_id(

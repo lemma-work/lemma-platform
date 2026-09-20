@@ -38,7 +38,6 @@
     "app/modules/agent_surfaces/services/surface_reach_resolver.py::SurfaceReachResolver._persist_username::debug-only-broad-catch::agent_surfaces.surface_reach_resolver.surface_reach_write_through_surface.observed": 1,
     "app/modules/agent_surfaces/services/surface_router.py::SurfaceRouter._clear_stale_default::debug-only-broad-catch::agent_surfaces.ingress_service.clear_stale_surface_default_user.diagnostic": 1,
     "app/modules/agent_surfaces/services/surface_router.py::SurfaceRouter.resolve_sender::silent-broad-catch::Exception -> assign": 1,
-    "app/modules/agent_surfaces/services/surface_service.py::AgentSurfaceService._delete_matching_surfaces::silent-broad-catch::Exception -> assign": 1,
     "app/modules/agent_surfaces/services/surface_telegram_webhook.py::SurfaceTelegramWebhookMixin._delete_telegram_webhook::debug-only-broad-catch::agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic": 1,
     "app/modules/apps/services/app_storage_phase.py::AppStoragePhase.cleanup_storage::debug-only-broad-catch::apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic": 1,
     "app/modules/connectors/api/connector_controller.py::get_connector_skill::silent-broad-catch::Exception -> assign": 1,

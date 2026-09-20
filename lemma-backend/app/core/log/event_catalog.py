@@ -757,6 +757,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'service.started': EventSpec('info', frozenset()),
     'service.stopped': EventSpec('info', frozenset()),
     'surface.cleanup.failed': EventSpec('error', frozenset({'failure_count', 'pod_id'})),
+    'surface.cleanup.surface_failed.degraded': EventSpec('warning', frozenset({'pod_id', 'surface_id'})),
     'surface.message.send_failed': EventSpec('debug', frozenset()),
     'surface.slack.history_failed': EventSpec('debug', frozenset()),
     'surface.slack.parse_channel_setup_failed': EventSpec('debug', frozenset()),
