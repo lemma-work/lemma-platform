@@ -39,9 +39,29 @@ def test_email_platforms_flagged():
     assert email == {"RESEND"}, "email is Resend; the Composio mailboxes are gone"
 
 
-def test_channel_capable_only_slack_teams():
+def test_channel_capable_is_the_platforms_whose_history_we_can_read():
+    """The set is a consequence, not a preference.
+
+    It used to read `{"SLACK", "TEAMS"}` with nothing saying why, and it was
+    wrong: `TelegramSurfaceAdapter` implements `fetch_thread_context`, the router
+    has a group route, and `test_telegram_group_injects_reply_as_channel_context`
+    asserts a Telegram group reply reaches the agent as `channel_context`. The
+    only reader of this field is the standing guidance, so the flag said "you
+    have no channel history here" to the one chat platform that was handing it
+    some. Nothing failed, because a bare set restated the constant instead of the
+    rule -- which is the whole reason the conformance test in
+    `test_adapter_contract.py` now checks the claim against the adapter.
+
+    WhatsApp is absent for the same reason it was always absent: no
+    `fetch_thread_context`, so there is no history to promise.
+    """
     channel = {p for p, c in PLATFORM_CAPABILITIES.items() if c.is_channel_capable}
-    assert channel == {"SLACK", "TEAMS"}
+    assert channel == {"SLACK", "TEAMS", "TELEGRAM"}
+
+
+def test_telegram_guidance_mentions_the_channel_history_it_actually_gets():
+    text = platform_agent_guidance("TELEGRAM")
+    assert "Channel background context" in text
 
 
 def test_slack_guidance_has_native_choices_channel_and_mrkdwn():

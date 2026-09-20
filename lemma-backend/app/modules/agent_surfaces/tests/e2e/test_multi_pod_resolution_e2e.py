@@ -29,7 +29,7 @@ from app.modules.agent_surfaces.domain.ingress_context import (
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
     _create_agent,
@@ -53,7 +53,7 @@ CUSTOM_WHATSAPP_WABA_ID = "waba-routing-custom"
 async def _prepare_telegram_dm(db_session: AsyncSession, payload: dict):
     """Run just the ingress routing for a Telegram DM and persist its link."""
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(source="telegram", payload=payload)
     )
@@ -120,7 +120,7 @@ async def _prepare_platform_dm(
     receiver_surface_ids: list[UUID] | None = None,
 ):
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(
             source=platform.lower(),

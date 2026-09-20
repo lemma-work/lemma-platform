@@ -24,7 +24,7 @@ from app.modules.agent.contracts.agents import (
 )
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceConnectionResolverDep,
-    SurfaceEventHandlerDep,
+    MemberReachDep,
     get_surface_service,
 )
 from app.modules.agent_surfaces.api.schemas import (
@@ -466,7 +466,7 @@ async def send_surface_message(
     request: SurfaceSendRequest,
     user: CurrentUser,
     ctx: PodContextDep,
-    ingress: SurfaceEventHandlerDep,
+    reach: MemberReachDep,
     service: AgentSurfaceService = Depends(get_surface_service),
 ) -> SurfaceSendResponse:
     """Proactively send a message to a pod member on this surface.
@@ -481,7 +481,7 @@ async def send_surface_message(
         agent_id=surface.agent_id,
         action=Permissions.AGENT_UPDATE,
     )
-    undeliverable = await ingress.send_to_member(
+    undeliverable = await reach.send_to_member(
         surface=surface,
         user_id=request.user_id,
         message=request.message,

@@ -97,19 +97,19 @@ class NotificationService:
         surface_repository,
         conversation_link_repository,
         external_user_repository,
-        ingress_service: SurfaceNotificationEgressPort,
+        egress: SurfaceNotificationEgressPort,
         pod_membership_port,
         rate_limiter=None,
         surface_provisioner: SurfaceProvisioner | None = None,
     ):
         self.uow = uow
         self.notifications = notification_repository
-        # The three repositories this used to also hang on `self` are not kept:
-        # they were assigned and never read, because the objects that use them
-        # are built with them below. A field nothing reads reads as a seam --
-        # someone will reach for `service.surfaces` and get a repository this
-        # class has no opinion about.
-        self.ingress = ingress_service
+        # The three repositories this used to also hang on `self` are not kept,
+        # and neither is the egress collaborator: all four were assigned and
+        # never read, because the objects that use them are built with them
+        # below. A field nothing reads reads as a seam -- someone will reach for
+        # `service.surfaces` and get a repository this class has no opinion
+        # about, or for `service.ingress` and get the whole inbound service.
         self.membership = pod_membership_port
         self.rate_limiter = rate_limiter
         # Which surface can carry this to this person, and minting one when the
@@ -125,7 +125,7 @@ class NotificationService:
         # the notification means, and it is the half with all the surface
         # coupling. See ``notification_egress``.
         self.egress = NotificationEgress(
-            egress=ingress_service,
+            egress=egress,
             uow=uow,
             conversation_link_repository=conversation_link_repository,
         )

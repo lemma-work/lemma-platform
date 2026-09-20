@@ -361,3 +361,97 @@ async def test_every_envelope_field_reaches_the_person_on_every_platform(
         f"never mentions it ({sorted(receipt.parts)}). A part `deliver` does not "
         "walk is a part that reaches nobody with nothing saying so."
     )
+
+
+#: How a platform can deliver a kind of content natively. Two entries, because
+#: there are two ways: the part's own render hook, or the one-reply fold that a
+#: platform delivering a single message per turn uses instead. Resend renders no
+#: `_render_file` and still attaches files to the mail it sends, so a test that
+#: only looked for the hook would call the registry a liar for being right.
+_NATIVE_PATHS = {
+    "supports_native_files": ("_render_file", "_render_one"),
+    "supports_native_choices": ("_render_choices",),
+}
+
+
+def _implements(adapter: object, name: str) -> bool:
+    """Does anything in this adapter's ancestry supply `name` itself?
+
+    Not `_overrides`, which only looks at classes deriving from
+    `BaseSurfaceAdapter` -- and `_render_one` is contributed by a mixin that does
+    not, so that helper cannot see the one path Resend delivers files through.
+    Comparing the resolved attribute against the base's answers the question for
+    any shape of ancestry, including a hook the base never declared.
+    """
+    own = getattr(type(adapter), name, None)
+    return own is not None and own is not getattr(BaseSurfaceAdapter, name, None)
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+@pytest.mark.parametrize("claim", sorted(_NATIVE_PATHS))
+def test_the_registry_claims_only_what_some_adapter_path_implements(
+    platform, adapter, claim
+):
+    """The capability registry calls itself the single source of truth. Prove it.
+
+    Nothing in production reads `supports_native_files` or
+    `supports_native_choices` -- the delivery decision lives in
+    `EnvelopeDeliveryMixin`, which tries the native hook and degrades without
+    consulting either. Their only reader is the text the agent is given about
+    what it can do here. So a wrong value fails nothing and tells the model
+    something untrue, which is worse than a red test because nobody finds out.
+    The registry already carries a hand-written note explaining that Teams'
+    `False` "is not an oversight"; this is that note, executed.
+
+    Asserted against the adapter's implementation rather than against a delivery
+    receipt. A receipt is the better oracle in principle -- it is what the person
+    actually got -- but `deliver` degrades when the upload fails, and an upload
+    with no credentials always fails, so under a stub every platform looks
+    incapable. That measures the stub, not the claim.
+    """
+    from app.modules.agent_surfaces.platforms.platform_capabilities import (
+        get_platform_capabilities,
+    )
+
+    capabilities = get_platform_capabilities(platform)
+    assert capabilities is not None, (
+        f"{platform} has a registered adapter and no capability entry"
+    )
+    implemented = any(_implements(adapter, hook) for hook in _NATIVE_PATHS[claim])
+    assert getattr(capabilities, claim) == implemented, (
+        f"{platform}.{claim} says {getattr(capabilities, claim)} while "
+        f"{_NATIVE_PATHS[claim]} are {'implemented' if implemented else 'base stubs'}. "
+        "Work out which side is wrong before touching either -- editing the "
+        "constant to match is how this drifted in the first place."
+    )
+
+
+@pytest.mark.parametrize("platform, adapter", _registered_adapters())
+@pytest.mark.parametrize(
+    "claim, hook",
+    [
+        ("can_cold_open", "send_cold_email"),
+        ("is_channel_capable", "fetch_thread_context"),
+    ],
+)
+def test_the_registry_claims_only_what_the_adapter_implements(
+    platform, adapter, claim, hook
+):
+    """The two claims about *reach* rather than about how a part degrades.
+
+    `can_cold_open` has eight production readers and decides whether a
+    notification may open a conversation with somebody who never wrote first.
+    `is_channel_capable` has none -- it is a third field whose only reader is the
+    agent's standing guidance, which is exactly how it came to say False for a
+    platform whose group history the adapter fetches.
+    """
+    from app.modules.agent_surfaces.platforms.platform_capabilities import (
+        get_platform_capabilities,
+    )
+
+    capabilities = get_platform_capabilities(platform)
+    assert capabilities is not None
+    assert getattr(capabilities, claim) == _overrides(adapter, hook), (
+        f"{platform}.{claim} says {getattr(capabilities, claim)} while "
+        f"{hook} is {'overridden' if _overrides(adapter, hook) else 'the base stub'}."
+    )

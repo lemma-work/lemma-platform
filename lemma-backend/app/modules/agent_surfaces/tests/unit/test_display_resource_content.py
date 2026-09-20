@@ -27,9 +27,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceMode,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
-)
+from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
 from app.modules.agent_surfaces.domain.models import SurfaceDisplayRenderPlan
 from app.modules.datastore.contracts.surfaces import TableRows
 from app.modules.agent_surfaces.services import display_resource_content
@@ -342,7 +340,7 @@ def _inbound() -> ParsedInboundSurfaceEvent:
     )
 
 
-def _egress_service(installation: AgentSurfaceEntity, conversation_id):
+def _delivery(installation: AgentSurfaceEntity, conversation_id):
     surfaces = AsyncMock()
     surfaces.get.return_value = installation
     links = AsyncMock()
@@ -358,18 +356,19 @@ def _egress_service(installation: AgentSurfaceEntity, conversation_id):
         last_message_id="1700000000.1",
         last_inbound_at=datetime.now(timezone.utc),
     )
-    service = AgentSurfaceIngressService(
+    return SurfaceDelivery(
         uow=SimpleNamespace(session=None),
         surface_repository=surfaces,
         conversation_link_repository=links,
         adapter_registry=SimpleNamespace(get=lambda platform: AsyncMock()),
+        # The real resolver reaches a database. This is the same collaborator,
+        # answering the one call target resolution makes of it -- given to the
+        # constructor now rather than assigned over one the object built for
+        # itself.
+        credential_resolver=SimpleNamespace(
+            for_surface=AsyncMock(return_value={"access_token": "xoxb-company"})
+        ),
     )
-    # The resolver the constructor built for itself reaches a database. This is
-    # the same collaborator, answering the one call egress makes of it.
-    service.credential_resolver = SimpleNamespace(
-        for_surface=AsyncMock(return_value={"access_token": "xoxb-company"})
-    )
-    return service
 
 
 async def test_a_personal_dm_resolves_against_the_conversations_pod(
@@ -382,9 +381,9 @@ async def test_a_personal_dm_resolves_against_the_conversations_pod(
         id=CONVERSATION_ID, user_id=uuid4(), pod_id=personal_pod
     )
 
-    target = await _egress_service(
-        installation, CONVERSATION_ID
-    )._resolve_egress_target(CONVERSATION_ID)
+    target = await _delivery(installation, CONVERSATION_ID).resolve_egress_target(
+        CONVERSATION_ID
+    )
 
     assert target is not None
     assert target.pod_id == personal_pod, "egress resolved the wrong pod's data"
@@ -399,8 +398,8 @@ async def test_there_is_no_target_without_a_conversation_to_answer_in(
     """No conversation, no pod -- and guessing one is what this replaced."""
     conversation_owner.return_value = None
 
-    target = await _egress_service(
+    target = await _delivery(
         _installation(uuid4()), CONVERSATION_ID
-    )._resolve_egress_target(CONVERSATION_ID)
+    ).resolve_egress_target(CONVERSATION_ID)
 
     assert target is None

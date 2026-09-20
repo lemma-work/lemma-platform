@@ -91,59 +91,92 @@ class AgentSurface(UUIDAuditBase):
             unique=True,
             postgresql_where=text("surface_identity_email IS NOT NULL"),
         ),
+        # Every routing read leads with exactly this pair --
+        # `surface_routing_sql.active_surfaces_of_type` -- and `status` had no
+        # index at all, so the platform's whole live set was found on
+        # `surface_type` alone and then filtered.
+        #
+        # It stops at the pair on purpose, and that is worth writing down
+        # because the obvious next move is wrong. `active_surfaces_of_type` also
+        # orders by `(created_at, id)`, the documented tiebreak that picks a
+        # surface when a sender resolves to several -- so carrying those two
+        # columns looks like it would remove the sort. Measured on 20k rows
+        # across five platforms with a seventh inactive, it does not: with no
+        # LIMIT the query wants the whole candidate set, and Postgres takes a
+        # bitmap scan and sorts regardless. The same index only avoids the sort
+        # once a LIMIT applies, which this query does not have. Two extra
+        # columns per row for a plan nobody gets.
+        #
+        # This is also why `surface_type` no longer carries an index of its own:
+        # it is this index's leading column, and there is no query that filters
+        # the platform without also filtering the status.
+        Index("ix_agent_surface_routing", "surface_type", "status"),
     )
 
-    pod_id: Mapped[UUID] = mapped_column(
-        ForeignKey("pods.id", ondelete="CASCADE"), index=True
-    )
+    # No index of its own: `uq_agent_surface_pod_name` leads with `pod_id`, and
+    # `list_by_pod` is the only reader that filters on it alone.
+    pod_id: Mapped[UUID] = mapped_column(ForeignKey("pods.id", ondelete="CASCADE"))
     # Stable, pod-unique identifier addressed by the API (like agent names).
-    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    # Read only as `(pod_id, name)` -- `get_by_pod_and_name` -- which is the
+    # unique constraint, so an index on the name alone serves nothing.
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
     # Whose surface this is, and the only question this column answers. It used
     # to answer two -- "who answers here by default" inbound and "whose bot is
     # this" outbound -- with null meaning the assistant to one and "nobody's, so
     # anyone may borrow it" to the other. CASCADE rather than SET NULL because
     # a nulled row was indistinguishable from the assistant's own surface, which
     # is how a pod ended up answering from a deleted agent's address.
+    # No index of its own: `uq_agent_surface_agent_type` leads with `agent_id`.
     agent_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agents.id", ondelete="CASCADE"), index=True, nullable=False
+        ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
     )
 
-    surface_type: Mapped[str] = mapped_column(String(50), index=True)
-    mode: Mapped[str] = mapped_column(
-        String(50), default="DM", server_default="DM", index=True
-    )
+    # Leading column of `ix_agent_surface_routing`; see there.
+    surface_type: Mapped[str] = mapped_column(String(50))
+    # The three below are two- and three-member enums, and no query selects on
+    # any of them alone. `credential_mode` appears twice, both times as an extra
+    # predicate on a read already narrowed by platform and organisation; an
+    # index whose most common value matches most of the table is read cost on
+    # the write path and nothing on the read path.
+    mode: Mapped[str] = mapped_column(String(50), default="DM", server_default="DM")
     event_mode: Mapped[str] = mapped_column(
-        String(50), default="WEBHOOK", server_default="WEBHOOK", index=True
+        String(50), default="WEBHOOK", server_default="WEBHOOK"
     )
     credential_mode: Mapped[str] = mapped_column(
-        String(50), default="SYSTEM", server_default="SYSTEM", index=True
+        String(50), default="SYSTEM", server_default="SYSTEM"
     )
     config: Mapped[dict] = mapped_column(JSONB)
+    # Indexed: `get_account_conflict_in_org` and the shared-webhook narrowing in
+    # `routing_surfaces` both filter it, including as IS NULL.
     account_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
+    # Indexed: `routing_surfaces` narrows by it on every inbound event that
+    # carries a workspace, which is the selective predicate once the platform's
+    # live surfaces are the candidate set.
     external_workspace_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
-    external_tenant_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
-    )
-    external_channel_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
-    )
-    surface_identity_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
-    )
+    # The four below carry no index, and the reason is the same for all of them:
+    # nothing anywhere filters or orders on them. They are read back on a row
+    # that was already found. `surface_identity_id` is additionally covered by
+    # `uq_agent_pooled_whatsapp_number` for the one lookup that will need it.
+    external_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    surface_identity_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     surface_identity_username: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
+        String(255), nullable=True
     )
     status: Mapped[str] = mapped_column(
         String(50), default="ACTIVE", server_default="ACTIVE"
     )
+    # Its one reader compares `lower(surface_identity_email)`, which a plain
+    # btree on the column cannot serve at all. `uq_agent_surface_identity_email`
+    # is functional and partial and matches that lookup exactly.
     surface_identity_email: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
+        String(255), nullable=True
     )
     # Encrypted at rest via app.core.crypto (compact ``lsenc1:`` envelope). Text
     # (not String(255)) because the envelope is longer than the raw secret.
@@ -240,17 +273,37 @@ class AgentSurfaceExternalUser(UUIDAuditBase):
             unique=True,
             postgresql_nulls_not_distinct=True,
         ),
+        # `get_by_email` compares `lower(email)`, so the plain btree this
+        # replaces could never be used for it -- the one query the column had.
+        # Paired with the platform because that is how the query asks.
+        Index(
+            "ix_agent_surface_external_user_platform_email",
+            "platform",
+            func.lower(text("email")),
+            postgresql_where=text("email IS NOT NULL"),
+        ),
+        # `list_by_resolved_users` reads `resolved_user_id IN (...) AND platform
+        # = ...`; `clear_resolved_users` updates on `resolved_user_id` alone,
+        # which this index's leading column serves.
+        Index(
+            "ix_agent_surface_external_user_resolved_platform",
+            "resolved_user_id",
+            "platform",
+        ),
     )
 
-    platform: Mapped[str] = mapped_column(String(50), index=True)
+    # No index of its own: leading column of the unique triple above.
+    platform: Mapped[str] = mapped_column(String(50))
     tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
-    phone: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Never filtered or ordered on anywhere. It is written by profile enrichment
+    # and read back off a row found by platform identity.
+    phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     raw_profile: Mapped[dict] = mapped_column(JSONB, default=dict)
     resolved_user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -273,38 +326,69 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
             unique=True,
         ),
         Index("ix_agent_surface_link_conversation", "conversation_id"),
+        # `find_surface_id_for_external_thread`: the continuity lookup that runs
+        # on *every* inbound message, and the one read here that is not scoped
+        # to a surface -- it exists to find which surface a returning chat
+        # already lives on. Without this it matched the standalone `platform`
+        # index and then filtered and sorted a table that grows per thread.
+        # Column order is the query's; `updated_at DESC` is its `ORDER BY ...
+        # LIMIT 1`.
+        Index(
+            "ix_agent_surface_link_thread_continuity",
+            "platform",
+            "external_thread_id",
+            "external_channel_id",
+            "external_user_id",
+            text("updated_at DESC"),
+        ),
+        # `latest_links_by_surface_and_external_users`: the fan-in read, one row
+        # per person via DISTINCT ON. The pair is the lookup; `last_inbound_at`
+        # is carried because the recency it sorts by is
+        # `coalesce(last_inbound_at, updated_at)`, so this covers the common
+        # case without claiming to serve the coalesce itself.
+        Index(
+            "ix_agent_surface_link_surface_member",
+            "surface_id",
+            "external_user_id",
+            text("last_inbound_at DESC"),
+        ),
     )
 
+    # No index of its own: leading column of `ix_agent_surface_link_external_thread`,
+    # and paired with the member in `ix_agent_surface_link_surface_member`.
     surface_id: Mapped[UUID] = mapped_column(
         ForeignKey("agent_surfaces.id", ondelete="CASCADE"),
-        index=True,
         nullable=False,
     )
+    # `index=True` removed, not the index: it produced a second, identical index
+    # beside `ix_agent_surface_link_conversation` above. Both existed, both were
+    # maintained on every write, and one of them could ever be chosen.
     conversation_id: Mapped[UUID] = mapped_column(
         ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-        index=True,
         nullable=False,
     )
-    platform: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    # No index of its own: leading column of the continuity index above, which
+    # is the only read that starts from the platform.
+    platform: Mapped[str] = mapped_column(String(50), nullable=False)
     external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
     external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Never filtered on: it records which agent answered this thread and is read
+    # off a row already found. Same for `route_key` below.
     routed_agent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True
+        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True
     )
     conversation_kind: Mapped[str] = mapped_column(
         String(50), default="DM", server_default="DM", nullable=False
     )
-    route_key: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, index=True
-    )
+    route_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_event: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # Nullable, and it stays nullable: the backfill sets it from ``updated_at``
     # for existing rows, but a row created by an older worker mid-deploy would
     # still arrive NULL. ``inbound_activity_at`` on the entity is the reader.
     last_inbound_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
+        DateTime(timezone=True), nullable=True
     )
 
     def to_entity(self) -> AgentSurfaceConversationLink:
