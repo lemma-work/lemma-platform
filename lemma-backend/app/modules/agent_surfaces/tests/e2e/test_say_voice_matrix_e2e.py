@@ -84,16 +84,6 @@ LADDER = {
 }
 
 
-@pytest.fixture
-def platform_fake(fake_slack, fake_teams, fake_telegram, fake_whatsapp):
-    return {
-        SurfacePlatform.SLACK: fake_slack,
-        SurfacePlatform.TEAMS: fake_teams,
-        SurfacePlatform.TELEGRAM: fake_telegram,
-        SurfacePlatform.WHATSAPP: fake_whatsapp,
-    }
-
-
 @pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
 async def test_say_reaches_the_person_on_every_platform(
     platform: SurfacePlatform,

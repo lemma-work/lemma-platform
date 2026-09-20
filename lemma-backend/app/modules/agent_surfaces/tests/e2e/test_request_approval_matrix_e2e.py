@@ -125,17 +125,6 @@ async def _tool_return(client: AsyncClient, *, pod_id: str, conversation_id) -> 
     )
 
 
-@pytest.fixture
-def platform_fake(fake_slack, fake_teams, fake_telegram, fake_whatsapp):
-    """One place to hand a journey the fake server for its platform."""
-    return {
-        SurfacePlatform.SLACK: fake_slack,
-        SurfacePlatform.TEAMS: fake_teams,
-        SurfacePlatform.TELEGRAM: fake_telegram,
-        SurfacePlatform.WHATSAPP: fake_whatsapp,
-    }
-
-
 async def _staged(platform: SurfacePlatform, platform_fake, **kwargs) -> SurfaceStage:
     return await stage_surface(
         platform,

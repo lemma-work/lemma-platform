@@ -170,16 +170,6 @@ def _final_answer_count(platform: SurfacePlatform, store: Any) -> int:
     )
 
 
-@pytest.fixture
-def platform_fake(fake_slack, fake_teams, fake_telegram, fake_whatsapp):
-    return {
-        SurfacePlatform.SLACK: fake_slack,
-        SurfacePlatform.TEAMS: fake_teams,
-        SurfacePlatform.TELEGRAM: fake_telegram,
-        SurfacePlatform.WHATSAPP: fake_whatsapp,
-    }
-
-
 @pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
 async def test_both_tools_land_and_exactly_one_answer_closes_the_turn(
     platform: SurfacePlatform,
