@@ -103,10 +103,12 @@ export interface StatusCopy {
 /**
  * What a status means for the person reading it.
  *
- * `past_due` is the one that needs care. It is not a lockout: the backend
- * resolves a non-active subscription to free-tier limits, so the honest
- * sentence is that the plan's allowances have stopped, not that anything has
- * been taken away.
+ * `past_due` and `paused` are the pair that needs care, and they are not the
+ * same thing. A failed payment starts a grace window in which the plan keeps
+ * working and the customer is emailed; only when that window closes unpaid does
+ * the subscription pause, and pausing is what actually withdraws the
+ * allowances. Telling a past-due customer they are already on free limits is
+ * both untrue and the wrong thing to make them feel.
  */
 export function describeStatus(
     status: SubscriptionStatus,
@@ -133,7 +135,18 @@ export function describeStatus(
         case "past_due":
             return {
                 label: "Payment failed",
-                detail: "You are on free limits until a payment goes through.",
+                detail:
+                    "Your plan is still running. Update your payment method to " +
+                    "keep it that way.",
+                tone: "attention",
+            };
+        case "paused":
+            return {
+                label: "Paused",
+                detail:
+                    "A payment did not go through, so this plan is paused and " +
+                    "you are on free limits. Paying resumes it — nothing has " +
+                    "been cancelled.",
                 tone: "attention",
             };
         case "cancelled":

@@ -83,13 +83,25 @@ describe("plan price", () => {
 });
 
 describe("status copy", () => {
-    it("describes past_due as a downgrade, not a lockout", () => {
-        // The backend resolves any non-active subscription to free-tier
-        // limits, so nothing is taken away -- the allowances just stop.
+    it("describes past_due as still running, because it is", () => {
         const copy = describeStatus("past_due", null, false);
-        expect(copy.label).toBe("Payment failed");
+
+        // A failed payment starts a grace window; the plan keeps working while
+        // the customer is chased. This test used to assert the opposite -- that
+        // past_due already meant free limits -- which is what `paused` means,
+        // two days later.
+        expect(copy.detail).toContain("still running");
+        expect(copy.detail).not.toContain("free limits");
+    });
+
+    it("describes paused as the point where the allowances actually stop", () => {
+        const copy = describeStatus("paused", null, false);
+
+        expect(copy.label).toBe("Paused");
         expect(copy.detail).toContain("free limits");
-        expect(copy.tone).toBe("attention");
+        // Paying resumes it; nothing was cancelled, and the copy should not
+        // make someone think they have to buy the plan again.
+        expect(copy.detail).toContain("resumes");
     });
 
     it("does not call a pending subscription active", () => {

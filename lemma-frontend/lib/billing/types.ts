@@ -14,9 +14,10 @@ export type PlanType = "PERSONAL" | "TEAM";
 export type SubscriptionStatus =
     | "pending"
     | "active"
+    | "past_due"
+    | "paused"
     | "cancelled"
-    | "expired"
-    | "past_due";
+    | "expired";
 
 export type BillingInvoiceStatus =
     | "draft"
