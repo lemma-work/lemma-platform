@@ -13,6 +13,8 @@ three platforms where ``acknowledge_interaction`` was a no-op.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.authorization.current import reset_current_context, set_current_context
@@ -55,6 +57,19 @@ from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 logger = get_logger(__name__)
 
 # Recent thread/channel messages fetched per run for group-mention continuity.
+
+
+def _authorized_surface_ids(request) -> list[UUID] | None:
+    """The surfaces this verified request may act on, or `None` for all of them.
+
+    A surface-addressed webhook proved exactly one. A platform webhook proved
+    whatever `receiver_surface_ids` names -- for Slack and Teams that is derived
+    from the workspace the signature belongs to, which is the boundary a forged
+    payload cannot cross. `None` survives only where the secret was ours.
+    """
+    if isinstance(request, SurfaceDirectWebhookIngress):
+        return [request.surface_id]
+    return request.receiver_surface_ids
 
 
 class SurfaceInteractionMixin:
@@ -107,11 +122,25 @@ class SurfaceInteractionMixin:
                         clear_actions=True,
                     )
             return True
-        await self.handle_interaction(parsed)
+        await self.handle_interaction(
+            parsed, authorized_surface_ids=_authorized_surface_ids(request)
+        )
         return True
 
-    async def handle_interaction(self, parsed: ParsedSurfaceInteraction) -> None:
+    async def handle_interaction(
+        self,
+        parsed: ParsedSurfaceInteraction,
+        *,
+        authorized_surface_ids: list[UUID] | None = None,
+    ) -> None:
         """Resume a paused ``ask_user`` run from a native answer submission.
+
+        ``authorized_surface_ids`` is what the signature actually proved, and it
+        is the difference between resolving an interaction and resolving
+        *anybody's* interaction. The button carries an unsigned
+        ``conversation_id|tool_call_id``, so without it the id alone decided
+        whose conversation was reached. Defaulted to ``None`` for the callers
+        that genuinely have no receiver list -- see `_within_authorized_scope`.
 
         The submitted values are keyed by question header (the native render uses
         the header as each input's id), so they map straight into
@@ -124,7 +153,9 @@ class SurfaceInteractionMixin:
         try:
             if parsed.action == "retry":
                 tool_call_id = ""
-                delivery = await resolve_current_interaction_delivery(self, parsed)
+                delivery = await resolve_current_interaction_delivery(
+                    self, parsed, authorized_surface_ids=authorized_surface_ids
+                )
             else:
                 target = parse_interaction_target(parsed)
                 if target is None:
@@ -134,6 +165,7 @@ class SurfaceInteractionMixin:
                     self,
                     parsed,
                     conversation_id,
+                    authorized_surface_ids=authorized_surface_ids,
                 )
             if delivery is None:
                 return
