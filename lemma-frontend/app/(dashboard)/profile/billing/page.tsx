@@ -136,7 +136,6 @@ function PersonalBilling() {
                 />
                 <UsageCycleCard
                     subscription={subscription.data}
-                    spentUsd={usage.data?.system_cost_usd ?? undefined}
                     usedPercent={tightestWindow}
                     loading={loadingPlan || usage.isLoading || myLimits.isLoading}
                     usageHref="/profile/usage"

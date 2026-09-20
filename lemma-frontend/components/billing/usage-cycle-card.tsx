@@ -4,39 +4,39 @@ import Link from "next/link";
 
 import { Skeleton } from "@/components/shared/loading";
 import { SettingsPanel, SettingsHelpText } from "@/components/settings/settings-kit";
-import { formatCents, formatDate } from "@/lib/billing/format";
+import { formatDate } from "@/lib/billing/format";
 import type { SubscriptionWithPlan } from "@/lib/billing/types";
 
 /**
- * What has been spent this cycle, and how much of the allowance that is.
+ * How much of this cycle's limit has been used.
  *
- * The dollar figure is `system_cost_usd` from the usage ledger -- only work
- * drawn on Lemma's own keys counts. Anything run on a customer's own provider
- * key is free and is deliberately absent here.
+ * A percentage, and nothing else. Usage is never quantified in money anywhere a
+ * customer reads it: not the allowance, and not the spend against it. What a
+ * plan includes may be retuned and what any one request costs depends on the
+ * model it routes to, so a figure in dollars invites someone to plan against a
+ * number that is neither fixed nor ours to guarantee -- and reading "$3.40
+ * used" prompts exactly the arithmetic we are trying not to promise.
  *
- * Spend is shown in money; the *allowance* never is. This card used to render
- * "$150 included" and measure the bar against it, which is a promise about how
- * much we will give -- and what a plan includes may be retuned, while what any
- * one request costs depends on the model it routes to. `usedPercent` comes from
- * the usage API, which reports a percentage consumed for exactly that reason.
+ * This card has shrunk twice for that reason: first losing "$150 included",
+ * then the "$0 used" headline it was measured against. `usedPercent` comes from
+ * the usage API, which reports a percentage consumed and no dollars at all.
+ *
+ * What is charged -- the plan's price, an invoice total -- is money and stays
+ * money. That is a fact about a transaction, not a promise about usage.
  */
 export function UsageCycleCard({
     subscription,
-    spentUsd,
     usedPercent,
     loading,
     usageHref,
 }: {
     subscription: SubscriptionWithPlan | null | undefined;
-    spentUsd: number | undefined;
     usedPercent: number | null | undefined;
     loading: boolean;
     usageHref: string;
 }) {
-    const currency = subscription?.plan.currency ?? "USD";
     // `null` is an uncapped window, which is a different statement from 0% used.
     const hasAllowance = usedPercent !== null && usedPercent !== undefined;
-    const spentCents = spentUsd === undefined ? undefined : Math.round(spentUsd * 100);
 
     const periodLabel =
         subscription?.current_period_start && subscription.current_period_end
@@ -62,23 +62,14 @@ export function UsageCycleCard({
                 </div>
             ) : (
                 <div className="space-y-3">
-                    <div className="flex flex-wrap items-baseline justify-between gap-2">
-                        <p className="flex items-baseline gap-1.5">
-                            <span className="text-3xl text-[var(--text-primary)] tabular-nums">
-                                {spentCents === undefined
-                                    ? "—"
-                                    : formatCents(spentCents, currency)}
-                            </span>
-                            <span className="text-sm text-[var(--text-tertiary)]">
-                                used
-                            </span>
-                        </p>
-                        {hasAllowance ? (
-                            <span className="text-sm text-[var(--text-tertiary)] tabular-nums">
-                                {Math.round(usedPercent as number)}% of your limit
-                            </span>
-                        ) : null}
-                    </div>
+                    <p className="flex items-baseline gap-1.5">
+                        <span className="text-3xl text-[var(--text-primary)] tabular-nums">
+                            {hasAllowance ? `${Math.round(usedPercent as number)}%` : "—"}
+                        </span>
+                        <span className="text-sm text-[var(--text-tertiary)]">
+                            of your limit used
+                        </span>
+                    </p>
 
                     {hasAllowance ? (
                         <UsageBar usedPercent={usedPercent as number} />

@@ -138,7 +138,6 @@ function OrganizationBilling({ organizationId }: { organizationId: string }) {
                 />
                 <UsageCycleCard
                     subscription={subscription.data}
-                    spentUsd={usage.data?.system_cost_usd ?? undefined}
                     usedPercent={limits.data?.org_monthly?.used_percent}
                     loading={loadingPlan || usage.isLoading || limits.isLoading}
                     usageHref={`/organizations/${organizationId}/settings/usage`}

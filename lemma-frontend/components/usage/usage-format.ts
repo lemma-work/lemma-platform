@@ -1,16 +1,25 @@
 import type { UsageRecord } from "@/lib/types";
 
-export function formatUsageCost(
+/**
+ * One row's share of the period, as a percentage.
+ *
+ * This replaced `formatUsageCost`, which rendered the same number in dollars.
+ * Usage is not quantified in money anywhere a customer reads it: what a plan
+ * includes may be retuned and what any one request costs depends on the model
+ * it routes to, so a dollar figure invites planning against a number that is
+ * neither fixed nor ours to guarantee. A share answers what the page is
+ * actually for -- which model, which activity, which day is using it up --
+ * and stays true however the underlying rate moves.
+ */
+export function formatUsageShare(
   value: number | null | undefined,
-  detailed = false,
+  total: number | null | undefined,
 ): string {
   if (value == null || !Number.isFinite(value)) return "Unavailable";
-  if (!detailed && value > 0 && value < 0.0001) return "<$0.0001";
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: detailed ? 9 : value < 1 ? 4 : 2,
-  }).format(value);
+  if (!total || !Number.isFinite(total) || total <= 0) return "—";
+  const share = (value / total) * 100;
+  if (share > 0 && share < 0.1) return "<0.1%";
+  return `${share.toFixed(share < 10 ? 1 : 0)}%`;
 }
 
 export function formatUsagePercent(value: number, allowed: boolean): string {
@@ -26,9 +35,9 @@ export function usageAccountingLabel(record: UsageRecord): string {
     case "UNCONFIRMED":
       return "Awaiting usage";
     case "UNPRICED":
-      return "Cost unavailable";
+      return "Not yet accounted";
     default:
-      return record.cost_usd == null ? "Cost unavailable" : "Recorded";
+      return record.cost_usd == null ? "Not yet accounted" : "Recorded";
   }
 }
 

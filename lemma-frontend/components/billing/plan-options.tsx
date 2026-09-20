@@ -202,13 +202,16 @@ function PlanCard({
                     disabled={isCurrent || disabled}
                     onClick={onSelect}
                 >
+                    {/* The plan's name is the card's heading directly above
+                        this button, so repeating it here says nothing and, at
+                        "Upgrade to Lemma Team Plus", overflowed the card. */}
                     {isCurrent
                         ? "Current plan"
                         : busy
                           ? "Opening checkout…"
                           : isUpgrade
-                            ? `Upgrade to ${plan.name}`
-                            : `Switch to ${plan.name}`}
+                            ? "Upgrade"
+                            : "Switch to this plan"}
                 </Button>
                 )}
             </div>
