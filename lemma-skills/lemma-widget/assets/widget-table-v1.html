@@ -1,0 +1,311 @@
+<!-- Lemma table widget v1. A table that narrows in place and offers the next
+     question. Replace every uppercase placeholder except __LEMMA_CONFIG__. -->
+<style>
+/* Lemma widget tokens v1 — take this whole block verbatim, like the SDK loader.
+ *
+ * Every name is `var(--lemma-widget-*, <fallback>)`. The fallback is not
+ * decoration: the host delivers the palette by postMessage, so it arrives
+ * AFTER first paint, and it never arrives at all when the widget is opened
+ * standalone — promoted to an app, or followed from a share link. A bare
+ * `var(--lemma-widget-surface)` renders colourless there.
+ *
+ * The fallbacks are Lemma's own stock. The ground is paper, not screen: none
+ * of these neutrals is #ffffff, because a warm white on cream is a different
+ * material and needs no border to be found, where white on grey has to be
+ * outlined to exist. Dark is the same stock under less light.
+ */
+:root {
+  color-scheme: var(--lemma-widget-color-scheme, light);
+
+  /* Ground and surface */
+  --w-canvas:    var(--lemma-widget-bg, #f4f3ed);
+  --w-paper:     var(--lemma-widget-surface, #fffefa);
+  --w-chrome:    var(--lemma-widget-subtle, #ecebe1);
+  --w-raised:    var(--lemma-widget-raised, #f8f6fe);
+
+  /* Ink — three weights of it, and never a fourth */
+  --w-ink:       var(--lemma-widget-text, #20211f);
+  --w-ink-2:     var(--lemma-widget-muted, #55564e);
+  --w-ink-3:     var(--lemma-widget-faint, #6a6b62);
+
+  /* Rules. Translucent, so they modulate whatever they are laid over. */
+  --w-line:      var(--lemma-widget-border, rgb(32 33 31 / 0.05));
+  --w-line-2:    var(--lemma-widget-border-strong, rgb(32 33 31 / 0.10));
+
+  /* The accent means "you can act here". It should appear about four times
+     in a view, not forty. Every fill of it is written in `--w-on-accent`,
+     never in white: on a light accent in dark mode, white measures 1.2:1. */
+  --w-accent:      var(--lemma-widget-accent, #6b4fe0);
+  --w-on-accent:   var(--lemma-widget-on-accent, #fffefa);
+  --w-accent-soft: var(--lemma-widget-accent-soft, rgb(107 79 224 / 0.09));
+  --w-accent-line: var(--lemma-widget-accent-line, rgb(107 79 224 / 0.26));
+
+  /* State does not move with the accent. "Danger" is not a matter of taste,
+     and a status that borrows the accent has said nothing about itself. */
+  --w-ok:        var(--lemma-widget-success, #2f7d57);
+  --w-on-ok:     var(--lemma-widget-on-success, #fffefa);
+  --w-warn:      var(--lemma-widget-warning, #8a5f0f);
+  --w-bad:       var(--lemma-widget-danger, #b3261e);
+  --w-on-bad:    var(--lemma-widget-on-danger, #ffffff);
+  --w-bad-soft:  var(--lemma-widget-danger-soft, #fef2f2);
+  --w-info:      var(--lemma-widget-info, #2563a8);
+
+  /* A categorical ramp, in the host's order. */
+  --w-chart-1:   var(--lemma-widget-chart-1, #6b4fe0);
+  --w-chart-2:   var(--lemma-widget-chart-2, #2563a8);
+  --w-chart-3:   var(--lemma-widget-chart-3, #2f7d57);
+  --w-chart-4:   var(--lemma-widget-chart-4, #b5811f);
+  --w-chart-5:   var(--lemma-widget-chart-5, #6a6b62);
+
+  --w-r-sm:      var(--lemma-widget-radius-sm, 7px);
+  --w-r-md:      var(--lemma-widget-radius-md, 10px);
+  --w-r-lg:      var(--lemma-widget-radius, 14px);
+
+  /* Shadow carries the weight, so a card is an object resting on the page
+     rather than a rectangle someone drew a line around. */
+  --w-depth: var(--lemma-widget-shadow-rest,
+    0 1px 2px rgb(25 23 18 / 0.03), 0 4px 14px rgb(25 23 18 / 0.05), 0 10px 28px rgb(25 23 18 / 0.04));
+  --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.30);
+
+  /* Two faces. Figures take the mono one so columns of them line up and can
+     actually be compared; everything else takes the UI face. */
+  --w-ui:   var(--lemma-widget-font, "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif);
+  --w-mono: var(--lemma-widget-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: var(--lemma-widget-color-scheme, dark);
+    --w-canvas:    var(--lemma-widget-bg, #141310);
+    --w-paper:     var(--lemma-widget-surface, #1e1c17);
+    --w-chrome:    var(--lemma-widget-subtle, #272520);
+    --w-raised:    var(--lemma-widget-raised, #17161f);
+    --w-ink:       var(--lemma-widget-text, #f6f4ec);
+    --w-ink-2:     var(--lemma-widget-muted, #aaa79a);
+    --w-ink-3:     var(--lemma-widget-faint, #8b8878);
+    --w-line:      var(--lemma-widget-border, rgb(246 244 236 / 0.07));
+    --w-line-2:    var(--lemma-widget-border-strong, rgb(246 244 236 / 0.12));
+    --w-accent:      var(--lemma-widget-accent, #a08cff);
+    --w-on-accent:   var(--lemma-widget-on-accent, #1b1a18);
+    --w-accent-soft: var(--lemma-widget-accent-soft, rgb(160 140 255 / 0.14));
+    --w-accent-line: var(--lemma-widget-accent-line, rgb(160 140 255 / 0.32));
+    --w-ok:        var(--lemma-widget-success, #6ecf9c);
+    --w-on-ok:     var(--lemma-widget-on-success, #1b1a18);
+    --w-warn:      var(--lemma-widget-warning, #dcb06a);
+    --w-bad:       var(--lemma-widget-danger, #f08a7e);
+    --w-on-bad:    var(--lemma-widget-on-danger, #2a1512);
+    --w-bad-soft:  var(--lemma-widget-danger-soft, #331919);
+    --w-info:      var(--lemma-widget-info, #7fb4e8);
+    --w-chart-1:   var(--lemma-widget-chart-1, #a08cff);
+    --w-chart-2:   var(--lemma-widget-chart-2, #7fb4e8);
+    --w-chart-3:   var(--lemma-widget-chart-3, #6ecf9c);
+    --w-chart-4:   var(--lemma-widget-chart-4, #dcb06a);
+    --w-chart-5:   var(--lemma-widget-chart-5, #8b8878);
+    --w-depth: var(--lemma-widget-shadow-rest,
+      0 1px 2px rgb(0 0 0 / 0.22), 0 4px 14px rgb(0 0 0 / 0.26), 0 10px 28px rgb(0 0 0 / 0.22));
+    --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  }
+}
+
+/* Shared by every view: the card, the rules, the figures. */
+.w { font: 400 15px/1.5 var(--w-ui); color: var(--w-ink); display: block; }
+.w *, .w *::before, .w *::after { box-sizing: border-box; }
+.w [hidden] { display: none !important; }
+.w-card { background: var(--w-paper); border-radius: var(--w-r-lg); box-shadow: var(--w-depth), var(--w-lit); padding: 20px 22px; }
+/* Weight never exceeds 500. Hierarchy comes from size and the space above. */
+.w h2, .w h3 { margin: 0; font-weight: 500; letter-spacing: -0.025em; }
+.w-kicker { margin: 0 0 10px; font: 400 11px/1 var(--w-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--w-ink-3); }
+.w-num { font-family: var(--w-mono); font-variant-numeric: tabular-nums; }
+.w-state { padding: 18px; border-radius: var(--w-r-md); background: var(--w-chrome); color: var(--w-ink-2); text-align: center; font-size: 14px; }
+.w-state[data-kind="error"] { background: var(--w-bad-soft); color: var(--w-bad); }
+/* Nothing is offered that cannot be acted on, and the fill takes its own ink. */
+.w-ask { padding: 8px 15px; border: 0; border-radius: 999px; background: var(--w-accent); color: var(--w-on-accent); font: 400 13.5px/1 var(--w-ui); cursor: pointer; }
+.w-ask:hover { filter: brightness(1.07); }
+
+  /* ── this view ─────────────────────────────────────────────── */
+  .wt__head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .wt__head h2 { font-size: 19px; }
+  .wt__hint { font-size: 13px; color: var(--w-ink-3); white-space: nowrap; }
+  .wt__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .wt__chip { padding: 4px 11px; border: 1px solid var(--w-line-2); border-radius: 999px; background: transparent; color: var(--w-ink-2); font: 400 12.5px/1.2 var(--w-ui); cursor: pointer; }
+  .wt__chip[aria-pressed="true"] { background: var(--w-accent-soft); border-color: var(--w-accent-line); color: var(--w-accent); }
+  /* Hairlines, not boxes. Twelve bordered pills is twelve things competing to
+     be looked at; ruled rows in one card is a table you can read down. */
+  .wt__table { width: 100%; margin-top: 15px; border-collapse: collapse; }
+  .wt__table th { padding: 0 0 9px; border: 0; font: 400 10.5px/1 var(--w-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--w-ink-3); text-align: left; }
+  .wt__table td { padding: 11px 0; border-top: 1px solid var(--w-line-2); vertical-align: baseline; }
+  .wt__table th.r, .wt__table td.r { text-align: right; }
+  .wt__title { display: block; max-width: 40ch; overflow: hidden; font-size: 14.5px; text-overflow: ellipsis; white-space: nowrap; }
+  .wt__sub { display: block; margin-top: 2px; font-size: 12.5px; color: var(--w-ink-3); }
+  .wt__age { font: 400 13px/1 var(--w-mono); font-variant-numeric: tabular-nums; color: var(--w-ink-2); }
+  .wt__status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--w-ink-2); white-space: nowrap; }
+  .wt__status s { width: 6px; height: 6px; flex: none; border-radius: 999px; }
+  .wt__foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; margin-top: 16px; }
+  .wt__count { font-size: 13px; color: var(--w-ink-3); }
+  .wt__count b { font: 500 13px/1 var(--w-mono); font-variant-numeric: tabular-nums; color: var(--w-ink-2); }
+  @media (max-width: 460px) { .wt__sub, .wt__hint { display: none; } .wt__title { max-width: 22ch; } }
+</style>
+
+<section class="w" data-lemma-widget-version="1">
+  <header class="wt__head">
+    <h2>__WIDGET_TITLE__</h2>
+    <span class="wt__hint">oldest first</span>
+  </header>
+  <div id="wt-chips" class="wt__chips"></div>
+  <div id="wt-state" class="w-state" style="margin-top:15px">Loading…</div>
+  <table id="wt-table" class="wt__table" hidden>
+    <thead><tr><th>__WIDGET_NOUN__</th><th class="r">Age</th><th class="r">__STATUS_FIELD__</th></tr></thead>
+    <tbody id="wt-rows"></tbody>
+  </table>
+  <div class="wt__foot">
+    <span id="wt-count" class="wt__count"></span>
+    <button id="wt-ask" class="w-ask" hidden></button>
+  </div>
+</section>
+
+<script>
+  (function () {
+    var ROWS = 12;
+    var stateEl = document.getElementById("wt-state");
+    var tableEl = document.getElementById("wt-table");
+    var rowsEl = document.getElementById("wt-rows");
+    var chipsEl = document.getElementById("wt-chips");
+    var countEl = document.getElementById("wt-count");
+    var askEl = document.getElementById("wt-ask");
+    var client = null;
+    var groups = [];
+    var active = null;
+
+    function fail(message) {
+      stateEl.hidden = false; stateEl.dataset.kind = "error";
+      stateEl.textContent = message || "Unable to load."; tableEl.hidden = true;
+    }
+    // Separate from `fail` for its wording, not its styling: the widget is a
+    // cross-site iframe and the browser SDK authenticates by cookie, which some
+    // browsers withhold. The person is usually signed in — do not say otherwise.
+    function notice(message) {
+      stateEl.hidden = false; delete stateEl.dataset.kind;
+      stateEl.textContent = message; tableEl.hidden = true;
+    }
+    function num(value) { return new Intl.NumberFormat().format(Number(value) || 0); }
+    function esc(value) { var n = document.createElement("span"); n.textContent = value == null ? "" : value; return n.innerHTML; }
+    // A value read out of the data and put back into SQL. Doubling the quote is
+    // the whole of it, and leaving it out is how a title with an apostrophe
+    // becomes a syntax error in front of the person who asked.
+    function sql(value) { return String(value).replace(/'/g, "''"); }
+
+    var MEANING = {
+      ok: /^(done|closed|resolved|complete|completed|shipped|passed|active|healthy)$/i,
+      bad: /^(blocked|failed|error|rejected|cancelled|canceled|overdue|down)$/i,
+      warn: /^(waiting|pending|review|in.?review|paused|stalled|at.?risk|queued)$/i,
+      info: /^(open|new|todo|to.?do|backlog|draft|in.?progress|running)$/i
+    };
+    function colour(key, index) {
+      for (var name in MEANING) if (MEANING[name].test(String(key))) return "var(--w-" + name + ")";
+      return "var(--w-chart-" + ((index % 5) + 1) + ")";
+    }
+
+    // A figure with no direction is trivia. Days are what a person actually
+    // compares, so the raw timestamp never reaches the column.
+    function age(value) {
+      var when = value ? new Date(value) : null;
+      if (!when || isNaN(when.getTime())) return "";
+      var days = Math.floor((Date.now() - when.getTime()) / 86400000);
+      if (days < 1) return "today";
+      if (days < 365) return days + "d";
+      return Math.floor(days / 365) + "y";
+    }
+
+    function total() {
+      return groups.reduce(function (running, row) { return running + (Number(row.group_count) || 0); }, 0);
+    }
+
+    function drawChips() {
+      chipsEl.innerHTML = "";
+      [{ group_key: null, group_count: total() }].concat(groups).forEach(function (row, index) {
+        var chip = document.createElement("button");
+        chip.className = "wt__chip";
+        chip.type = "button";
+        chip.setAttribute("aria-pressed", String(row.group_key === active));
+        chip.textContent = (row.group_key == null ? "All" : String(row.group_key)) + "  " + num(row.group_count);
+        chip.onclick = function () { active = row.group_key; drawChips(); load(); };
+        chipsEl.appendChild(chip);
+        if (index === 0) chip.style.order = "-1";
+      });
+    }
+
+    function drawRows(rows, matched) {
+      if (!rows.length) { notice("Nothing here" + (active ? " in " + active + "." : " yet.")); countEl.textContent = ""; return; }
+      rowsEl.innerHTML = rows.map(function (row, index) {
+        var status = row.__STATUS_FIELD__;
+        return "<tr><td><span class='wt__title'>" + esc(row.__TITLE_FIELD__ || "Untitled") + "</span>" +
+          "<span class='wt__sub'>" + esc(row.__SUBTITLE_FIELD__) + "</span></td>" +
+          "<td class='r'><span class='wt__age'>" + esc(age(row.__DATE_FIELD__)) + "</span></td>" +
+          "<td class='r'><span class='wt__status'><s style='background:" + colour(status, index) + "'></s>" +
+          esc(status) + "</span></td></tr>";
+      }).join("");
+      tableEl.hidden = false; stateEl.hidden = true;
+
+      // `datastore.query`'s `total` counts rows RETURNED, not rows matched, so
+      // the honest denominator is the group count — which came from a COUNT(*)
+      // over the whole table — and never the length of this page.
+      countEl.innerHTML = "Showing <b>" + num(rows.length) + "</b> of <b>" + num(matched) + "</b>" +
+        (active ? " " + esc(active) : "") + " · <b>" + num(total()) + "</b> in the table";
+    }
+
+    function offer() {
+      var api = window.LemmaClient || {};
+      // Checked before the button is drawn, not inside it: an app opened from a
+      // share link has no conversation anywhere near it, and a button that
+      // quietly does nothing is worse than one that was never there.
+      if (typeof api.canComposeInConversation !== "function" || !api.canComposeInConversation()) return;
+      askEl.textContent = "__COMPOSE_LABEL__";
+      askEl.hidden = false;
+      // Written as the person's own words, because it lands in their composer
+      // for them to send, edit or ignore — it is never sent from here.
+      askEl.onclick = function () { api.composeInConversation("__COMPOSE_TEXT__"); };
+    }
+
+    async function load() {
+      try {
+        var where = active == null ? "" : " where __STATUS_FIELD__ = '" + sql(active) + "'";
+        var response = await client.datastore.query(
+          "select __TITLE_FIELD__, __SUBTITLE_FIELD__, __STATUS_FIELD__, __DATE_FIELD__" +
+          " from __TABLE_NAME__" + where +
+          " order by __DATE_FIELD__ asc limit " + ROWS
+        );
+        var matched = active == null
+          ? total()
+          : (groups.filter(function (row) { return String(row.group_key) === String(active); })[0] || {}).group_count || 0;
+        drawRows((response && response.items) || [], matched);
+      } catch (error) { fail(error && error.message); }
+    }
+
+    async function boot() {
+      try {
+        client = new window.LemmaClient.LemmaClient();
+        var auth = await client.initialize();
+        if (!auth || auth.status !== "authenticated") {
+          notice("This view can't load pod data in this browser."); return;
+        }
+        var counts = await client.datastore.query(
+          "select __STATUS_FIELD__ as group_key, count(*) as group_count" +
+          " from __TABLE_NAME__ group by __STATUS_FIELD__ order by group_count desc"
+        );
+        groups = (counts && counts.items) || [];
+        active = "__DEFAULT_FILTER__" || null;
+        drawChips();
+        offer();
+        await load();
+      } catch (error) { fail(error && error.message); }
+    }
+
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    if (!cfg.apiUrl) { fail("Lemma runtime configuration is unavailable."); return; }
+    var sdk = document.createElement("script");
+    sdk.src = cfg.apiUrl.replace(/\/$/, "") + "/public/sdk/lemma-client.js";
+    sdk.onload = boot;
+    sdk.onerror = function () { fail("Could not load the Lemma browser SDK."); };
+    document.head.appendChild(sdk);
+  })();
+</script>

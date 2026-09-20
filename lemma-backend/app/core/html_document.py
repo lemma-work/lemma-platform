@@ -20,42 +20,56 @@ import re
 _FULL_DOC_RE = re.compile(r"<!doctype|<html[\s>]|<body[\s>]", re.IGNORECASE)
 
 # Keeps an in-conversation iframe integrated with its host: reports rendered height
-# and accepts a narrow, presentation-only ``--lemma-widget-*`` theme payload. The
-# bridge is kept out of promoted standalone apps, whose starter fallbacks remain
-# system-theme aware on their own.
+# and applies the host's ``--lemma-widget-*`` theme payload. The bridge is kept out
+# of promoted standalone apps, whose fallbacks remain system-theme aware on their own.
+#
+# The theme is taken by PREFIX rather than from a list of names. A curated list was
+# a guess at what a widget would ever want to draw, and it guessed low: the host
+# frontends send state colours, the ink for an accent fill, soft accents and the
+# corner scale, and every one of them was dropped on the floor here. So a widget
+# could not paint a green "done" or an amber "waiting" and had to reach for the
+# accent, which is why every status in every widget came out the same colour. What
+# is left is the part that is about soundness rather than taste: this is a style
+# sink, so a value carrying CSS syntax is refused, and the payload is bounded.
 _HEIGHT_BRIDGE = """
     <script data-lemma-embed-bridge>
       (function () {
-        var themeTokens = [
-          "--lemma-widget-bg", "--lemma-widget-surface", "--lemma-widget-subtle",
-          "--lemma-widget-text", "--lemma-widget-muted", "--lemma-widget-border",
-          "--lemma-widget-accent", "--lemma-widget-danger",
-          "--lemma-widget-danger-soft", "--lemma-widget-radius",
-          "--lemma-widget-font", "--lemma-widget-color-scheme",
-          "--lemma-widget-chart-1", "--lemma-widget-chart-2",
-          "--lemma-widget-chart-3", "--lemma-widget-chart-4",
-          "--lemma-widget-chart-5"
-        ];
+        var TOKEN = /^--lemma-widget-[a-z0-9-]+$/;
+        // A value goes straight into a style declaration, so anything that could
+        // close it and start another is not a colour. `event.source !== parent`
+        // already establishes the sender is the host; this is the seatbelt.
+        var UNSAFE = /[;{}<>]|url\\(|@import|expression\\(/i;
+        var MAX_TOKENS = 100;
+        var last = -1;
         var post = function () {
-          // No floor here. `min-height` used to sit on html/body, which made the
-          // document always as tall as the frame the host had already sized —
-          // so this measured the host's own guess and a short widget could
-          // never shrink below it. The host clamps the low end; this reports
-          // what the content actually is.
-          var h = Math.max(
-            document.documentElement.scrollHeight || 0,
-            document.body ? document.body.scrollHeight : 0
-          );
+          var body = document.body;
+          if (!body) return;
+          // The BODY, never `documentElement.scrollHeight`. That one reports the
+          // scrolling area, which the spec clamps to the viewport — so it hands
+          // back whatever height the host just gave the frame, and the widget
+          // ratchets upward and can never shrink. Removing `min-height` was read
+          // as a fix for this and was not: the clamp is in scrollHeight itself.
+          var h = Math.ceil(Math.max(
+            body.getBoundingClientRect().height || 0,
+            body.scrollHeight || 0
+          ));
+          // Nothing is learned by re-sending the same number, and a zero before
+          // first layout would collapse the frame.
+          if (h <= 0 || h === last) return;
+          last = h;
           parent.postMessage({ type: "lemma-widget-height", height: h }, "*");
         };
         window.addEventListener("message", function (event) {
           if (event.source !== parent || !event.data || event.data.type !== "lemma-widget-theme") return;
           var values = event.data.tokens || {};
-          themeTokens.forEach(function (name) {
+          var applied = 0;
+          Object.keys(values).forEach(function (name) {
+            if (applied >= MAX_TOKENS || !TOKEN.test(name)) return;
             var value = values[name];
-            if (typeof value === "string" && value.length > 0 && value.length <= 500) {
-              document.documentElement.style.setProperty(name, value);
-            }
+            if (typeof value !== "string" || !value.length || value.length > 512) return;
+            if (UNSAFE.test(value)) return;
+            document.documentElement.style.setProperty(name, value);
+            applied++;
           });
           var theme = event.data.theme;
           if (theme === "light" || theme === "dark") {
@@ -65,7 +79,7 @@ _HEIGHT_BRIDGE = """
           post();
         });
         window.addEventListener("load", post);
-        try { new ResizeObserver(post).observe(document.documentElement); } catch (e) {}
+        try { new ResizeObserver(post).observe(document.body); } catch (e) {}
         post();
       })();
     </script>"""

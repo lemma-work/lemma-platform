@@ -1,0 +1,264 @@
+<!-- Lemma record widget v1. One record as a subject, not a form.
+     Replace every uppercase placeholder except __LEMMA_CONFIG__. -->
+<style>
+/* Lemma widget tokens v1 — take this whole block verbatim, like the SDK loader.
+ *
+ * Every name is `var(--lemma-widget-*, <fallback>)`. The fallback is not
+ * decoration: the host delivers the palette by postMessage, so it arrives
+ * AFTER first paint, and it never arrives at all when the widget is opened
+ * standalone — promoted to an app, or followed from a share link. A bare
+ * `var(--lemma-widget-surface)` renders colourless there.
+ *
+ * The fallbacks are Lemma's own stock. The ground is paper, not screen: none
+ * of these neutrals is #ffffff, because a warm white on cream is a different
+ * material and needs no border to be found, where white on grey has to be
+ * outlined to exist. Dark is the same stock under less light.
+ */
+:root {
+  color-scheme: var(--lemma-widget-color-scheme, light);
+
+  /* Ground and surface */
+  --w-canvas:    var(--lemma-widget-bg, #f4f3ed);
+  --w-paper:     var(--lemma-widget-surface, #fffefa);
+  --w-chrome:    var(--lemma-widget-subtle, #ecebe1);
+  --w-raised:    var(--lemma-widget-raised, #f8f6fe);
+
+  /* Ink — three weights of it, and never a fourth */
+  --w-ink:       var(--lemma-widget-text, #20211f);
+  --w-ink-2:     var(--lemma-widget-muted, #55564e);
+  --w-ink-3:     var(--lemma-widget-faint, #6a6b62);
+
+  /* Rules. Translucent, so they modulate whatever they are laid over. */
+  --w-line:      var(--lemma-widget-border, rgb(32 33 31 / 0.05));
+  --w-line-2:    var(--lemma-widget-border-strong, rgb(32 33 31 / 0.10));
+
+  /* The accent means "you can act here". It should appear about four times
+     in a view, not forty. Every fill of it is written in `--w-on-accent`,
+     never in white: on a light accent in dark mode, white measures 1.2:1. */
+  --w-accent:      var(--lemma-widget-accent, #6b4fe0);
+  --w-on-accent:   var(--lemma-widget-on-accent, #fffefa);
+  --w-accent-soft: var(--lemma-widget-accent-soft, rgb(107 79 224 / 0.09));
+  --w-accent-line: var(--lemma-widget-accent-line, rgb(107 79 224 / 0.26));
+
+  /* State does not move with the accent. "Danger" is not a matter of taste,
+     and a status that borrows the accent has said nothing about itself. */
+  --w-ok:        var(--lemma-widget-success, #2f7d57);
+  --w-on-ok:     var(--lemma-widget-on-success, #fffefa);
+  --w-warn:      var(--lemma-widget-warning, #8a5f0f);
+  --w-bad:       var(--lemma-widget-danger, #b3261e);
+  --w-on-bad:    var(--lemma-widget-on-danger, #ffffff);
+  --w-bad-soft:  var(--lemma-widget-danger-soft, #fef2f2);
+  --w-info:      var(--lemma-widget-info, #2563a8);
+
+  /* A categorical ramp, in the host's order. */
+  --w-chart-1:   var(--lemma-widget-chart-1, #6b4fe0);
+  --w-chart-2:   var(--lemma-widget-chart-2, #2563a8);
+  --w-chart-3:   var(--lemma-widget-chart-3, #2f7d57);
+  --w-chart-4:   var(--lemma-widget-chart-4, #b5811f);
+  --w-chart-5:   var(--lemma-widget-chart-5, #6a6b62);
+
+  --w-r-sm:      var(--lemma-widget-radius-sm, 7px);
+  --w-r-md:      var(--lemma-widget-radius-md, 10px);
+  --w-r-lg:      var(--lemma-widget-radius, 14px);
+
+  /* Shadow carries the weight, so a card is an object resting on the page
+     rather than a rectangle someone drew a line around. */
+  --w-depth: var(--lemma-widget-shadow-rest,
+    0 1px 2px rgb(25 23 18 / 0.03), 0 4px 14px rgb(25 23 18 / 0.05), 0 10px 28px rgb(25 23 18 / 0.04));
+  --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.30);
+
+  /* Two faces. Figures take the mono one so columns of them line up and can
+     actually be compared; everything else takes the UI face. */
+  --w-ui:   var(--lemma-widget-font, "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif);
+  --w-mono: var(--lemma-widget-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: var(--lemma-widget-color-scheme, dark);
+    --w-canvas:    var(--lemma-widget-bg, #141310);
+    --w-paper:     var(--lemma-widget-surface, #1e1c17);
+    --w-chrome:    var(--lemma-widget-subtle, #272520);
+    --w-raised:    var(--lemma-widget-raised, #17161f);
+    --w-ink:       var(--lemma-widget-text, #f6f4ec);
+    --w-ink-2:     var(--lemma-widget-muted, #aaa79a);
+    --w-ink-3:     var(--lemma-widget-faint, #8b8878);
+    --w-line:      var(--lemma-widget-border, rgb(246 244 236 / 0.07));
+    --w-line-2:    var(--lemma-widget-border-strong, rgb(246 244 236 / 0.12));
+    --w-accent:      var(--lemma-widget-accent, #a08cff);
+    --w-on-accent:   var(--lemma-widget-on-accent, #1b1a18);
+    --w-accent-soft: var(--lemma-widget-accent-soft, rgb(160 140 255 / 0.14));
+    --w-accent-line: var(--lemma-widget-accent-line, rgb(160 140 255 / 0.32));
+    --w-ok:        var(--lemma-widget-success, #6ecf9c);
+    --w-on-ok:     var(--lemma-widget-on-success, #1b1a18);
+    --w-warn:      var(--lemma-widget-warning, #dcb06a);
+    --w-bad:       var(--lemma-widget-danger, #f08a7e);
+    --w-on-bad:    var(--lemma-widget-on-danger, #2a1512);
+    --w-bad-soft:  var(--lemma-widget-danger-soft, #331919);
+    --w-info:      var(--lemma-widget-info, #7fb4e8);
+    --w-chart-1:   var(--lemma-widget-chart-1, #a08cff);
+    --w-chart-2:   var(--lemma-widget-chart-2, #7fb4e8);
+    --w-chart-3:   var(--lemma-widget-chart-3, #6ecf9c);
+    --w-chart-4:   var(--lemma-widget-chart-4, #dcb06a);
+    --w-chart-5:   var(--lemma-widget-chart-5, #8b8878);
+    --w-depth: var(--lemma-widget-shadow-rest,
+      0 1px 2px rgb(0 0 0 / 0.22), 0 4px 14px rgb(0 0 0 / 0.26), 0 10px 28px rgb(0 0 0 / 0.22));
+    --w-lit: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  }
+}
+
+/* Shared by every view: the card, the rules, the figures. */
+.w { font: 400 15px/1.5 var(--w-ui); color: var(--w-ink); display: block; }
+.w *, .w *::before, .w *::after { box-sizing: border-box; }
+.w [hidden] { display: none !important; }
+.w-card { background: var(--w-paper); border-radius: var(--w-r-lg); box-shadow: var(--w-depth), var(--w-lit); padding: 20px 22px; }
+/* Weight never exceeds 500. Hierarchy comes from size and the space above. */
+.w h2, .w h3 { margin: 0; font-weight: 500; letter-spacing: -0.025em; }
+.w-kicker { margin: 0 0 10px; font: 400 11px/1 var(--w-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--w-ink-3); }
+.w-num { font-family: var(--w-mono); font-variant-numeric: tabular-nums; }
+.w-state { padding: 18px; border-radius: var(--w-r-md); background: var(--w-chrome); color: var(--w-ink-2); text-align: center; font-size: 14px; }
+.w-state[data-kind="error"] { background: var(--w-bad-soft); color: var(--w-bad); }
+/* Nothing is offered that cannot be acted on, and the fill takes its own ink. */
+.w-ask { padding: 8px 15px; border: 0; border-radius: 999px; background: var(--w-accent); color: var(--w-on-accent); font: 400 13.5px/1 var(--w-ui); cursor: pointer; }
+.w-ask:hover { filter: brightness(1.07); }
+
+  /* ── this view ─────────────────────────────────────────────── */
+  .wr__top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+  .wr__top h2 { max-width: 28ch; font-size: 21px; line-height: 1.25; }
+  .wr__tag { flex: none; padding: 5px 11px; border: 1px solid var(--w-line-2); border-radius: 999px; font-size: 12.5px; color: var(--w-ink-2); white-space: nowrap; }
+  /* Facts on one line, not a grid of boxed cells. A record has a handful of
+     them and they are read across, the way a caption is read. */
+  .wr__facts { display: flex; flex-wrap: wrap; gap: 14px 34px; margin: 19px 0 0; }
+  .wr__facts dt { margin: 0 0 4px; font: 400 10.5px/1 var(--w-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--w-ink-3); }
+  .wr__facts dd { margin: 0; font-size: 14.5px; overflow-wrap: anywhere; }
+  .wr__facts dd.n { font: 400 13.5px/1.4 var(--w-mono); font-variant-numeric: tabular-nums; }
+  /* What has happened to it, which is the question a record usually raises and
+     a key-value grid can never answer. */
+  .wr__when { margin: 20px 0 0; padding: 16px 0 0; border-top: 1px solid var(--w-line-2); list-style: none; }
+  .wr__when li { position: relative; display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: baseline; padding: 7px 0; }
+  .wr__when s { position: relative; width: 5px; height: 5px; margin-top: 7px; border-radius: 999px; background: var(--w-line-2); }
+  .wr__when s::after { content: ""; position: absolute; left: 2px; top: 9px; width: 1px; height: 22px; background: var(--w-line-2); }
+  .wr__when li:last-child s::after { display: none; }
+  .wr__when li:first-child s { background: var(--w-accent); }
+  .wr__when p { margin: 0; font-size: 14px; color: var(--w-ink-2); }
+  .wr__when time { font: 400 12px/1 var(--w-mono); color: var(--w-ink-3); white-space: nowrap; }
+  .wr__foot { display: flex; justify-content: flex-end; margin-top: 16px; }
+  @media (max-width: 420px) { .wr__top { display: block; } .wr__tag { display: inline-block; margin-top: 9px; } }
+</style>
+
+<section class="w" data-lemma-widget-version="1">
+  <div id="wr-state" class="w-state">Loading…</div>
+  <article id="wr-card" class="w-card" hidden>
+    <div class="wr__top">
+      <h2 id="wr-title"></h2>
+      <span id="wr-tag" class="wr__tag" hidden></span>
+    </div>
+    <dl id="wr-facts" class="wr__facts"></dl>
+    <ul id="wr-when" class="wr__when" hidden></ul>
+    <div class="wr__foot"><button id="wr-ask" class="w-ask" hidden></button></div>
+  </article>
+</section>
+
+<script>
+  (function () {
+    var stateEl = document.getElementById("wr-state");
+    var cardEl = document.getElementById("wr-card");
+
+    function fail(message) {
+      stateEl.hidden = false; stateEl.dataset.kind = "error";
+      stateEl.textContent = message || "Unable to load this record."; cardEl.hidden = true;
+    }
+    // Not an error: a cross-site iframe whose cookie the browser withheld. The
+    // person is usually signed in, so this does not tell them to sign in.
+    function notice(message) {
+      stateEl.hidden = false; delete stateEl.dataset.kind;
+      stateEl.textContent = message; cardEl.hidden = true;
+    }
+    function esc(value) { var n = document.createElement("span"); n.textContent = value == null ? "—" : value; return n.innerHTML; }
+    // A record may arrive flat or wrapped in `data`; both are normal.
+    function field(row, key) {
+      return row && row.data && row.data[key] != null ? row.data[key] : row && row[key];
+    }
+    function when(value) {
+      var at = value ? new Date(value) : null;
+      if (!at || isNaN(at.getTime())) return null;
+      var days = Math.floor((Date.now() - at.getTime()) / 86400000);
+      return { at: at, days: days, said: days < 1 ? "today" : days === 1 ? "yesterday" : days + "d ago" };
+    }
+
+    var MEANING = {
+      ok: /^(done|closed|resolved|complete|completed|shipped|passed|active|healthy)$/i,
+      bad: /^(blocked|failed|error|rejected|cancelled|canceled|overdue|down)$/i,
+      warn: /^(waiting|pending|review|in.?review|paused|stalled|at.?risk|queued)$/i,
+      info: /^(open|new|todo|to.?do|backlog|draft|in.?progress|running)$/i
+    };
+
+    function render(row) {
+      document.getElementById("wr-title").textContent = field(row, "__TITLE_FIELD__") || "Untitled";
+
+      var status = field(row, "__STATUS_FIELD__");
+      if (status != null) {
+        var tag = document.getElementById("wr-tag");
+        tag.textContent = String(status);
+        for (var name in MEANING) if (MEANING[name].test(String(status))) {
+          // The tag takes the state's own colour, softly: a filled pill would
+          // be the loudest thing on a card whose subject is the title.
+          tag.style.color = "var(--w-" + name + ")";
+          tag.style.borderColor = "currentColor";
+          tag.style.opacity = "0.9";
+        }
+        tag.hidden = false;
+      }
+
+      document.getElementById("wr-facts").innerHTML = __FIELD_CONFIG__.map(function (item) {
+        var value = field(row, item.field);
+        var numeric = typeof value === "number" || (value != null && /^[\d\s.,:/-]+$/.test(String(value)));
+        return "<div><dt>" + esc(item.label) + "</dt><dd" + (numeric ? " class='n'" : "") + ">" + esc(value) + "</dd></div>";
+      }).join("");
+
+      // Built from the record's own date columns rather than a second query:
+      // whatever the agent listed, newest first, and anything unparseable is
+      // left out rather than printed as "Invalid Date".
+      var events = __TIMELINE_CONFIG__.map(function (item) {
+        var moment = when(field(row, item.field));
+        return moment ? { label: item.label, moment: moment } : null;
+      }).filter(Boolean).sort(function (a, b) { return b.moment.at - a.moment.at; });
+
+      if (events.length) {
+        document.getElementById("wr-when").innerHTML = events.map(function (event) {
+          return "<li><s></s><p>" + esc(event.label) + "</p><time>" + esc(event.moment.said) + "</time></li>";
+        }).join("");
+        document.getElementById("wr-when").hidden = false;
+      }
+
+      var api = window.LemmaClient || {};
+      if (typeof api.canComposeInConversation === "function" && api.canComposeInConversation()) {
+        var ask = document.getElementById("wr-ask");
+        ask.textContent = "__COMPOSE_LABEL__";
+        ask.hidden = false;
+        ask.onclick = function () { api.composeInConversation("__COMPOSE_TEXT__"); };
+      }
+
+      cardEl.hidden = false; stateEl.hidden = true;
+    }
+
+    async function boot() {
+      try {
+        var client = new window.LemmaClient.LemmaClient();
+        var auth = await client.initialize();
+        if (!auth || auth.status !== "authenticated") {
+          notice("This view can't load pod data in this browser."); return;
+        }
+        render(await client.records.get("__TABLE_NAME__", "__RECORD_ID__"));
+      } catch (error) { fail(error && error.message); }
+    }
+
+    var cfg = window.__LEMMA_CONFIG__ || {};
+    if (!cfg.apiUrl) { fail("Lemma runtime configuration is unavailable."); return; }
+    var sdk = document.createElement("script");
+    sdk.src = cfg.apiUrl.replace(/\/$/, "") + "/public/sdk/lemma-client.js";
+    sdk.onload = boot;
+    sdk.onerror = function () { fail("Could not load the Lemma browser SDK."); };
+    document.head.appendChild(sdk);
+  })();
+</script>

@@ -46,4 +46,31 @@ describe('buildWidgetThemeMessage', () => {
         });
         expect(message.tokens['--lemma-widget-muted']).toBeUndefined();
     });
+
+    it('sends the chart ramp, not brand hues with a status colour standing in', () => {
+        // `--state-success` as "series 3" steals a meaning — a green bar that
+        // encodes nothing still reads as "good" — and leaves the categorical set
+        // without a step chosen to separate from its neighbours.
+        const values: Record<string, string> = {
+            '--chart-1': '#795bce',
+            '--chart-3': '#b95400',
+            '--state-success': '#1f9254',
+            '--font-mono': 'IBM Plex Mono, monospace',
+            '--shadow-md': '0 4px 14px rgb(0 0 0 / 0.05)',
+        };
+        const message = buildWidgetThemeMessage({
+            theme: 'light',
+            readToken: (name) => values[name] || '',
+            fontFamily: 'Inter, sans-serif',
+        });
+
+        expect(message.tokens['--lemma-widget-chart-1']).toBe('#795bce');
+        expect(message.tokens['--lemma-widget-chart-3']).toBe('#b95400');
+        expect(message.tokens['--lemma-widget-chart-3']).not.toBe(values['--state-success']);
+        expect(message.tokens['--lemma-widget-font-mono']).toBe('IBM Plex Mono, monospace');
+        expect(message.tokens['--lemma-widget-shadow-rest']).toBe('0 4px 14px rgb(0 0 0 / 0.05)');
+        // This frontend has no token for the ink that goes on a fill, and a
+        // guessed one is worse than none.
+        expect(message.tokens['--lemma-widget-on-accent']).toBeUndefined();
+    });
 });
