@@ -286,6 +286,7 @@ async def offer_workspace_choice(
             uow,
             user_id=verified_user_id,
             platform=event.platform,
+            parsed=event,
             system_credentials_only=transport.surface is None,
         ):
             return None

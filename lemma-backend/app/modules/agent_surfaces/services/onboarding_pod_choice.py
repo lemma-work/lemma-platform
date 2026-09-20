@@ -18,16 +18,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import select
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.domain.entities import SurfacePlatform
-from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
-    SqlAlchemySurfaceRoutingResolutionAdapter,
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    SurfaceRepository,
 )
-from app.modules.agent_surfaces.infrastructure.models import AgentSurface
-from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
-    routing_surfaces,
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
 )
 from app.modules.identity.contracts.organizations import (
     organization_member_ids_for_user,
@@ -163,42 +161,30 @@ async def has_somewhere_to_talk(
     *,
     user_id: UUID,
     platform: SurfacePlatform,
+    parsed: ParsedInboundSurfaceEvent,
     system_credentials_only: bool,
 ) -> bool:
-    """Is there any live surface on this platform in a pod this person is in?
+    """Whether routing would find this person somewhere on this platform.
 
-    The same question routing asks first, and only that one. Routing then picks
-    among what comes back -- saved default, then continuity, then a
-    deterministic tiebreak -- and choosing is none of this module's business.
-    What matters here is the empty case: no candidate at all is the one state
-    routing cannot answer, and the one worth interrupting someone to fix.
+    Delegated rather than answered here. Routing already decides this on every
+    inbound message -- membership, then a saved default, then continuity, then a
+    tiebreak -- and a second implementation of the same question is how the two
+    came to disagree. The only state routing cannot answer is having no
+    candidate at all, and that is the one worth interrupting somebody for.
 
-    `system_credentials_only` matches how the transport narrowed the same
-    lookup: a message on the shared bot can only be served by a system-
-    credential surface, while one on a company's own installation is not
-    restricted that way. Getting this wrong in the permissive direction would
-    interrupt people who route perfectly well; in the strict direction it would
-    miss the ones who do not.
+    The candidate read is the one ingestion performs on every inbound message
+    anyway, so for the message that reaches here it happens twice. That is the
+    price of the two paths agreeing, and it is paid once per sender: from the
+    next message on, this person has a route and never reaches this function.
     """
-    pod_ids = await SqlAlchemySurfaceRoutingResolutionAdapter(uow).get_user_pod_ids(
-        user_id
+    from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
+
+    candidates = await SurfaceRepository(uow).list_active_for_routing(
+        platform.value, system_credentials_only=system_credentials_only
     )
-    if not pod_ids:
-        return False
-    # EXISTS over the routing predicate, narrowed by this person's pods, rather
-    # than reading every system surface of the platform in the deployment and
-    # filtering in Python. The answer is one boolean and the list grows with
-    # every provisioned user, so it has no business crossing the wire -- and
-    # this reuses `routing_surfaces`, so it cannot drift from what routing
-    # counts as live.
-    return bool(
-        await uow.session.scalar(
-            select(
-                routing_surfaces(
-                    platform.value, system_credentials_only=system_credentials_only
-                )
-                .where(AgentSurface.pod_id.in_(pod_ids))
-                .exists()
-            )
-        )
+    return await get_surface_event_handler(uow).can_reach_a_surface(
+        candidates=candidates,
+        user_id=user_id,
+        platform=platform,
+        parsed=parsed,
     )
