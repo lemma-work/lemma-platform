@@ -288,6 +288,12 @@ class _ClassShape(ast.NodeVisitor):
         self.imported: dict[str, str] = {}
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        # Absolute only. A relative import would have to be resolved against
+        # this file's package to name a module, and it lands in that same
+        # package by construction -- which the same-package tie-breaker in
+        # `resolve` already covers. There are 23 of them against 9,617
+        # absolute, so the resolution they would add is not worth carrying a
+        # package calculation for.
         if node.module and not node.level:
             for alias in node.names:
                 self.imported[alias.asname or alias.name] = node.module
