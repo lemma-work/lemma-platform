@@ -346,6 +346,56 @@ describe('paste', () => {
     const XK_CONTROL_L = 0xffe3;
     const XK_LOWER_V = 0x76;
 
+    it.each([
+        ['meta', { metaKey: true }],
+        ['ctrl', { ctrlKey: true }],
+    ])('lets the native paste event survive %s+V', async (_label, modifier) => {
+        // The bug people actually hit: pasting a password into the pane did
+        // nothing at all.
+        //
+        // noVNC binds `keydown` on its canvas and ends every one of them with
+        // `stopEvent` -- `preventDefault` plus `stopPropagation`. A
+        // preventDefaulted keydown is precisely what a browser will not
+        // follow with a `paste` event, so the handler that writes to the
+        // remote clipboard never ran. This handler is in the capture phase on
+        // an ancestor, so it sees the key first and stops it reaching noVNC.
+        //
+        // It must stop propagation and *not* preventDefault: suppressing the
+        // default is what would kill the paste event we are here to provoke.
+        const { container } = render(<BrowserPane origin="https://example.com" />);
+        await connect();
+        const target = container.querySelector('[role="application"]');
+
+        const event = new KeyboardEvent('keydown', {
+            key: 'v',
+            bubbles: true,
+            cancelable: true,
+            ...modifier,
+        });
+        target!.dispatchEvent(event);
+
+        expect(event.defaultPrevented).toBe(false);
+    });
+
+    it('still translates meta+C into a Ctrl+C the far side understands', async () => {
+        const { container } = render(<BrowserPane origin="https://example.com" />);
+        const rfb = await connect();
+        const target = container.querySelector('[role="application"]');
+
+        const event = new KeyboardEvent('keydown', {
+            key: 'c',
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+        });
+        target!.dispatchEvent(event);
+
+        expect(event.defaultPrevented).toBe(true);
+        expect(rfb.sentKeys.map(([keysym]: [number, string, boolean]) => keysym)).toContain(
+            XK_CONTROL_L,
+        );
+    });
+
     it('writes the clipboard and then sends a real Ctrl+V, in that order', async () => {
         const { container } = render(
             <BrowserPane origin="https://example.com" />,
