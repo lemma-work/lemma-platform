@@ -278,6 +278,20 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         # A notification past that window needs an approved template, which we
         # do not have, so delivery falls through to the next channel.
         reply_window_hours=24,
+        # Was `True`, and had to be: one number meant the system credential and
+        # the identity were the same thing, so a second surface claiming it in
+        # an organisation really was a conflict.
+        #
+        # A pool separates them. The credential is now the number's, not the
+        # deployment's, and an organisation holding two numbers is the feature
+        # rather than a collision. Exclusivity did not go away -- it got more
+        # precise: `uq_agent_org_whatsapp_number` says one *number* per
+        # organisation, which is the rule that was actually wanted, enforced
+        # where a race cannot get past it. Leaving this `True` would keep the
+        # coarse rule on top and refuse the second number the pool exists to
+        # hand out. Resend answers `False` for the same shape of reason: a
+        # shared key, an identity allocated per surface.
+        system_credential_is_identity=False,
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",

@@ -324,18 +324,20 @@ class PodService:
         # written to by its correspondents. Which of the two came down to queue
         # lag. Every pod holds an address now, so this stopped being a corner.
         #
-        # Only the email surfaces, deliberately. The comment above is right that
-        # an unbounded number of Composio round trips must not go inside this
-        # transaction — but a Resend surface has none: it receives on a
-        # catch-all webhook, so `delete_surface` makes no provider call for it
-        # and `_sync_email_schedule` returns early. Bounded by the number of
-        # agents in the pod, and the rest still waits for the worker.
+        # Only the scarce identities, deliberately. The comment above is right
+        # that an unbounded number of Composio round trips must not go inside
+        # this transaction — but neither of these makes one: a Resend surface
+        # receives on a catch-all webhook, so `delete_surface` makes no provider
+        # call for it and `_sync_email_schedule` returns early, and a pooled
+        # WhatsApp number's webhook belongs to the number rather than to the
+        # surface. Bounded by the number of agents in the pod, and the rest
+        # still waits for the worker.
         if self._uow is not None:
             from app.modules.agent_surfaces.contracts.email_surfaces import (
-                release_pod_inbound_addresses,
+                release_pod_scarce_identities,
             )
 
-            await release_pod_inbound_addresses(self._uow, pod_id=pod_id)
+            await release_pod_scarce_identities(self._uow, pod_id=pod_id)
         # Cached role snapshots outlive the pod otherwise, and they are what
         # authorizes every pod-scoped request. The snapshot carries
         # `pod_is_deleted`, so one written *before* this moment says the pod is

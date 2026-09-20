@@ -202,6 +202,17 @@ def _shared_transport(
     credentials = TypeAdapter(dict[str, JsonValue]).validate_python(
         native_credentials(platform)
     )
+    # Shared signup belongs to the shared line, and only to it. This reads like
+    # a leftover single-number assumption now that numbers come from a pool, and
+    # it is the opposite: a pooled number is held by one organisation, so an
+    # unknown sender who reaches it is that organisation's surface's business,
+    # not the deployment's signup flow. Answering them here would introduce them
+    # to Lemma-at-large from a number somebody bought for their own customers.
+    #
+    # It compares against settings rather than the pool because this function is
+    # synchronous and has no unit of work, and because the number it is asking
+    # about is the one the deployment configured -- which is what `SHARED` in
+    # `surface_whatsapp_numbers` mirrors rather than replaces.
     if platform == SurfacePlatform.WHATSAPP and (
         not credentials.get("phone_number_id")
         or parsed.reply_target.get("phone_number_id")

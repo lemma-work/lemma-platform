@@ -371,6 +371,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.telegram_manager.webhook_registration_failed': EventSpec('error', frozenset()),
     'agent_surfaces.telegram_manager.webhook_secret_missing': EventSpec('warning', frozenset()),
     'agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic': EventSpec('debug', frozenset({'account_id'})),
+    'agent_surfaces.whatsapp_surface_provisioning.number_allocated': EventSpec('info', frozenset({'organization_id', 'phone_number_id', 'pod_id'})),
     'analytics.actor.unattributed': EventSpec('warning', frozenset({'actor_type', 'analytic_event'})),
     'analytics.app_session.cache_unavailable': EventSpec('debug', frozenset()),
     'analytics.app_session.record_failed': EventSpec('debug', frozenset()),

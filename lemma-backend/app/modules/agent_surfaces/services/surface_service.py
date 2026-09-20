@@ -116,6 +116,7 @@ class AgentSurfaceService(
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
         surface_identity_email: str | None = None,
+        surface_identity_id: str | None = None,
         ctx: Context | None = None,
     ) -> AgentSurfaceEntity:
         # A surface is addressed by its pod-unique name (defaults to the
@@ -134,11 +135,20 @@ class AgentSurfaceService(
         (
             resolved_tenant_id,
             resolved_workspace_id,
-            surface_identity_id,
+            bound_identity_id,
         ) = await self.account_binding_resolver.resolve_binding(
             platform,
             account_id=account_id,
         )
+        # The binding resolver answers for the platforms whose identity is
+        # *derivable* from a connected account -- Slack's bot user id, and so
+        # on. A pooled WhatsApp number is not derivable: it is allocated, and
+        # the allocation is the caller's because the arbiter for it is a unique
+        # index on the row this call is about to write. So a caller-supplied
+        # identity wins where the resolver has none, exactly as
+        # `surface_identity_email` does for Resend, and can never silently
+        # overwrite one the resolver did produce.
+        resolved_identity_id = bound_identity_id or surface_identity_id
         entity = AgentSurfaceEntity.create(
             pod_id=pod_id,
             surface_type=platform,
@@ -150,7 +160,7 @@ class AgentSurfaceService(
             external_workspace_id=external_workspace_id or resolved_workspace_id,
             external_tenant_id=external_tenant_id or resolved_tenant_id,
             external_channel_id=external_channel_id,
-            surface_identity_id=surface_identity_id,
+            surface_identity_id=resolved_identity_id,
         )
         # Resend is a system-credentialed email surface: it needs an inbound
         # address that routing matches on and outbound uses as the From. (Other
@@ -468,17 +478,42 @@ class AgentSurfaceService(
             pod_id, agent_id=agent_id, match_agent=True
         )
 
-    async def delete_email_surfaces_for_pod(self, pod_id: UUID) -> int:
-        """Remove the pod's Resend surfaces, freeing their inbound addresses.
+    async def release_scarce_identities_for_pod(self, pod_id: UUID) -> int:
+        """Free the finite things this pod holds, inline as it is deleted.
 
-        Called inline as a pod is deleted, because the pod's name is freed in
-        that same request and a pod recreated under it otherwise races the worker
-        for the address. Resend only, which is what keeps it bounded and
-        provider-free: everything else still goes through the pod-deleted event
-        and :meth:`delete_all_surfaces_for_pod`.
+        Two kinds, for one reason: a Resend inbound address and a WhatsApp
+        number out of the pool. Both are allocated per surface off a shared
+        credential, both are exhaustible, and neither makes a provider call on
+        the way out -- Resend receives on a catch-all webhook, and a pooled
+        number's webhook belongs to the number rather than to the surface, so
+        there is nothing to deregister. That is what keeps this bounded and
+        safe to do inside the delete transaction; everything else still goes
+        through the pod-deleted event and :meth:`delete_all_surfaces_for_pod`.
+
+        Inline rather than on the event, because pod deletion is **soft** and
+        the surface row survives on purpose so an undelete restores a working
+        surface. That is the right trade for a Slack app and the wrong one for
+        something scarce: a soft-deleted pod would hold a number out of a finite
+        pool indefinitely, and the deployment would run out on behalf of pods
+        nobody is using. For the address there is a second reason -- the pod's
+        org-unique *name* is freed in this same request, so a pod recreated
+        under it races the worker for the address.
+
+        The cost, stated rather than discovered: an undeleted pod does not get
+        its number back, exactly as it does not get its address back. Somebody
+        restoring a pod re-allocates, and may find the pool empty.
+
+        Only WhatsApp surfaces that actually hold a number are released. One on
+        the shared line has taken nothing scarce, so it keeps the ordinary
+        teardown path.
         """
-        return await self._delete_matching_surfaces(
+        released = await self._delete_matching_surfaces(
             pod_id, platform=SurfacePlatform.RESEND.value
+        )
+        return released + await self._delete_matching_surfaces(
+            pod_id,
+            platform=SurfacePlatform.WHATSAPP.value,
+            only_holding_an_identity=True,
         )
 
     async def _delete_matching_surfaces(
@@ -488,6 +523,7 @@ class AgentSurfaceService(
         platform: str | None = None,
         agent_id: UUID | None = None,
         match_agent: bool = False,
+        only_holding_an_identity: bool = False,
     ) -> int:
         """Delete a pod's surfaces, or the subset the filters name.
 
@@ -513,6 +549,10 @@ class AgentSurfaceService(
                 cursor=cursor,
             )
             for surface in surfaces:
+                if only_holding_an_identity and not surface.surface_identity_id:
+                    # Nothing scarce to give back; the pod-deleted event will
+                    # tear this one down with the rest.
+                    continue
                 try:
                     await self.delete_surface(surface.id)
                     deleted += 1

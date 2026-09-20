@@ -61,22 +61,24 @@ class _Repository:
         return None
 
 
-@pytest.mark.parametrize(
-    "platform", [SurfacePlatform.WHATSAPP, SurfacePlatform.TELEGRAM]
-)
-async def test_the_shared_bot_is_claimable_once_per_organization(platform):
+async def test_the_shared_bot_is_claimable_once_per_organization():
     """The exemption that made this rule unreachable where it mattered most.
 
-    WhatsApp and Telegram were skipped, on the grounds that shared-bot routing
-    authorizes the sender and the personal pod separately. But one number and
-    one bot are precisely the credentials that *are* an identity: with two
-    organizations holding the same one, an inbound message has no predictable
-    answer to whose it is.
+    WhatsApp and Telegram were both skipped, on the grounds that shared-bot
+    routing authorizes the sender and the personal pod separately. But one bot
+    is precisely the credential that *is* an identity: with two organizations
+    holding it, an inbound message has no predictable answer to whose it is.
+
+    Telegram alone now. WhatsApp left this rule when its numbers became a pool
+    -- see the scenario below -- and the parametrize went with it, because a
+    two-platform sweep over a rule that applies to one of them reads as coverage
+    it no longer has.
 
     Onboarding still gives every personal pod its own shared surface. It writes
     through the repository and does not come through here, which is deliberate
     and written down where the exemption used to be.
     """
+    platform = SurfacePlatform.TELEGRAM
     repository = _Repository(_surface(platform))
 
     with pytest.raises(AgentSurfaceCredentialConflictError, match="System"):
@@ -85,6 +87,36 @@ async def test_the_shared_bot_is_claimable_once_per_organization(platform):
         )
 
     assert repository.system_lookups == 1
+
+
+async def test_a_pooled_number_is_not_claimed_by_the_whole_organization():
+    """Exclusivity got finer, not weaker, and this is the difference.
+
+    One number per deployment made "the WhatsApp credential" and "the WhatsApp
+    identity" the same sentence, so a second surface in an organization really
+    was a second claim on one thing. A pool separates them: the credential is
+    the number's, and an organization holding two numbers is the feature.
+
+    What replaced this is `uq_agent_org_whatsapp_number` -- one *number* per
+    organization, enforced by a unique index where a race cannot get past it,
+    rather than one *platform* per organization enforced by a read-then-write
+    that could. Keeping this rule as well would refuse the second number the
+    pool exists to hand out.
+
+    The lookup is not performed at all, for the same reason Resend's is not:
+    there is nothing it could usefully answer.
+    """
+    repository = _Repository(_surface(SurfacePlatform.WHATSAPP))
+
+    await ensure_unique_org_credential_binding(
+        _surface(SurfacePlatform.WHATSAPP), surface_repository=repository
+    )
+
+    assert repository.system_lookups == 0, (
+        "the organization-wide claim was still consulted for a pooled number, "
+        "so a second allocation would be refused before it reached the index "
+        "that actually decides"
+    )
 
 
 async def test_email_is_exempt_because_its_credential_is_not_an_identity():

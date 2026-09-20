@@ -77,6 +77,33 @@ class AgentSurfaceCredentialConflictError(AgentSurfaceError):
         }
 
 
+class AgentSurfaceNumberPoolExhaustedError(AgentSurfaceError):
+    """Every WhatsApp number the deployment owns is already held.
+
+    **503 and not 409**, which is the whole point of giving it its own class.
+    A conflict says "somebody else has the thing you asked for, take it up with
+    them" -- that is `AgentSurfaceCredentialConflictError`, and it names the pod
+    holding it so the UI can link there. This organisation conflicts with
+    nobody: it asked for *a* number and the deployment has none left to give.
+    There is no other party and nothing the caller can do differently, so the
+    honest answer is that the service cannot serve the request right now and
+    somebody has to buy more numbers.
+
+    Exhaustion is a steady state rather than a failure. A pool is bought a
+    number at a time and can sit fully allocated for weeks, reached entirely
+    through ordinary success -- so it is not logged as degraded where it is
+    detected. Only the caller knows whether it is failing a person's request,
+    which is this, or quietly falling back to the shared line, which is not.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            code="AGENT_SURFACE_NUMBER_POOL_EXHAUSTED",
+            status_code=503,
+        )
+
+
 class AgentSurfaceNotFoundError(AgentSurfaceError):
     def __init__(self, surface_id: str):
         super().__init__(

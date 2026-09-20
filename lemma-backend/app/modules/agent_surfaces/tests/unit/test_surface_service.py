@@ -436,11 +436,17 @@ async def test_create_telegram_webhook_surface_rejects_duplicate_account(monkeyp
 
 
 async def test_create_shared_surface_refuses_a_second_org_claim(monkeypatch):
-    """A system number answers for one organization, or for nobody predictably.
+    """A shared bot answers for one organization, or for nobody predictably.
 
     This asserted the opposite until the exemption came out: WhatsApp and
     Telegram skipped the check entirely, so `create_surface` never even asked.
     Onboarding's per-pod provisioning does not come through this path.
+
+    Telegram rather than WhatsApp now. WhatsApp numbers come from a pool, so its
+    system credential stopped being one identity and the organization-wide claim
+    stopped applying to it -- exclusivity moved to one *number* per organization,
+    enforced by a unique index. Telegram still has the one shared bot this rule
+    was written for.
     """
     repo = _repo()
     enricher = AsyncMock()
@@ -452,8 +458,8 @@ async def test_create_shared_surface_refuses_a_second_org_claim(monkeypatch):
     config = SurfaceConfig()
     repo.create.side_effect = lambda entity: entity
     holder = _surface_entity(
-        surface_type=SurfacePlatform.WHATSAPP,
-        name="whatsapp",
+        surface_type=SurfacePlatform.TELEGRAM,
+        name="telegram",
         config=config,
         account_id=None,
     )
@@ -466,14 +472,14 @@ async def test_create_shared_surface_refuses_a_second_org_claim(monkeypatch):
 
     with pytest.raises(AgentSurfaceCredentialConflictError, match="System") as raised:
         await service.create_surface(
-            platform=SurfacePlatform.WHATSAPP,
+            platform=SurfacePlatform.TELEGRAM,
             pod_id=uuid4(),
             agent_id=uuid4(),
             config=config,
         )
 
     assert raised.value.details["kind"] == "SYSTEM"
-    assert raised.value.details["conflicting_surface"]["name"] == "whatsapp"
+    assert raised.value.details["conflicting_surface"]["name"] == "telegram"
     repo.create.assert_not_awaited()
 
 

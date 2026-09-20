@@ -245,3 +245,267 @@ async def test_a_surface_holding_no_number_is_still_a_candidate(
         "a surface that has not been allocated a number stopped being routable "
         "as soon as the number predicate was applied"
     )
+
+
+async def _pod_in(session, *, organization_id: UUID, user_id: UUID) -> Pod:
+    """A second pod, so an organisation can want two numbers at once."""
+    pod = Pod(
+        user_id=user_id,
+        organization_id=organization_id,
+        name=f"pod-{uuid4().hex[:8]}",
+        config={},
+    )
+    session.add(pod)
+    await session.flush()
+    session.add(
+        AgentModel(
+            id=pod.id,
+            pod_id=pod.id,
+            user_id=user_id,
+            name="pod_default",
+            kind="POD_DEFAULT",
+            instruction="",
+            toolsets=[],
+            visibility="POD",
+        )
+    )
+    await session.commit()
+    return pod
+
+
+async def test_a_surface_is_given_a_number_of_the_organisations_own(
+    db_session, test_pod, fixed_test_org
+) -> None:
+    """Allocation is the step that makes a pool a pool.
+
+    Everything before this reads a number a surface already holds; nothing put
+    one there. `resolve_binding` answers `None` for WhatsApp on every path --
+    correctly, because a pooled number is allocated rather than derived from a
+    connected account -- so without this the column stays NULL forever and the
+    pool is inventory nobody draws from.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="alloc-1", token="t1")
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    surface = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=UUID(test_pod["id"]),
+        agent_id=UUID(test_pod["id"]),
+        organization_id=UUID(fixed_test_org["id"]),
+    )
+
+    assert surface.surface_identity_id == "alloc-1", (
+        "a surface was created without being given a number, so the pool is "
+        "inventory nothing draws from"
+    )
+
+
+async def test_a_second_surface_in_one_organisation_gets_a_different_number(
+    db_session, test_pod, fixed_test_org, fixed_test_user
+) -> None:
+    """Exclusive within an organisation, so the second draw must move on.
+
+    `uq_agent_org_whatsapp_number` is the arbiter and the allocator retries
+    against it rather than pre-checking, so this also exercises the retry: the
+    candidate list is a snapshot that still contains the number just taken.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="alloc-a", token="a")
+    await _number(db_session, phone_number_id="alloc-b", token="b")
+    organization_id = UUID(fixed_test_org["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    second_pod = await _pod_in(
+        db_session,
+        organization_id=organization_id,
+        user_id=UUID(str(fixed_test_user["id"])),
+    )
+
+    first = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=UUID(test_pod["id"]),
+        agent_id=UUID(test_pod["id"]),
+        organization_id=organization_id,
+    )
+    second = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=second_pod.id,
+        agent_id=second_pod.id,
+        organization_id=organization_id,
+    )
+
+    assert first.surface_identity_id != second.surface_identity_id, (
+        "one organisation was handed the same number twice, so two of its "
+        "surfaces answer on one line and an inbound message is ambiguous"
+    )
+    assert {first.surface_identity_id, second.surface_identity_id} == {
+        "alloc-a",
+        "alloc-b",
+    }
+
+
+async def test_an_exhausted_pool_says_so_rather_than_sharing(
+    db_session, test_pod, fixed_test_org, fixed_test_user
+) -> None:
+    """Running out is a normal state, and it still has to be said out loud.
+
+    The tempting failure is to fall back to the shared line: the caller gets a
+    surface, nothing raises, and the person finds out only when a reply arrives
+    from a number they have never seen. They asked for a number of their own.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.domain.errors import (
+        AgentSurfaceNumberPoolExhaustedError,
+    )
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="only-one", token="t")
+    organization_id = UUID(fixed_test_org["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    second_pod = await _pod_in(
+        db_session,
+        organization_id=organization_id,
+        user_id=UUID(str(fixed_test_user["id"])),
+    )
+
+    await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=UUID(test_pod["id"]),
+        agent_id=UUID(test_pod["id"]),
+        organization_id=organization_id,
+    )
+
+    with pytest.raises(AgentSurfaceNumberPoolExhaustedError) as refused:
+        await provision_pooled_whatsapp_surface(
+            uow,
+            service=build_surface_service(uow),
+            pod_id=second_pod.id,
+            agent_id=second_pod.id,
+            organization_id=organization_id,
+        )
+
+    assert refused.value.status_code == 503, (
+        "an exhausted pool answered like a conflict; there is no other party "
+        "to take it up with, the deployment simply has none left"
+    )
+
+
+async def test_two_pods_in_one_organisation_may_each_have_a_whatsapp_surface(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """The refusal the pool exists to remove, asserted through HTTP.
+
+    A second pod asking for WhatsApp used to get 409 "System WHATSAPP
+    credentials are already used by another surface in this organization",
+    because one number made the credential and the identity the same thing.
+    With a pool they are different things and the second pod is entitled to its
+    own number, so the organisation-wide claim had to stop applying -- and
+    `test_surface_api_e2e` moved its 409 case to Telegram, which still has the
+    single shared bot that rule was written for.
+
+    Over HTTP rather than through the service, because the 409 this replaces
+    reached people as an API response and a catalog that greyed the option out.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "system-phone")
+
+    sibling = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": test_pod["organization_id"],
+            "name": f"sibling-{uuid4().hex[:8]}",
+        },
+    )
+    assert sibling.status_code == 201, sibling.text
+
+    first = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+    second = await authenticated_client.post(
+        f"/pods/{sibling.json()['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, (
+        "the second pod in this organisation was refused a WhatsApp surface, "
+        f"so the pool cannot hand it a number of its own: {second.text}"
+    )
+
+    catalog = await authenticated_client.get(
+        f"/pods/{sibling.json()['id']}/available-surfaces"
+    )
+    row = next(
+        item for item in catalog.json()["surfaces"] if item["platform"] == "WHATSAPP"
+    )
+    assert row["system_claim"]["available"] is True, (
+        "the catalog still greys WhatsApp out for an organisation that already "
+        "holds one, which is the disagreement with the writer that this rule "
+        "change exists to remove"
+    )
+
+
+async def test_deleting_a_pod_gives_its_number_back_to_the_pool(
+    db_session, test_pod, fixed_test_org
+) -> None:
+    """A finite pool leaks unless something hands numbers back.
+
+    Pod deletion is soft: the surface row survives on purpose so an undelete
+    restores a working surface. That is right for a Slack app and wrong for
+    something scarce -- a deleted pod would hold a number indefinitely and the
+    deployment would run out on behalf of pods nobody is using.
+
+    Asserted by allocating twice from a pool of one: the second allocation can
+    only succeed if the first was genuinely released, which is stronger than
+    reading the column back.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.contracts.email_surfaces import (
+        release_pod_scarce_identities,
+    )
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="recycled", token="t")
+    organization_id = UUID(fixed_test_org["id"])
+    pod_id = UUID(test_pod["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    first = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=pod_id,
+        agent_id=pod_id,
+        organization_id=organization_id,
+    )
+    assert first.surface_identity_id == "recycled"
+
+    await release_pod_scarce_identities(uow, pod_id=pod_id)
+
+    again = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=pod_id,
+        agent_id=pod_id,
+        organization_id=organization_id,
+    )
+
+    assert again.surface_identity_id == "recycled", (
+        "the only number in the pool was still held by a deleted pod, so a "
+        "finite pool drains one deleted pod at a time"
+    )
+    assert again.id != first.id

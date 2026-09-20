@@ -178,28 +178,33 @@ async def test_system_claim_available_when_org_has_not_claimed_it(monkeypatch):
     assert claim.claimed_by_pod_id is None
 
 
-async def test_the_shared_number_shows_as_taken_once_the_org_holds_it(monkeypatch):
+async def test_the_shared_bot_shows_as_taken_once_the_org_holds_it(monkeypatch):
     """This asserted the opposite while WhatsApp and Telegram were exempt.
 
     The exemption sat on both sides -- here and in the writer -- so the two
-    agreed, and what they agreed on was that the rule did not apply to the two
+    agreed, and what they agreed on was that the rule did not apply to the
     platforms whose system credential most plainly is an identity. The catalog's
     job is to name who holds it before somebody tries and is refused.
+
+    Telegram rather than WhatsApp now, and the swap is the point: there is one
+    shared Telegram bot and holding it is holding it. WhatsApp numbers come from
+    a pool, so its system credential stopped being a single identity -- see the
+    scenario below.
     """
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
     holder_pod_id = uuid4()
-    conflict = SimpleNamespace(pod_id=holder_pod_id, name="whatsapp")
+    conflict = SimpleNamespace(pod_id=holder_pod_id, name="telegram")
     monkeypatch.setattr(mod, "AgentSurfaceEntity", SimpleNamespace)
     resp = await build_available_surfaces(
         read_connector=_catalog(),
         pod_id=uuid4(),
         surface_repository=_claim_repository(conflict),
     )
-    claim = _by_platform(resp)[SurfacePlatform.WHATSAPP].system_claim
+    claim = _by_platform(resp)[SurfacePlatform.TELEGRAM].system_claim
     assert claim is not None
     assert claim.available is False
     assert claim.claimed_by_pod_id == holder_pod_id
-    assert claim.claimed_by_surface_name == "whatsapp"
+    assert claim.claimed_by_surface_name == "telegram"
 
 
 async def test_system_claim_degrades_to_available_when_lookup_fails(monkeypatch):
@@ -268,15 +273,26 @@ async def test_one_row_per_registry_platform(monkeypatch):
     assert len(platforms) == len(SURFACE_CONNECTOR_BINDINGS)
 
 
-async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeypatch):
+async def test_an_allocated_identity_is_never_claimed_by_the_organization(
+    monkeypatch,
+):
     """The bug this rule caused: one mailbox blocking an organization.
 
-    A Slack app or a WhatsApp number is one identity, so whoever holds it in an
-    organization holds it. Resend's system credential is an API key over a catch-all domain
-    and every surface gets its own unique address off it — so a Resend surface
+    A Slack app is one identity, so whoever holds it in an organization holds
+    it. Resend's system credential is an API key over a catch-all domain and
+    every surface gets its own unique address off it — so a Resend surface
     existing somewhere in the org says nothing about whether this pod may have
     one. The catalog must agree with the writer, or it offers something that
     then fails.
+
+    **WhatsApp joined that side when its numbers became a pool.** It used to be
+    the clearest case of a credential that *is* an identity, because there was
+    exactly one number. Now the number is allocated per surface off a shared
+    app, which is Resend's shape exactly, and exclusivity moved to the finer
+    rule that was always wanted: one *number* per organisation, not one
+    platform. So a WhatsApp surface existing in the org says nothing either --
+    and if the pool is empty, allocation says so at 503 rather than the catalog
+    pretending the platform is spoken for.
     """
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
     monkeypatch.setattr(mod, "AgentSurfaceEntity", SimpleNamespace)
@@ -294,8 +310,12 @@ async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeyp
     assert email_claim is not None
     assert email_claim.available is True
     assert email_claim.claimed_by_pod_id is None
-    # The same repository reports a holder for these, and for them it counts.
-    assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is False
+    whatsapp_claim = by_platform[SurfacePlatform.WHATSAPP].system_claim
+    assert whatsapp_claim is not None
+    assert whatsapp_claim.available is True
+    assert whatsapp_claim.claimed_by_pod_id is None
+    # The same repository reports a holder for this one, and for it it counts:
+    # one shared bot, and holding it is holding it.
     assert by_platform[SurfacePlatform.TELEGRAM].system_claim.available is False
 
 

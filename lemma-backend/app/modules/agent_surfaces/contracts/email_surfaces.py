@@ -114,10 +114,10 @@ async def teardown_agent_surfaces(
     return await build_surface_service(uow).delete_surfaces_for_agent(pod_id, agent_id)
 
 
-async def release_pod_inbound_addresses(
+async def release_pod_scarce_identities(
     uow: SqlAlchemyUnitOfWork, *, pod_id: UUID
 ) -> int:
-    """Delete a deleted pod's email surfaces, freeing their addresses now.
+    """Give back the finite things a deleted pod held: its address, its number.
 
     `delete_pod` frees the pod's org-unique *name* immediately, so recreating a
     pod under it before the pod-deleted event is consumed races the teardown:
@@ -125,16 +125,21 @@ async def release_pod_inbound_addresses(
     orphaned, or it inherits an address the deleted pod's correspondents are
     still writing to.
 
-    Email only, so this stays bounded — a Resend surface receives on a
-    catch-all webhook and has no provider call to make on the way out. The
-    pod-deleted event still tears down everything else.
+    A pooled WhatsApp number has no name race but the same scarcity, and pod
+    deletion is soft -- so without this a deleted pod holds one out of a finite
+    pool forever and the deployment runs out on behalf of pods nobody uses.
+
+    Both stay bounded and provider-free, which is what makes them safe inside
+    the delete transaction: a Resend surface receives on a catch-all webhook,
+    and a pooled number's webhook belongs to the number rather than the surface.
+    The pod-deleted event still tears down everything else.
     """
-    return await build_surface_service(uow).delete_email_surfaces_for_pod(pod_id)
+    return await build_surface_service(uow).release_scarce_identities_for_pod(pod_id)
 
 
 __all__ = [
     "provision_agent_email_surface",
     "provision_pod_assistant_email_surface",
-    "release_pod_inbound_addresses",
+    "release_pod_scarce_identities",
     "teardown_agent_surfaces",
 ]
