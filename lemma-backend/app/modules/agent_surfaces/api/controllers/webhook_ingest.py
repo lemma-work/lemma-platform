@@ -14,9 +14,8 @@ import hashlib
 from typing import Any
 from uuid import UUID
 
-from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
-    WhatsAppNumberRepository,
+from app.modules.agent_surfaces.contracts.whatsapp import (
+    deployment_owns_whatsapp_number,
 )
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
@@ -275,13 +274,8 @@ async def _published_whatsapp_verification(
     if verification is None or not await is_whatsapp_verification_configured():
         return False
     code, sender_wa_id, destination_id, message_id = verification
-    if destination_id != surface_settings.whatsapp_phone_number_id:
-        async with uow_factory() as uow:
-            owned = await WhatsAppNumberRepository(uow).get_by_phone_number_id(
-                destination_id
-            )
-        if owned is None:
-            return False
+    if not await deployment_owns_whatsapp_number(destination_id):
+        return False
 
     identity_event = WhatsAppMobileVerificationReceivedEvent(
         event_id=stable_event_id(

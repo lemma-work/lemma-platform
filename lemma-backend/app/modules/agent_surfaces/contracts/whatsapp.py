@@ -99,6 +99,42 @@ async def global_whatsapp_configuration() -> GlobalWhatsAppConfiguration:
     )
 
 
+async def deployment_owns_whatsapp_number(phone_number_id: str) -> bool:
+    """Is this a number we receive on -- the configured one, or one in the pool?
+
+    One answer, because two disagreeing is a black hole. The ingress gate and
+    identity's consumer both ask it, and when they disagreed a verification code
+    sent to a pooled number was accepted by the first (so the webhook returned
+    early and it never became an ordinary message) and rejected by the second
+    (so it was never a verification either). It vanished.
+
+    Every pooled number is a system number, so a person who sends their code to
+    whichever of our numbers they are already talking to gets verified. Telling
+    them "wrong number, use the other one" is a distinction only we can see.
+
+    Fails **closed**, unlike `global_whatsapp_configuration`, and the asymmetry
+    is deliberate: that one improves an answer settings can already give, while
+    this one decides whether to act on a message. An unreadable pool must not
+    turn into "sure, we own that".
+    """
+    if not phone_number_id:
+        return False
+    if phone_number_id == surface_settings.whatsapp_phone_number_id:
+        return True
+    try:
+        async with async_session_maker() as session:
+            found = await WhatsAppNumberRepository(
+                SqlAlchemyUnitOfWork(session)
+            ).get_by_phone_number_id(phone_number_id)
+    except SQLAlchemyError:
+        logger.warning(
+            "agent_surfaces.whatsapp_contract.number_ownership_unreadable.degraded",
+            exc_info=True,
+        )
+        return False
+    return found is not None
+
+
 async def _shared_row() -> WhatsAppNumberEntity | None:
     """The `SHARED` pool row, or nothing if it cannot be read.
 

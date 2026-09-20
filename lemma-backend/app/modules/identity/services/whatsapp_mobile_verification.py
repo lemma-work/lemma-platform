@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.modules.agent_surfaces.contracts.whatsapp import (
     GlobalWhatsAppDeliveryError,
+    deployment_owns_whatsapp_number,
     global_whatsapp_configuration,
     send_global_whatsapp_text,
 )
@@ -476,10 +477,12 @@ class WhatsAppMobileVerificationService:
         destination_phone_number_id: str,
         whatsapp_message_id: str,
     ) -> bool:
-        whatsapp = await global_whatsapp_configuration()
-        if (
-            not await is_whatsapp_verification_configured()
-            or destination_phone_number_id != whatsapp.phone_number_id
+        # The same question ingress asked, and that is the point: when the two
+        # disagreed, a code sent to a pooled number was accepted there -- so the
+        # webhook returned early and it never became an ordinary message -- and
+        # rejected here, so it was never a verification either. It vanished.
+        if not await is_whatsapp_verification_configured() or not (
+            await deployment_owns_whatsapp_number(destination_phone_number_id)
         ):
             return False
         try:
