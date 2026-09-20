@@ -18,8 +18,8 @@ class WebLoginResponse:
     """
     Attributes:
         cookie_count (int): How many cookies this site has. A rough sense of scale.
-        site (str): The site, as a person would name it. Cookies are grouped by registrable domain, so `asur.work` and
-            `api.asur.work` are one login rather than two -- the second being the half nobody visited on purpose.
+        site (str): The site, as a person would name it. Cookies are grouped by registrable domain, so `lemma.work` and
+            `api.lemma.work` are one login rather than two -- the second being the half nobody visited on purpose.
         expires (datetime.datetime | None | Unset): When the soonest of them lapses, which is the closest thing to 'when
             will I have to sign in again'. Null when they are all session cookies, which go when the browser does.
         signed_in (bool | Unset): True when somebody answered 'yes, I signed in' to a sign-in request for this site. The

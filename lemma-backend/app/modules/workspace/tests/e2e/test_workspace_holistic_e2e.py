@@ -667,15 +667,15 @@ async def test_a_person_watches_the_agents_browser_and_then_drives_it(
     running on, and a click sent down that same socket lands where that
     browser can see it.
 
-    Opened with a bare `AGENT_BROWSER_SESSION=workspace`, rather than the way
-    an agent's own shell is set up: that shell is put in a session and profile
-    of its conversation's own on purpose (`_browser_session_env`, over
-    `app/modules/workspace/domain/browser_context.py`'s `agent_session` -- so
-    one conversation's agent never inherits another's cookies), and `/vnc` has no
-    way to name a session at all -- it shows the shared *default* session's
-    display, which is what a plain "watch this computer's browser" panel is
-    for. A conversation's own agent browsing is a different, not-yet-viewable
-    browser entirely; this test is about the shared one.
+    There is one browser and one profile, so "the shared session" is simply
+    the browser. This paragraph used to say the opposite -- that an agent's
+    shell got a session and profile of its conversation's own, via
+    `_browser_session_env` and `browser_context.agent_session`, "so one
+    conversation's agent never inherits another's cookies". Both names were
+    deleted, and `test_the_browser_is_reached_through_the_shell.py` asserts
+    their absence. Inheriting the earlier login is now the product's
+    deliberate promise (`browser_context.py`), not a thing to be prevented,
+    and a docstring describing the property we gave up is worse than none.
 
     It also pins the one rule the relay adds to RFB: a viewer who is only
     watching may not move the mouse or press a key. That refusal is the whole

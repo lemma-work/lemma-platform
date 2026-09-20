@@ -63,6 +63,11 @@ class _FakeSandbox:
 class _FakeManagerClient:
     def __init__(self) -> None:
         self.directories: list[tuple[UUID, str]] = []
+        #: Every file written into the sandbox, by path. The session path
+        #: writes one: the browser-proxy decision, which is asserted on
+        #: every session so that withdrawing a proxy takes effect without
+        #: anybody replacing a sandbox.
+        self.files: dict[str, bytes] = {}
 
     async def create_directory(
         self,
@@ -73,6 +78,18 @@ class _FakeManagerClient:
     ) -> None:
         del deadline_at
         self.directories.append((logical_id, path))
+
+    async def write_file(
+        self,
+        logical_id: UUID,
+        path: str,
+        data: bytes,
+        *,
+        deadline_at=None,
+        **_kwargs,
+    ) -> None:
+        del logical_id, deadline_at
+        self.files[path] = data
 
 
 def _retryable_failure(code: str = "PROVIDER_UNAVAILABLE") -> SandboxUnavailable:
@@ -423,3 +440,39 @@ async def test_get_session_reensures_after_missing_provider_allocation(
         (user_id, f"{WORKSPACE_ROOT}"),
         (user_id, f"{WORKSPACE_ROOT}"),
     ]
+
+
+async def test_a_session_tells_the_sandbox_whether_to_use_a_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Written on every session, and written even when the answer is "no".
+
+    The viewer path is not enough on its own: an agent typing
+    `agent-browser open` in its own shell reaches `lemma-ensure-display`
+    without the backend in the loop. A sandbox no person ever watches would
+    never hear the decision, and an older one would go on using the value
+    baked into its creation environment -- which is the bug, because that
+    value could never be withdrawn.
+    """
+    from app.modules.workspace.services.browser_proxy import (
+        BROWSER_PROXY_DECISION_PATH,
+    )
+
+    user_id = uuid4()
+    sandbox = _FakeSandbox()
+    service = _service(sandbox)
+    manager_client = _FakeManagerClient()
+
+    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+        return {"LEMMA_TOKEN": "dynamic"}
+
+    monkeypatch.setattr(service, "get_env_vars", environment)
+    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+
+    await service.get_session(user_id=user_id, pod_id=None, session_id="conversation")
+
+    assert BROWSER_PROXY_DECISION_PATH in manager_client.files
+    assert manager_client.files[BROWSER_PROXY_DECISION_PATH] == b"", (
+        "an empty pool is still a decision -- it is how a withdrawal reaches "
+        "a sandbox that already has a proxy"
+    )

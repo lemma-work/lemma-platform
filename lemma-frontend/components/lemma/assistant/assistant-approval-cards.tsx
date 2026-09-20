@@ -840,7 +840,7 @@ export function SignInCard({
   // asked, and "person" when somebody actually signed in just now. The card
   // used to read the same either way, so a run that quietly reused a login
   // was indistinguishable from one the person had just answered -- which is
-  // how three "Signed in to asur.work" cards appeared in a row that nobody
+  // how three "Signed in to lemma.work" cards appeared in a row that nobody
   // had clicked.
   const fromSaved = signedIn && asString(body.source) === "saved";
 

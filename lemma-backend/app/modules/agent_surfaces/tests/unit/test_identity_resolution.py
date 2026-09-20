@@ -23,6 +23,20 @@ from app.modules.agent_surfaces.services.identity_resolution_service import (
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize(
+    "platform", [SurfacePlatform.SLACK, SurfacePlatform.TEAMS, SurfacePlatform.TELEGRAM]
+)
+async def test_unknown_onboarding_sender_cannot_use_profile_email_or_username(platform):
+    existing_user = uuid4()
+    users = _FakeUsers(by_email=existing_user, by_telegram=existing_user)
+    resolved = await _service(users, _FakeExternalRepo()).resolve(
+        event=_event(platform=platform, email="person@example.com", username="person"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None
+    assert users.telegram_lookups == []
+
+
 class _FakeExternalRepo:
     """Returns the resolved_user_id passed on write, else a preset cached id."""
 
@@ -77,10 +91,15 @@ def _service(users: _FakeUsers, external: _FakeExternalRepo):
     decision this service exists to make, so the directory is a collaborator the
     test hands over -- and no real database is touched.
     """
+
+    async def no_verified_identity(event: ParsedInboundSurfaceEvent) -> None:
+        return None
+
     return SurfaceIdentityResolutionService(
         uow=SimpleNamespace(session=object()),
         external_user_repository=external,
         user_directory=users,
+        verified_identity_lookup=no_verified_identity,
     )
 
 

@@ -385,23 +385,23 @@ describe('a sign-in answered late', () => {
     it('says it is still opening the site, rather than showing a blank browser', async () => {
         // The case somebody hits after stepping away: the pause is hours old,
         // the browser it was aimed at has been retired, and clicking "Open
-        // asur.work" reconnects to a display showing about:blank. The pane
+        // lemma.work" reconnects to a display showing about:blank. The pane
         // used to paint that and stop -- indistinguishable from "done".
         page.url = 'about:blank';
-        render(<BrowserPane origin="https://asur.work" />);
+        render(<BrowserPane origin="https://lemma.work" />);
         await connect();
 
-        expect(await screen.findByText('Opening asur.work…')).toBeTruthy();
+        expect(await screen.findByText('Opening lemma.work…')).toBeTruthy();
     });
 
     it('clears once the browser reports it got there', async () => {
-        page.url = 'https://asur.work/auth';
-        render(<BrowserPane origin="https://asur.work" />);
+        page.url = 'https://lemma.work/auth';
+        render(<BrowserPane origin="https://lemma.work" />);
         await connect();
 
         await waitFor(() => expect(rfbInstances[0].url).toContain('origin='));
         await waitFor(() =>
-            expect(screen.queryByText('Opening asur.work…')).toBeNull(),
+            expect(screen.queryByText('Opening lemma.work…')).toBeNull(),
         );
     });
 
@@ -411,10 +411,10 @@ describe('a sign-in answered late', () => {
         // was reloading the page, because clicking "Open" a second time
         // resolves the same origin and changes nothing the pane watches.
         page.url = 'about:blank';
-        render(<BrowserPane origin="https://asur.work" />);
+        render(<BrowserPane origin="https://lemma.work" />);
         await connect();
 
-        await screen.findByText('Opening asur.work…');
+        await screen.findByText('Opening lemma.work…');
         expect(rfbInstances).toHaveLength(1);
 
         screen.getByRole('button', { name: 'Try again' }).click();
@@ -429,7 +429,7 @@ describe('the clipboard, both ways', () => {
     it('sends Ctrl+C when a Mac presses Cmd+C', async () => {
         // Passed through, Cmd arrives at a Linux browser as Super+c and
         // copies nothing -- the gesture silently does nothing at all.
-        const { container } = render(<BrowserPane origin="https://asur.work" />);
+        const { container } = render(<BrowserPane origin="https://lemma.work" />);
         const rfb = await connect();
         const target = container.querySelector('[role="application"]')!;
 
@@ -447,7 +447,7 @@ describe('the clipboard, both ways', () => {
         // The paste event writes the remote clipboard first and then types,
         // which is what makes it race-free. Handling the keystroke as well
         // would fire a second, empty paste.
-        const { container } = render(<BrowserPane origin="https://asur.work" />);
+        const { container } = render(<BrowserPane origin="https://lemma.work" />);
         const rfb = await connect();
         const target = container.querySelector('[role="application"]')!;
 
@@ -462,7 +462,7 @@ describe('the clipboard, both ways', () => {
             configurable: true,
             value: { writeText: async (text: string) => void written.push(text) },
         });
-        render(<BrowserPane origin="https://asur.work" />);
+        render(<BrowserPane origin="https://lemma.work" />);
         const rfb = await connect();
 
         act(() => rfb.emit('clipboard', { detail: { text: 'copied over there' } }));

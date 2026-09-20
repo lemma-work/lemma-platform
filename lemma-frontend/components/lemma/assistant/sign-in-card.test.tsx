@@ -20,7 +20,7 @@ afterEach(cleanup);
 const paused = {
     toolCallId: 'call_abc123',
     toolName: 'browser_sign_in',
-    args: { origin: 'https://asur.work', reason: 'reading your pods' },
+    args: { origin: 'https://lemma.work', reason: 'reading your pods' },
     state: 'call' as const,
 };
 
@@ -49,7 +49,7 @@ describe('a waiting sign-in', () => {
             />),
         );
 
-        screen.getByRole('button', { name: /Open asur\.work/ }).click();
+        screen.getByRole('button', { name: /Open lemma\.work/ }).click();
 
         expect(navigations).toEqual([
             ['sign_in', 'call_abc123', { conversationId: 'conv-1' }],
@@ -62,7 +62,7 @@ describe('a waiting sign-in', () => {
     it('falls back to the standalone page where there is no panel to open', () => {
         render(withQuery(<SignInCard invocation={paused} conversationId="conv-1" />));
 
-        const link = screen.getByRole('link', { name: /Open asur\.work/ });
+        const link = screen.getByRole('link', { name: /Open lemma\.work/ });
         // The same destination the Slack and Telegram links use, so somebody
         // outside the app shell still reaches a page that can resolve it.
         expect(link.getAttribute('href')).toBe('/sign-in-to-site/conv-1/call_abc123');
@@ -123,13 +123,13 @@ describe('a waiting sign-in', () => {
                 invocation={{
                     ...paused,
                     state: 'result',
-                    result: { success: true, outcome: 'signed_in', origin: 'https://asur.work' },
+                    result: { success: true, outcome: 'signed_in', origin: 'https://lemma.work' },
                 }}
                 conversationId="conv-1"
             />),
         );
 
-        expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
+        expect(screen.getByText('Signed in to lemma.work')).toBeTruthy();
         // There is no "kept for next time" any more, because nothing is kept
         // on Lemma's side to be. The browser holds the session; it either is
         // signed in or it is not.
@@ -143,18 +143,18 @@ describe('a waiting sign-in', () => {
                 invocation={{
                     ...paused,
                     state: 'result',
-                    result: { success: true, outcome: 'declined', origin: 'https://asur.work' },
+                    result: { success: true, outcome: 'declined', origin: 'https://lemma.work' },
                 }}
                 conversationId="conv-1"
             />),
         );
 
-        expect(screen.getByText('Not signed in to asur.work')).toBeTruthy();
+        expect(screen.getByText('Not signed in to lemma.work')).toBeTruthy();
         expect(screen.getByText('skipped')).toBeTruthy();
     });
 
     it('says when the browser was already signed in, and offers to sign out', () => {
-        // The three identical "Signed in to asur.work" cards nobody clicked.
+        // The three identical "Signed in to lemma.work" cards nobody clicked.
         // The tool returns signed_in without asking when the browser is
         // already signed in, and the card read exactly like one the person
         // had just answered -- so a session the site had stopped accepting,
@@ -170,14 +170,14 @@ describe('a waiting sign-in', () => {
                         success: true,
                         outcome: 'signed_in',
                         source: 'saved',
-                        origin: 'https://asur.work',
+                        origin: 'https://lemma.work',
                     },
                 }}
                 conversationId="conv-1"
             />),
         );
 
-        expect(screen.getByText('Used your saved login for asur.work')).toBeTruthy();
+        expect(screen.getByText('Used your saved login for lemma.work')).toBeTruthy();
         expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy();
     });
 
@@ -191,14 +191,14 @@ describe('a waiting sign-in', () => {
                         success: true,
                         outcome: 'signed_in',
                         source: 'person',
-                        origin: 'https://asur.work',
+                        origin: 'https://lemma.work',
                     },
                 }}
                 conversationId="conv-1"
             />),
         );
 
-        expect(screen.getByText('Signed in to asur.work')).toBeTruthy();
+        expect(screen.getByText('Signed in to lemma.work')).toBeTruthy();
         expect(screen.queryByRole('button', { name: /sign out/i })).toBeNull();
     });
 });

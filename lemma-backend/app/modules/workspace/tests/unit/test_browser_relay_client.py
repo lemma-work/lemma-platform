@@ -290,5 +290,12 @@ async def test_bringing_a_viewer_up_asks_for_the_whole_display(_key) -> None:
         # asking it for a command it does not have fails the viewer outright
         # rather than degrading.
         assert "start-browser" in started[0]
+        # And the viewing half, which `lemma-ensure-display` no longer
+        # starts. x11vnc and websockify measured 66 MiB together in a 2 GB
+        # sandbox, and an agent doing research with nobody watching was
+        # paying it. This is the viewer's own path, so this is where it is
+        # asked for -- and a viewer that does not ask gets a relay that is
+        # up and a picture that never arrives.
+        assert "start-vnc-bridge" in started[0]
     finally:
         relay.close()

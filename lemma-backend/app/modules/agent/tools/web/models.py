@@ -91,6 +91,24 @@ class WebFetchPage(BaseModel):
             "the markdown was short would throw away what was wanted."
         ),
     )
+    status: Optional[int] = Field(
+        default=None,
+        description=(
+            "The HTTP status the plain fetch saw. Null on the browser path, "
+            "which cannot report one. Worth having because a status and a "
+            "page can disagree: a site answering 429 while serving the whole "
+            "article is saved, and told about, rather than re-fetched."
+        ),
+    )
+    blocked_by: Optional[str] = Field(
+        default=None,
+        description=(
+            "The bot defence that refused this request, when one did -- "
+            "`cloudflare`, `datadome`, `aws_waf`, `perimeterx`, or `unnamed` "
+            "for a challenge page whose vendor was not named. Absent means "
+            "nothing refused us, not that nothing could."
+        ),
+    )
     error: Optional[str] = None
 
 

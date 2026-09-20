@@ -234,6 +234,16 @@ def workspace_template():
             "/usr/local/bin/start-browser-relay",
             mode=0o755,
         )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/browser-is-live.sh",
+            "/usr/local/bin/browser-is-live",
+            mode=0o755,
+        )
+        .copy(
+            "lemma-backend/sandbox-images/scripts/start-vnc-bridge.sh",
+            "/usr/local/bin/start-vnc-bridge",
+            mode=0o755,
+        )
         # The browser relay, and the package files it needs to be importable.
         #
         # This template deliberately ships no workspace runtime -- an E2B
@@ -261,6 +271,10 @@ def workspace_template():
         .copy(
             "lemma-backend/sandbox_runtime/paths.py",
             "/app/sandbox_runtime/paths.py",
+        )
+        .copy(
+            "lemma-backend/sandbox_runtime/sandbox_memory.py",
+            "/app/sandbox_runtime/sandbox_memory.py",
         )
         .copy(
             "lemma-backend/sandbox_runtime/browser_relay",

@@ -30,6 +30,7 @@ import { readLastOpenedPodId, subscribeToLastOpenedPodId } from '@/lib/pods/last
 import { humanizeName } from '@/lib/utils/display-name';
 import { parseResourceIcon } from '@/lib/utils/resource-icon-value';
 import { formatRelativeTime } from '@/lib/utils/relative-time';
+import { OrganizationRole } from '@/lib/types';
 import type { AppPageRef } from '@/lib/types/app';
 
 /** Apps one pod shows before it starts counting. Past this the shelf stops
@@ -44,6 +45,27 @@ const SEARCH_THRESHOLD = 4;
  *  would open the page with fifty of them. Pods past this point still list and
  *  still open — they just arrive without their shelf. */
 const MAX_PODS_WITH_APP_SHORTCUTS = 12;
+
+/**
+ * Whether this viewer may share or delete *this* pod.
+ *
+ * Per pod, from the role the pod's own organization reports, and not from the
+ * flag that decides whether a "New pod" button is drawn. Those were the same
+ * prop: every listed pod inherited `showCreateAction`, so on a page that set it
+ * the share and delete controls appeared on all of them. On home, where the
+ * list spans organizations, one flag decided it for pods in organizations the
+ * viewer is merely a member of.
+ *
+ * The controls are a convenience either way -- the API refuses what the role
+ * does not allow -- but offering an action that will be refused is its own kind
+ * of wrong.
+ */
+function canManagePod(pod: AccessiblePod): boolean {
+    return (
+        pod.organization.role === OrganizationRole.ORG_OWNER ||
+        pod.organization.role === OrganizationRole.ORG_EDITOR
+    );
+}
 
 export function HomeWorkspaceOverview({
     pods,
@@ -173,7 +195,7 @@ export function HomeWorkspaceOverview({
                                 pod={pod}
                                 appPages={appPagesByPod.get(pod.id) || []}
                                 showOrganizationName={showOrganizationName}
-                                canManage={showCreateAction}
+                                canManage={canManagePod(pod)}
                                 onShare={() => setPodPendingShare(pod)}
                                 onDelete={() => setPodPendingDelete(pod)}
                             />

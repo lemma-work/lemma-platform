@@ -341,6 +341,15 @@ def _build_service(
         else None
     )
 
+    # Egress reads the pod from the conversation now, not from the surface, so a
+    # link implies a conversation. For every scenario in this file the two pods
+    # are the same; a personal DM is where they differ, and that has its own
+    # coverage.
+    if resolved_surfaces:
+        agent_conversations.surface_conversation.return_value = _surface_conversation(
+            resolved_surfaces[0]
+        )
+
     agent_conversations.surface_agent_identity.return_value = (
         SimpleNamespace(
             id=uuid4(), name="Surface Agent", is_pod_default=False, icon_url=None

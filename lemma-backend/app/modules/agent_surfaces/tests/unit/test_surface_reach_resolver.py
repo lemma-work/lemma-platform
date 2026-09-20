@@ -212,7 +212,7 @@ async def test_resend_falls_back_to_surface_email(monkeypatch):
         surface_type=SurfacePlatform.RESEND,
         account_id=None,
         surface_identity_id=None,
-        surface_identity_email="pod-abc@ops.asur.work",
+        surface_identity_email="pod-abc@ops.lemma.work",
     )
 
     reach = await SurfaceReachResolver().resolve(
@@ -222,8 +222,8 @@ async def test_resend_falls_back_to_surface_email(monkeypatch):
         surface_repository=FakeSurfaceRepository(),
     )
 
-    assert reach.handle == "pod-abc@ops.asur.work"
-    assert reach.email == "pod-abc@ops.asur.work"
+    assert reach.handle == "pod-abc@ops.lemma.work"
+    assert reach.email == "pod-abc@ops.lemma.work"
 
 
 # ---------------------------------------------------------------------------

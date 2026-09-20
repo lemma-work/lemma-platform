@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import JsonValue
+
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -144,6 +146,32 @@ def resolve_whatsapp_send_type(*, delivery_mode: str, mime_type: str) -> str:
     if requested != "auto":
         return requested
     return media_kind_for_mime(mime_type).value
+
+
+#: Meta's cap on an interactive message's body text. A flow whose body is
+#: longer is rejected outright, which would lose the form as well as the words.
+INTERACTIVE_BODY_LIMIT = 1024
+
+
+def flow_with_message(flow: dict[str, JsonValue], message: str) -> dict[str, JsonValue]:
+    """Put what the caller wanted to say inside the form it is sending.
+
+    A flow carries its own generic prompt ("Enter your verification code..."),
+    and sending the form on its own discards the only text that explains *why*
+    it is being shown again -- that the code was wrong, or expired, or that a
+    fresh one is on its way. The person then sees an identical blank form and
+    no reason for it. The caller's words go first, the standing prompt after.
+    """
+    text = (message or "").strip()
+    if not text:
+        return flow
+    merged = dict(flow)
+    body = dict(merged.get("body") or {})
+    standing = (body.get("text") or "").strip()
+    combined = f"{text}\n\n{standing}" if standing and standing != text else text
+    body["text"] = combined[:INTERACTIVE_BODY_LIMIT]
+    merged["body"] = body
+    return merged
 
 
 def whatsapp_message_bodies(message: str) -> list[str]:

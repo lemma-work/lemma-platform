@@ -49,7 +49,7 @@ export function PlainPageShell({
 
     return (
         <div className="flex h-dvh overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-primary)]">
-            <aside className="hidden h-full w-56 shrink-0 overflow-hidden border-r border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] md:block">
+            <aside className="hidden h-full w-64 shrink-0 overflow-hidden border-r border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] md:block">
                 <SettingsSidebar />
             </aside>
 

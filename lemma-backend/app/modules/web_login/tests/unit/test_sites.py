@@ -2,7 +2,7 @@
 
 The survivors of `scope.py`, and the only guessing this module still does --
 which is why they are worth pinning down. Everything that decided "is this a
-login" from cookie shapes is gone; grouping `api.asur.work` under `asur.work`
+login" from cookie shapes is gone; grouping `api.lemma.work` under `lemma.work`
 is a public-suffix fact, not a judgement.
 """
 
@@ -17,11 +17,11 @@ from app.modules.web_login.services.sites import (
 
 class TestTheSiteAHostBelongsTo:
     def test_a_subdomain_groups_under_its_registrable_domain(self) -> None:
-        """The whole reason this exists: `asur.work` and `api.asur.work` are
+        """The whole reason this exists: `lemma.work` and `api.lemma.work` are
         one login to a person, and listing them separately offers to forget
         half of one -- the half nobody visited on purpose."""
-        assert site_of("api.asur.work") == "asur.work"
-        assert site_of("asur.work") == "asur.work"
+        assert site_of("api.lemma.work") == "lemma.work"
+        assert site_of("lemma.work") == "lemma.work"
 
     def test_a_host_with_no_registrable_domain_has_no_site(self) -> None:
         """Empty, not the host itself. Callers decide what to do with that,
@@ -36,7 +36,7 @@ class TestTheSiteAHostBelongsTo:
 
 class TestWhetherTwoHostsAreOneSite:
     def test_a_subdomain_matches_its_site(self) -> None:
-        assert same_site("api.asur.work", "asur.work")
+        assert same_site("api.lemma.work", "lemma.work")
 
     def test_an_exact_match_is_the_fallback_where_there_is_no_site(self) -> None:
         """`localhost` and a bare IP have no registrable domain, so the only
@@ -56,8 +56,8 @@ class TestTheSiteAnOriginBelongsTo:
     """
 
     def test_an_origin_reduces_to_what_the_cookie_list_shows(self) -> None:
-        assert site_from_origin("https://api.asur.work/account") == "asur.work"
-        assert site_from_origin("asur.work") == "asur.work"
+        assert site_from_origin("https://api.lemma.work/account") == "lemma.work"
+        assert site_from_origin("lemma.work") == "lemma.work"
 
     def test_a_bare_ip_loses_its_port(self) -> None:
         """Caught by the sign-in e2e, which serves its site on a port.

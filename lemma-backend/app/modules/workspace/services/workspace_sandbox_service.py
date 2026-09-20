@@ -381,6 +381,7 @@ class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
             )
         with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
             await self._ensure_runtime_bundle(user_id, sandbox_info)
+            await self._ensure_browser_proxy(user_id, sandbox_info)
 
         if env_vars is None:
             with _tracer.start_as_current_span("lemma.workspace.env_vars"):

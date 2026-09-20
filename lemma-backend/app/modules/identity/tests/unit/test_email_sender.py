@@ -130,7 +130,7 @@ def test_resend_key_configures_documented_smtp_relay(monkeypatch):
     monkeypatch.setattr(settings, "smtp_password", None)
     monkeypatch.setattr(settings, "smtp_from_email", None)
     monkeypatch.setattr(settings, "resend_api_key", SecretStr("re_test_key"))
-    monkeypatch.setattr(settings, "resend_from_email", "local@ops.asur.work")
+    monkeypatch.setattr(settings, "resend_from_email", "local@ops.lemma.work")
 
     sender = EmailSender.from_settings()
 
@@ -138,7 +138,7 @@ def test_resend_key_configures_documented_smtp_relay(monkeypatch):
     assert sender.smtp_port == 465
     assert sender.smtp_user == "resend"
     assert sender.smtp_password == "re_test_key"
-    assert sender.from_email == "local@ops.asur.work"
+    assert sender.from_email == "local@ops.lemma.work"
     assert sender.use_tls is True
 
 

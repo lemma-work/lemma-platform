@@ -404,3 +404,39 @@ async def test_without_a_page_it_still_falls_back_to_the_origin() -> None:
         origin=SITE, auth_ctx=_Ctx(uuid4())
     )
     assert browser.opened == [SITE]
+
+
+class TestTheAddressIsReadToo:
+    """The shape this check is rebuilt to catch, and used to pass.
+
+    A login wall that serves its form at a neutral address under a neutral
+    title, without redirecting, defeats a title-and-substring test: the
+    text carries none of "sign in", "signin", "log in", "login" or
+    "password", so the page reads as not-a-wall, `already_signed_in`
+    answers True, and the caller is told the browser is signed in while a
+    login form is on screen. An app whose sign-in page is titled after the
+    product is the ordinary way to arrive here.
+    """
+
+    def test_a_product_titled_login_route_is_a_wall(self) -> None:
+        assert page_looks_like_a_login_wall("https://lemma.work/auth Lemma")
+
+    def test_a_neutral_title_does_not_rescue_an_auth_address(self) -> None:
+        assert page_looks_like_a_login_wall("https://x.test/authenticate Welcome")
+
+    def test_sso_counts(self) -> None:
+        assert page_looks_like_a_login_wall("https://x.test/sso/start ")
+
+    def test_an_author_page_is_not_a_login_wall(self) -> None:
+        """Whole path segments, not substrings: "auth" is inside "authors",
+        and a blog is not a login form."""
+        assert not page_looks_like_a_login_wall("https://blog.test/authors/jane Jane")
+
+    def test_an_ordinary_account_area_is_not_a_login_wall(self) -> None:
+        """`/accounts/` is where plenty of signed-in apps keep billing.
+        Treating it as a wall would ask people to sign in to somewhere they
+        already are, often."""
+        assert not page_looks_like_a_login_wall("https://x.test/app/accounts/1 Billing")
+
+    def test_a_dashboard_is_still_not_a_wall(self) -> None:
+        assert not page_looks_like_a_login_wall("https://x.test/dashboard Dashboard")

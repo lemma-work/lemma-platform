@@ -147,6 +147,9 @@ class _FakeSession:
         #: Emulate a page that rendered but had nothing in it -- the
         #: converter still writes its title and `Source:` header.
         self.header_only = False
+        #: The heading the converter writes. An interstitial renders to a
+        #: perfectly ordinary markdown file whose title is the giveaway.
+        self.browser_title = "A Title"
 
     # `writes` names only what the file API put there, so a test can still
     # assert the cheap path did not go through the browser.
@@ -192,7 +195,7 @@ class _FakeSession:
                     # ten-character body is not what a real capture looks
                     # like, and a fixture that thin makes the "nothing to
                     # read" guard fire on every test meant to be a success.
-                    else b"# A Title\n\nSource: https://example.com/\n\n"
+                    else f"# {self.browser_title}\n\nSource: https://example.com/\n\n".encode()
                     + b"Body text that is long enough to read. " * 5
                 )
 
@@ -217,18 +220,39 @@ class _FakeSession:
         return {"exit_code": 0, "stdout": ""}
 
 
-def _patch_extraction(monkeypatch, *, markdown: str | None, title: str = "A Title"):
-    """Stand in for the network fetch + trafilatura extraction."""
+def _patch_extraction(
+    monkeypatch,
+    *,
+    markdown: str | None,
+    title: str = "A Title",
+    status: int = 200,
+    verdict=None,
+    refusal_status: int | None = None,
+):
+    """Stand in for the network fetch + trafilatura extraction.
+
+    Extended rather than joined by a second helper: `check_test_doubles`
+    counts patch *sites*, and `modules/agent` is at its ceiling, so a new
+    `monkeypatch.setattr` anywhere in this file fails the build. Every new
+    case below is a keyword here.
+    """
     from app.modules.agent.tools.web import page_extract
 
     async def fake_fetch(url: str):
         if markdown is None:
             raise page_extract.PageFetchError(
                 "No readable article was found — the page probably renders its "
-                "content with JavaScript."
+                "content with JavaScript.",
+                status=refusal_status,
+                verdict=verdict,
             )
         return page_extract.ExtractedPage(
-            url=url, title=title, markdown=markdown, content_type="text/html"
+            url=url,
+            title=title,
+            markdown=markdown,
+            content_type="text/html",
+            status=status,
+            verdict=verdict or page_extract.NOT_BLOCKED,
         )
 
     monkeypatch.setattr(web_fetch_module, "fetch_and_clean", fake_fetch)
@@ -986,6 +1010,12 @@ class TestAnEmptyBrowserCapture:
     async def test_a_text_only_request_that_rendered_nothing_is_a_failure(
         self, monkeypatch
     ) -> None:
+        # Extraction is stubbed to force the browser path. It used to be
+        # left unstubbed, which meant this unit test really fetched
+        # `https://example.com/shell` over the network and depended on that
+        # URL answering 404 to escalate -- a live request, and a 404 the
+        # cheap path is now right to refuse without spending a browser on.
+        _patch_extraction(monkeypatch, markdown=None)
         session = _FakeSession()
         session.header_only = True
         _patch_session(monkeypatch, session)
@@ -1009,6 +1039,7 @@ class TestAnEmptyBrowserCapture:
         `success=False` with no files at all, throwing away a screenshot
         that was exactly what somebody asked for.
         """
+        _patch_extraction(monkeypatch, markdown=None)
         session = _FakeSession()
         session.header_only = True
         _patch_session(monkeypatch, session)
@@ -1039,3 +1070,151 @@ class TestAnEmptyBrowserCapture:
 
         assert result.pages[0].success is True
         assert result.pages[0].files.get("markdown")
+
+
+class TestTellingABlockFromAPage:
+    """The two opposite failures the detector exists to end.
+
+    Every status and body here is a real measurement: reuters.com answered
+    429 with 6,935 characters of article, zillow.com answered 200 with a
+    106-character "Access denied", and g2.com answered 403 with DataDome's
+    headers and 5,057 characters of content.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_site_that_refuses_our_address_does_not_get_a_browser(
+        self, monkeypatch
+    ) -> None:
+        """A DataDome 403 refused curl, headed Chrome and headless Chrome
+        identically. Spending a render on it costs seven seconds and one of
+        only five slots in the batch -- which can starve a page the browser
+        would have rescued."""
+        from app.modules.agent.tools.web.blocked import BlockVerdict
+
+        _patch_extraction(
+            monkeypatch,
+            markdown=None,
+            refusal_status=403,
+            verdict=BlockVerdict(True, "datadome", "datadome_403", "certain", False),
+        )
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://g2.com/x"], formats=["markdown"]),
+        )
+
+        page = result.pages[0]
+        assert page.success is False
+        assert page.blocked_by == "datadome"
+        assert page.status == 403
+        assert not any("save-webpage" in cmd for cmd in session.commands), (
+            "the browser must not be spent on a refusal it shares"
+        )
+        assert session.writes == {}, (
+            "and nothing may be written into the person's workspace"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_cloudflare_challenge_does_get_a_browser(self, monkeypatch) -> None:
+        """A managed challenge is JavaScript, which is the one thing a real
+        headed Chrome can actually do about it."""
+        from app.modules.agent.tools.web.blocked import BlockVerdict
+
+        _patch_extraction(
+            monkeypatch,
+            markdown=None,
+            refusal_status=403,
+            verdict=BlockVerdict(True, "cloudflare", "cf_mitigated", "certain", True),
+        )
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["https://stackoverflow.com/q/1"], formats=["markdown"]
+            ),
+        )
+
+        assert any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_an_article_served_under_a_grumpy_status_is_kept(
+        self, monkeypatch
+    ) -> None:
+        """reuters.com/technology/, measured: 429 with the whole article.
+        Re-fetching that through a browser pays for a page we already had."""
+        _patch_extraction(monkeypatch, markdown="Real article. " * 40, status=429)
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(
+                urls=["https://reuters.com/technology/"], formats=["markdown"]
+            ),
+        )
+
+        page = result.pages[0]
+        assert page.success is True
+        assert page.status == 429
+        assert "429" in (page.notice or ""), "the disagreement is worth saying"
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_a_page_that_is_simply_not_there_gets_no_browser(
+        self, monkeypatch
+    ) -> None:
+        _patch_extraction(monkeypatch, markdown=None, refusal_status=404)
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/gone"], formats=["markdown"]),
+        )
+
+        assert result.pages[0].success is False
+        assert result.pages[0].status == 404
+        assert not any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_javascript_page_still_escalates(
+        self, monkeypatch
+    ) -> None:
+        """The default that must not change: everything the detector has no
+        opinion about behaves exactly as it did before it existed."""
+        _patch_extraction(monkeypatch, markdown=None)
+        session = _FakeSession()
+        _patch_session(monkeypatch, session)
+
+        await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/app"], formats=["markdown"]),
+        )
+
+        assert any("save-webpage" in cmd for cmd in session.commands)
+
+    @pytest.mark.asyncio
+    async def test_a_rendered_bot_check_is_not_an_article(self, monkeypatch) -> None:
+        """The browser path's version of the same hole. An interstitial
+        renders to markdown with a title and a couple of hundred characters
+        -- comfortably past the thin-content floor -- and was saved as the
+        article. Headers do not survive the markdown conversion, so the
+        title is the only evidence left, and it is enough for this case."""
+        _patch_extraction(monkeypatch, markdown=None)
+        session = _FakeSession()
+        session.browser_title = "Just a moment..."
+        _patch_session(monkeypatch, session)
+
+        result = await web_fetch_module.web_fetch_internal(
+            SimpleNamespace(),
+            WebFetchRequest(urls=["https://example.com/walled"], formats=["markdown"]),
+        )
+
+        page = result.pages[0]
+        assert page.success is False
+        assert page.blocked_by == "unnamed"
+        assert "bot check" in (page.error or "")

@@ -510,7 +510,7 @@ async def test_platform_webhook_verification_endpoints_and_signature_rejection(
     assert missing_signature.status_code == 401
 
 
-async def test_surface_credentials_are_unique_within_org_until_deleted(
+async def test_a_system_credential_is_claimed_once_per_organization(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
@@ -518,6 +518,19 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     fake_slack,
     monkeypatch,
 ):
+    """Both halves of "one credential, one owner", through HTTP.
+
+    This asserted the opposite for the shared bot until the WhatsApp/Telegram
+    exemption came out. The exemption covered the two platforms whose system
+    credential is most plainly an identity -- one number, one bot -- so two
+    organizations could each hold the same one and an inbound message had no
+    predictable answer to whose it was. It also put the catalog and the writer
+    into disagreement: `_system_claim` never had the exemption, so it reported
+    the option as taken while the write went through anyway.
+
+    Onboarding still gives each personal pod its own shared surface; it writes
+    through the repository and does not come through this path.
+    """
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -549,19 +562,10 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         json={"platform": "WHATSAPP"},
     )
     assert duplicate_system.status_code == 409, duplicate_system.text
-    assert "System WHATSAPP credentials are already used" in duplicate_system.text
-    # The setup UI names the pod holding the claim and links to it, so the
-    # conflict has to be structured — not just a message.
-    conflict_body = duplicate_system.json()
-    assert conflict_body["code"] == "AGENT_SURFACE_CREDENTIAL_CONFLICT"
-    assert conflict_body["details"]["kind"] == "SYSTEM"
-    assert conflict_body["details"]["conflicting_surface"] == {
-        "pod_id": primary_pod_id,
-        "name": "whatsapp",
-    }
+    assert duplicate_system.json()["details"]["kind"] == "SYSTEM"
 
-    # And the catalog publishes the same claim up front, so the option can be
-    # disabled before the user commits.
+    # And the catalog says the same thing before anybody tries, which is the
+    # agreement the exemption broke.
     catalog = await authenticated_client.get(
         f"/pods/{sibling_pod_id}/available-surfaces"
     )
@@ -580,11 +584,13 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     )
     assert deleted_system.status_code == 204, deleted_system.text
 
+    # Released, not spent: the next pod to ask gets it.
     reused_system = await authenticated_client.post(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
     assert reused_system.status_code == 200, reused_system.text
+    assert reused_system.json()["pod_id"] == sibling_pod_id
 
     account = await _ensure_connector_account(
         db_session,
@@ -611,8 +617,7 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "SLACK", "account_id": str(account.id)},
     )
-    # Same AgentSurfaceCredentialConflict as the SYSTEM case above, so the same
-    # 409 - a conflict, not an unprocessable body.
+    # Customer-owned installations still have one credential owner.
     assert duplicate_account.status_code == 409, duplicate_account.text
     assert "connected account is already used" in duplicate_account.text
 
@@ -799,7 +804,7 @@ async def test_create_resend_email_surface_provisions_address(
         )
     ).scalar_one()
     assert row.surface_identity_email and row.surface_identity_email.endswith(
-        "@ops.asur.work"
+        "@ops.lemma.work"
     )
 
 

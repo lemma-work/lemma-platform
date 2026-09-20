@@ -24,6 +24,11 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContex
 from app.modules.agent_surfaces.api import dependencies as surface_dependencies
 from app.modules.agent_surfaces.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
+from app.modules.agent_surfaces.services.chat_onboarding import OnboardingIngressResult
+
+
+async def _recognized_sender(_request):
+    return OnboardingIngressResult(False)
 
 
 @asynccontextmanager
@@ -109,6 +114,7 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
         inbox=PassthroughEventInbox(),
+        onboarding_handler=_recognized_sender,
     )
 
     handler.try_handle_interaction.assert_awaited_once()
@@ -140,6 +146,7 @@ async def test_a_batched_delivery_enqueues_one_job_per_message(monkeypatch):
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
         inbox=PassthroughEventInbox(),
+        onboarding_handler=_recognized_sender,
     )
 
     assert job_queue.enqueue.await_count == 3
@@ -172,6 +179,7 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
         inbox=PassthroughEventInbox(),
+        onboarding_handler=_recognized_sender,
     )
 
     handler.prepare_ingress.assert_not_awaited()
@@ -198,6 +206,7 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
         inbox=PassthroughEventInbox(),
+        onboarding_handler=_recognized_sender,
     )
 
     handler.prepare_ingress.assert_awaited_once()
@@ -229,6 +238,7 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=AsyncMock(),
         inbox=PassthroughEventInbox(),
+        onboarding_handler=_recognized_sender,
     )
 
     request = handler.prepare_ingress.await_args.args[0]
@@ -287,6 +297,7 @@ async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
         inbox=PassthroughEventInbox(),
+        onboarding_handler=_recognized_sender,
     )
 
     handler.try_handle_channel_setup.assert_not_awaited()
@@ -352,6 +363,7 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
         inbox=PassthroughEventInbox(),
+        onboarding_handler=_recognized_sender,
     )
 
     handler.try_handle_lifecycle.assert_awaited_once()

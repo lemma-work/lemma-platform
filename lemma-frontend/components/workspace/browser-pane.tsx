@@ -183,7 +183,7 @@ export function BrowserPane({
     // its own profile -- at the site, and that browser may be cold. The pane
     // meanwhile connects and paints whatever the display holds, which is a
     // blank page with a New Tab beside it. Somebody who came back to the
-    // conversation an hour later clicked "Open asur.work", got exactly that,
+    // conversation an hour later clicked "Open lemma.work", got exactly that,
     // and had nothing to tell them whether it was working, finished, or
     // broken. Answering late is the normal case for a question that pauses a
     // run, so it has to read as progress rather than as an empty browser.

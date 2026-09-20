@@ -44,6 +44,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import tempfile
 
 import httpx
 
@@ -245,8 +246,13 @@ def recorded_port(session: str | None = None) -> int:
         raise BrowserNotRunning(f"no port recorded at {path} ({exc!r})") from exc
 
 
-async def _answers_on(port: int) -> bool:
-    """Whether anything is actually listening, as opposed to recorded."""
+async def answers_on(port: int) -> bool:
+    """Whether anything is actually listening, as opposed to recorded.
+
+    Public because the relay asks it of websockify's port as well: "the
+    bridge script exited 0" and "a viewer will get a picture" are different
+    claims, and this is the one that answers the second.
+    """
     try:
         _, writer = await asyncio.wait_for(
             asyncio.open_connection("127.0.0.1", port),
@@ -268,11 +274,81 @@ async def live_port(session: str | None = None) -> int:
     This is the ambient answer: a workspace whose browser has been shed for
     idleness or memory is the ordinary resting state, and asking to look at it
     should not conjure one.
+
+    **Two places are asked, because Chrome does not always use the profile it
+    was given.** `agent-browser` can run Chrome on a throwaway
+    `--user-data-dir=/tmp/agent-browser-chrome-<uuid>` and copy the profile
+    back on close -- measured, and what a bare `agent-browser open` does --
+    and Chrome writes `DevToolsActivePort` into whichever directory it is
+    actually using. So the configured profile's copy can name a launch that
+    ended, while the live browser is recorded somewhere else entirely:
+
+        ensure 1: recorded=45007 live=40977 recorded_answers=no
+        ensure 2: recorded=40977 live=42989 recorded_answers=no
+
+    `lemma-ensure-display` no longer provokes that, but the fix is in the
+    image and this is in the runtime bundle -- which is installed on every
+    session, so it reaches sandboxes the image has not reached yet. It is
+    also the more durable half: it holds whatever agent-browser decides to do
+    next.
     """
-    port = recorded_port(session)
-    if not await _answers_on(port):
-        raise BrowserNotRunning(f"nothing answers on the recorded port {port}")
-    return port
+    for port in _candidate_ports(session):
+        if await answers_on(port):
+            return port
+    raise BrowserNotRunning("nothing answers on any recorded port")
+
+
+def _candidate_ports(session: str | None) -> list[int]:
+    """Every port a Chrome in this sandbox could have recorded, best first.
+
+    The configured profile first, because that is where Chrome writes when
+    it is given one and used it. Then agent-browser's own scratch profiles,
+    newest first -- there is normally at most one, and a stale directory
+    whose port answers nothing costs a refused connection to rule out.
+
+    **The scratch sweep is for the default session only, and that is a
+    boundary rather than an optimisation.** A scratch directory is named
+    `agent-browser-chrome-<uuid>` and records nothing about whose browser it
+    is, so a named session whose recorded port had gone stale would pick up
+    whatever scratch Chrome was newest -- and the named session that exists
+    in this product is `login-<host>`, the one a person types a password
+    into. `/targets` would list its pages and `/profile:forget` would clear
+    its data, both while naming a different session.
+
+    The literal `/tmp` is deliberate, not an oversight flagged by a linter:
+    this is not a temporary file this process creates, it is where
+    agent-browser was *measured* to put its scratch profiles.
+    `tempfile.gettempdir()` honours `TMPDIR`, so a relay started with one
+    set would look somewhere the browser never writes and quietly find
+    nothing.
+
+    Nothing is lost by the restriction. The sweep exists for images that
+    predate this branch, where `lemma-ensure-display` ended in a bare
+    `agent-browser open` and stranded the port file -- and that is the
+    *default* browser's path. Every named session is started from this
+    module, through `agent_browser_argv(..., session=...)` with a URL, which
+    keeps Chrome on the configured profile and so keeps its recorded port
+    accurate. A named session that cannot be found by its own port file is
+    genuinely not running, and saying so is the honest answer.
+    """
+    found: list[int] = []
+    with suppress(BrowserNotRunning):
+        found.append(recorded_port(session))
+    if session is not None and session != DEFAULT_SESSION:
+        return found
+    scratch = sorted(
+        Path("/tmp").glob("agent-browser-chrome-*/DevToolsActivePort"),
+        key=lambda p: p.stat().st_mtime if p.exists() else 0,
+        reverse=True,
+    )
+    for path in scratch[:4]:
+        try:
+            port = int(path.read_text().splitlines()[0].strip())
+        except OSError, IndexError, ValueError:
+            continue
+        if port not in found:
+            found.append(port)
+    return found
 
 
 async def ensure_port(*, session: str | None = None) -> int:
@@ -489,6 +565,147 @@ def default_display_size() -> tuple[int, int]:
     return _FALLBACK_SCREEN
 
 
+#: Brings up x11vnc and websockify. Not started with the display: they serve
+#: a person watching, and measured at 67 MiB together in a sandbox where
+#: most sessions have nobody watching at all.
+_START_VNC_BRIDGE = "/usr/local/bin/start-vnc-bridge"
+
+#: Bounded well under the ten seconds a `websockets.connect` will wait for
+#: a handshake, because this runs *before* `accept()`: a viewer whose relay
+#: sits here longer than that gives up mid-handshake and sees a dropped
+#: TCP connection with no close frame and no reason attached, which is
+#: strictly worse than a refusal it can read.
+#:
+#: Shorter than the script's own worst case, and safe. The old worry was
+#: killing the script between starting x11vnc and starting websockify, but
+#: both launches happen in the first few hundred milliseconds and the rest
+#: of the script is only waiting for ports; the children are `setsid`
+#: detached, so killing the waiter never kills them, it only gives up
+#: watching. `/vnc`'s own probe decides the answer either way, so giving up
+#: early costs one refusal the viewer can read and retry, not a wrong yes.
+#:
+#: A backstop rather than a budget: measured cold, a whole first viewer --
+#: bridge, handshake and first RFB frame -- takes 0.68 s, and a warm one
+#: 0.33 s. Nothing reaches this number unless something is actually wrong.
+_VNC_BRIDGE_TIMEOUT_SECONDS = 8.0
+
+
+async def ensure_vnc_bridge() -> bool:
+    """Start the viewing chain if it is not up. True when a viewer can be served.
+
+    Called by `/vnc` before it accepts, because the relay is what serves the
+    socket and so the relay is what must guarantee its own upstream. The
+    backend's ensure string asks for this too, but not every caller comes
+    through the backend -- the workspace e2e drives this route directly, and
+    found exactly the gap this closes.
+
+    Missing script means an older image, where both processes are already
+    running because the display brought them up. Nothing to start, and not
+    an error.
+
+    **Stderr goes to a file and this waits on the process, rather than
+    `communicate()`.** Measured, and the difference is not small: the same
+    script takes 0.22s from a standalone `asyncio.run` and hits an
+    eight-second timeout from inside the relay, every time, while its work
+    has actually finished in the first fraction of a second. `communicate()`
+    returns when the process exits *and* the pipe reaches EOF, and the write
+    end of that pipe is inherited by the `setsid` grandchildren this script
+    exists to leave running -- x11vnc and websockify outlive it deliberately,
+    so the pipe never closes and the wait always runs to the timeout.
+
+    In CI that timeout was the whole failure: the route sat here for longer
+    than a `websockets.connect` will wait for a handshake, and the viewer saw
+    a dropped TCP connection with no close frame and no reason. A file has no
+    EOF to wait for, and it cannot fill and deadlock either.
+    """
+    if not Path(_START_VNC_BRIDGE).exists():
+        return True
+    log = logging.getLogger(__name__)
+    with tempfile.TemporaryDirectory(prefix="lemma-vnc-bridge-") as directory:
+        errors = Path(directory) / "stderr"
+        try:
+            with errors.open("wb") as sink:
+                process = await asyncio.create_subprocess_exec(
+                    _START_VNC_BRIDGE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=sink,
+                )
+        except OSError as exc:
+            log.warning("could not start the VNC bridge: %r", exc)
+            return False
+        try:
+            await asyncio.wait_for(process.wait(), timeout=_VNC_BRIDGE_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            with suppress(ProcessLookupError):
+                process.kill()
+            with suppress(ProcessLookupError):
+                await process.wait()
+            log.warning(
+                "the VNC bridge did not finish within %.0fs; anything it "
+                "started is detached and left running",
+                _VNC_BRIDGE_TIMEOUT_SECONDS,
+            )
+            return False
+        if process.returncode != 0:
+            # The whole of the script's stderr, not a 200-character prefix
+            # of it: the script deliberately tails the failing process's
+            # log into that stream, and truncating it throws away the only
+            # evidence of why -- which is exactly what happened the last
+            # time this failed.
+            said = errors.read_bytes().decode("utf-8", "replace").strip()
+            log.warning("the VNC bridge did not come up:\n%s", said)
+            return False
+    return True
+
+
+class RecordingInProgress(RuntimeError):
+    """A recording is running, so the display may not change size."""
+
+
+async def recording_in_progress() -> bool:
+    """Whether `agent-browser record` is capturing the display right now.
+
+    Detected by the recorder process, because agent-browser has no `record
+    status` to ask -- the CLI offers `start` and `stop` and nothing between
+    them. Measured in the sandbox: zero `ffmpeg` processes before a take,
+    exactly one during, zero after. Nothing else in this image runs ffmpeg
+    on its own.
+
+    `-x`, so the match is the program name and not a command line that
+    happens to mention it -- the mistake the old memory guard made with its
+    pattern list, which matched 1 of 14 Chromium processes.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "pgrep",
+            "-x",
+            "ffmpeg",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        # No `pgrep` is not evidence of a recording. Refusing every resize
+        # on a missing tool would be worse than the thing this prevents.
+        return False
+    try:
+        return await asyncio.wait_for(process.wait(), timeout=5) == 0
+    except asyncio.TimeoutError:
+        # Fail *closed*, unlike the missing-`pgrep` branch above. A probe
+        # that hung is not evidence of no recording, and the two mistakes
+        # do not cost the same: a wrong "yes" is a 409 the viewer can retry
+        # a moment later, a wrong "no" resizes the framebuffer mid-take and
+        # the recording is already spoiled by the time anyone sees it. The
+        # missing-tool branch is the other way round because there the
+        # answer never changes -- failing closed there refuses every resize
+        # forever.
+        with suppress(ProcessLookupError):
+            process.kill()
+        # Reaped, or the killed probe stays a zombie on a long-lived relay.
+        with suppress(ProcessLookupError):
+            await process.wait()
+        return True
+
+
 async def set_display_size(width: int, height: int) -> str | None:
     """Resize the shared display, returning the size it settled on.
 
@@ -504,6 +721,17 @@ async def set_display_size(width: int, height: int) -> str | None:
     """
     if not Path(_SET_DISPLAY_SIZE).exists():
         return None
+    if await recording_in_progress():
+        # The recorder is built around the framebuffer it started with --
+        # its ffmpeg runs `-vf pad=...` sized at `record start` -- so moving
+        # the display under it produces a broken take at best. A person
+        # opening the pane, or the last one closing it, must not be able to
+        # ruin a capture the agent is part-way through; the viewer keeps a
+        # letterboxed picture instead, which is recoverable.
+        raise RecordingInProgress(
+            "the display is being recorded, so its size is held until the "
+            "recording stops"
+        )
     try:
         process = await asyncio.create_subprocess_exec(
             _SET_DISPLAY_SIZE,

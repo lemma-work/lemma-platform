@@ -1990,6 +1990,8 @@ quality:
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-controller-types
 	@echo "→ Swallowed errors…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-swallowed-errors
+	@echo "→ Public prose…"
+	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-public-prose
 	@echo "→ Migration order…"
 	@cd $(BACKEND_DIR) && $(MAKE) --no-print-directory lint-migration-order
 	@echo "→ In-subject test doubles…"

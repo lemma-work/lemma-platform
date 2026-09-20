@@ -102,6 +102,7 @@ class SurfaceConversationLinkMixin:
                 route_key=link.route_key or route.route_key,
                 routed_agent_id=link.routed_agent_id or route.agent_id,
                 conversation_kind=link.conversation_kind or route.conversation_kind,
+                agent_name=route.agent_name,
             )
             return (updated or link), None
 
@@ -160,18 +161,22 @@ class SurfaceConversationLinkMixin:
         # differ, and this reads "the agent changed" for a thread whose agent
         # never changed -- cutting a fresh conversation and stranding the history
         # the person can still see above the reply.
-        def same_agent(left: UUID | None, right: UUID | None) -> bool:
-            return effective_agent_id(
-                left, pod_id=surface.pod_id
-            ) == effective_agent_id(right, pod_id=surface.pod_id)
+        def same_agent(left: UUID | None, right: UUID | None, *, pod_id: UUID) -> bool:
+            return effective_agent_id(left, pod_id=pod_id) == effective_agent_id(
+                right, pod_id=pod_id
+            )
 
         if (
             route is not None
             and current_conversation_agent_id is not None
-            and not same_agent(current_conversation_agent_id, route.agent_id)
+            and not same_agent(
+                current_conversation_agent_id, route.agent_id, pod_id=route.pod_id
+            )
         ):
             return True
-        if route is not None and not same_agent(link.routed_agent_id, route.agent_id):
+        if route is not None and not same_agent(
+            link.routed_agent_id, route.agent_id, pod_id=route.pod_id
+        ):
             return True
         shape = thread_shape(
             link.conversation_kind or (route.conversation_kind if route else None)
@@ -204,13 +209,13 @@ class SurfaceConversationLinkMixin:
         )
         auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
             user_id=resolved_user.internal_user_id,
-            pod_id=surface.pod_id,
+            pod_id=route.pod_id,
         )
         token = set_current_context(auth_ctx)
         try:
             return await agent_conversations.open_surface_conversation(
                 self.uow,
-                pod_id=surface.pod_id,
+                pod_id=route.pod_id,
                 agent_name=route.agent_name,
                 user_id=resolved_user.internal_user_id,
                 title=self._surface_conversation_title(
@@ -250,6 +255,7 @@ class SurfaceConversationLinkMixin:
         route_key: str | None = None,
         routed_agent_id: UUID | None = None,
         conversation_kind: str | None = None,
+        agent_name: str | None = None,
     ) -> None:
         surface_event_metadata = build_surface_event_metadata(
             surface.surface_type.value,
@@ -267,13 +273,11 @@ class SurfaceConversationLinkMixin:
             "route_key": route_key,
             "conversation_kind": conversation_kind,
             "routed_agent_id": str(routed_agent_id) if routed_agent_id else None,
-            # `agent_name_for_surface` answers with the *row* name, so the pod's
-            # own agent answers `pod_default`. The `or "Lemma"` that used to sit
-            # here never caught it: a stored name is not falsy, and that guard
-            # was written when the agent had no row and the name really was null.
-            "agent_display_name": agent_display_name(
-                await self.agent_name_for_surface(surface)
-            ),
+            # From the route, which names the agent that is answering. Reading
+            # it off the surface answered "whose installation is this", which is
+            # a different question wherever the two differ -- and the reason the
+            # personal path had to hand this function a doctored surface.
+            "agent_display_name": agent_display_name(agent_name),
             "surface_event_metadata": (
                 surface_event_metadata.model_dump(mode="json")
                 if surface_event_metadata
