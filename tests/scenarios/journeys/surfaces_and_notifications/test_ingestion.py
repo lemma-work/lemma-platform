@@ -50,14 +50,11 @@ async def test_an_unknown_sender_is_told_how_to_get_access(forged):
 
     await stranger.says("hello there")
 
-    replies = await eventually(
-        stranger.replies,
-        bool,
-        describe="the agent to reply in the Telegram chat",
-        timeout=UNTIL_ANSWERED,
-    )
+    # Same reason as the scenario below: the streamed placeholder satisfies
+    # "there is a reply" before there are any words in it.
+    spoken = await stranger.waits_for_a_reply(timeout=UNTIL_ANSWERED)
 
-    answer = replies[0].text
+    answer = spoken.text
     assert answer, "a reply with no words is not an answer"
     # This sender is a Telegram account nobody has linked to a Lemma user, so
     # the right answer is how to become known — not pod content, and not silence.
@@ -65,7 +62,7 @@ async def test_an_unknown_sender_is_told_how_to_get_access(forged):
         f"an unrecognised sender should be told how to get access; got: {answer!r}"
     )
     # And it is asked natively, not as text telling them what to type.
-    assert replies[0].choices, (
+    assert spoken.choices, (
         f"Telegram supports native controls, so the ask should use one: {answer!r}"
     )
 
@@ -103,13 +100,10 @@ async def test_reaching_the_bot_is_not_membership_of_the_pod(world, forged):
 
     await theirs.says("Show me what is in this workspace.")
 
-    said = await eventually(
-        theirs.replies,
-        bool,
-        describe="the pod to answer somebody it has never admitted",
-        timeout=UNTIL_ANSWERED,
-    )
-    answer = said[0].text
+    # `waits_for_a_reply`, not `replies` — Lemma streams, so the first message
+    # in a chat is an empty placeholder it fills in as the answer arrives, and
+    # waiting for "a message" would hand this assertion `''`.
+    answer = (await theirs.waits_for_a_reply(timeout=UNTIL_ANSWERED)).text
     assert "access" in answer.lower(), (
         f"a signed-up person outside the pod should be told how to get into it "
         f"rather than left guessing why the bot went quiet; got: {answer!r}"

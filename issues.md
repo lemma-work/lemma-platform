@@ -50,16 +50,31 @@ surface somebody switched off has never been decided.
 **Actual:** `AgentSurfaceStatus.INACTIVE` is reachable from three write paths —
 `surface_controller.py:287` (creating with `is_enabled: false`),
 `surface_controller.py:405` (patching `is_enabled`), and
-`managed_bot_persistence.py:149` (a managed bot whose setup is not enabled). Both
-routing reads filter `status == AgentSurfaceStatus.ACTIVE`, so a disabled surface
-matches no candidate. The webhook is still live, still verifies the signature, and
-still returns 200; the message then routes to nothing and is discarded with no
-reply and no record. Nothing in `lemma-frontend/src` mentions the status, so
-there is no way to see or unset it from the product.
+`managed_bot_persistence.py:149` (a managed bot whose setup is not enabled).
+
+*Messages* are dropped on both inbound routes. The shared platform endpoint goes
+through `surface_repository.py:121` and `:174`, which filter
+`status == AgentSurfaceStatus.ACTIVE`, so a disabled surface is never a
+candidate; the surface-addressed endpoint reaches
+`surface_inbound.py:352`, which returns `None` on `not surface.is_active`
+before the payload is even parsed. Either way ingress yields no context, the
+worker enqueues nothing, and no reply, conversation or message row is produced.
+
+*Slack lifecycle events are not.* `webhook_ingest.py:300` calls
+`AppEventHandler.try_handle_channel_setup` **in the HTTP request, before
+anything is published** — because a `trigger_id` expires in about three seconds
+— and `app_event_handler.py` consults `status` nowhere. So a disabled Slack
+surface still opens its channel-setup modal.
+
+Nothing in `lemma-frontend/src` mentions the status, so there is no way to see or
+unset it from the product.
 **Why it matters:** the platform side keeps working — the bot is still in the
 channel, the number still receives — so a person messaging a disabled surface
-sees their message delivered and simply never answered. It is indistinguishable
-from the agent ignoring them, and the deployment has no signal either.
+sees their message delivered and simply never answered, indistinguishable from
+the agent ignoring them, with no signal on either side. On Slack it is stranger
+than that: the surface still opens configuration modals, so it answers clicks
+and not words. Whatever `INACTIVE` is supposed to mean, it does not currently
+mean one thing.
 **Fix:** unknown, and that is the point of the entry. Three shapes are possible
 and they are product decisions, not code ones: (a) `INACTIVE` should not exist —
 deleting a surface is the way to stop it, and the flag is a half-built feature
