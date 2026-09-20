@@ -213,6 +213,24 @@ async def handle_surface_webhook(
     return {"message": "Webhook received"}
 
 
+def _token_matches(provided: str | None, expected: str | None) -> bool:
+    """Compare a verify token without leaking its length or prefix in timing.
+
+    `==` on a secret returns as soon as two bytes differ, so the time it takes
+    says how much of the token was right -- and this one is guessable a
+    character at a time by anyone who can reach the endpoint, which is the whole
+    internet, because a platform has to. The signature check two functions up
+    already uses `compare_digest`; this comparison was the odd one out.
+
+    A missing expected token is never a match. Otherwise an unconfigured
+    deployment would accept `hub.verify_token` absent as equal to absent and
+    hand out its challenge.
+    """
+    if not provided or not expected:
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
 def _webhook_verification_response(
     platform: str, params: dict[str, str], *, whatsapp_verify_token: str | None = None
 ) -> Response:
@@ -228,7 +246,10 @@ def _webhook_verification_response(
         if (
             mode == "subscribe"
             and challenge
-            and (not security_enabled or verify_token == whatsapp_verify_token)
+            and (
+                not security_enabled
+                or _token_matches(verify_token, whatsapp_verify_token)
+            )
         ):
             return Response(content=challenge, media_type="text/plain")
 
