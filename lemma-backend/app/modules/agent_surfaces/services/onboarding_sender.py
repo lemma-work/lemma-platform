@@ -50,6 +50,7 @@ from app.modules.agent_surfaces.services.onboarding_pod_choice import (
 )
 from app.modules.agent_surfaces.services.onboarding_transport import OnboardingTransport
 from app.modules.agent_surfaces.services.personal_dm_routes import (
+    PersonalRouteUnavailable,
     prepare_personal_dm_context,
 )
 from app.modules.identity.contracts.onboarding import (
@@ -209,13 +210,29 @@ async def recognize_sender(
             external_message_id=event.external_message_id,
         ):
             return OnboardingIngressResult(True)
-        async with uows() as uow:
-            context = await prepare_personal_dm_context(
-                uow,
-                route_id=route.id,
-                event=event,
-                linker=get_surface_event_handler(uow),
+        try:
+            async with uows() as uow:
+                context = await prepare_personal_dm_context(
+                    uow,
+                    route_id=route.id,
+                    event=event,
+                    linker=get_surface_event_handler(uow),
+                )
+        except PersonalRouteUnavailable:
+            # The route died between one message and the next: the pod deleted,
+            # the person removed from it, the app uninstalled. The claim goes
+            # back with it, because this message has not been delivered and the
+            # path that will deliver it -- ordinary ingestion, which routes by
+            # pod membership -- takes a claim of its own. Holding it here would
+            # make that second attempt read as a duplicate and drop the message.
+            await event_dedup_store.release_message(
+                surface_installation_id=route.installation_surface_id,
+                platform=event.platform.value,
+                external_channel_id=event.external_channel_id,
+                external_thread_id=event.external_thread_id,
+                external_message_id=event.external_message_id,
             )
+            return OnboardingIngressResult(False)
         return OnboardingIngressResult(True, context)
     if verified_user_id is not None:
         offered = await offer_workspace_choice(uows, transport, verified_user_id)

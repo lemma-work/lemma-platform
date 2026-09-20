@@ -178,6 +178,45 @@ async def handle_surface_webhook(
     await inbox.process("agent-surfaces.webhook", received, process)
 
 
+async def _context_for_delivery(
+    part: SurfaceIngressRequest,
+    *,
+    onboarding_handler: Callable[
+        [SurfaceIngressRequest], Awaitable[OnboardingIngressResult]
+    ],
+    uow_factory: UnitOfWorkFactory,
+) -> AgentSurfaceContext | None:
+    """Onboarding's answer for one delivery, or ordinary ingestion's.
+
+    The two refusals caught here mean "this message cannot go the onboarding
+    way", and neither gets better on a retry: a personal route dies when the pod
+    is deleted, the person is removed from it, or the app is uninstalled.
+    Uncaught, they left the inbox retrying a message that can never succeed and
+    the person with no answer at all. Ordinary ingestion is the right next
+    thing -- it routes by pod membership, and where it cannot it says so, which
+    is the reply this was costing them.
+    """
+    from app.modules.agent_surfaces.services.onboarding_private_delivery import (
+        PrivateDeliveryUnavailable,
+    )
+    from app.modules.agent_surfaces.services.personal_dm_routes import (
+        PersonalRouteUnavailable,
+    )
+
+    try:
+        onboarding = await onboarding_handler(part)
+    except (PersonalRouteUnavailable, PrivateDeliveryUnavailable) as unavailable:
+        logger.info(
+            "agent_surfaces.events.handlers.onboarding_route_unavailable",
+            reason=str(unavailable),
+        )
+    else:
+        if onboarding.handled:
+            return onboarding.context
+    async with uow_factory() as uow:
+        return await build_surface_event_handler(uow).prepare_ingress(part)
+
+
 async def _release_claim_for_retry(
     context: AgentSurfaceContext,
     *,
@@ -268,13 +307,16 @@ async def _process_surface_webhook(
         onboarding_handler = ChatOnboardingCoordinator(uow_factory).handle
     contexts: list[tuple[int, AgentSurfaceContext | None]] = []
     for index, part in enumerate(deliveries):
-        onboarding = await onboarding_handler(part)
-        if onboarding.handled:
-            context = onboarding.context
-        else:
-            async with uow_factory() as uow:
-                context = await build_surface_event_handler(uow).prepare_ingress(part)
-        contexts.append((index, context))
+        contexts.append(
+            (
+                index,
+                await _context_for_delivery(
+                    part,
+                    onboarding_handler=onboarding_handler,
+                    uow_factory=uow_factory,
+                ),
+            )
+        )
 
     for index, context in contexts:
         if not context:

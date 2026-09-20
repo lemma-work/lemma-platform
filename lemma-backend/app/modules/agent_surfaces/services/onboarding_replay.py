@@ -29,7 +29,6 @@ from app.modules.agent_surfaces.services.personal_dm_routes import (
     prepare_personal_dm_context,
 )
 from app.modules.identity.contracts.onboarding import active_chat_user
-from app.modules.identity.contracts.surfaces import user_preferences
 
 
 async def replay_onboarding(
@@ -69,6 +68,14 @@ async def replay_onboarding(
                 route_id = await uow.session.scalar(
                     select(VerifiedSurfaceIdentity.id).where(
                         VerifiedSurfaceIdentity.binding_key == state.binding_key,
+                        # The whole of `is_routable`, as `verified_sender` asks
+                        # it. On the pod alone, a row whose installation was
+                        # cleared by SET NULL -- the company uninstalled the app
+                        # -- is selected here and then refused inside
+                        # `validate_personal_dm_route`, which turns a knowable
+                        # "no route" into a raise in the middle of a replay.
+                        VerifiedSurfaceIdentity.installation_surface_id.is_not(None),
+                        VerifiedSurfaceIdentity.revoked_at.is_(None),
                         VerifiedSurfaceIdentity.pod_id.is_not(None),
                     )
                 )
@@ -102,12 +109,26 @@ async def _shared_replay_context(
     event: ParsedInboundSurfaceEvent,
     user: UserEntity,
 ) -> AgentSurfaceContext:
-    preferences = await user_preferences(uow, user.id)
-    surface_id = preferences.default_surface_for(state.platform)
-    surface = await SurfaceRepository(uow).get(surface_id) if surface_id else None
+    handler = get_surface_event_handler(uow)
+    # Resolved rather than read back. This used to load the surface saved in the
+    # user's preferences and raise when it had gone -- and it can have gone by
+    # the time a replay runs: the pod deleted, the person removed from it,
+    # another device finishing onboarding first. Raising there dropped the very
+    # message this whole flow exists to deliver. Selection honours that saved
+    # default as its first choice anyway, and has continuity and a deterministic
+    # tiebreak behind it, so asking it is strictly more answers and the same
+    # preference.
+    candidates = await SurfaceRepository(uow).list_active_for_routing(
+        event.platform.value, system_credentials_only=True
+    )
+    surface = await handler.reachable_surface(
+        candidates=candidates,
+        user_id=user.id,
+        platform=event.platform,
+        parsed=event,
+    )
     if surface is None:
         raise ValueError("The shared personal surface is missing")
-    handler = get_surface_event_handler(uow)
     adapter = handler.adapter_registry.get(state.platform)
     if adapter is None:
         raise ValueError("The shared platform adapter is unavailable")

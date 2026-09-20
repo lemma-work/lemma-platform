@@ -213,6 +213,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.event_receiver_service.telegram_polling_received_update_id.observed': EventSpec('debug', frozenset({'update_id'})),
     'agent_surfaces.event_receiver_service.telegram_polling_receiver_s.diagnostic': EventSpec('debug', frozenset()),
     'agent_surfaces.event_receiver_service.telegram_system_surface_exists_but.diagnostic': EventSpec('debug', frozenset()),
+    'agent_surfaces.events.handlers.onboarding_route_unavailable': EventSpec('info', frozenset({'reason'})),
     'agent_surfaces.fallback_reply.surface_fallback_no_credentials.degraded': EventSpec('warning', frozenset({'platform', 'surface_id'})),
     'agent_surfaces.fallback_reply.surface_fallback_within_window.observed': EventSpec('debug', frozenset({'platform', 'reply_kind'})),
     'agent_surfaces.fallback_reply_service.agent_surface_ignored_duplicate_unrouted.observed': EventSpec('debug', frozenset({'external_channel_id'})),
