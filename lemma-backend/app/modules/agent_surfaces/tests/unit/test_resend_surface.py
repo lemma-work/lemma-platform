@@ -193,7 +193,10 @@ async def test_a_connected_account_does_not_need_the_deployment_s_key(monkeypatc
     )
     assert not email_surface_provisioning.email_is_configured()
 
-    service = AsyncMock()
+    # No mailbox yet, said explicitly: minting only happens for an agent that
+    # has none, and a bare `AsyncMock` answers that question with a truthy mock
+    # -- which would send this down the adopt path and test nothing.
+    service = _minting_service()
     session = AsyncMock()
     session.begin_nested = MagicMock(return_value=AsyncMock())
 
@@ -335,12 +338,20 @@ async def test_connecting_email_adopts_the_mailbox_that_already_exists(monkeypat
     assert updated["account_id"] == account_id
 
 
-async def test_a_named_request_mints_rather_than_adopting(monkeypatch):
-    """A caller that names a surface is naming a distinct thing.
+async def test_a_named_request_adopts_the_mailbox_the_agent_already_has(monkeypatch):
+    """There is no second mailbox for a name to pick out.
 
-    The bundle applier always passes a name, and its upsert is keyed on it so a
-    bundle round-trips. Adopting under a name the caller chose would rewrite
-    whichever surface happened to share the agent, not the one they meant.
+    This asserted the opposite until the product scenarios ran against a real
+    server. `agent_id` is `NOT NULL` and `uq_agent_surface_agent_type` is unique
+    on `(agent_id, surface_type)`, so an agent holds at most one Resend surface
+    -- and every agent is given one as it is created. Minting under a name
+    therefore never got as far as an address: it was refused with
+    `AGENT_SURFACE_AGENT_PLATFORM_CONFLICT`, a 409 naming a surface the person
+    never created and cannot see.
+
+    The old test passed because `_minting_service` is a stand-in and a stand-in
+    does not enforce a unique index. It proved the call was made, which was
+    never in doubt, and not that it could succeed.
     """
     from app.modules.agent_surfaces.services import email_surface_provisioning
     from app.modules.agent_surfaces.config import surface_settings
@@ -365,8 +376,8 @@ async def test_a_named_request_mints_rather_than_adopting(monkeypatch):
         credential_mode=SurfaceCredentialMode.SYSTEM,
     )
 
-    service.update_surface.assert_not_awaited()
-    assert service.create_surface.await_args.kwargs["name"] == "inbox"
+    service.create_surface.assert_not_awaited()
+    assert service.update_surface.await_args.kwargs["surface_id"] == existing.id
 
 
 async def test_a_non_email_surface_passes_straight_through(monkeypatch):

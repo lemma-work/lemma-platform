@@ -477,8 +477,25 @@ class AgentSurfaceEntity(AggregateRoot):
             return False
         # Channels and groups (Slack channels, Teams channels, Telegram groups):
         # respond ONLY when the bot is @mentioned, or when the user is replying
-        # within an existing bot thread. There is no per-channel opt-out — being
-        # mentioned is the universal trigger.
+        # inside a thread. There is no per-channel opt-out — being mentioned is
+        # the universal trigger.
+        #
+        # "Inside a thread", and not "inside an existing *bot* thread", which is
+        # what this said and is not what it checks. `is_thread_reply` is set by
+        # the Slack and Teams parsers from the payload alone -- Teams reads
+        # `replyToId`, Slack a `thread_ts` -- and neither can know whether this
+        # bot ever spoke in that thread. Answering that needs the conversation
+        # link, which is a database read, and this is a pure predicate that runs
+        # on every inbound event before continuity is resolved.
+        #
+        # What bounds it is the line above: a channel message only reaches here
+        # if `matches_channel` accepted it, so the channel is one an operator
+        # deliberately connected, and the sender still has to pass the
+        # pod-membership check afterwards. So the cost of the gap is agent runs
+        # on unrelated threads inside a connected channel -- noise and model
+        # calls, not access. Narrowing it properly means moving this decision
+        # after continuity, which is a change to the ingress pipeline rather
+        # than to this predicate.
         if event.metadata.get("is_thread_reply"):
             return True
         if not event.mentioned_agent:
