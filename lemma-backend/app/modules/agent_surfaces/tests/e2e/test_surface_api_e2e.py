@@ -1041,12 +1041,12 @@ async def test_a_retired_platform_row_does_not_take_the_whole_list_with_it(
     await db_session.execute(
         sql_text(
             "INSERT INTO agent_surfaces "
-            "(id, pod_id, agent_id, name, surface_type, mode, event_mode,"
+            "(id, pod_id, agent_id, name, surface_type, event_mode,"
             " credential_mode, config, status, created_at, updated_at) "
             # `agent_id` is the pod's own, which is the assistant's row id --
             # every surface has an owner.
             "VALUES (gen_random_uuid(), :pod_id, :pod_id, 'legacy-gmail',"
-            " 'GMAIL', 'DM', 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE',"
+            " 'GMAIL', 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE',"
             " now(), now())"
         ),
         {"pod_id": pod_id},

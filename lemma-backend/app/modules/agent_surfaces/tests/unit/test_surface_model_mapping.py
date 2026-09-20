@@ -46,7 +46,6 @@ def _row(**overrides) -> AgentSurface:
     # row id is its pod's.
     row.agent_id = row.pod_id
     row.surface_type = "SLACK"
-    row.mode = "DM"
     row.event_mode = "WEBHOOK"
     row.credential_mode = "SYSTEM"
     row.config = {}
