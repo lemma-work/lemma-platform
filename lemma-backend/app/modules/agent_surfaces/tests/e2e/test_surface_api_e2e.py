@@ -1041,13 +1041,16 @@ async def test_a_retired_platform_row_does_not_take_the_whole_list_with_it(
     await db_session.execute(
         sql_text(
             "INSERT INTO agent_surfaces "
-            "(id, pod_id, agent_id, name, surface_type, event_mode,"
-            " credential_mode, config, status, created_at, updated_at) "
+            "(id, pod_id, organization_id, agent_id, name, surface_type,"
+            " event_mode, credential_mode, config, status, created_at,"
+            " updated_at) "
             # `agent_id` is the pod's own, which is the assistant's row id --
-            # every surface has an owner.
-            "VALUES (gen_random_uuid(), :pod_id, :pod_id, 'legacy-gmail',"
-            " 'GMAIL', 'WEBHOOK', 'SYSTEM', '{}'::jsonb, 'ACTIVE',"
-            " now(), now())"
+            # every surface has an owner. The organisation is read back off the
+            # pod rather than passed: a composite foreign key ties the pair, so
+            # a literal here would only ever be right by coincidence.
+            "SELECT gen_random_uuid(), pods.id, pods.organization_id, pods.id,"
+            " 'legacy-gmail', 'GMAIL', 'WEBHOOK', 'SYSTEM', '{}'::jsonb,"
+            " 'ACTIVE', now(), now() FROM pods WHERE pods.id = :pod_id"
         ),
         {"pod_id": pod_id},
     )

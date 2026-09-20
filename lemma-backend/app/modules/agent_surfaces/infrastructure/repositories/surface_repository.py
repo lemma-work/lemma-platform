@@ -14,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     SurfacePlatform,
 )
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceInstallationRepositoryPort,
 )
@@ -251,12 +252,41 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         # would otherwise 500 the creation of an unrelated surface.
         return model.to_entity_or_none() if model else None
 
+    async def _organization_for_pod(self, pod_id: UUID) -> UUID:
+        """The organisation this surface is in, read from the pod that defines it.
+
+        Carried on the row rather than joined for, because per-organisation
+        uniqueness of a pooled WhatsApp number has to be expressible as an
+        index, and an index cannot reach through a join.
+
+        Read here rather than taken from the entity, and that is the whole
+        reason it is not on `AgentSurfaceEntity`: a denormalised column a caller
+        can set is a denormalised column a caller can set wrongly. The composite
+        foreign key would catch it, but it would catch it as a constraint
+        violation naming `pods`, which tells whoever is reading the traceback
+        nothing about which caller was confused. One reader, one definition.
+
+        `update` needs no equivalent: it never moves a surface between pods, and
+        a pod that changes organisation drags its surfaces along through
+        `ON UPDATE CASCADE` without anything here running.
+        """
+        organization_id = await self.session.scalar(
+            select(Pod.organization_id).where(Pod.id == pod_id)
+        )
+        if organization_id is None:
+            raise AgentSurfaceValidationError(
+                f"Cannot create a surface for pod {pod_id}: it does not exist, "
+                "so there is no organization to scope it to"
+            )
+        return organization_id
+
     async def create(self, entity: AgentSurfaceEntity) -> AgentSurfaceEntity:
         model = AgentSurface(
             id=entity.id,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
             pod_id=entity.pod_id,
+            organization_id=await self._organization_for_pod(entity.pod_id),
             name=entity.name,
             agent_id=entity.agent_id,
             surface_type=entity.surface_type.value,

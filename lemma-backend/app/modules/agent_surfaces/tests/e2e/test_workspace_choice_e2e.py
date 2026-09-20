@@ -370,6 +370,7 @@ async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
     async with sessions() as session:
         surface = AgentSurface(
             pod_id=UUID(test_pod["id"]),
+            organization_id=UUID(test_pod["organization_id"]),
             agent_id=UUID(test_pod["id"]),
             name=f"whatsapp-{uuid4().hex[:6]}",
             surface_type="WHATSAPP",
@@ -455,6 +456,7 @@ async def test_a_surface_in_another_slack_workspace_is_not_somewhere_to_talk(
         session.add(
             AgentSurface(
                 pod_id=UUID(test_pod["id"]),
+                organization_id=UUID(test_pod["organization_id"]),
                 agent_id=UUID(test_pod["id"]),
                 name=f"slack-{uuid4().hex[:6]}",
                 surface_type="SLACK",
@@ -522,6 +524,7 @@ async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
         session.add(
             AgentSurface(
                 pod_id=UUID(test_pod["id"]),
+                organization_id=UUID(test_pod["organization_id"]),
                 agent_id=UUID(test_pod["id"]),
                 name=f"whatsapp-own-{uuid4().hex[:6]}",
                 surface_type="WHATSAPP",
@@ -718,6 +721,7 @@ async def test_another_bot_in_the_same_workspace_is_not_somewhere_to_talk(
     async with sessions() as session:
         listening = AgentSurface(
             pod_id=UUID(test_pod["id"]),
+            organization_id=UUID(test_pod["organization_id"]),
             agent_id=UUID(test_pod["id"]),
             name=f"slack-a-{uuid4().hex[:6]}",
             surface_type="SLACK",
@@ -730,6 +734,7 @@ async def test_another_bot_in_the_same_workspace_is_not_somewhere_to_talk(
         # filter cannot tell these two apart, and only one took delivery.
         other_bot = AgentSurface(
             pod_id=UUID(test_pod["id"]),
+            organization_id=UUID(test_pod["organization_id"]),
             agent_id=UUID(second_agent["id"]),
             name=f"slack-b-{uuid4().hex[:6]}",
             surface_type="SLACK",
@@ -798,6 +803,7 @@ async def test_a_shared_bot_webhook_reads_no_surface_list_to_find_its_transport(
         session.add(
             AgentSurface(
                 pod_id=UUID(test_pod["id"]),
+                organization_id=UUID(test_pod["organization_id"]),
                 agent_id=UUID(test_pod["id"]),
                 name=f"whatsapp-{uuid4().hex[:6]}",
                 surface_type="WHATSAPP",

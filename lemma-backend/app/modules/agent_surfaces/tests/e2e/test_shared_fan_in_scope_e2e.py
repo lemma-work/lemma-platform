@@ -86,13 +86,14 @@ async def _provision_other_people(sessions, *, organization_id) -> None:
                 )
             )
             await session.flush()
-            session.add(_shared_surface(pod.id))
+            session.add(_shared_surface(pod.id, organization_id))
         await session.commit()
 
 
-def _shared_surface(pod_id: UUID) -> AgentSurface:
+def _shared_surface(pod_id: UUID, organization_id: UUID) -> AgentSurface:
     return AgentSurface(
         pod_id=pod_id,
+        organization_id=organization_id,
         agent_id=pod_id,
         name=f"lemma-whatsapp-{uuid4().hex[:8]}",
         surface_type="WHATSAPP",
@@ -133,14 +134,16 @@ async def _ingest(sessions, *, sender_phone: str):
         )
 
 
-async def _known_sender(sessions, *, user_id, pod_id: UUID) -> str:
+async def _known_sender(
+    sessions, *, user_id, pod_id: UUID, organization_id: UUID
+) -> str:
     """Somebody the deployment already knows, with a surface in their own pod."""
     phone = "1555" + str(uuid4().int)[:7]
     async with sessions() as session:
         user = await session.get(User, user_id)
         user.mobile_number = "+" + phone
         user.mobile_verified_at = datetime.now(timezone.utc)
-        session.add(_shared_surface(pod_id))
+        session.add(_shared_surface(pod_id, organization_id))
         await session.commit()
     return phone
 
@@ -156,7 +159,10 @@ async def test_a_known_sender_routes_past_everybody_elses_surfaces(
     """The answer, with the crowd present and without it, is the same answer."""
     sessions = shared_bot
     phone = await _known_sender(
-        sessions, user_id=fixed_test_user["id"], pod_id=UUID(test_pod["id"])
+        sessions,
+        user_id=fixed_test_user["id"],
+        pod_id=UUID(test_pod["id"]),
+        organization_id=UUID(fixed_test_org["id"]),
     )
     await _provision_other_people(sessions, organization_id=UUID(fixed_test_org["id"]))
 
@@ -184,7 +190,10 @@ async def test_the_read_is_the_senders_pods_not_the_deployments(
     """
     sessions = shared_bot
     await _known_sender(
-        sessions, user_id=fixed_test_user["id"], pod_id=UUID(test_pod["id"])
+        sessions,
+        user_id=fixed_test_user["id"],
+        pod_id=UUID(test_pod["id"]),
+        organization_id=UUID(fixed_test_org["id"]),
     )
 
     async def rows(pod_ids) -> int:
@@ -236,7 +245,9 @@ async def test_a_stranger_is_still_routed_into_signup(
     """
     sessions = shared_bot
     async with sessions() as session:
-        only_surface = _shared_surface(UUID(test_pod["id"]))
+        only_surface = _shared_surface(
+            UUID(test_pod["id"]), UUID(test_pod["organization_id"])
+        )
         session.add(only_surface)
         await session.commit()
         surface_id = only_surface.id

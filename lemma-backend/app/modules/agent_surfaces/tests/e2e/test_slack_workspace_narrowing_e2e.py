@@ -21,6 +21,8 @@ from uuid import UUID, uuid4, uuid7
 import pytest
 from sqlalchemy import select
 
+from app.modules.pod.infrastructure.models.pod_models import Pod
+
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
@@ -80,6 +82,13 @@ async def _slack_surface(db_session, pod_id, agent_id, *, workspace: str | None)
     surface = AgentSurface(
         id=uuid7(),
         pod_id=UUID(str(pod_id)),
+        # Resolved from the pod rather than passed in, for the reason
+        # `SurfaceRepository._organization_for_pod` gives: a value a caller can
+        # supply is a value a caller can supply wrongly, and the composite
+        # foreign key would then refuse this fixture with a message about pods.
+        organization_id=await db_session.scalar(
+            select(Pod.organization_id).where(Pod.id == UUID(str(pod_id)))
+        ),
         agent_id=await _sibling_agent(db_session, agent_id),
         name=f"slack-{uuid4().hex[:8]}",
         surface_type=SurfacePlatform.SLACK.value,

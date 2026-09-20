@@ -33,6 +33,7 @@ Resend address.
 | `surface_verified_identities` | One row per hashed platform/tenant/installation/actor binding: that this person proved who they are, and the pod and installation their private chat reaches. A check constraint keeps a revoked identity from holding a destination, so a live route beside a revoked proof is unrepresentable rather than merely unlikely |
 | `surface_pending_onboarding` | Onboarding in flight for one binding — step, email challenge, offered pods, and the original inbound event held until there is a conversation to commit it to |
 | `surface_onboarding_input_tokens` | Hashed handles for a native input form — a Slack modal, a Teams card, a WhatsApp prompt — each minted against one pending row, step and challenge. A submission is accepted only while all three still match, so a form left open across a step stops working rather than answering the wrong question; the cleanup sweep deletes handles at expiry |
+| `surface_whatsapp_numbers` | The deployment's WhatsApp numbers, one row each and each independent: its own WABA, access token, verify token and Flow ids, every one falling back to settings when absent so a single-number deployment declares nothing. `role` separates the one `SHARED` line everybody rides from the `ALLOCATABLE` pool; `status` separates "stop handing this out" from "we no longer own it". Who holds a number is not stored here — it is `agent_surfaces.surface_identity_id`, so there is no second copy to disagree |
 | `notifications` | Something the pod needs a person to see: recipient, actor, origin, body, optional background instruction, and open/expiry state. It lives in this module because delivery is surface work; the agent and workflow modules reach it through ports in `app/composition` |
 
 Conversation metadata records surface, platform, external user/channel/thread,
@@ -43,6 +44,16 @@ Onboarding storage is deliberately private rather than pod-scoped: a person
 being recognised and a person having somewhere to talk are different states,
 and the gap between them is one a real user sits in while they pick or wait for
 a workspace.
+
+A WhatsApp number is shared across organisations and exclusive within one:
+`uq_agent_org_whatsapp_number` is unique over (organisation, number), so several
+organisations may hold one number and exactly one surface in each of them does.
+That makes an arriving number ambiguous by construction, which is why routing
+resolves the *sender* first and uses the number only as an additional predicate
+on candidates already narrowed to the sender's pods. `agent_surfaces` carries
+`organization_id` for that rule rather than joining `pods` for it, and a
+composite foreign key `(pod_id, organization_id)` makes the carried copy
+impossible to leave stale.
 
 ## API groups
 

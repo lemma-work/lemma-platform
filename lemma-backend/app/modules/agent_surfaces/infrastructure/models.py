@@ -5,6 +5,14 @@ from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noq
     VerifiedSurfaceIdentity,
 )
 
+# Re-exported for its side effect, like the onboarding models above: importing
+# this module is what registers `surface_whatsapp_numbers` on `Base.metadata`,
+# and `migrations/env.py` imports this file and not that one. A table missing
+# from the metadata is a table autogenerate offers to create on every run.
+from app.modules.agent_surfaces.infrastructure.whatsapp_pool_models import (  # noqa: F401
+    WhatsAppNumber,
+)
+
 from datetime import datetime
 from uuid import UUID
 
@@ -12,6 +20,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     String,
     Text,
@@ -74,17 +83,40 @@ class AgentSurface(UUIDAuditBase):
         UniqueConstraint(
             "agent_id", "surface_type", name="uq_agent_surface_agent_type"
         ),
-        # One agent per pooled WhatsApp number: the arriving number is the
-        # routing key once the numbers come from a pool, so two surfaces
-        # claiming one is an inbound with no answer to "which agent". Scoped to
-        # WhatsApp -- a Slack or Teams bot id may repeat.
+        # One organisation, one WhatsApp number -- and the emphasis is on
+        # *organisation*. This replaces `uq_agent_pooled_whatsapp_number`, which
+        # was unique on `surface_identity_id` deployment-wide and so read "one
+        # surface per number, everywhere": the exact opposite of a pool shared
+        # across organisations. Several organisations may hold one number now;
+        # within one organisation exactly one surface does, which is what makes
+        # (sender's organisation, arriving number) resolve to a single surface.
+        #
+        # It is also the arbiter allocation relies on:
+        # `WhatsAppNumberRepository.allocate_for_organization` inserts and
+        # retries rather than checking first, so without this index a schema
+        # built from metadata would hand one number to one organisation twice --
+        # and autogenerate would emit a DROP for the index that stops it.
         Index(
-            "uq_agent_pooled_whatsapp_number",
+            "uq_agent_org_whatsapp_number",
+            "organization_id",
             "surface_identity_id",
             unique=True,
             postgresql_where=text(
                 "surface_type = 'WHATSAPP' AND surface_identity_id IS NOT NULL"
             ),
+        ),
+        # The organisation is carried on the row, and this is what stops the
+        # copy going stale. A composite foreign key onto `pods (id,
+        # organization_id)` makes a wrong pair unrepresentable, and ON UPDATE
+        # CASCADE makes a pod that moves organisation update its own surfaces --
+        # so the usual denormalisation bug (the pod moves, the copy does not)
+        # cannot be written down. The parent-side unique it needs is declared on
+        # `Pod` as `uq_pod_id_organization`.
+        ForeignKeyConstraint(
+            ["pod_id", "organization_id"],
+            ["pods.id", "pods.organization_id"],
+            name="fk_agent_surface_pod_organization",
+            onupdate="CASCADE",
         ),
         # Address allocation inserts and retries on conflict, which is only safe
         # with this present, and autogenerate would otherwise emit a DROP for an
@@ -122,6 +154,12 @@ class AgentSurface(UUIDAuditBase):
     # No index of its own: `uq_agent_surface_pod_name` leads with `pod_id`, and
     # `list_by_pod` is the only reader that filters on it alone.
     pod_id: Mapped[UUID] = mapped_column(ForeignKey("pods.id", ondelete="CASCADE"))
+    # The pod's organisation, carried rather than joined for. Per-organisation
+    # uniqueness over (organisation, number) is a partial index, and an index
+    # cannot join -- so the column has to be here for the rule to exist at all.
+    # Not written by hand either: the composite FK above ties it to the pod's
+    # own organisation and cascades a move, so it cannot go stale.
+    organization_id: Mapped[UUID] = mapped_column(nullable=False)
     # Stable, pod-unique identifier addressed by the API (like agent names).
     # Read only as `(pod_id, name)` -- `get_by_pod_and_name` -- which is the
     # unique constraint, so an index on the name alone serves nothing.
@@ -175,7 +213,7 @@ class AgentSurface(UUIDAuditBase):
     # The four below carry no index, and the reason is the same for all of them:
     # nothing anywhere filters or orders on them. They are read back on a row
     # that was already found. `surface_identity_id` is additionally covered by
-    # `uq_agent_pooled_whatsapp_number` for the one lookup that will need it.
+    # `uq_agent_org_whatsapp_number` for the one lookup that will need it.
     external_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     surface_identity_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -36,6 +36,8 @@ from uuid import UUID, uuid4, uuid7
 import pytest
 from sqlalchemy import select, text
 
+from app.modules.pod.infrastructure.models.pod_models import Pod
+
 from app.modules.agent.infrastructure.models import AgentModel
 from app.modules.agent.infrastructure.models.conversation import ConversationModel
 from app.modules.agent_surfaces.domain.entities import (
@@ -89,6 +91,9 @@ async def _surface(db_session, pod_id, agent_id, platform: str) -> AgentSurface:
     surface = AgentSurface(
         id=uuid7(),
         pod_id=UUID(str(pod_id)),
+        organization_id=await db_session.scalar(
+            select(Pod.organization_id).where(Pod.id == UUID(str(pod_id)))
+        ),
         agent_id=sibling.id,
         name=f"{platform.lower()}-{uuid4().hex[:8]}",
         surface_type=platform,
