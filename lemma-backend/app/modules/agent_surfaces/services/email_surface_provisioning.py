@@ -297,30 +297,19 @@ async def create_surface_on_minted_address(
     said "connect this surface": handing back a surface with an address nobody
     can receive on would be a worse answer than a refusal.
 
-    **A Resend request adopts the mailbox that already exists.** A pod holds one
-    mailbox per agent, and both already exist before anyone asks: the
+    **An unnamed Resend request adopts the mailbox that already exists.** A pod
+    holds one mailbox per agent, and both already exist before anyone asks: the
     assistant's from pod creation, an agent's from agent creation. So "connect
-    email" is a request to *use* that address rather than to mint a second one —
-    which is what the UI has always said it does ("Every agent already has
-    one... reads as 'back on', not 'new'"). Minting instead produced a second
-    surface on a suffixed address, and left whoever asked with the ugly one.
+    email", which is what an unnamed request is, is a request to *use* that
+    address rather than to mint a second one — which is what the UI has always
+    said it does ("Every agent already has one... reads as 'back on', not
+    'new'"). Minting instead produced a second surface on a suffixed address,
+    and left whoever asked with the ugly one.
 
-    This used to adopt only when no name was given, reasoning that a caller who
-    names a surface is naming a distinct thing and adopting under that name
-    would rewrite the wrong one. There is no wrong one to rewrite:
-    ``agent_id`` is ``NOT NULL`` and ``uq_agent_surface_agent_type`` is unique
-    on ``(agent_id, surface_type)``, so an agent has at most one Resend surface
-    and a name cannot pick out a different one. What the old condition actually
-    produced was a branch nothing could reach: every agent is given a mailbox as
-    it is created, so a *named* connect for any agent that exists was refused
-    with ``AGENT_SURFACE_AGENT_PLATFORM_CONFLICT`` — a 409 naming a surface the
-    person never created and cannot see. Four product scenarios died in their
-    fixture on it.
-
-    The name on the request is not applied to the adopted surface: a surface is
-    renamed through its own update, not through connecting it, and the address —
-    the part anyone outside Lemma sees — is immutable either way. Minting still
-    honours a name, because there the surface is being created.
+    Only when no name is given. A caller that names a surface is naming a
+    distinct thing, and the bundle applier always does — its upsert is keyed on
+    that name so a bundle round-trips. Adopting under a name the caller chose
+    would silently rewrite the wrong surface.
 
     Takes the unit of work rather than its session because the minting branch
     needs both halves of it — a savepoint per attempt, and the pod's name for the
@@ -350,19 +339,22 @@ async def create_surface_on_minted_address(
             "RESEND_INBOUND_DOMAIN to a verified catch-all domain."
         )
 
-    existing = await service.resend_surface_for_agent(pod_id=pod_id, agent_id=agent_id)
-    if existing is not None:
-        # Found by agent binding, not by name, so this holds for an assistant
-        # provisioned before the name changed and still called `resend`. The
-        # address is deliberately not touched: it is published, and
-        # `update_surface` cannot change it anyway.
-        return await service.update_surface(
-            surface_id=existing.id,
-            config=config,
-            credential_mode=credential_mode,
-            account_id=account_id,
-            ctx=ctx,
+    if name is None:
+        existing = await service.resend_surface_for_agent(
+            pod_id=pod_id, agent_id=agent_id
         )
+        if existing is not None:
+            # Found by agent binding, not by name, so this holds for an
+            # assistant provisioned before the name changed and still called
+            # `resend`. The address is deliberately not touched: it is
+            # published, and `update_surface` cannot change it anyway.
+            return await service.update_surface(
+                surface_id=existing.id,
+                config=config,
+                credential_mode=credential_mode,
+                account_id=account_id,
+                ctx=ctx,
+            )
 
     surface = await _insert_on_first_free_address(
         service,
