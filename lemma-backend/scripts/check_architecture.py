@@ -45,6 +45,21 @@ MAX_COMPLEXITY = 15
 # naming in the baseline. Deliberately the size of the ancestry rather than the
 # length of the longest chain: eight mixins side by side are a chain two deep and
 # an object made of nine classes, and it is the nine a reader has to hold.
+#
+# Counted only for an object that is *assembled* -- one where some class in the
+# ancestry, itself included, declares more than one base. A single-inheritance
+# chain is depth and not composition, and a reader holds one link of it at a
+# time: `AgentSurfaceNumberPoolExhaustedError -> AgentSurfaceError ->
+# AppDomainError -> Exception` is four classes and no burden at all.
+#
+# Without that condition the metric was a tax on ordinary code rather than a
+# signal. It named 274 classes, and the top of the list was 46 ORM models on
+# `UUIDAuditBase`, 16 aggregates and every error hierarchy in the backend --
+# so *any* new table or error type failed a ratchet that only fails on growth,
+# and the fix was always to re-record the baseline, which is how a gate stops
+# meaning anything. With it, 12 classes are named, and they are the mixin piles
+# the rule was written for: `AgentSurfaceService`, the platform adapters, the
+# progress observer, the repositories.
 MAX_ANCESTRY = 3
 # Generated files are exempt from the size rule. `event_catalog.py` is one line
 # per logging event, emitted by scripts/generate_logging_event_catalogs.py, and
@@ -411,22 +426,35 @@ def _class_shapes(
                 names |= inherited(found, seen | {entry["key"]})
         return names
 
-    def ancestry(entry: dict[str, Any], seen: frozenset[str]) -> set[str]:
+    def ancestry(entry: dict[str, Any], seen: frozenset[str]) -> tuple[set[str], bool]:
+        """Every class this one is made of, and whether any of them is assembled.
+
+        The second half is what separates composition from depth -- see
+        `MAX_ANCESTRY`. True as soon as one class in the chain declares more
+        than one base, because that is the point where a reader stops being able
+        to follow a single line.
+        """
         if entry["key"] in seen:
-            return set()
+            return set(), False
         found: set[str] = set()
+        assembled = len(entry["bases"]) > 1
         for base in entry["bases"]:
             found.add(base)
             resolved = resolve(base, entry)
             if resolved is not None:
-                found |= ancestry(resolved, seen | {entry["key"]})
-        return found
+                inherited_names, inherited_assembled = ancestry(
+                    resolved, seen | {entry["key"]}
+                )
+                found |= inherited_names
+                assembled = assembled or inherited_assembled
+        return found, assembled
 
     undeclared: dict[str, int] = {}
     deep: dict[str, int] = {}
     for entry in classes.values():
-        made_of = 1 + len(ancestry(entry, frozenset()))
-        if made_of > MAX_ANCESTRY:
+        ancestors, assembled = ancestry(entry, frozenset())
+        made_of = 1 + len(ancestors)
+        if made_of > MAX_ANCESTRY and assembled:
             deep[entry["key"]] = made_of
         if entry["unresolved_bases"] or any(
             resolve(base, entry) is None for base in entry["bases"]

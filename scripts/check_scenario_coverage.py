@@ -52,6 +52,12 @@ CONTRACTS_RE = re.compile(r"^\*\*Contracts:\*\* (.+?)\s*$", re.M)
 CAPABILITY_RE = re.compile(r"^## Capability: (.+?)\s*$", re.M)
 JOURNEY_RE = re.compile(r"^\*\*Journey:\*\* (.+?)\s*$", re.M)
 GAP_NOTE_RE = re.compile(r"^> \*\*Gap:\*\*", re.M)
+#: What a `manual` status has to say for itself. `manual` means "this promise
+#: is kept, and no scenario test proves it" -- which is the one status a
+#: reader cannot check, so it has to carry how it *was* checked. Both
+#: spellings already in use are accepted rather than picking one and
+#: rewriting ten files.
+MANUAL_NOTE_RE = re.compile(r"^> \*\*(Manual|Verified by):\*\*", re.M)
 BACKTICKED = re.compile(r"`([a-z_][a-z0-9_.]*)`")
 
 
@@ -65,6 +71,7 @@ class Scenario:
     capability: str
     contracts: list[str] = field(default_factory=list)
     has_gap_note: bool = False
+    has_manual_note: bool = False
 
 
 #: Marks that take a scenario out of the lane a normal run collects.
@@ -154,6 +161,7 @@ def load_scenarios() -> tuple[list[Scenario], list[str]]:
                     capability=capability_at(offset),
                     contracts=contracts,
                     has_gap_note=bool(GAP_NOTE_RE.search(body)),
+                    has_manual_note=bool(MANUAL_NOTE_RE.search(body)),
                 )
             )
 
@@ -464,6 +472,22 @@ def main() -> int:
             errors.append(
                 f"{scenario.journey_file}: {scenario.id} is marked covered but no "
                 f"scenario test proves it"
+            )
+
+    # Gate 7 — a manual status says how it was checked.
+    #
+    # The other statuses can all be verified from the repository: `covered`
+    # points at a test, `gap` at an `issues.md` entry, `planned` and `withdrawn`
+    # claim nothing. `manual` claims the promise is kept on a reader's word, so
+    # the word has to be written down. Two of the twelve said it in an ordinary
+    # paragraph, which reads the same to a person and is invisible to this --
+    # they now use the same note the other ten do.
+    for scenario in scenarios:
+        if scenario.status == "manual" and not scenario.has_manual_note:
+            errors.append(
+                f"{scenario.journey_file}: {scenario.id} is marked manual but "
+                "carries no '> **Verified by:**' (or '> **Manual:**') note saying "
+                "how it was checked"
             )
 
     # Gate 4 — a gap admits how it diverges.
