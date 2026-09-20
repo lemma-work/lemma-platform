@@ -2,7 +2,7 @@
 
 ``lint_app_html`` remains advisory for app uploads: callers log common authoring
 mistakes without rejecting a bundle. ``validate_widget_html`` promotes those same
-mistakes plus fragment/starter/loader checks to blocking errors before an inline
+mistakes plus fragment/example/loader checks to blocking errors before an inline
 widget is persisted and rendered. A widget is an HTML fragment: encoded content,
 standalone SVG images, and markup that would not parse as authored are rejected
 there rather than rendered as-is.
@@ -387,7 +387,7 @@ def validate_widget_html(html: str) -> list[str]:
     )
     if tokens:
         errors.append(
-            "Replace unresolved widget starter tokens before display: "
+            "Replace unresolved widget example placeholders before display: "
             + ", ".join(tokens)
             + "."
         )
