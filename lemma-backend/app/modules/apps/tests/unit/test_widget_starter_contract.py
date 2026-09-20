@@ -105,9 +105,9 @@ def test_versioned_widget_examples_require_token_replacement():
     for name in SUBSTITUTIONS:
         source = (ASSET_ROOT / name).read_text(encoding="utf-8")
         errors = validate_widget_html(source)
-        assert any("unresolved widget example placeholders" in error for error in errors), (
-            name
-        )
+        assert any(
+            "unresolved widget example placeholders" in error for error in errors
+        ), name
 
 
 def test_examples_do_not_assume_a_schema():
