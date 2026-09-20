@@ -126,6 +126,14 @@ async def verified_sender(
                     VerifiedSurfaceIdentity.installation_surface_id,
                 ).where(
                     VerifiedSurfaceIdentity.binding_key == binding_key,
+                    # The whole of `is_routable`, not the pod alone. The
+                    # installation FK is SET NULL on purpose -- deleting a
+                    # company's app leaves the proof of identity and clears the
+                    # destination -- so a row with a pod and no installation is
+                    # a state this query has to read as "no route", or it
+                    # bypasses the workspace choice and fails validation later.
+                    VerifiedSurfaceIdentity.installation_surface_id.is_not(None),
+                    VerifiedSurfaceIdentity.revoked_at.is_(None),
                     VerifiedSurfaceIdentity.pod_id.is_not(None),
                 )
             )
@@ -225,6 +233,16 @@ async def recognize_sender(
                 uow, ExternalSurfaceUserRepository(uow)
             ).resolve(event=event, sender_profile=profile, require_proven_identity=True)
         if resolved.internal_user_id is not None:
+            # Recognised by a verified phone rather than by a binding, which is
+            # a different route to the same place: someone the system knows,
+            # who may still have nowhere to talk. Both paths ask it now, or
+            # this one answers a WhatsApp-only user by telling them to open the
+            # website -- the dead end the choice step exists to remove.
+            offered = await offer_workspace_choice(
+                uows, transport, resolved.internal_user_id
+            )
+            if offered is not None:
+                return offered
             return OnboardingIngressResult(False)
         if profile is not None:
             event = event.model_copy(
@@ -272,7 +290,11 @@ async def offer_workspace_choice(
             ):
                 return None
     async with uows() as uow:
-        pods = await candidate_pods(uow, user_id=verified_user_id)
+        pods = await candidate_pods(
+            uow,
+            user_id=verified_user_id,
+            organization_id=transport.organization_id,
+        )
     state = await create_pending(uows, transport, event)
     async with uows() as uow:
         row = await uow.session.get(PendingChatOnboarding, state.id)

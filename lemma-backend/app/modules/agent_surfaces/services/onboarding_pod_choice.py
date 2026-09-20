@@ -18,13 +18,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceRepository,
+from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
+    routing_surfaces,
 )
 from app.modules.identity.contracts.organizations import (
     organization_member_ids_for_user,
@@ -44,7 +47,11 @@ NEW_POD_KEYWORD = "new"
 
 
 async def candidate_pods(
-    uow: SqlAlchemyUnitOfWork, *, user_id: UUID, limit: int | None = MAX_OFFERED_PODS
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    user_id: UUID,
+    organization_id: UUID | None = None,
+    limit: int | None = MAX_OFFERED_PODS,
 ) -> list[dict[str, JsonValue]]:
     """The workspaces this person could attach the conversation to.
 
@@ -53,10 +60,18 @@ async def candidate_pods(
     dataclass does not. `limit=None` asks for all of them, which is how the
     answer is re-checked against live access rather than against the handful
     that happened to be shown.
+
+    `organization_id` is the installation's, and passing it is not optional for
+    a caller acting for one: routing refuses a pod outside the installation's
+    organization, so offering one hands somebody a choice that breaks their
+    next message.
     """
     membership_ids = await organization_member_ids_for_user(uow, user_id=user_id)
     pods = await list_attachable_pods(
-        session=uow.session, organization_member_ids=membership_ids, limit=limit
+        session=uow.session,
+        organization_member_ids=membership_ids,
+        organization_id=organization_id,
+        limit=limit,
     )
     return [{"id": str(pod.id), "name": pod.name} for pod in pods]
 
@@ -121,12 +136,26 @@ async def organization_for_new_pod(
     user_id: UUID,
     installation_organization_id: UUID | None,
 ) -> tuple[UUID, UUID] | None:
-    """Where a newly named workspace should live: (organization, membership)."""
-    return await preferred_organization_membership(
+    """Where a newly named workspace should live: (organization, membership).
+
+    An installation's organization is a requirement, not a preference. Routing
+    refuses a pod outside it, so falling back to some other membership would
+    build the person a workspace their next message cannot reach. Without an
+    installation -- the shared bot -- there is nothing to be outside of, and the
+    oldest membership is as good an answer as any.
+    """
+    placement = await preferred_organization_membership(
         uow,
         user_id=user_id,
         preferred_organization_id=installation_organization_id,
     )
+    if (
+        installation_organization_id is not None
+        and placement is not None
+        and placement[0] != installation_organization_id
+    ):
+        return None
+    return placement
 
 
 async def has_somewhere_to_talk(
@@ -140,12 +169,23 @@ async def has_somewhere_to_talk(
     What matters here is the empty case: no candidate at all is the one state
     routing cannot answer, and the one worth interrupting someone to fix.
     """
-    surfaces = await SurfaceRepository(uow).list_active_for_routing(
-        platform.value, system_credentials_only=True
+    pod_ids = await SqlAlchemySurfaceRoutingResolutionAdapter(uow).get_user_pod_ids(
+        user_id
     )
-    if not surfaces:
+    if not pod_ids:
         return False
-    pod_ids = set(
-        await SqlAlchemySurfaceRoutingResolutionAdapter(uow).get_user_pod_ids(user_id)
+    # EXISTS over the routing predicate, narrowed by this person's pods, rather
+    # than reading every system surface of the platform in the deployment and
+    # filtering in Python. The answer is one boolean and the list grows with
+    # every provisioned user, so it has no business crossing the wire -- and
+    # this reuses `routing_surfaces`, so it cannot drift from what routing
+    # counts as live.
+    return bool(
+        await uow.session.scalar(
+            select(
+                routing_surfaces(platform.value, system_credentials_only=True)
+                .where(AgentSurface.pod_id.in_(pod_ids))
+                .exists()
+            )
+        )
     )
-    return any(surface.pod_id in pod_ids for surface in surfaces)

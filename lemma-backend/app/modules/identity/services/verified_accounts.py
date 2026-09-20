@@ -51,13 +51,18 @@ async def _auth_users(email: str) -> list[AuthUser]:
 async def _secure_recovered_account(user: AuthUser, email: str) -> None:
     """Take the account back from whoever registered it first.
 
-    Order is the whole point. Revoking sessions does not prevent a *login*, so
-    revoking before the password is replaced leaves a window: someone who
-    preregistered this address can sign in during it and walk away with a
-    session the revoke has already swept past, which is account takeover of a
-    mailbox its real owner just proved. Replacing the password first closes the
-    door, and revoking afterwards clears anything issued before or during the
-    rotation.
+    Ordering is half of it, and only half. Revoking sessions does not prevent a
+    *login*, so revoking before the password is replaced lets someone who
+    preregistered this address sign in during the gap and keep a session the
+    revoke has already swept past. Rotating first closes that.
+
+    It does not close the mirror image: a sign-in whose credential was checked
+    before the rotation can still have its session minted after the revoke, and
+    a revoke only sweeps what already exists. No ordering here fixes that,
+    because the gap is on the sign-in side. The caller holds
+    `identity_lease(f"account:{email}")` for this whole function, and
+    `sign_in_post` takes the same lease around verify-then-mint, so the two
+    cannot interleave at all.
     """
     for method in user.login_methods:
         if method.recipe_id != "emailpassword":

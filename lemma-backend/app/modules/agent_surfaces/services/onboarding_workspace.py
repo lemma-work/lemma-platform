@@ -132,6 +132,22 @@ async def _ensure_shared_surface(
         None,
     )
     if surface is None:
+        # An agent reaches a platform in one place, so if this one already has
+        # a surface here that the lookup above did not match -- a bot on the
+        # company's own credentials -- there is no second place to put the
+        # shared one. Creating it anyway is what `uq_agent_surface_agent_type`
+        # refuses, and an IntegrityError is a poor way to tell someone their
+        # workspace is already reachable another way.
+        #
+        # Nor can the existing one simply be reused: shared routing considers
+        # system-credential surfaces only, so a default pointing at a custom
+        # bot is a default that is always ignored.
+        if any(item.agent_id == assistant_id for item in surfaces):
+            raise ChallengeRejected(
+                "That workspace's assistant already answers on "
+                f"{platform.value.title()} through its own connection. "
+                "Pick another workspace, or message it there."
+            )
         surface = await repository.create(
             AgentSurfaceEntity.create(
                 pod_id=pod_id,
@@ -194,7 +210,12 @@ async def attach_chosen_workspace(
             # Re-proving membership rather than trusting the stored list: the
             # offer was written when the question was asked, and access can be
             # taken away between a question and its answer.
-            allowed = await candidate_pods(uow, user_id=user.id, limit=None)
+            allowed = await candidate_pods(
+                uow,
+                user_id=user.id,
+                organization_id=transport.organization_id,
+                limit=None,
+            )
             if not any(UUID(str(item["id"])) == pod_id for item in allowed):
                 return "That workspace is no longer available. Pick another."
         assistant_id = await ensure_pod_default_agent(

@@ -166,6 +166,7 @@ async def list_attachable_pods(
     *,
     session: AsyncSession,
     organization_member_ids: list[UUID],
+    organization_id: UUID | None = None,
     limit: int | None = None,
 ) -> list[AttachablePod]:
     """The pods these memberships belong to, newest first.
@@ -174,6 +175,11 @@ async def list_attachable_pods(
     and works out organizations and roles. This one answers "which of your
     workspaces should this chat use", where membership is the whole question.
 
+    `organization_id` narrows to one organization, which a caller acting for a
+    company's installation must pass: a pod in another organization is one that
+    installation may not route to, and offering it is offering something that
+    will be refused the moment it is used.
+
     Takes membership ids rather than a user id for the same reason
     `ensure_personal_workspace` does -- resolving a user to their memberships
     is identity's to answer, and a pod query that joined identity's tables to
@@ -181,12 +187,16 @@ async def list_attachable_pods(
     """
     if not organization_member_ids:
         return []
+    scope = (
+        (Pod.organization_id == organization_id,) if organization_id is not None else ()
+    )
     rows = await session.execute(
         select(Pod.id, Pod.name)
         .join(PodMember, PodMember.pod_id == Pod.id)
         .where(
             PodMember.organization_member_id.in_(organization_member_ids),
             Pod.is_deleted.is_(False),
+            *scope,
         )
         .order_by(Pod.created_at.desc(), Pod.id)
         .limit(limit)
