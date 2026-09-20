@@ -19,7 +19,7 @@ import {
 } from "@/components/settings/settings-kit";
 import { SettingsPageHeading } from "@/components/settings/settings-page-heading";
 import { useOrganizationDetails } from "@/lib/hooks/use-organizations";
-import { useUsageSummary } from "@/lib/hooks/use-usage";
+import { useUsageLimits, useUsageSummary } from "@/lib/hooks/use-usage";
 import {
     useBillingAvailable,
     useBillingHistory,
@@ -56,6 +56,8 @@ function OrganizationBilling({ organizationId }: { organizationId: string }) {
     const cancel = useCancelOrganizationSubscription(organizationId);
     const [busyPlanId, setBusyPlanId] = useState<string | null>(null);
     const usage = useUsageSummary(organizationId, { days: 30 }, { enabled });
+    // The allowance is only ever published as a percentage consumed.
+    const limits = useUsageLimits(organizationId, { enabled });
 
     const dismissReturn = useCallback(() => {
         router.replace(`/organizations/${organizationId}/settings/billing`);
@@ -137,7 +139,8 @@ function OrganizationBilling({ organizationId }: { organizationId: string }) {
                 <UsageCycleCard
                     subscription={subscription.data}
                     spentUsd={usage.data?.system_cost_usd ?? undefined}
-                    loading={loadingPlan || usage.isLoading}
+                    usedPercent={limits.data?.org_monthly?.used_percent}
+                    loading={loadingPlan || usage.isLoading || limits.isLoading}
                     usageHref={`/organizations/${organizationId}/settings/usage`}
                 />
             </div>

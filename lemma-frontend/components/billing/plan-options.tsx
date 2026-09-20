@@ -60,6 +60,17 @@ export function PlanOptions({
         );
     }
 
+    // Cheapest first, with "talk to us" last however it is priced. The API
+    // returns plans in the order they were created, which is the order someone
+    // happened to add them to the catalog -- it put Enterprise in the middle of
+    // the ladder, between the entry tier and the one above it.
+    const ordered = [...plans].sort((a, b) => {
+        const aCustom = isContactSales(a);
+        const bCustom = isContactSales(b);
+        if (aCustom !== bCustom) return aCustom ? 1 : -1;
+        return a.price_cents - b.price_cents;
+    });
+
     const current = plans.find((plan) => plan.id === currentPlanId);
     const currentPrice = current?.price_cents ?? -1;
     // The dearest plan above the one in force. Undefined once they are already
@@ -72,7 +83,7 @@ export function PlanOptions({
         <section className="space-y-3">
             <PlansHeading />
             <div className="grid items-stretch gap-4 [grid-template-columns:repeat(auto-fit,minmax(14rem,1fr))]">
-                {plans.map((plan) => (
+                {ordered.map((plan) => (
                     <PlanCard
                         key={plan.id}
                         plan={plan}

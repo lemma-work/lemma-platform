@@ -13,7 +13,7 @@ import { UsageCycleCard } from "@/components/billing/usage-cycle-card";
 import { Button } from "@/components/ui/button";
 import { SettingsHelpText, SettingsStack } from "@/components/settings/settings-kit";
 import { SettingsPageHeading } from "@/components/settings/settings-page-heading";
-import { useUsageSummary } from "@/lib/hooks/use-usage";
+import { useMyUsageLimits, useUsageSummary } from "@/lib/hooks/use-usage";
 import {
     useBillingAvailable,
     useBillingPlans,
@@ -45,6 +45,16 @@ function PersonalBilling() {
     // The cycle the plan is actually billed on, so the spend shown lines up
     // with the allowance it is measured against rather than a rolling window.
     const usage = useUsageSummary(undefined, { days: 30 }, { enabled, self: true });
+    // The allowance is only ever published as a percentage consumed.
+    const myLimits = useMyUsageLimits(undefined, { enabled });
+    // `/usage/me/limits` returns one entry per window rather than named fields.
+    // The one worth showing on a billing page is whichever is closest to its
+    // limit -- that is the one about to stop work.
+    const tightestWindow = myLimits.data?.windows?.reduce<number | null>(
+        (worst, window) =>
+            worst === null || window.used_percent > worst ? window.used_percent : worst,
+        null,
+    );
 
     const dismissReturn = useCallback(() => {
         router.replace("/profile/billing");
@@ -127,7 +137,8 @@ function PersonalBilling() {
                 <UsageCycleCard
                     subscription={subscription.data}
                     spentUsd={usage.data?.system_cost_usd ?? undefined}
-                    loading={loadingPlan || usage.isLoading}
+                    usedPercent={tightestWindow}
+                    loading={loadingPlan || usage.isLoading || myLimits.isLoading}
                     usageHref="/profile/usage"
                 />
             </div>
