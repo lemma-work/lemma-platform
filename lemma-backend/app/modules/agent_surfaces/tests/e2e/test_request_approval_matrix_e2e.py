@@ -22,12 +22,15 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 import json
 
 from app.modules.agent_surfaces.events.handlers import (
     build_surface_ingress,
+    build_surface_turn_starter,
 )
 from app.modules.agent_surfaces.tests.e2e.helpers import _messages_for_conversation
 from uuid import UUID
@@ -415,8 +418,7 @@ async def test_an_emailed_approve_resolves_the_approval_despite_the_quoted_threa
     # helper to drive. The decision itself is recorded synchronously, and the
     # decision is what this test is about.
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_ingress(uow)
-    reply_context = await handler.prepare_ingress(
+    reply_context = await build_surface_ingress(uow).prepare_ingress(
         SurfacePlatformWebhookIngress(
             source="resend",
             payload=_resend_payload(
@@ -437,7 +439,9 @@ async def test_an_emailed_approve_resolves_the_approval_despite_the_quoted_threa
         "the reply must land in the conversation it answers, not a new one"
     )
     with suppress_agent_run_enqueue():
-        await handler.execute_chat(reply_context)
+        await build_surface_turn_starter(
+            SessionUnitOfWorkFactory(async_session_maker)
+        ).execute_chat(reply_context)
     await db_session.commit()
 
     decision = (

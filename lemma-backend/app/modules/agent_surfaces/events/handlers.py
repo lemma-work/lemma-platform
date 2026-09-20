@@ -31,7 +31,7 @@ from app.core.infrastructure.jobs.streaq_runtime import (
 from app.modules.agent_surfaces.composition import (
     build_surface_ingress,
     build_surface_service,
-    build_worker_surface_ingress,
+    build_surface_turn_starter,
 )
 from app.modules.agent_surfaces.domain.events import (
     SurfaceWebhookReceivedEvent,
@@ -406,9 +406,9 @@ async def process_surface_message(
 ):
     worker_ctx: AppWorkerContext = streaq_worker.context
     task_payload = SurfaceProcessMessageTaskPayload.model_validate(payload)
-    # The service scopes its own short UoWs (credential read + message-write
+    # The starter scopes its own short UoWs (credential read + message-write
     # tail) around the long external I/O inside execute_chat — platform API
     # calls, file ingestion, and voice transcription — so no pooled DB
     # connection is held during that I/O.
-    service = build_worker_surface_ingress(worker_ctx.uow_factory)
-    await service.execute_chat(task_payload.context)
+    starter = build_surface_turn_starter(worker_ctx.uow_factory)
+    await starter.execute_chat(task_payload.context)

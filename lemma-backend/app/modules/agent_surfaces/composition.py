@@ -82,6 +82,7 @@ from app.modules.agent_surfaces.services.surface_connection_resolver import (
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
+from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagerService,
 )
@@ -163,17 +164,15 @@ def build_surface_ingress(uow: SqlAlchemyUnitOfWork) -> AgentSurfaceIngressServi
     )
 
 
-def build_worker_surface_ingress(
-    uow_factory: UnitOfWorkFactory,
-) -> AgentSurfaceIngressService:
-    """An ingress service that scopes its own short units of work.
+def build_surface_turn_starter(uow_factory: UnitOfWorkFactory) -> SurfaceTurnStarter:
+    """The worker's half: scope your own short units of work around long I/O.
 
-    Used by the `process_surface_message` worker task: `execute_chat` runs long
-    external I/O -- platform APIs, file ingest, voice transcription -- that must
-    not hold a pooled DB connection. The service resolves credentials and writes
-    the inbound message in separate short scopes from the factory.
+    `process_surface_message` runs platform APIs, file ingest and voice
+    transcription before it writes anything, and none of that may hold a pooled
+    connection. This used to be the same class as `build_surface_ingress`,
+    handed a factory instead of a session, with seven collaborators left `None`.
     """
-    return AgentSurfaceIngressService(uow_factory=uow_factory)
+    return SurfaceTurnStarter(uow_factory=uow_factory)
 
 
 def build_notification_service(uow: SqlAlchemyUnitOfWork) -> NotificationService:

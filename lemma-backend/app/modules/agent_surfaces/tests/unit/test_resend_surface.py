@@ -798,7 +798,34 @@ def test_a_header_that_merely_looks_like_json_is_left_alone():
 
 
 @pytest.mark.asyncio
-async def test_an_email_reply_resolves_credentials_from_its_surface():
+def _starter_reading(monkeypatch, *, surface=None, repository=None, resolver):
+    """A turn starter whose short scope reads these doubles instead of Postgres.
+
+    `_credentials_for` builds its own resolver and repository inside the scope it
+    opens -- that is the point of the object: nothing is bound to a session the
+    caller holds. So the doubles go where it builds them.
+    """
+    from contextlib import asynccontextmanager
+
+    from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.turn_starter.SurfaceCredentialResolver",
+        lambda *, uow: resolver,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.turn_starter.SurfaceRepository",
+        lambda uow: repository or SimpleNamespace(get=AsyncMock(return_value=surface)),
+    )
+
+    @asynccontextmanager
+    async def uow_factory():
+        yield SimpleNamespace(session=AsyncMock())
+
+    return SurfaceTurnStarter(uow_factory=uow_factory)
+
+
+async def test_an_email_reply_resolves_credentials_from_its_surface(monkeypatch):
     """`from_address` is a property of the surface, not of the platform.
 
     `for_platform` returns only the deployment-wide api key, so a reply routed
@@ -808,14 +835,6 @@ async def test_an_email_reply_resolves_credentials_from_its_surface():
     surface failed this way, including the acknowledgement that closes a
     notification.
     """
-    from unittest.mock import AsyncMock
-
-    from types import SimpleNamespace
-
-    from app.modules.agent_surfaces.services.ingress_service import (
-        AgentSurfaceIngressService,
-    )
-
     surface = AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
@@ -826,14 +845,16 @@ async def test_an_email_reply_resolves_credentials_from_its_surface():
         surface_identity_email="mailtest.acme@ops.lemma.work",
     )
 
-    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
-    service._uow_factory = None
-    service.surface_repository = AsyncMock()
-    service.surface_repository.get = AsyncMock(return_value=surface)
-    service.credential_resolver = AsyncMock()
-    service.credential_resolver.for_surface = AsyncMock(
-        return_value={"api_key": "re_x", "from_address": surface.surface_identity_email}
+    resolver = SimpleNamespace(
+        for_surface=AsyncMock(
+            return_value={
+                "api_key": "re_x",
+                "from_address": surface.surface_identity_email,
+            }
+        ),
+        for_platform=AsyncMock(return_value={}),
     )
+    starter = _starter_reading(monkeypatch, surface=surface, resolver=resolver)
 
     context = SimpleNamespace(
         platform=SurfacePlatform.RESEND.value,
@@ -841,28 +862,21 @@ async def test_an_email_reply_resolves_credentials_from_its_surface():
         surface_account_id=None,
     )
 
-    credentials = await service._resolve_credentials_from_context(context)
+    credentials = await starter._credentials_for(context)
 
     assert credentials["from_address"] == "mailtest.acme@ops.lemma.work"
-    service.credential_resolver.for_surface.assert_awaited_once_with(surface)
+    resolver.for_surface.assert_awaited_once_with(surface)
 
 
 @pytest.mark.asyncio
-async def test_chat_platforms_do_not_pay_for_an_extra_surface_read():
+async def test_chat_platforms_do_not_pay_for_an_extra_surface_read(monkeypatch):
     """This runs on every inbound reply, so the lookup stays scoped to Resend."""
-    from unittest.mock import AsyncMock
-
-    from types import SimpleNamespace
-
-    from app.modules.agent_surfaces.services.ingress_service import (
-        AgentSurfaceIngressService,
+    resolver = SimpleNamespace(
+        for_surface=AsyncMock(return_value={}),
+        for_platform=AsyncMock(return_value={"token": "t"}),
     )
-
-    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
-    service._uow_factory = None
-    service.surface_repository = AsyncMock()
-    service.credential_resolver = AsyncMock()
-    service.credential_resolver.for_platform = AsyncMock(return_value={"token": "t"})
+    repository = SimpleNamespace(get=AsyncMock())
+    starter = _starter_reading(monkeypatch, repository=repository, resolver=resolver)
 
     context = SimpleNamespace(
         platform=SurfacePlatform.SLACK.value,
@@ -870,10 +884,10 @@ async def test_chat_platforms_do_not_pay_for_an_extra_surface_read():
         surface_account_id=None,
     )
 
-    await service._resolve_credentials_from_context(context)
+    await starter._credentials_for(context)
 
-    service.surface_repository.get.assert_not_awaited()
-    service.credential_resolver.for_platform.assert_awaited_once()
+    repository.get.assert_not_awaited()
+    resolver.for_platform.assert_awaited_once()
 
 
 def test_references_unwrap_applies_to_the_data_field_too():

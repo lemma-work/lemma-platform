@@ -117,7 +117,7 @@ class SurfaceLifecycleMixin:
         if not candidates or not parsed.actor_external_user_id:
             return
         prompt_surface = authorized[0][0] if authorized else candidates[0]
-        credentials = await self._resolve_credentials(prompt_surface)
+        credentials = await self.credential_resolver.for_surface(prompt_surface)
         choices = await self._surface_choice_labels(authorized) if authorized else None
         await self._prompt_for_configuration(
             adapter=adapter,
@@ -191,7 +191,7 @@ class SurfaceLifecycleMixin:
         adapter = self.adapter_registry.get(surface.surface_type)
         if adapter is None:
             return
-        credentials = await self._resolve_credentials(surface)
+        credentials = await self.credential_resolver.for_surface(surface)
 
         if parsed.kind is SurfaceLifecycleKind.HOME_OPENED:
             # Slack spins forever until a view is published, so this must answer

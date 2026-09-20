@@ -12,6 +12,7 @@ certifying a shape production never produces. One definition, three callers.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import MethodType, SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
@@ -43,6 +44,10 @@ from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
 from app.modules.agent_surfaces.services.member_reach import MemberReach
+from app.modules.agent_surfaces.services.surface_file_ingest_service import (
+    AttachmentIngest,
+)
+from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
 from app.modules.test_support.surface_routing_double import routing_surfaces_double
 
 #: Where `agent` publishes what a surface does to a conversation, and where the
@@ -396,8 +401,10 @@ def build_ingress_service(
             )
         )
     )
-    service._resolve_credentials = AsyncMock(return_value={})
-    service._resolve_credentials_from_context = AsyncMock(return_value={})
+    service.credential_resolver = SimpleNamespace(
+        for_surface=AsyncMock(return_value={}),
+        for_platform=AsyncMock(return_value={}),
+    )
     service._resolve_account_credentials = AsyncMock(return_value={})
     service.event_dedup_store = SimpleNamespace(
         claim_message=AsyncMock(return_value=True),
@@ -534,3 +541,66 @@ _REQUEST_APPROVAL_TOOL_ARGS = {
     "reason": "The agent wants to write a record to your table.",
     "args": {"table_id": "tbl-1", "data": {"col": "val"}},
 }
+
+
+class ScopeCountingFactory:
+    """A unit-of-work factory over one doubled session, counting open scopes.
+
+    `SurfaceTurnStarter` exists so that no connection is held across platform
+    I/O, and the only way to assert that is to watch the scopes open and close.
+    `active` is how many are open right now; `opened` is how many ever were.
+    """
+
+    def __init__(self, uow: object | None = None) -> None:
+        self._uow = uow
+        self.active = 0
+        self.opened = 0
+
+    @asynccontextmanager
+    async def __call__(self):
+        self.active += 1
+        self.opened += 1
+        try:
+            yield (
+                self._uow
+                if self._uow is not None
+                else SimpleNamespace(session=SimpleNamespace())
+            )
+        finally:
+            self.active -= 1
+
+
+def build_turn_starter(
+    *,
+    adapter,
+    surfaces: list[AgentSurfaceEntity] | None = None,
+    conversation: Conversation | None = None,
+    existing_link: AgentSurfaceConversationLink | None = None,
+    uow_factory: object | None = None,
+    file_ingest_service: object | None = None,
+) -> SurfaceTurnStarter:
+    """The worker's half, over doubled collaborators.
+
+    It takes a factory and nothing else that could be `None`. The object this
+    replaced took *either* a unit of work or a factory, so a test could write
+    `uow_factory=lambda: None` and get a half-built ingress service for a method
+    that never touched a session -- which is what two of these files did.
+    """
+    doubles = build_doubles(
+        adapter=adapter,
+        surfaces=surfaces,
+        conversation=conversation,
+        existing_link=existing_link,
+    )
+    return SurfaceTurnStarter(
+        uow_factory=uow_factory or ScopeCountingFactory(doubles.uow),
+        adapter_registry=_registry(adapter),
+        event_dedup_store=SimpleNamespace(
+            claim_message=AsyncMock(return_value=True),
+            claim_stranger_reply=AsyncMock(return_value=True),
+        ),
+        file_ingest_service=file_ingest_service
+        or SimpleNamespace(
+            ingest_attachments=AsyncMock(return_value=AttachmentIngest())
+        ),
+    )

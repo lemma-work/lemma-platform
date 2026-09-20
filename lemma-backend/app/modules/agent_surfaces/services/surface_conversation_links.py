@@ -40,6 +40,68 @@ _CONVERSATION_TITLE_MAX_LENGTH = 120
 # Recent thread/channel messages fetched per run for group-mention continuity.
 
 
+def should_start_a_new_conversation(
+    *,
+    surface: AgentSurfaceEntity,
+    link: AgentSurfaceConversationLink,
+    route: ResolvedSurfaceRoute | None = None,
+    current_conversation_agent_id: UUID | None = None,
+) -> bool:
+    """Has this thread stopped being the conversation it was?
+
+    Two reasons, and they are not the same reason.
+
+    A **different agent** is a different conversation on every shape. This
+    check used to sit inside a ``surface.mode is DM`` guard, so an email
+    thread re-routed to another agent kept the old one indefinitely.
+
+    A **cold thread** is only a fresh conversation where one thread id
+    carries all of them. On a channel or an email thread the platform
+    already bounded the topic, and cutting it on a timer discards history
+    the person can still see above your reply.
+    """
+
+    # Compared through `effective_agent_id`, because the two sides are
+    # written in different eras and the assistant has more than one spelling.
+    # A conversation now names it by the pod's own id; a route computed from
+    # surface configuration still names it by naming nobody. Raw, those two
+    # differ, and this reads "the agent changed" for a thread whose agent
+    # never changed -- cutting a fresh conversation and stranding the history
+    # the person can still see above the reply.
+    def same_agent(left: UUID | None, right: UUID | None, *, pod_id: UUID) -> bool:
+        return effective_agent_id(left, pod_id=pod_id) == effective_agent_id(
+            right, pod_id=pod_id
+        )
+
+    if (
+        route is not None
+        and current_conversation_agent_id is not None
+        and not same_agent(
+            current_conversation_agent_id, route.agent_id, pod_id=route.pod_id
+        )
+    ):
+        return True
+    if route is not None and not same_agent(
+        link.routed_agent_id, route.agent_id, pod_id=route.pod_id
+    ):
+        return True
+    shape = thread_shape(
+        link.conversation_kind or (route.conversation_kind if route else None)
+    )
+    if shape is not ThreadShape.MULTIPLEXED:
+        return False
+    reset_hours = surface.config.dm_conversation_reset_after_hours
+    if reset_hours <= 0:
+        return False
+    # Inbound activity, NOT ``updated_at``: an outbound notification also
+    # writes this row, so keying the reset off ``updated_at`` would let a
+    # proactive message suppress it and leak yesterday's context into today.
+    last_seen = link.inbound_activity_at
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - last_seen > timedelta(hours=reset_hours)
+
+
 class SurfaceConversationLinkMixin:
     async def _get_or_create_conversation_link(
         self,
@@ -66,7 +128,7 @@ class SurfaceConversationLinkMixin:
         )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
-            if self._should_start_a_new_conversation(
+            if should_start_a_new_conversation(
                 surface=surface,
                 link=link,
                 route=route,
@@ -131,68 +193,6 @@ class SurfaceConversationLinkMixin:
             )
         )
         return created_link, conversation.title
-
-    def _should_start_a_new_conversation(
-        self,
-        *,
-        surface: AgentSurfaceEntity,
-        link: AgentSurfaceConversationLink,
-        route: ResolvedSurfaceRoute | None = None,
-        current_conversation_agent_id: UUID | None = None,
-    ) -> bool:
-        """Has this thread stopped being the conversation it was?
-
-        Two reasons, and they are not the same reason.
-
-        A **different agent** is a different conversation on every shape. This
-        check used to sit inside a ``surface.mode is DM`` guard, so an email
-        thread re-routed to another agent kept the old one indefinitely.
-
-        A **cold thread** is only a fresh conversation where one thread id
-        carries all of them. On a channel or an email thread the platform
-        already bounded the topic, and cutting it on a timer discards history
-        the person can still see above your reply.
-        """
-
-        # Compared through `effective_agent_id`, because the two sides are
-        # written in different eras and the assistant has more than one spelling.
-        # A conversation now names it by the pod's own id; a route computed from
-        # surface configuration still names it by naming nobody. Raw, those two
-        # differ, and this reads "the agent changed" for a thread whose agent
-        # never changed -- cutting a fresh conversation and stranding the history
-        # the person can still see above the reply.
-        def same_agent(left: UUID | None, right: UUID | None, *, pod_id: UUID) -> bool:
-            return effective_agent_id(left, pod_id=pod_id) == effective_agent_id(
-                right, pod_id=pod_id
-            )
-
-        if (
-            route is not None
-            and current_conversation_agent_id is not None
-            and not same_agent(
-                current_conversation_agent_id, route.agent_id, pod_id=route.pod_id
-            )
-        ):
-            return True
-        if route is not None and not same_agent(
-            link.routed_agent_id, route.agent_id, pod_id=route.pod_id
-        ):
-            return True
-        shape = thread_shape(
-            link.conversation_kind or (route.conversation_kind if route else None)
-        )
-        if shape is not ThreadShape.MULTIPLEXED:
-            return False
-        reset_hours = surface.config.dm_conversation_reset_after_hours
-        if reset_hours <= 0:
-            return False
-        # Inbound activity, NOT ``updated_at``: an outbound notification also
-        # writes this row, so keying the reset off ``updated_at`` would let a
-        # proactive message suppress it and leak yesterday's context into today.
-        last_seen = link.inbound_activity_at
-        if last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) - last_seen > timedelta(hours=reset_hours)
 
     async def _create_surface_conversation(
         self,

@@ -23,7 +23,7 @@ from app.modules.agent_surfaces.services.chat_onboarding import (
 )
 from app.modules.agent_surfaces.services.onboarding_replay import replay_onboarding
 from app.modules.agent_surfaces.composition import (
-    build_worker_surface_ingress,
+    build_surface_turn_starter,
 )
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
@@ -148,7 +148,7 @@ async def test_shared_whatsapp_without_a_surface_provisions_and_replays(
     assert codes[0] not in str(context)
     assert context["event"]["is_dm"] is True
     parsed_context = SurfaceChatContext.model_validate(context)
-    handler = build_worker_surface_ingress(factory)
+    handler = build_surface_turn_starter(factory)
     with suppress_agent_run_enqueue():
         await handler.execute_chat(parsed_context)
         await handler.execute_chat(parsed_context)
@@ -267,7 +267,7 @@ async def test_telegram_requires_own_contact_without_a_username_or_existing_surf
     )
     assert context.message_text == "Help plan my day"
     with suppress_agent_run_enqueue():
-        await build_worker_surface_ingress(factory).execute_chat(context)
+        await build_surface_turn_starter(factory).execute_chat(context)
     await run_scripted_agent_run(
         db_session,
         conversation_id=context.conversation_id,

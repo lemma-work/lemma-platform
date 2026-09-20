@@ -30,8 +30,8 @@ from app.modules.agent_surfaces.domain.notification import (
     NotificationOriginKind,
     NotificationStatus,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
+from app.modules.agent_surfaces.services.surface_conversation_links import (
+    should_start_a_new_conversation,
 )
 from app.modules.agent_surfaces.services.notification_delivery import (
     DeliveryChannel,
@@ -381,7 +381,6 @@ def test_an_outbound_notification_does_not_suppress_the_dm_reset():
     activity: the person comes back two days later and the agent is still
     holding a conversation from before, silently.
     """
-    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
     now = datetime.now(timezone.utc)
     link = _link(
         # They last wrote two days ago...
@@ -390,30 +389,24 @@ def test_an_outbound_notification_does_not_suppress_the_dm_reset():
         updated_at=now - timedelta(minutes=1),
     )
 
-    assert service._should_start_a_new_conversation(surface=_dm_surface(), link=link)
+    assert should_start_a_new_conversation(surface=_dm_surface(), link=link)
 
 
 def test_dm_reset_falls_back_to_updated_at_for_pre_migration_rows():
-    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
     now = datetime.now(timezone.utc)
 
     recent_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(hours=1))
-    assert not service._should_start_a_new_conversation(
+    assert not should_start_a_new_conversation(
         surface=_dm_surface(), link=recent_legacy
     )
 
     old_legacy = _link(last_inbound_at=None, updated_at=now - timedelta(days=3))
-    assert service._should_start_a_new_conversation(
-        surface=_dm_surface(), link=old_legacy
-    )
+    assert should_start_a_new_conversation(surface=_dm_surface(), link=old_legacy)
 
 
 def test_a_live_thread_is_not_reset():
-    service = AgentSurfaceIngressService.__new__(AgentSurfaceIngressService)
     link = _link(last_inbound_at=datetime.now(timezone.utc) - timedelta(minutes=10))
-    assert not service._should_start_a_new_conversation(
-        surface=_dm_surface(), link=link
-    )
+    assert not should_start_a_new_conversation(surface=_dm_surface(), link=link)
 
 
 # --------------------------------------------------------- the surface policy

@@ -319,9 +319,9 @@ def test_the_worker_builder_scopes_its_own_units_of_work():
     """
     factory = object()
 
-    service = composition.build_worker_surface_ingress(factory)
+    starter = composition.build_surface_turn_starter(factory)
 
-    assert service._uow_factory is factory
+    assert starter.uow_factory is factory
 
 
 def _reply_context() -> SurfaceReplyContext:

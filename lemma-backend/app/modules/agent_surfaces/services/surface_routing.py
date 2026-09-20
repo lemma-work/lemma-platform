@@ -295,7 +295,7 @@ class SurfaceRoutingMixin:
                 TelegramPlatformService,
             )
 
-            credentials = await self._resolve_credentials(surface)
+            credentials = await self.credential_resolver.for_surface(surface)
             service = TelegramPlatformService(credentials)
             bot_username = (await service.get_bot_username() or "").lower()
             bot_user_id = await service.get_bot_user_id()

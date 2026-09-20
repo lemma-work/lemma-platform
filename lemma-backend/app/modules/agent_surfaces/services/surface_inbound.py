@@ -47,9 +47,6 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
 from app.modules.agent_surfaces.services.agent_naming import agent_name_for_surface
 from app.core.log.log import get_logger
 
-from app.modules.agent_surfaces.services.surface_inbound_message import (
-    SurfaceInboundMessageMixin,
-)
 
 logger = get_logger(__name__)
 
@@ -129,14 +126,14 @@ def _needs_mention_verification(
     )
 
 
-class SurfaceInboundMixin(SurfaceInboundMessageMixin):
+class SurfaceInboundMixin:
     #: Supplied by `AgentSurfaceIngressService`, which composes these mixins.
-    #: `None` in the worker's factory mode, which is why every reader here goes
-    #: through `getattr(..., "session", None)`. Declared so these reads
-    #: type-check instead of reading as "this class has no `uow`", the shape of
-    #: most of this file's baselined type errors. The outbound half no longer
-    #: needs the idiom: `SurfaceDelivery` requires a unit of work.
-    uow: SqlAlchemyUnitOfWork | None
+    #: Not optional any more: the worker's factory mode went to
+    #: `SurfaceTurnStarter`, so there is one kind of ingress service and it
+    #: always has a session. Declared so these reads type-check instead of
+    #: reading as "this class has no `uow`", the shape of most of this file's
+    #: baselined type errors.
+    uow: SqlAlchemyUnitOfWork
 
     async def _prepare_platform_webhook_ingress(
         self, request: SurfacePlatformWebhookIngress
@@ -150,7 +147,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             return None
 
         # No connection held for the platform call; see `connection_released`.
-        async with connection_released(getattr(self.uow, "session", None)):
+        async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             logger.debug(
@@ -183,9 +180,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             return None
 
         if _needs_mention_verification(platform, parsed, surfaces):
-            async with connection_released(
-                getattr(self.uow, "session", None)
-            ):  # Telegram API
+            async with connection_released(self.uow.session):  # Telegram API
                 parsed = await self._telegram_text_mention_enrich(parsed, surfaces[0])
 
         candidates = [
@@ -224,7 +219,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         resolved_user = await self._resolve_sender_identity(
             adapter=adapter,
             parsed=parsed,
-            credentials=await self._resolve_credentials(identity_surface),
+            credentials=await self.credential_resolver.for_surface(identity_surface),
             installation_id=identity_surface.account_id or identity_surface.id,
         )
         matched_surface = await self._select_surface(
@@ -270,7 +265,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         if adapter is None:
             return None
 
-        async with connection_released(getattr(self.uow, "session", None)):
+        async with connection_released(self.uow.session):
             parsed = await adapter.parse_inbound_event(request.payload, request.headers)
         if parsed is None:
             return None
@@ -299,7 +294,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 return None
         if resolved_user is None:
             credentials = (
-                await self._resolve_credentials(surface)
+                await self.credential_resolver.for_surface(surface)
                 if surface is not None
                 # No surface on this path by definition: the event matched none.
                 else await self.credential_resolver.for_platform(
@@ -348,12 +343,12 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         if surface.should_ignore_sender(parsed.sender_external_user_id):
             return None
 
-        credentials = await self._resolve_credentials(surface)
+        credentials = await self.credential_resolver.for_surface(surface)
         fallback_agent_name = await agent_name_for_surface(self.uow, surface)
         fallback_agent_display_name = agent_display_name(fallback_agent_name)
 
         # `enrich_or_drop` is module-level: no session of its own to release.
-        async with connection_released(getattr(self.uow, "session", None)):
+        async with connection_released(self.uow.session):
             enriched = await enrich_or_drop(
                 adapter=adapter, surface=surface, parsed=parsed, credentials=credentials
             )
@@ -378,7 +373,7 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             # trip, and only reads have happened by here -- the identity upsert
             # and the conversation link are below, so this release is real
             # rather than a `safe_to_release` no-op.
-            async with connection_released(getattr(self.uow, "session", None)):
+            async with connection_released(self.uow.session):
                 claimed = await self.event_dedup_store.claim_message(
                     surface_installation_id=surface.id,
                     platform=surface.surface_type,

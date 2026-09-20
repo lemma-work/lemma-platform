@@ -31,7 +31,7 @@
     "app/modules/agent_surfaces/services/surface_display_delivery.py::deliver_display_resource_to_surface::debug-only-broad-catch::agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic": 1,
     "app/modules/agent_surfaces/services/surface_display_delivery.py::deliver_surface_message_to_surface::debug-only-broad-catch::agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic": 1,
     "app/modules/agent_surfaces/services/surface_display_delivery.py::deliver_voice_note_to_surface::debug-only-broad-catch::agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic": 1,
-    "app/modules/agent_surfaces/services/surface_inbound_message.py::SurfaceInboundMessageMixin._fetch_channel_context::debug-only-broad-catch::agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic": 1,
+    "app/modules/agent_surfaces/services/surface_inbound_message.py::fetch_channel_context::debug-only-broad-catch::agent_surfaces.ingress_service.surface_channel_context_fetch_platform.diagnostic": 1,
     "app/modules/agent_surfaces/services/surface_interactions.py::SurfaceInteractionMixin.handle_interaction::silent-broad-catch::Exception -> fallthrough": 1,
     "app/modules/agent_surfaces/services/surface_reach_resolver.py::SurfaceReachResolver._fallback_handle::debug-only-broad-catch::agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed": 1,
     "app/modules/agent_surfaces/services/surface_reach_resolver.py::SurfaceReachResolver._live_handle::debug-only-broad-catch::agent_surfaces.surface_reach_resolver.surface_reach_live_handle_surface.observed": 1,

@@ -268,6 +268,19 @@ class SurfacePlatformAdapterPort(Protocol):
     # Parse an interaction submission (Slack block_actions, Teams Action.Submit)
     # into a routable interaction, or None when the payload is not an interaction.
 
+    async def set_thread_title(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        title: str,
+    ) -> bool: ...
+
+    # Name the thread on the platform, where it has a name to set. False on
+    # every platform that does not, which is the default on `BaseSurfaceAdapter`
+    # -- best-effort by construction, and called once, when a conversation is
+    # brand new.
+
     async def add_processing_indicator(
         self,
         *,
