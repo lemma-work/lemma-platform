@@ -15255,9 +15255,10 @@ var LemmaClient = (() => {
     }
     /**
      * Create Surface
-     * Create a surface. ``name`` defaults to the lowercased platform — pass an
-     * explicit name to create a second surface of the same platform (e.g. a
-     * second bot routed to a different agent).
+     * Create a surface. ``name`` defaults to the lowercased platform and is the
+     * pod-unique handle the API addresses it by. A second surface of the same
+     * platform has to belong to a different agent: one agent reaches a platform in
+     * one place — one Slack app, one WhatsApp number, one Telegram bot.
      * @param podId
      * @param requestBody
      * @returns AgentSurfaceResponse Successful Response

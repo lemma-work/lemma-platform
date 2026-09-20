@@ -50,9 +50,6 @@ from app.modules.identity.tests.e2e.test_email_challenges_e2e import allow_test_
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
 
-_WABA_ID = "waba-workspace-choice"
-_PHONE_NUMBER_ID = "1234567890"
-
 
 async def _swallow(*, email: str, code: str) -> bool:
     del email, code
@@ -86,8 +83,8 @@ async def recognised_sender(
         f"{fake_whatsapp.api_base}/v21.0",
     )
     monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", _PHONE_NUMBER_ID)
-    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", _WABA_ID)
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-workspace-choice")
 
     sessions, coordinator = _coordinator(db_session)
     sender_phone = "1555" + str(uuid4().int)[:7]
@@ -99,8 +96,11 @@ async def recognised_sender(
                 payload=_whatsapp_payload(
                     text=text,
                     message_id=uuid4().hex,
-                    phone_number_id=_PHONE_NUMBER_ID,
-                    waba_id=_WABA_ID,
+                    # Read back off the settings rather than repeated here: a
+                    # real webhook is addressed to the number the deployment is
+                    # configured with, and two copies of it can disagree.
+                    phone_number_id=surface_settings.whatsapp_phone_number_id,
+                    waba_id=surface_settings.whatsapp_waba_id,
                     sender_phone=sender_phone,
                 ),
             )
@@ -116,7 +116,7 @@ async def recognised_sender(
             VerifiedSurfaceIdentity(
                 binding_key=binding_key,
                 platform="WHATSAPP",
-                tenant_id=_WABA_ID,
+                tenant_id=surface_settings.whatsapp_waba_id,
                 external_user_id=sender_phone,
                 user_id=fixed_test_user["id"],
             )
