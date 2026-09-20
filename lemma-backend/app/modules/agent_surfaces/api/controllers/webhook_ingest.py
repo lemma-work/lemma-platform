@@ -293,11 +293,11 @@ async def _handled_slack_modal(
     if not _opens_a_slack_modal(payload):
         return False
     from app.modules.agent_surfaces.composition import (
-        build_surface_ingress,
+        build_app_event_handler,
     )
 
     async with uow_factory() as uow:
-        return await build_surface_ingress(uow).try_handle_channel_setup(
+        return await build_app_event_handler(uow).try_handle_channel_setup(
             SurfacePlatformWebhookIngress(
                 source="slack",
                 payload=payload,

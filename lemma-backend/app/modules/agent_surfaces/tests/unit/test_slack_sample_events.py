@@ -26,6 +26,8 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
+from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
 from app.modules.agent_surfaces.services.turn_starter import SurfaceTurnStarter
 from app.modules.test_support.surface_routing_double import (
     routing_surfaces_double,
@@ -135,7 +137,15 @@ def _build_service(*, surface, monkeypatch):
     conversation_link_repository = AsyncMock()
     conversation_link_repository.get_by_external_thread.return_value = None
     conversation_link_repository.create.side_effect = lambda link: link
-    service = AgentSurfaceIngressService(
+    slack_credentials = {
+        "access_token": "xoxb-test",
+        "scope": "assistant:write,chat:write.customize,reactions:write",
+    }
+    credential_resolver = SimpleNamespace(
+        for_surface=AsyncMock(return_value=slack_credentials),
+        for_platform=AsyncMock(return_value=slack_credentials),
+    )
+    router = SurfaceRouter(
         uow=uow,
         surface_repository=surface_repository,
         conversation_link_repository=conversation_link_repository,
@@ -143,24 +153,29 @@ def _build_service(*, surface, monkeypatch):
             get_user_pod_ids=AsyncMock(return_value=[surface.pod_id]),
             get_user_email=AsyncMock(return_value="sender@example.com"),
         ),
-    )
-    service.identity_service = SimpleNamespace(
-        resolve=AsyncMock(
-            return_value=ResolvedSurfaceUser(
-                internal_user_id=surface.agent_id,
-                external_user_id="U-RESOLVED",
-                email="sender@example.com",
-                display_name="Sample Sender",
+        identity_service=SimpleNamespace(
+            resolve=AsyncMock(
+                return_value=ResolvedSurfaceUser(
+                    internal_user_id=surface.agent_id,
+                    external_user_id="U-RESOLVED",
+                    email="sender@example.com",
+                    display_name="Sample Sender",
+                )
             )
-        )
+        ),
+        credential_resolver=credential_resolver,
     )
-    slack_credentials = {
-        "access_token": "xoxb-test",
-        "scope": "assistant:write,chat:write.customize,reactions:write",
-    }
-    service.credential_resolver = SimpleNamespace(
-        for_surface=AsyncMock(return_value=slack_credentials),
-        for_platform=AsyncMock(return_value=slack_credentials),
+    service = AgentSurfaceIngressService(
+        uow=uow,
+        router=router,
+        binder=ConversationBinder(
+            uow=uow,
+            surface_repository=surface_repository,
+            conversation_link_repository=conversation_link_repository,
+        ),
+        surface_repository=surface_repository,
+        conversation_link_repository=conversation_link_repository,
+        credential_resolver=credential_resolver,
     )
     service._resolve_account_credentials = AsyncMock(return_value={})
     service.event_dedup_store = SimpleNamespace(

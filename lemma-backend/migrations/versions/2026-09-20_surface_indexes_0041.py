@@ -45,7 +45,27 @@ usable index at all -- it matched the standalone ``platform`` btree and then
 filtered and sorted a table that grows per thread.
 
 Indexes only. No column, constraint or row is touched, so this is reversible
-exactly, and ``downgrade`` restores all nineteen.
+exactly, and ``downgrade`` restores all twenty-two.
+
+**Concurrently, in an autocommit block.** All three tables are on the inbound
+routing path. A plain ``CREATE INDEX`` holds a ``SHARE`` lock for the whole
+build and a plain ``DROP INDEX`` holds ``ACCESS EXCLUSIVE``, so twenty-two drops
+and five builds against a populated deployment would stall inbound message
+processing for as long as they take. ``0018`` says CONCURRENTLY "cannot run
+inside Alembic's transaction"; that is stale -- ``script.py.mako`` wraps every
+migration in ``op.get_context().autocommit_block()`` and ``0032`` uses one
+directly.
+
+The cost is that concurrent DDL is **not atomic**: interrupt a
+``CREATE INDEX CONCURRENTLY`` and Postgres leaves the index behind marked
+``INVALID``, which ``IF NOT EXISTS`` then treats as present and skips. If this
+migration is interrupted, find one before re-running::
+
+    SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;
+
+and ``DROP INDEX CONCURRENTLY`` whatever it names. None of the five added here
+is unique, so there is no half-built constraint to reason about -- only a
+useless index the planner ignores.
 
 Revision ID: 0041_surface_indexes
 Revises: 0040_external_user_nulls

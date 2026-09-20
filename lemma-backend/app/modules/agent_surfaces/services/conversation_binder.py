@@ -3,6 +3,13 @@
 One lifecycle: find the conversation this thread maps to, create it when there
 isn't one, decide when a DM has gone cold enough to start a fresh one, and keep
 the conversation's surface metadata in step.
+
+An object with a constructor rather than a mixin, and the dependency direction
+is why: inbound and interactions both reach for `get_or_create`, and this
+reaches for neither. It was flattened onto one service only so they could see
+it, which is also how the two *callers* came to be unable to see their own
+collaborators' types -- an attribute that resolves to nothing type-checks as
+nothing, and most of this module's baselined errors are that.
 """
 
 from __future__ import annotations
@@ -30,7 +37,12 @@ from app.modules.agent_surfaces.domain.entities import (
     ThreadShape,
     thread_shape,
 )
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
+from app.modules.agent_surfaces.domain.ports import SurfaceInstallationRepositoryPort
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
+    SurfaceConversationLinkRepository,
+)
 from app.modules.agent_surfaces.domain.surface_event_metadata import (
     build_surface_event_metadata,
 )
@@ -102,8 +114,21 @@ def should_start_a_new_conversation(
     return datetime.now(timezone.utc) - last_seen > timedelta(hours=reset_hours)
 
 
-class SurfaceConversationLinkMixin:
-    async def _get_or_create_conversation_link(
+class ConversationBinder:
+    """Find or open the conversation a surface thread belongs to."""
+
+    def __init__(
+        self,
+        *,
+        uow: SqlAlchemyUnitOfWork,
+        surface_repository: SurfaceInstallationRepositoryPort,
+        conversation_link_repository: SurfaceConversationLinkRepository,
+    ) -> None:
+        self.uow = uow
+        self.surface_repository = surface_repository
+        self.conversation_link_repository = conversation_link_repository
+
+    async def bind_conversation(
         self,
         *,
         surface: AgentSurfaceEntity,
@@ -117,7 +142,17 @@ class SurfaceConversationLinkMixin:
         The title is how a caller learns a *fresh* conversation started on this
         turn — which is the only moment worth naming the thread on the platform.
         None means the link already existed.
+
+        A resolved sender is a precondition, not a hope: a conversation belongs
+        to somebody, and `open_surface_conversation` takes a user id. Both
+        callers already refuse an unresolved sender well before here -- ingestion
+        answers them with a signup link instead -- so this states the contract
+        rather than adding a case. It is stated because this is a published verb
+        now (`ConversationLinker`), and the caller that reaches it through that
+        protocol has no way to see the check the others do.
         """
+        if resolved_user.internal_user_id is None:
+            raise ValueError("A conversation cannot be bound to an unresolved sender")
         external_user_id = resolved_user.external_user_id
         link = await self.conversation_link_repository.get_by_external_thread(
             surface_id=surface.id,
@@ -135,6 +170,7 @@ class SurfaceConversationLinkMixin:
                 current_conversation_agent_id=current_conversation_agent_id,
             ):
                 conversation = await self._create_surface_conversation(
+                    user_id=resolved_user.internal_user_id,
                     surface=surface,
                     parsed=parsed,
                     resolved_user=resolved_user,
@@ -172,6 +208,7 @@ class SurfaceConversationLinkMixin:
             surface=surface,
             parsed=parsed,
             resolved_user=resolved_user,
+            user_id=resolved_user.internal_user_id,
             external_user_id=external_user_id,
             route=route,
         )
@@ -200,6 +237,7 @@ class SurfaceConversationLinkMixin:
         surface: AgentSurfaceEntity,
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
+        user_id: UUID,
         external_user_id: str | None,
         route: ResolvedSurfaceRoute,
     ):
@@ -208,7 +246,7 @@ class SurfaceConversationLinkMixin:
             parsed.metadata,
         )
         auth_ctx = await create_authorization_data_service(self.uow).build_user_context(
-            user_id=resolved_user.internal_user_id,
+            user_id=user_id,
             pod_id=route.pod_id,
         )
         token = set_current_context(auth_ctx)
@@ -217,7 +255,7 @@ class SurfaceConversationLinkMixin:
                 self.uow,
                 pod_id=route.pod_id,
                 agent_name=route.agent_name,
-                user_id=resolved_user.internal_user_id,
+                user_id=user_id,
                 title=self._surface_conversation_title(
                     parsed,
                     fallback=f"{surface.surface_type.value} Conversation",

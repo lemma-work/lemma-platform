@@ -107,6 +107,9 @@ async def test_handle_surface_webhook_enqueues_prepared_context(monkeypatch):
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
+    # The set-up and lifecycle flows are their own object now; the webhook
+    # handler builds both, so a double for one is not a double for the path.
+    monkeypatch.setattr(handlers, "build_app_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="telegram", payload={"update_id": 1}),
@@ -137,6 +140,9 @@ async def test_a_batched_delivery_enqueues_one_job_per_message(monkeypatch):
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
+    # The set-up and lifecycle flows are their own object now; the webhook
+    # handler builds both, so a double for one is not a double for the path.
+    monkeypatch.setattr(handlers, "build_app_event_handler", lambda uow: handler)
 
     envelope = _webhook_envelope(source="whatsapp", payload={"entry": []})
     event_id = envelope["event_id"]
@@ -172,6 +178,9 @@ async def test_handle_surface_webhook_skips_queue_when_interaction_was_handled(
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
+    # The set-up and lifecycle flows are their own object now; the webhook
+    # handler builds both, so a double for one is not a double for the path.
+    monkeypatch.setattr(handlers, "build_app_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="telegram", payload={"callback_query": {}}),
@@ -199,6 +208,9 @@ async def test_handle_surface_webhook_skips_queue_when_no_context(monkeypatch):
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
+    # The set-up and lifecycle flows are their own object now; the webhook
+    # handler builds both, so a double for one is not a double for the path.
+    monkeypatch.setattr(handlers, "build_app_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="telegram", payload={"update_id": 2}),
@@ -225,6 +237,9 @@ async def test_direct_webhook_builds_direct_ingress(monkeypatch):
     handler.prepare_ingress.return_value = None
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
+    # The set-up and lifecycle flows are their own object now; the webhook
+    # handler builds both, so a double for one is not a double for the path.
+    monkeypatch.setattr(handlers, "build_app_event_handler", lambda uow: handler)
     surface_id = uuid4()
 
     await handlers.handle_surface_webhook(
@@ -287,6 +302,9 @@ async def test_handle_surface_webhook_ignores_the_other_events_on_its_stream(
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
+    # The set-up and lifecycle flows are their own object now; the webhook
+    # handler builds both, so a double for one is not a double for the path.
+    monkeypatch.setattr(handlers, "build_app_event_handler", lambda uow: handler)
 
     # Returning cleanly is the whole assertion: FastStream acknowledges only a
     # handler that does not raise, and the ack is what lets the message leave
@@ -356,6 +374,9 @@ async def test_handle_surface_webhook_stops_at_a_lifecycle_event(monkeypatch):
     job_queue = AsyncMock()
     uow_mock = AsyncMock()
     monkeypatch.setattr(handlers, "build_surface_ingress", lambda uow: handler)
+    # The set-up and lifecycle flows are their own object now; the webhook
+    # handler builds both, so a double for one is not a double for the path.
+    monkeypatch.setattr(handlers, "build_app_event_handler", lambda uow: handler)
 
     await handlers.handle_surface_webhook(
         _webhook_envelope(source="slack", payload={"type": "event_callback"}),

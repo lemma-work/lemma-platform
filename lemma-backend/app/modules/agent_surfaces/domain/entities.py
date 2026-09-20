@@ -127,6 +127,17 @@ class SurfacePlatform(StrEnum):
         return self is SurfacePlatform.RESEND
 
 
+def platform_value_for_source(source: str) -> str | None:
+    """The platform a webhook source names, as the string the columns store.
+
+    A two-line derivation that was a method on the routing mixin, which is
+    why the configuration flows -- which have nothing to do with routing -- had
+    to inherit routing to parse their own webhook's source.
+    """
+    platform = SurfacePlatform.from_source(source)
+    return platform.value if platform else None
+
+
 class ExternalSurfaceUserEntity(Entity):
     platform: str
     tenant_id: str | None = None

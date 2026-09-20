@@ -24,6 +24,7 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent.contracts.conversations_for_surfaces import SurfaceConversation
 from app.modules.agent_surfaces.domain.entities import (
+    platform_value_for_source,
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
@@ -48,6 +49,9 @@ from app.modules.agent_surfaces.services.interaction_helpers import (
 )
 from app.core.log.log import get_logger
 
+from app.modules.agent_surfaces.services.conversation_binder import ConversationBinder
+from app.modules.agent_surfaces.services.surface_router import SurfaceRouter
+
 logger = get_logger(__name__)
 
 # Recent thread/channel messages fetched per run for group-mention continuity.
@@ -56,6 +60,8 @@ logger = get_logger(__name__)
 class SurfaceInteractionMixin:
     #: Supplied by `AgentSurfaceIngressService`; see `SurfaceInboundMixin`.
     uow: SqlAlchemyUnitOfWork
+    router: SurfaceRouter
+    binder: ConversationBinder
 
     async def try_handle_interaction(
         self,
@@ -74,7 +80,7 @@ class SurfaceInteractionMixin:
                 return False
             adapter = self.adapter_registry.get(surface.surface_type)
         else:
-            platform = self._resolve_platform(request.source)
+            platform = platform_value_for_source(request.source)
             adapter = self.adapter_registry.get(platform) if platform else None
         if adapter is None:
             return False
@@ -316,10 +322,10 @@ class SurfaceInteractionMixin:
             last_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
         except TypeError, ValueError:
             return link, conversation, False
-        route = await self._resolve_route(surface=surface, parsed=last_event)
+        route = await self.router.resolve_route(surface=surface, parsed=last_event)
         if route is None:
             return link, conversation, False
-        refreshed_link, _ = await self._get_or_create_conversation_link(
+        refreshed_link, _ = await self.binder.bind_conversation(
             surface=surface,
             parsed=last_event,
             resolved_user=ResolvedSurfaceUser(

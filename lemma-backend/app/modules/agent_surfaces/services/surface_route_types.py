@@ -21,7 +21,7 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
 )
-from app.modules.agent_surfaces.domain.ports import SurfacePlatformAdapterPort
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 
 
 @dataclass(frozen=True)

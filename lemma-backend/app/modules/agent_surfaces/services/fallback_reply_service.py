@@ -18,9 +18,11 @@ from app.modules.agent_surfaces.domain.ingress_context import (
     SurfaceReplyContext,
     SurfaceReplyKind,
 )
+from app.modules.agent_surfaces.domain.adapter_port import (
+    SurfacePlatformAdapterPort,
+)
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
-    SurfacePlatformAdapterPort,
 )
 from app.modules.agent_surfaces.platforms.email_authentication import (
     EmailAuthenticationVerdict,

@@ -123,7 +123,8 @@ async def test_prepare_webhook_avoids_pod_access_link_for_system_non_member():
         ),
     )
     # Resolved user belongs to no pod -> not a member of the surface's pod.
-    service.pod_membership_port = SimpleNamespace(
+    # On the router, which is the one holder of the question now.
+    service.router.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[])
     )
 
@@ -178,7 +179,7 @@ async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member(
             display_name="Member",
         ),
     )
-    service.pod_membership_port = SimpleNamespace(
+    service.router.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[])
     )
 
@@ -286,7 +287,7 @@ async def test_resolved_dm_without_matching_surface_gets_setup_link(monkeypatch)
             email="signed-in@example.com",
         ),
     )
-    service.pod_membership_port = SimpleNamespace(
+    service.router.pod_membership_port = SimpleNamespace(
         get_user_pod_ids=AsyncMock(return_value=[]),
         get_user_email=AsyncMock(return_value="signed-in@example.com"),
     )
@@ -337,7 +338,7 @@ async def test_resolved_dm_with_no_route_gets_setup_reply():
             email="sender@example.com",
         ),
     )
-    service._resolve_route = AsyncMock(return_value=None)
+    service.router.resolve_route = AsyncMock(return_value=None)
 
     context = await service._prepare_surface_context(
         surface=surface,
@@ -1159,8 +1160,8 @@ def _claim_journal(service) -> list[str]:
         (service.adapter_registry.get(SurfacePlatform.SLACK), "adapter"),
         (service.surface_repository, "surfaces"),
         (service.conversation_link_repository, "links"),
-        (service.identity_service, "identity"),
-        (service.pod_membership_port, "membership"),
+        (service.router.identity_service, "identity"),
+        (service.router.pod_membership_port, "membership"),
     ):
         if target is not None:
             _journal_awaits(target, entries, label)

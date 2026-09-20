@@ -27,9 +27,8 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
     SqlAlchemySurfaceRoutingResolutionAdapter,
 )
-from app.modules.agent_surfaces.infrastructure.models import AgentSurface
-from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
-    routing_surfaces,
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    SurfaceRepository,
 )
 from app.modules.identity.contracts.organizations import (
     organization_member_ids_for_user,
@@ -182,7 +181,8 @@ async def has_somewhere_to_talk(
     case it exists for.
 
     What the two paths *do* share is the predicate, and they share it here:
-    `routing_surfaces` is the candidate query ingestion runs, and
+    `list_active_for_routing` is the candidate query ingestion runs, down to the
+    `pod_ids` narrowing it now applies for the same reason, and
     `allows_inbound_event` is the per-event filter it applies to the result --
     so a Slack surface belonging to a workspace this installation is not part of
     is excluded here in the same call it is excluded there.
@@ -208,14 +208,10 @@ async def has_somewhere_to_talk(
     )
     if not pod_ids:
         return False
-    result = await uow.session.execute(
-        routing_surfaces(
-            platform.value,
-            surface_ids=receiver_surface_ids,
-            system_credentials_only=system_credentials_only,
-        ).where(AgentSurface.pod_id.in_(pod_ids))
+    candidates = await SurfaceRepository(uow).list_active_for_routing(
+        platform.value,
+        surface_ids=receiver_surface_ids,
+        pod_ids=pod_ids,
+        system_credentials_only=system_credentials_only,
     )
-    return any(
-        surface is not None and surface.allows_inbound_event(parsed)
-        for surface in (model.to_entity_or_none() for model in result.scalars().all())
-    )
+    return any(surface.allows_inbound_event(parsed) for surface in candidates)

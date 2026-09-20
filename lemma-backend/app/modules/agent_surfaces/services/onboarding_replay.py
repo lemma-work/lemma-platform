@@ -12,7 +12,10 @@ from sqlalchemy import select
 
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.jobs.streaq_job_queue import SharedStreaqJobQueue
-from app.modules.agent_surfaces.composition import build_surface_ingress
+from app.modules.agent_surfaces.composition import (
+    build_conversation_binder,
+    build_surface_ingress,
+)
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
@@ -85,7 +88,7 @@ async def replay_onboarding(
                     uow,
                     route_id=route_id,
                     event=event,
-                    linker=build_surface_ingress(uow),
+                    linker=build_conversation_binder(uow),
                 )
             else:
                 context = await _shared_replay_context(uow, state, event, user)
@@ -121,7 +124,7 @@ async def _shared_replay_context(
     candidates = await SurfaceRepository(uow).list_active_for_routing(
         event.platform.value, system_credentials_only=True
     )
-    surface = await handler.reachable_surface(
+    surface = await handler.router.reachable_surface(
         candidates=candidates,
         user_id=user.id,
         platform=event.platform,

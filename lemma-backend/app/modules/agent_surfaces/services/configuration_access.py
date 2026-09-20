@@ -1,4 +1,15 @@
-"""Identity, membership, and agent authorization for in-platform setup flows."""
+"""Who may configure a surface from inside the chat app, and which agents.
+
+One question, asked of the same collaborators: given a webhook and the platform
+account that sent it, which surfaces is that person allowed to point at an
+agent, and which agents may they choose?
+
+Its own object rather than a base class of `AppEventHandler`, because it has no
+edge back: nothing here opens a modal, publishes an app home or answers a
+lifecycle event. It was a mixin only so that a service composed of eight of them
+could reach it, which is also why every method is still spelled with a leading
+underscore -- renaming them is a change of its own.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +20,7 @@ from slack_sdk.errors import SlackApiError
 
 from app.core.authorization.delegation import is_pod_default_agent
 from app.core.infrastructure.db.transaction_locks import connection_released
-from app.core.authorization.context import ResourceRef, ResourceType
+from app.core.authorization.context import Context, ResourceRef, ResourceType
 from app.core.authorization.factory import create_authorization_data_service
 from app.modules.agent.contracts import AgentNotFoundError
 from app.modules.agent.contracts.agents import agent_id_for_name
@@ -18,9 +29,25 @@ from app.modules.agent.contracts.pod_summaries import (
     list_agent_summaries_by_pod,
 )
 from app.modules.pod.contracts.members import pod_name
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent_surfaces.domain.adapter_port import SurfacePlatformAdapterPort
 from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceEntity,
     ConversationType,
     ParsedInboundSurfaceEvent,
+)
+from app.modules.agent_surfaces.domain.ports import (
+    SurfaceInstallationRepositoryPort,
+    SurfacePodMembershipPort,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
+    ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+)
+from app.modules.agent_surfaces.services.identity_resolution_service import (
+    SurfaceIdentityResolutionService,
 )
 
 #: How many of a pod's agents a surface's chooser offers. Slack's App Home and
@@ -30,7 +57,26 @@ from app.modules.agent_surfaces.domain.entities import (
 SURFACE_AGENT_CHOICES = 100
 
 
-class SurfaceConfigurationAuthorizationMixin:
+class ConfigurationAccess:
+    """The authorization half of in-platform setup."""
+
+    def __init__(
+        self,
+        *,
+        uow: SqlAlchemyUnitOfWork,
+        surface_repository: SurfaceInstallationRepositoryPort,
+        pod_membership_port: SurfacePodMembershipPort,
+        identity_service: SurfaceIdentityResolutionService,
+        external_user_repository: ExternalSurfaceUserRepository,
+        credential_resolver: SurfaceCredentialResolver,
+    ) -> None:
+        self.uow = uow
+        self.surface_repository = surface_repository
+        self.pod_membership_port = pod_membership_port
+        self.identity_service = identity_service
+        self.external_user_repository = external_user_repository
+        self.credential_resolver = credential_resolver
+
     async def _configuration_surface_candidates(self, request, *, tenant_id, platform):
         # Both predicates used to run in Python over every surface of the
         # platform in the deployment, and each candidate that survived then paid
@@ -96,9 +142,12 @@ class SurfaceConfigurationAuthorizationMixin:
         tenant_id,
         platform,
         actor_external_user_id: str | None,
-        adapter,
+        adapter: SurfacePlatformAdapterPort,
         action: str,
-    ):
+    ) -> tuple[
+        list[AgentSurfaceEntity], UUID | None, list[tuple[AgentSurfaceEntity, Context]]
+    ]:
+        """Every candidate, who is asking, and the ones they may configure."""
         candidates = await self._configuration_surface_candidates(
             request, tenant_id=tenant_id, platform=platform
         )
@@ -123,9 +172,10 @@ class SurfaceConfigurationAuthorizationMixin:
                 authorized.append((surface, ctx))
         return candidates, user_id, authorized
 
-    async def _configuration_member_pod_ids(self, user_id) -> set:
-        if self.pod_membership_port is None:
-            return set()
+    async def _configuration_member_pod_ids(self, user_id) -> set[UUID]:
+        # No `is None` guard: the constructor requires the port. It had one, and
+        # the branch returned an empty set -- which reads as "this person is in
+        # no pods" rather than "the check did not run".
         return set(await self.pod_membership_port.get_user_pod_ids(user_id))
 
     async def _can_configure_surface(self, *, surface, ctx, action: str) -> bool:

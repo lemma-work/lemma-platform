@@ -18,7 +18,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceMode,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services.surface_conversation_links import (
+from app.modules.agent_surfaces.services.conversation_binder import (
     should_start_a_new_conversation,
 )
 
