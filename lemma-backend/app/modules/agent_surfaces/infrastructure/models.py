@@ -65,25 +65,19 @@ class AgentSurface(UUIDAuditBase):
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_agent_surface_pod_name"),
         # One agent reaches a platform in exactly one place: one Slack app, one
-        # WhatsApp number, one Telegram bot. Mirrors migration 0040; declared
-        # here too so a schema built from metadata carries the same guarantee,
-        # and so autogenerate does not emit a DROP for a constraint it cannot
-        # see. The WhatsApp numbers come from a pool and each surface takes one,
-        # so without this an agent could quietly hold two of a scarce thing.
+        # WhatsApp number, one Telegram bot. Declared here as well as in the
+        # migration that creates it, so a schema built from metadata carries the
+        # same guarantee and autogenerate does not emit a DROP for a constraint
+        # it cannot see. The WhatsApp numbers come from a pool and each surface
+        # takes one, so without this an agent could quietly hold two of a scarce
+        # thing.
         UniqueConstraint(
             "agent_id", "surface_type", name="uq_agent_surface_agent_type"
         ),
-        # Mirrors migration 0016. Declared here too so a schema built from
-        # metadata (tests, a fresh non-Alembic environment) carries the same
-        # guarantee — address allocation inserts and retries on conflict, which
-        # is only safe with this present, and autogenerate would otherwise emit
-        # a DROP for an index it cannot see. Functional and partial to match the
-        # lookup exactly: inbound routing compares lower(...), and most surfaces
-        # are not email and hold NULL here.
-        # One agent per pooled WhatsApp number. Mirrors migration 0041; the
-        # arriving number is the routing key once the numbers come from a pool,
-        # so two surfaces claiming one is an inbound with no answer to "which
-        # agent". Scoped to WhatsApp -- a Slack or Teams bot id may repeat.
+        # One agent per pooled WhatsApp number: the arriving number is the
+        # routing key once the numbers come from a pool, so two surfaces
+        # claiming one is an inbound with no answer to "which agent". Scoped to
+        # WhatsApp -- a Slack or Teams bot id may repeat.
         Index(
             "uq_agent_pooled_whatsapp_number",
             "surface_identity_id",
@@ -92,6 +86,11 @@ class AgentSurface(UUIDAuditBase):
                 "surface_type = 'WHATSAPP' AND surface_identity_id IS NOT NULL"
             ),
         ),
+        # Address allocation inserts and retries on conflict, which is only safe
+        # with this present, and autogenerate would otherwise emit a DROP for an
+        # index it cannot see. Functional and partial to match the lookup
+        # exactly: inbound routing compares lower(...), and most surfaces are
+        # not email and hold NULL here.
         Index(
             "uq_agent_surface_identity_email",
             func.lower(text("surface_identity_email")),
@@ -268,11 +267,12 @@ class AgentSurface(UUIDAuditBase):
 class AgentSurfaceExternalUser(UUIDAuditBase):
     __tablename__ = "agent_surface_external_users"
     __table_args__ = (
-        # NULLS NOT DISTINCT, mirroring migration 0041: Telegram writes no
-        # tenant, and by default Postgres would treat every one of those NULLs
-        # as a different value -- so the uniqueness this index exists for never
-        # applied to it. Declared here too so a schema built from metadata
-        # carries the same guarantee.
+        # NULLS NOT DISTINCT: Telegram writes no tenant, and by default
+        # Postgres would treat every one of those NULLs as a different value --
+        # so the uniqueness this index exists for never applied to it. Declared
+        # here too so a schema built from metadata carries the same guarantee.
+        # Why the repository cannot work without it is recorded on
+        # `ExternalSurfaceUserRepository`, which is what depends on it.
         Index(
             "ix_agent_surface_external_user_platform_tenant_external",
             "platform",
