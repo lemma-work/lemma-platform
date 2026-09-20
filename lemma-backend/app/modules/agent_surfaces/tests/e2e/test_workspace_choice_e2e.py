@@ -50,6 +50,7 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_agent_surface,
     _ensure_connector_account,
     _load_slack_dm_fixture,
+    _telegram_payload,
     _whatsapp_payload,
 )
 from app.modules.identity.infrastructure.models.user_models import User
@@ -828,3 +829,112 @@ async def test_a_shared_bot_webhook_reads_no_surface_list_to_find_its_transport(
     platform, surfaces = loaded
     assert platform is SurfacePlatform.WHATSAPP
     assert surfaces == [], "the shared webhook read a surface list it cannot use"
+
+
+async def test_changing_workspace_keeps_a_telegram_senders_phone_proof(
+    db_session, test_pod, fixed_test_user, fake_telegram, monkeypatch
+) -> None:
+    """The message after the choice has to land in chat, not back at signup.
+
+    A pending row carries a phone when a challenge just supplied one. A
+    returning person changing workspaces supplies none -- there was nothing to
+    verify -- and writing that nothing over their live proof is invisible to
+    onboarding, which recognises them by binding key alone. Ordinary ingestion
+    does not: for WhatsApp and Telegram `resolve_shared_verified_identity` requires
+    the stored phone and a match. So the choice reached READY and the next
+    message was answered with "please share your phone number".
+    """
+    from app.modules.agent_surfaces.services.verified_surface_identity import (
+        resolve_shared_verified_identity,
+    )
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
+    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
+        f"{fake_telegram.api_base}/bot",
+    )
+    sessions, coordinator = _coordinator(db_session)
+    actor = int(uuid4().hex[:8], 16)
+    phone = "+15550" + str(int(uuid4().hex[:7], 16)).zfill(9)[:9]
+
+    async with sessions() as session:
+        user = await session.get(User, fixed_test_user["id"])
+        user.mobile_number = phone
+        user.mobile_verified_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    async def say(text: str):
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(
+                source="telegram",
+                payload=_telegram_payload(
+                    text=text, message_id=int(uuid4().hex[:7], 16), sender_id=actor
+                ),
+            )
+        )
+
+    await say("hello")
+    async with sessions() as session:
+        pending = await session.scalar(select(PendingChatOnboarding))
+        assert pending is not None
+        binding_key = pending.binding_key
+        await session.delete(pending)
+        # A binding that already holds a proven number, which is what a
+        # returning Telegram sender has.
+        session.add(
+            VerifiedSurfaceIdentity(
+                binding_key=binding_key,
+                platform="TELEGRAM",
+                tenant_id="",
+                external_user_id=str(actor),
+                user_id=fixed_test_user["id"],
+                verified_phone=phone,
+            )
+        )
+        await session.commit()
+
+    await say("can you summarise my week")
+    async with sessions() as session:
+        asked = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert asked.step == OnboardingStep.AWAITING_POD
+
+    await say("new Another")
+
+    async with sessions() as session:
+        done = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert done.step == OnboardingStep.READY
+        identity = await session.scalar(
+            select(VerifiedSurfaceIdentity).where(
+                VerifiedSurfaceIdentity.binding_key == binding_key
+            )
+        )
+        assert identity.verified_phone == phone, "the workspace choice erased the proof"
+
+    # And the question that actually matters: does the next message reach chat?
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id=str(actor),
+        external_thread_id=str(actor),
+        sender_external_user_id=str(actor),
+        external_message_id=uuid4().hex,
+        message_text="and now the week",
+        is_dm=True,
+    )
+    async with sessions() as session:
+        resolved = await resolve_shared_verified_identity(
+            SqlAlchemyUnitOfWork(session), event=event, installation_id=None
+        )
+    assert resolved is not None
+    assert resolved.internal_user_id == UUID(str(fixed_test_user["id"])), (
+        "ingestion no longer recognises them, so the next message restarts signup"
+    )

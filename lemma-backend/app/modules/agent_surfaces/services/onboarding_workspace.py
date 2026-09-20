@@ -182,6 +182,16 @@ async def record_verified_identity(
     exactly the recognised-with-nowhere-to-talk state the workspace choice
     exists to answer, and the row is shaped to say so -- both destination
     columns are nullable, and `is_routable` reads that pair as "no route".
+
+    A phone is only ever *replaced* by fresh proof, never cleared by its
+    absence. A pending row carries one when a challenge just supplied it -- a
+    WhatsApp sender's own number, a Telegram contact share -- and carries none
+    when this is a returning person changing workspaces, because there was
+    nothing to verify. Assigning it unconditionally wrote that nothing over a
+    live proof, and it is `resolve_shared_verified_identity`, on the *ingestion*
+    side, that then stopped recognising them: for WhatsApp and Telegram it
+    requires the stored phone and a match. Onboarding said READY and handed off,
+    and the next message was answered with "please share your phone number".
     """
     assert state.user_id is not None
     async with uows() as uow:
@@ -204,7 +214,8 @@ async def record_verified_identity(
                 user_id=user.id,
             )
             uow.session.add(identity)
-        identity.verified_phone = state.verified_phone
+        if state.verified_phone:
+            identity.verified_phone = state.verified_phone
         identity.revoked_at = None
     return user
 
