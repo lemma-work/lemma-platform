@@ -91,11 +91,14 @@ class SurfaceRoutingMixin:
         """Where routing would send this person on this platform, if anywhere.
 
         Selection, asked by somebody who is not in the middle of an inbound
-        delivery. Onboarding needs it before it decides whether to interrupt a
-        person and ask which workspace they meant; the replay needs it when the
-        surface it saved has gone. Both must get the *same* answer ingestion
-        would give, so it is ingestion's own selection that gives it -- asking
-        the question a second way is how the two came to disagree.
+        delivery: the onboarding replay, when the surface it saved has gone.
+
+        It is **not** a reachability test, and onboarding's "is there anywhere
+        to talk" deliberately does not use it. Selection can answer with a
+        surface the sender is not a member of -- that is its continuity fallback,
+        and it exists so ordinary ingestion has somewhere to send the
+        access-denied reply. A replay wants that; a question about whether to
+        interrupt somebody does not.
         """
         if not candidates:
             return None
@@ -104,25 +107,6 @@ class SurfaceRoutingMixin:
             resolved_user=ResolvedSurfaceUser(internal_user_id=user_id),
             parsed=parsed,
             platform=platform.value,
-        )
-
-    async def can_reach_a_surface(
-        self,
-        *,
-        candidates: list[AgentSurfaceEntity],
-        user_id: UUID,
-        platform: SurfacePlatform,
-        parsed: ParsedInboundSurfaceEvent,
-    ) -> bool:
-        """Would routing find this person a surface on this platform?"""
-        return (
-            await self.reachable_surface(
-                candidates=candidates,
-                user_id=user_id,
-                platform=platform,
-                parsed=parsed,
-            )
-            is not None
         )
 
     async def _select_surface(

@@ -56,6 +56,7 @@ __all__ = [
     "email_challenge_service",
     "complete_chat_account",
     "ensure_chat_workspace",
+    "ensure_chat_organization",
     "current_verified_phone",
     "active_chat_user",
 ]
@@ -146,6 +147,35 @@ async def ensure_chat_workspace(
             full_name=name or None,
             arrived_through_organization_id=installation_organization_id,
         )
+
+
+async def ensure_chat_organization(
+    uow: SqlAlchemyUnitOfWork, *, user_id: UUID
+) -> UUID | None:
+    """The organization a chat-first workspace goes in, making one if there is none.
+
+    The same policy the web signup runs -- an existing membership, else a join
+    by verified work domain, else a new organization of their own -- asked for
+    the organization alone, because the caller is about to create a *named* pod
+    and the spare one `with_pod` would make is clutter beside it.
+
+    Only for the shared bot. A company installation fixes the organization, and
+    somebody outside it is told to ask an administrator rather than handed a
+    workspace next door to the one they meant.
+    """
+    from app.modules.identity.api.dependencies import get_organization_service
+
+    user = await uow.session.get(User, user_id)
+    if user is None:
+        return None
+    workspace = await ensure_first_workspace(
+        uow,
+        organization_service=get_organization_service(uow),
+        user_id=user_id,
+        email=user.email,
+        with_pod=False,
+    )
+    return workspace.organization_id
 
 
 async def current_verified_phone(

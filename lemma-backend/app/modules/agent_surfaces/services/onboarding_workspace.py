@@ -30,12 +30,14 @@ from app.modules.agent_surfaces.services.onboarding_transport import (
 from app.modules.identity.contracts.onboarding import (
     ChallengeRejected,
     active_chat_user,
+    ensure_chat_organization,
     ensure_chat_workspace,
 )
 from app.modules.agent.contracts.provisioning import ensure_pod_default_agent
 from app.modules.agent_surfaces.services.onboarding_pod_choice import (
     PodChoice,
     candidate_pods,
+    offer_text,
     organization_for_new_pod,
 )
 from app.modules.identity.contracts.surfaces import (
@@ -51,7 +53,72 @@ from app.modules.agent_surfaces.domain.onboarding_state import (
 )
 
 
+class SharedSurfaceUnavailable(ChallengeRejected):
+    """This workspace cannot carry the shared bot, but another one might.
+
+    Separate from every other refusal because it is the only one with a next
+    step the person can take, and saying "pick another workspace" is not the
+    same as letting them. Carries the pod that refused, so the list offered
+    next does not lead with it.
+    """
+
+    def __init__(self, message: str, *, pod_id: UUID) -> None:
+        super().__init__(message)
+        self.pod_id = pod_id
+
+
 async def complete_onboarding_workspace(
+    uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
+) -> bool:
+    assert state.user_id is not None
+    try:
+        return await _provision_and_bind(uows, transport, state)
+    except SharedSurfaceUnavailable as conflict:
+        # Raised from inside a unit of work, so the park has to happen after it
+        # has rolled back -- and `_step` turns what comes out of here into the
+        # reply, so the offer travels on the message.
+        raise ChallengeRejected(
+            await _park_on_another_workspace(uows, transport, state, conflict)
+        ) from conflict
+
+
+async def _park_on_another_workspace(
+    uows: UnitOfWorkFactory,
+    transport: OnboardingTransport,
+    state: PendingState,
+    conflict: SharedSurfaceUnavailable,
+) -> str:
+    """Move a stuck signup onto the workspace question, and ask it.
+
+    Without this the refusal was a dead end wearing an instruction: the step
+    stayed on VERIFIED, so the next message -- `new Personal`, or anything --
+    re-ran provisioning against the same pod and was refused again in the same
+    words. Nothing was reading the answer, because nothing had asked a question.
+
+    The pod that just refused is left off the list. It is still re-checked if
+    they name it some other way, but offering it back is offering the failure.
+    """
+    assert state.user_id is not None
+    async with uows() as uow:
+        pods = [
+            pod
+            for pod in await candidate_pods(
+                uow,
+                user_id=state.user_id,
+                organization_id=transport.organization_id,
+            )
+            if UUID(str(pod["id"])) != conflict.pod_id
+        ]
+    async with uows() as uow:
+        row = await uow.session.get(PendingChatOnboarding, state.id)
+        assert row is not None
+        row.step = OnboardingStep.AWAITING_POD
+        row.user_id = state.user_id
+        row.offered_pods = pods
+    return f"{conflict.message}\n\n{offer_text(pods)}"
+
+
+async def _provision_and_bind(
     uows: UnitOfWorkFactory, transport: OnboardingTransport, state: PendingState
 ) -> bool:
     assert state.user_id is not None
@@ -143,10 +210,11 @@ async def _ensure_shared_surface(
         # system-credential surfaces only, so a default pointing at a custom
         # bot is a default that is always ignored.
         if any(item.agent_id == assistant_id for item in surfaces):
-            raise ChallengeRejected(
+            raise SharedSurfaceUnavailable(
                 "That workspace's assistant already answers on "
                 f"{platform.value.title()} through its own connection. "
-                "Pick another workspace, or message it there."
+                "Pick another workspace, or message it there.",
+                pod_id=pod_id,
             )
         surface = await repository.create(
             AgentSurfaceEntity.create(
@@ -165,6 +233,30 @@ async def _ensure_shared_surface(
         user_id,
         preferences.with_default_surface(platform.value, surface.id),
     )
+
+
+async def _organization_for(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    user,
+    transport: OnboardingTransport,
+    placement: tuple[UUID, UUID] | None,
+) -> UUID | None:
+    """Where a newly named workspace goes, provisioning one where that is allowed.
+
+    Two different nothings hid behind one refusal. Somebody outside a company's
+    installation genuinely has to be added by an administrator -- that boundary
+    is the point of the installation. Somebody arriving on the *shared* bot with
+    a personal address and no organization at all was told the same thing, and
+    there was no administrator to ask: the message sent a verified person to a
+    door that does not exist. For them this runs the ordinary first-workspace
+    policy, which is what the web signup would have done a minute earlier.
+    """
+    if placement is not None:
+        return placement[0]
+    if transport.organization_id is not None:
+        return None
+    return await ensure_chat_organization(uow, user_id=user.id)
 
 
 async def attach_chosen_workspace(
@@ -193,12 +285,14 @@ async def attach_chosen_workspace(
                 user_id=user.id,
                 installation_organization_id=transport.organization_id,
             )
-            if placement is None:
+            organization_id = await _organization_for(
+                uow, user=user, transport=transport, placement=placement
+            )
+            if organization_id is None:
                 return (
                     "That account is not in any Lemma organization yet, so there "
                     "is nowhere to put a workspace. Ask your admin to add you."
                 )
-            organization_id, _membership_id = placement
             made = await create_named_workspace(
                 uow,
                 organization_id=organization_id,

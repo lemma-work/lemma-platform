@@ -20,12 +20,16 @@ from uuid import UUID
 
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
-    SurfaceRepository,
-)
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     SurfacePlatform,
+)
+from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
+    SqlAlchemySurfaceRoutingResolutionAdapter,
+)
+from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.agent_surfaces.infrastructure.repositories.surface_routing_sql import (
+    routing_surfaces,
 )
 from app.modules.identity.contracts.organizations import (
     organization_member_ids_for_user,
@@ -164,27 +168,47 @@ async def has_somewhere_to_talk(
     parsed: ParsedInboundSurfaceEvent,
     system_credentials_only: bool,
 ) -> bool:
-    """Whether routing would find this person somewhere on this platform.
+    """Is there a surface on this platform this person can actually chat on?
 
-    Delegated rather than answered here. Routing already decides this on every
-    inbound message -- membership, then a saved default, then continuity, then a
-    tiebreak -- and a second implementation of the same question is how the two
-    came to disagree. The only state routing cannot answer is having no
-    candidate at all, and that is the one worth interrupting somebody for.
+    Deliberately **not** "where would routing send this message". This asked
+    routing's selection for a while, on the reasoning that one implementation
+    cannot disagree with itself -- but selection answers a different question
+    and answers it with, among other things, a surface the sender cannot use.
+    It falls back to the thread's existing surface for a non-member precisely so
+    ordinary ingestion has somewhere to send the access-denied reply. Reading
+    that as "they have somewhere to talk" withheld the workspace choice from a
+    person who had just lost access to the only pod they were in -- the exact
+    case it exists for.
 
-    The candidate read is the one ingestion performs on every inbound message
-    anyway, so for the message that reaches here it happens twice. That is the
-    price of the two paths agreeing, and it is paid once per sender: from the
-    next message on, this person has a route and never reaches this function.
+    What the two paths *do* share is the predicate, and they share it here:
+    `routing_surfaces` is the candidate query ingestion runs, and
+    `allows_inbound_event` is the per-event filter it applies to the result --
+    so a Slack surface belonging to a workspace this installation is not part of
+    is excluded here in the same call it is excluded there.
+
+    Scoped to the pods this person belongs to, which is the authorization and
+    also the reason this is affordable. Unscoped it reads every surface of the
+    platform in the deployment, and a shared-bot sender takes this path on every
+    message: the shared destination lives on their preferences and a pod
+    surface, not on the identity row, so there is no stored route to short it
+    out the way an installation has.
+
+    `system_credentials_only` matches how the transport narrowed the same
+    lookup: a message on the shared bot can only be served by a
+    system-credential surface, while one on a company's own installation is not
+    restricted that way.
     """
-    from app.modules.agent_surfaces.api.dependencies import get_surface_event_handler
-
-    candidates = await SurfaceRepository(uow).list_active_for_routing(
-        platform.value, system_credentials_only=system_credentials_only
+    pod_ids = await SqlAlchemySurfaceRoutingResolutionAdapter(uow).get_user_pod_ids(
+        user_id
     )
-    return await get_surface_event_handler(uow).can_reach_a_surface(
-        candidates=candidates,
-        user_id=user_id,
-        platform=platform,
-        parsed=parsed,
+    if not pod_ids:
+        return False
+    result = await uow.session.execute(
+        routing_surfaces(
+            platform.value, system_credentials_only=system_credentials_only
+        ).where(AgentSurface.pod_id.in_(pod_ids))
+    )
+    return any(
+        surface is not None and surface.allows_inbound_event(parsed)
+        for surface in (model.to_entity_or_none() for model in result.scalars().all())
     )

@@ -19,7 +19,8 @@ computed here. It is a hash of platform, tenant, installation and actor, and a
 test that recomputed it would keep passing after the real one changed shape.
 """
 
-from uuid import uuid4
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
@@ -29,6 +30,11 @@ from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
+)
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.onboarding_state import OnboardingStep
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
@@ -45,6 +51,7 @@ from app.modules.agent_surfaces.tests.e2e.helpers import (
     _load_slack_dm_fixture,
     _whatsapp_payload,
 )
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.services.email_challenges import EmailChallengeService
 from app.modules.identity.tests.e2e.test_email_challenges_e2e import allow_test_delivery
 
@@ -309,3 +316,367 @@ async def test_a_sender_routing_can_already_place_is_not_interrupted(
             )
         )
         assert parked is None, "a routable sender was asked which workspace"
+
+
+async def _pod_member_ids(sessions, pod_id) -> list:
+    from app.modules.pod.infrastructure.models import PodMember
+
+    async with sessions() as session:
+        rows = await session.scalars(
+            select(PodMember).where(PodMember.pod_id == pod_id)
+        )
+        return list(rows)
+
+
+async def _stranger(sessions, *, email: str) -> User:
+    """A verified account with nothing attached to it.
+
+    Made here rather than through signup because what these tests need is the
+    absence of everything signup would give them -- no organization, no pod, no
+    surface -- and the shortest way to have none of it is never to have had it.
+    """
+    async with sessions() as session:
+        user = User(email=email, is_verified=True, is_active=True)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+
+async def test_a_thread_on_a_pod_you_left_is_not_somewhere_to_talk(
+    authenticated_client, db_session, test_pod, fixed_test_user
+) -> None:
+    """Routing answers this one with a surface the sender cannot use.
+
+    It is the continuity fallback, and it exists so ordinary ingestion has
+    somewhere to send the access-denied reply. Asking routing's selection here
+    read that as "they have somewhere to talk" and withheld the workspace
+    choice from the one person who most needs it: somebody who just lost access
+    to the only pod they were in, whose thread is still sitting on its surface.
+    """
+    from app.modules.agent.infrastructure.models.conversation import ConversationModel
+    from app.modules.agent_surfaces.infrastructure.models import (
+        AgentSurfaceConversationLinkModel,
+    )
+    from app.modules.agent_surfaces.services.onboarding_pod_choice import (
+        has_somewhere_to_talk,
+    )
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    stranger = await _stranger(sessions, email=f"left+{uuid4().hex[:8]}@example.com")
+    async with sessions() as session:
+        surface = AgentSurface(
+            pod_id=UUID(test_pod["id"]),
+            agent_id=UUID(test_pod["id"]),
+            name=f"whatsapp-{uuid4().hex[:6]}",
+            surface_type="WHATSAPP",
+            mode="DM",
+            event_mode="WEBHOOK",
+            credential_mode="SYSTEM",
+            config={},
+        )
+        session.add(surface)
+        await session.flush()
+        conversation = ConversationModel(
+            user_id=fixed_test_user["id"], pod_id=UUID(test_pod["id"])
+        )
+        session.add(conversation)
+        await session.flush()
+        # The thread they were talking in, still pointing at that surface.
+        session.add(
+            AgentSurfaceConversationLinkModel(
+                surface_id=surface.id,
+                conversation_id=conversation.id,
+                platform="WHATSAPP",
+                external_channel_id="15550001111",
+                external_thread_id="15550001111",
+                external_user_id="15550001111",
+                last_inbound_at=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.WHATSAPP,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="15550001111",
+        external_thread_id="15550001111",
+        sender_external_user_id="15550001111",
+        external_message_id=uuid4().hex,
+        message_text="can you summarise my week",
+        is_dm=True,
+    )
+    async with sessions() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        assert (
+            await has_somewhere_to_talk(
+                uow,
+                user_id=stranger.id,
+                platform=SurfacePlatform.WHATSAPP,
+                parsed=event,
+                system_credentials_only=True,
+            )
+            is False
+        ), "a surface in a pod they are not in counted as somewhere to talk"
+        # And the member of that pod is not interrupted, which is the other half.
+        assert (
+            await has_somewhere_to_talk(
+                uow,
+                user_id=UUID(str(fixed_test_user["id"])),
+                platform=SurfacePlatform.WHATSAPP,
+                parsed=event,
+                system_credentials_only=True,
+            )
+            is True
+        )
+
+
+async def test_a_surface_in_another_slack_workspace_is_not_somewhere_to_talk(
+    authenticated_client, db_session, test_pod, fixed_test_user
+) -> None:
+    """Pod membership is not the whole authorization; the tenant is the rest.
+
+    Ordinary ingestion drops a surface whose Slack workspace is not the one the
+    event arrived from. The onboarding check did not, so a person whose only
+    Slack surface belongs to a different workspace was read as reachable and
+    never offered a choice -- while the message they sent went nowhere.
+    """
+    from app.modules.agent_surfaces.services.onboarding_pod_choice import (
+        has_somewhere_to_talk,
+    )
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with sessions() as session:
+        session.add(
+            AgentSurface(
+                pod_id=UUID(test_pod["id"]),
+                agent_id=UUID(test_pod["id"]),
+                name=f"slack-{uuid4().hex[:6]}",
+                surface_type="SLACK",
+                mode="DM",
+                event_mode="WEBHOOK",
+                credential_mode="CUSTOM",
+                external_workspace_id="T-SOMEWHERE-ELSE",
+                config={},
+            )
+        )
+        await session.commit()
+
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.SLACK,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="D1",
+        external_thread_id="D1",
+        sender_external_user_id="U1",
+        external_message_id=uuid4().hex,
+        tenant_id="T-THIS-ONE",
+        message_text="hello",
+        is_dm=True,
+    )
+    async with sessions() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        assert (
+            await has_somewhere_to_talk(
+                uow,
+                user_id=UUID(str(fixed_test_user["id"])),
+                platform=SurfacePlatform.SLACK,
+                parsed=event,
+                system_credentials_only=False,
+            )
+            is False
+        ), "a surface in another Slack workspace counted as somewhere to talk"
+
+
+async def test_a_workspace_that_cannot_carry_the_bot_asks_for_another(
+    authenticated_client,
+    db_session,
+    test_pod,
+    fixed_test_user,
+    fake_whatsapp,
+    monkeypatch,
+) -> None:
+    """ "Pick another workspace" was an instruction nothing was listening for.
+
+    The refusal left the signup on VERIFIED, so the next message -- any message
+    -- re-ran provisioning against the same pod and was refused again in the
+    same words. A person whose only workspace already had its own WhatsApp bot
+    could not get past this sentence.
+    """
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-conflict")
+
+    # The pod's own assistant already reaches WhatsApp on a connection of its
+    # own, so there is no second place to put the shared number.
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with sessions() as session:
+        session.add(
+            AgentSurface(
+                pod_id=UUID(test_pod["id"]),
+                agent_id=UUID(test_pod["id"]),
+                name=f"whatsapp-own-{uuid4().hex[:6]}",
+                surface_type="WHATSAPP",
+                mode="DM",
+                event_mode="WEBHOOK",
+                credential_mode="CUSTOM",
+                config={},
+            )
+        )
+        await session.commit()
+    sibling = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": test_pod["organization_id"],
+            "name": f"Somewhere else {uuid4().hex[:6]}",
+        },
+    )
+    assert sibling.status_code == 201, sibling.text
+
+    _, coordinator = _coordinator(db_session)
+    sender_phone = "1555" + str(uuid4().int)[:7]
+
+    async def say(text: str):
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=_whatsapp_payload(
+                    text=text,
+                    message_id=uuid4().hex,
+                    phone_number_id=surface_settings.whatsapp_phone_number_id,
+                    waba_id=surface_settings.whatsapp_waba_id,
+                    sender_phone=sender_phone,
+                ),
+            )
+        )
+
+    await say("hello")
+    async with sessions() as session:
+        row = await session.scalar(select(PendingChatOnboarding))
+        assert row is not None
+        binding_key = row.binding_key
+        # Straight to the state the email code leaves behind. What is under test
+        # is what happens *from* VERIFIED, not how it was reached.
+        row.step = OnboardingStep.VERIFIED
+        row.user_id = fixed_test_user["id"]
+        row.destination = row.original_event
+        await session.commit()
+
+    await say("can you summarise my week")
+
+    async with sessions() as session:
+        parked = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert parked.step == OnboardingStep.AWAITING_POD, (
+            "the refusal repeated instead of asking"
+        )
+        offered = [str(pod["id"]) for pod in (parked.offered_pods or [])]
+    assert offered, "nothing was offered, so no reply can be read"
+    assert test_pod["id"] not in offered, "the workspace that just refused was offered"
+    assert sibling.json()["id"] in offered
+
+    # And the answer now lands: they are unstuck, which is the whole point.
+    await say("1")
+    surfaces = await _shared_surfaces(sessions, offered[0])
+    assert len(surfaces) == 1
+    async with sessions() as session:
+        done = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert done.step == OnboardingStep.READY
+
+
+async def test_a_sender_with_no_organization_can_still_name_a_workspace(
+    db_session, fake_whatsapp, monkeypatch
+) -> None:
+    """There was no administrator to ask.
+
+    Naming a new workspace needed an organization to put it in, and someone
+    arriving on the shared number with a personal address has none -- so a
+    verified person was told to ask an admin who does not exist. A company
+    installation still fixes the organization; the shared bot has no boundary to
+    hold, and this is the policy the web signup would have run a minute earlier.
+    """
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-no-org")
+
+    sessions, coordinator = _coordinator(db_session)
+    stranger = await _stranger(sessions, email=f"solo+{uuid4().hex[:8]}@example.com")
+    sender_phone = "1555" + str(uuid4().int)[:7]
+
+    async def say(text: str):
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=_whatsapp_payload(
+                    text=text,
+                    message_id=uuid4().hex,
+                    phone_number_id=surface_settings.whatsapp_phone_number_id,
+                    waba_id=surface_settings.whatsapp_waba_id,
+                    sender_phone=sender_phone,
+                ),
+            )
+        )
+
+    await say("hello")
+    async with sessions() as session:
+        pending = await session.scalar(select(PendingChatOnboarding))
+        assert pending is not None
+        binding_key = pending.binding_key
+        await session.delete(pending)
+        session.add(
+            VerifiedSurfaceIdentity(
+                binding_key=binding_key,
+                platform="WHATSAPP",
+                tenant_id=surface_settings.whatsapp_waba_id,
+                external_user_id=sender_phone,
+                user_id=stranger.id,
+            )
+        )
+        await session.commit()
+
+    await say("can you summarise my week")
+    async with sessions() as session:
+        asked = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert asked.step == OnboardingStep.AWAITING_POD
+        # Nothing to list: they have no workspace at all, which is the case.
+        assert not asked.offered_pods
+
+    await say("new Personal")
+
+    async with sessions() as session:
+        done = await session.scalar(
+            select(PendingChatOnboarding).where(
+                PendingChatOnboarding.binding_key == binding_key
+            )
+        )
+        assert done.step == OnboardingStep.READY, (
+            "naming a workspace was refused for want of an organization"
+        )
+        made = await session.scalars(
+            select(AgentSurface).where(
+                AgentSurface.surface_type == "WHATSAPP",
+                AgentSurface.credential_mode == "SYSTEM",
+            )
+        )
+        pods = {surface.pod_id for surface in made}
+    assert pods, "no workspace was created for them to talk in"
