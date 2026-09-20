@@ -1,4 +1,9 @@
 from __future__ import annotations
+from app.modules.agent_surfaces.infrastructure.onboarding_models import (  # noqa: F401
+    OnboardingInputToken,
+    PendingChatOnboarding,
+    VerifiedSurfaceIdentity,
+)
 
 from datetime import datetime
 from uuid import UUID
@@ -41,11 +46,26 @@ logger = get_logger(__name__)
 
 
 class AgentSurface(UUIDAuditBase):
-    """External platform surface connected to a default agent or pod agent."""
+    """One agent's connection to one outside platform.
+
+    The owner is the agent, not the pod: `agent_id` is not nullable, and the
+    surface answers as that agent and no other. `pod_id` is carried too because
+    a surface is reachable only while its pod is, and routing checks that in one
+    join rather than per lookup -- so the column is a scope, not the owner.
+    """
 
     __tablename__ = "agent_surfaces"
     __table_args__ = (
         UniqueConstraint("pod_id", "name", name="uq_agent_surface_pod_name"),
+        # One agent reaches a platform in exactly one place: one Slack app, one
+        # WhatsApp number, one Telegram bot. Mirrors migration 0040; declared
+        # here too so a schema built from metadata carries the same guarantee,
+        # and so autogenerate does not emit a DROP for a constraint it cannot
+        # see. The WhatsApp numbers come from a pool and each surface takes one,
+        # so without this an agent could quietly hold two of a scarce thing.
+        UniqueConstraint(
+            "agent_id", "surface_type", name="uq_agent_surface_agent_type"
+        ),
         # Mirrors migration 0016. Declared here too so a schema built from
         # metadata (tests, a fresh non-Alembic environment) carries the same
         # guarantee — address allocation inserts and retries on conflict, which
@@ -53,6 +73,18 @@ class AgentSurface(UUIDAuditBase):
         # a DROP for an index it cannot see. Functional and partial to match the
         # lookup exactly: inbound routing compares lower(...), and most surfaces
         # are not email and hold NULL here.
+        # One agent per pooled WhatsApp number. Mirrors migration 0041; the
+        # arriving number is the routing key once the numbers come from a pool,
+        # so two surfaces claiming one is an inbound with no answer to "which
+        # agent". Scoped to WhatsApp -- a Slack or Teams bot id may repeat.
+        Index(
+            "uq_agent_pooled_whatsapp_number",
+            "surface_identity_id",
+            unique=True,
+            postgresql_where=text(
+                "surface_type = 'WHATSAPP' AND surface_identity_id IS NOT NULL"
+            ),
+        ),
         Index(
             "uq_agent_surface_identity_email",
             func.lower(text("surface_identity_email")),
@@ -195,12 +227,18 @@ class AgentSurface(UUIDAuditBase):
 class AgentSurfaceExternalUser(UUIDAuditBase):
     __tablename__ = "agent_surface_external_users"
     __table_args__ = (
+        # NULLS NOT DISTINCT, mirroring migration 0041: Telegram writes no
+        # tenant, and by default Postgres would treat every one of those NULLs
+        # as a different value -- so the uniqueness this index exists for never
+        # applied to it. Declared here too so a schema built from metadata
+        # carries the same guarantee.
         Index(
             "ix_agent_surface_external_user_platform_tenant_external",
             "platform",
             "tenant_id",
             "external_user_id",
             unique=True,
+            postgresql_nulls_not_distinct=True,
         ),
     )
 

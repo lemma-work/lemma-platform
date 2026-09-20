@@ -1,18 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatUsageCost,
+  formatUsageShare,
   formatUsagePercent,
   usageBreakdown,
 } from "./usage-format";
 
 describe("usage presentation", () => {
-  it("keeps missing, zero and tiny positive costs distinct", () => {
-    expect(formatUsageCost(null)).toBe("Unavailable");
-    expect(formatUsageCost(undefined)).toBe("Unavailable");
-    expect(formatUsageCost(0)).toBe("$0.00");
-    expect(formatUsageCost(0.000000001)).toBe("<$0.0001");
-    expect(formatUsageCost(0.000000001, true)).toBe("$0.000000001");
-    expect(formatUsageCost(0.00001414, true)).toBe("$0.00001414");
+  it("states a row's share of the period, never an amount of money", () => {
+    // Usage is not quantified in money anywhere a customer reads it. This
+    // asserted currency strings until the page stopped rendering any.
+    expect(formatUsageShare(2.5, 10)).toBe("25%");
+    expect(formatUsageShare(0.4, 10)).toBe("4.0%");
+    expect(formatUsageShare(10, 10)).toBe("100%");
+  });
+
+  it("keeps missing, unknowable and vanishingly small shares distinct", () => {
+    expect(formatUsageShare(null, 10)).toBe("Unavailable");
+    expect(formatUsageShare(undefined, 10)).toBe("Unavailable");
+    // Nothing recorded yet, so a share of it is not a number worth printing.
+    expect(formatUsageShare(1, 0)).toBe("—");
+    expect(formatUsageShare(1, null)).toBe("—");
+    // A share that rounds to zero is not the same as no usage at all.
+    expect(formatUsageShare(0.00001, 10)).toBe("<0.1%");
+  });
+
+  it("never returns a currency symbol", () => {
+    const outputs = [
+      formatUsageShare(2.5, 10),
+      formatUsageShare(0, 10),
+      formatUsageShare(0.00001, 10),
+      formatUsageShare(null, 10),
+      formatUsageShare(1, 0),
+    ];
+
+    for (const output of outputs) {
+      expect(output).not.toContain("$");
+    }
   });
   it("does not round a usable allowance up to exhausted", () => {
     expect(formatUsagePercent(99.99, true)).toBe(">99%");

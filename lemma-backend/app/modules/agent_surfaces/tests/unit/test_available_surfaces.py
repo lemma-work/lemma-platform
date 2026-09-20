@@ -178,7 +178,14 @@ async def test_system_claim_available_when_org_has_not_claimed_it(monkeypatch):
     assert claim.claimed_by_pod_id is None
 
 
-async def test_system_claim_names_the_pod_holding_it(monkeypatch):
+async def test_the_shared_number_shows_as_taken_once_the_org_holds_it(monkeypatch):
+    """This asserted the opposite while WhatsApp and Telegram were exempt.
+
+    The exemption sat on both sides -- here and in the writer -- so the two
+    agreed, and what they agreed on was that the rule did not apply to the two
+    platforms whose system credential most plainly is an identity. The catalog's
+    job is to name who holds it before somebody tries and is refused.
+    """
     monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
     holder_pod_id = uuid4()
     conflict = SimpleNamespace(pod_id=holder_pod_id, name="whatsapp")
@@ -264,8 +271,8 @@ async def test_one_row_per_registry_platform(monkeypatch):
 async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeypatch):
     """The bug this rule caused: one mailbox blocking an organization.
 
-    A Slack app or a WhatsApp number can serve one pod, so whoever holds it
-    holds it. Resend's system credential is an API key over a catch-all domain
+    A Slack app or a WhatsApp number is one identity, so whoever holds it in an
+    organization holds it. Resend's system credential is an API key over a catch-all domain
     and every surface gets its own unique address off it — so a Resend surface
     existing somewhere in the org says nothing about whether this pod may have
     one. The catalog must agree with the writer, or it offers something that
@@ -287,8 +294,9 @@ async def test_email_is_never_claimed_because_its_key_is_not_an_identity(monkeyp
     assert email_claim is not None
     assert email_claim.available is True
     assert email_claim.claimed_by_pod_id is None
-    # The identity platforms are unchanged — this exempts email, not the rule.
+    # The same repository reports a holder for these, and for them it counts.
     assert by_platform[SurfacePlatform.WHATSAPP].system_claim.available is False
+    assert by_platform[SurfacePlatform.TELEGRAM].system_claim.available is False
 
 
 async def test_email_domain_is_published_so_the_builder_can_name_an_address(

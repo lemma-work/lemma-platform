@@ -112,7 +112,10 @@ async def _system_claim(
     Nothing to claim when the credential is not an identity — Resend hands every
     pod and every agent its own address off one key. This mirrors the write-side
     exemption on purpose: a catalog that disagrees with the writer either offers
-    something that then fails, or hides something that would have worked."""
+    something that then fails, or hides something that would have worked. The
+    WhatsApp/Telegram exemption that used to sit beside it is gone on both sides
+    for the same reason — one number and one bot are the clearest identities
+    there are, and exempting them left the rule applying to nothing."""
     if SurfaceCredentialMode.SYSTEM not in modes:
         return None
     capabilities = get_platform_capabilities(platform.value)

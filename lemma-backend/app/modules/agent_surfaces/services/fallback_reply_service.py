@@ -329,11 +329,23 @@ async def deliver_fallback_reply(
     event_dedup_store: SurfaceEventDedupStorePort,
 ) -> None:
     # Every fallback reply on every platform passes here, which makes it the one
-    # place the window can be held for all four reply kinds at once.
-    if not await event_dedup_store.claim_stranger_reply(
-        platform=str(context.platform),
-        surface_installation_id=context.surface_id,
-        sender_external_user_id=context.event.sender_external_user_id,
+    # place the window can be held.
+    #
+    # Except for a turn in a conversation. The window stops us repeating an
+    # unprompted nudge at somebody who is not engaging; onboarding is three
+    # replies in a row, each one answering a message the person just sent, and
+    # capping those the same way strands everybody after the first -- asked a
+    # question that could never be answered. Onboarding is bounded by its own
+    # turn limit instead, which is the right place for it: that budget knows
+    # when the exchange is going nowhere, and this one only knows how long ago
+    # somebody last heard from us.
+    if (
+        context.reply_kind != "identity_link"
+        and not await event_dedup_store.claim_stranger_reply(
+            platform=str(context.platform),
+            surface_installation_id=context.surface_id,
+            sender_external_user_id=context.event.sender_external_user_id,
+        )
     ):
         logger.debug(
             "agent_surfaces.fallback_reply.surface_fallback_within_window.observed",

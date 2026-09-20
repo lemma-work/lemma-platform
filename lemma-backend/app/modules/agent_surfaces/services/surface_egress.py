@@ -204,7 +204,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
             else DisplayResourceRequest.model_validate(request)
         )
         render_plan = build_display_resource_render_plan(
-            pod_id=target.surface.pod_id,
+            pod_id=target.pod_id,
             request=display_request,
             conversation_id=conversation_id,
             tool_call_id=tool_call_id,
@@ -564,7 +564,7 @@ class SurfaceEgressMixin(SurfaceMemberSendMixin, SurfaceEgressTargetMixin):
                     mime_type=mime,
                     caption=caption,
                     fallback=build_display_resource_render_plan(
-                        pod_id=target.surface.pod_id,
+                        pod_id=target.pod_id,
                         request=DisplayResourceRequest(
                             type=DisplayResourceType.FILE, path=path
                         ),

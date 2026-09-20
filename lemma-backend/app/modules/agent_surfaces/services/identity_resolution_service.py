@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -144,17 +145,50 @@ class SurfaceIdentityResolutionService:
         external_user_repository: ExternalSurfaceUserRepository,
         *,
         user_directory: SurfaceUserDirectoryPort | None = None,
+        verified_identity_lookup: Callable[
+            [ParsedInboundSurfaceEvent], Awaitable[ResolvedSurfaceUser | None]
+        ]
+        | None = None,
     ):
         self.uow = uow
         self.external_user_repository = external_user_repository
         self._users = user_directory or IdentityUserDirectoryAdapter(uow)
+        self._verified_identity_lookup = (
+            verified_identity_lookup or self._resolve_verified_identity
+        )
+
+    async def _resolve_verified_identity(
+        self, event: ParsedInboundSurfaceEvent
+    ) -> ResolvedSurfaceUser | None:
+        from app.modules.agent_surfaces.services.verified_surface_identity import (
+            resolve_shared_verified_identity,
+        )
+
+        return await resolve_shared_verified_identity(self.uow, event)
 
     async def resolve(
         self,
         *,
         event: ParsedInboundSurfaceEvent,
         sender_profile: SurfaceSenderProfile | None = None,
+        installation_id: UUID | None = None,
+        require_proven_identity: bool = False,
     ) -> ResolvedSurfaceUser:
+        if installation_id is not None and event.platform in (
+            SurfacePlatform.SLACK,
+            SurfacePlatform.TEAMS,
+        ):
+            from app.modules.agent_surfaces.services.verified_surface_identity import (
+                resolve_shared_verified_identity,
+            )
+
+            verified = await resolve_shared_verified_identity(
+                self.uow, event, installation_id
+            )
+        else:
+            verified = await self._verified_identity_lookup(event)
+        if verified is not None:
+            return verified
         known = _KnownSender.of(sender_profile or SurfaceSenderProfile(), event)
 
         # ── 0. An email sender is only who they say they are if the receiving
@@ -188,10 +222,14 @@ class SurfaceIdentityResolutionService:
 
         # ── 2-4. Match against Lemma users: telegram username, then email,
         #         then phone ─────────────────────────────────────────────────
-        match = await self._match_user_result(
-            email=known.email,
-            phone=known.phone,
-            telegram_username=_telegram_username(event),
+        match = (
+            await self._match_proven_sender(event, known)
+            if require_proven_identity
+            else await self._match_user_result(
+                email=known.email,
+                phone=known.phone,
+                telegram_username=_telegram_username(event),
+            )
         )
 
         # Persist the resolved_user_id so the next message is a cache hit.
@@ -208,6 +246,19 @@ class SurfaceIdentityResolutionService:
             display_name=known.display_name
             or (external_user.display_name if external_user else None),
         )
+
+    async def _match_proven_sender(
+        self, event: ParsedInboundSurfaceEvent, known: _KnownSender
+    ) -> _UserMatch:
+        # A signed WhatsApp sender proves a phone already verified on the account.
+        # Other unknown actors must complete private verification; profile email
+        # and Telegram usernames may describe someone, but do not prove ownership.
+        if event.platform != SurfacePlatform.WHATSAPP or not known.phone:
+            return _UserMatch(None)
+        ids = await self._users.user_ids_by_mobile_numbers(
+            _phone_lookup_candidates(known.phone), verified=True
+        )
+        return _UserMatch(ids[0] if len(ids) == 1 else None)
 
     async def _upsert(
         self,

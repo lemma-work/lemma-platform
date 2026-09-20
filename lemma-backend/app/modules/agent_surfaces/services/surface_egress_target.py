@@ -84,10 +84,26 @@ class SurfaceEgressTargetMixin:
             )
             return None
 
+        # The pod comes from the conversation, not from the surface. They are
+        # the same thing for a channel or a shared bot, and deliberately not for
+        # a personal DM, where the installation belongs to the company and the
+        # conversation to the person. Reading pod files or table rows off the
+        # installation resolved them in the wrong pod.
+        conversation = await agent_conversations.surface_conversation(
+            self.uow, conversation_id
+        )
+        if conversation is None:
+            logger.debug(
+                "agent_surfaces.ingress_service.surface_egress_skipped_no_conversation.diagnostic",
+                conversation_id=conversation_id,
+            )
+            return None
+
         credentials = await self._resolve_credentials(surface)
         return SurfaceEgressTarget(
             link=link,
             surface=surface,
+            pod_id=conversation.pod_id,
             adapter=adapter,
             event=parsed_event,
             credentials=credentials,

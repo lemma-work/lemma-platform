@@ -1,7 +1,13 @@
 """Deciding which surface, agent and sender an inbound event belongs to.
 
-Pure resolution: given an event and the surfaces configured for it, pick one,
-name the agent that answers, and identify who sent it. Nothing here writes.
+Resolution: given an event and the surfaces configured for it, pick one, name
+the agent that answers, and identify who sent it.
+
+One write, and it is deliberate: a saved default that no longer stands is
+cleared where it is found, because the alternative is routing reading it and
+declining to honour it on every message from then on. Everything else here is a
+read, which is what lets onboarding ask the same question before it decides
+whether to interrupt somebody.
 """
 
 from __future__ import annotations
@@ -74,6 +80,35 @@ class SurfaceRoutingMixin:
                 return surface
         return None
 
+    async def reachable_surface(
+        self,
+        *,
+        candidates: list[AgentSurfaceEntity],
+        user_id: UUID,
+        platform: SurfacePlatform,
+        parsed: ParsedInboundSurfaceEvent,
+    ) -> AgentSurfaceEntity | None:
+        """Where routing would send this person on this platform, if anywhere.
+
+        Selection, asked by somebody who is not in the middle of an inbound
+        delivery: the onboarding replay, when the surface it saved has gone.
+
+        It is **not** a reachability test, and onboarding's "is there anywhere
+        to talk" deliberately does not use it. Selection can answer with a
+        surface the sender is not a member of -- that is its continuity fallback,
+        and it exists so ordinary ingestion has somewhere to send the
+        access-denied reply. A replay wants that; a question about whether to
+        interrupt somebody does not.
+        """
+        if not candidates:
+            return None
+        return await self._select_surface(
+            candidates=candidates,
+            resolved_user=ResolvedSurfaceUser(internal_user_id=user_id),
+            parsed=parsed,
+            platform=platform.value,
+        )
+
     async def _select_surface(
         self,
         *,
@@ -143,7 +178,10 @@ class SurfaceRoutingMixin:
 
         # 2. A valid saved default is authoritative — it wins over continuity.
         chosen = await self._default_surface(
-            user_id=user_id, platform=platform, member_by_id=member_by_id
+            user_id=user_id,
+            platform=platform,
+            member_by_id=member_by_id,
+            user_pod_ids=user_pod_ids,
         )
         if chosen is not None:
             return chosen
@@ -163,12 +201,21 @@ class SurfaceRoutingMixin:
         user_id: UUID,
         platform: str,
         member_by_id: dict[UUID, AgentSurfaceEntity],
+        user_pod_ids: set[UUID],
     ) -> AgentSurfaceEntity | None:
         """The surface this user chose as their default, if it is still valid.
 
-        A stale default -- one pointing at a pod the user has since left -- is
-        cleared rather than honoured, so routing stops silently sending them
-        somewhere they can no longer reach.
+        A stale default -- one pointing at a surface that is gone, or at a pod
+        the user has since left -- is cleared rather than honoured, so routing
+        stops silently sending them somewhere they can no longer reach.
+
+        Staleness is a question about the surface and the person, **not** about
+        this delivery. ``member_by_id`` holds only the candidates for the message
+        in hand, and that set is narrowed twice over -- by which receiver took
+        delivery, and by whether system credentials are required. Reading a
+        default missing from it as stale deleted somebody's saved choice every
+        time a different bot on the same platform received a message, which is
+        the ordinary case in any deployment running more than one.
         """
         get_default = getattr(
             self.pod_membership_port, "get_user_default_surface_id", None
@@ -180,6 +227,10 @@ class SurfaceRoutingMixin:
             return None
         if default_id in member_by_id:
             return member_by_id[default_id]
+        if await self._default_still_stands(default_id, platform, user_pod_ids):
+            # Valid, just not on this delivery's list. Routing falls through to
+            # continuity and the tiebreak; the saved choice is left alone.
+            return None
 
         logger.debug(
             "agent_surfaces.ingress_service.agent_surface_default_user_s.diagnostic",
@@ -188,6 +239,22 @@ class SurfaceRoutingMixin:
         )
         await self._clear_stale_default(user_id, platform)
         return None
+
+    async def _default_still_stands(
+        self, surface_id: UUID, platform: str, user_pod_ids: set[UUID]
+    ) -> bool:
+        """Is this saved surface one the person could still be sent to?
+
+        The candidate query asked of one id and nothing else -- so liveness
+        means here exactly what it means there (ACTIVE, in a pod that has not
+        been deleted), and the difference is only that none of the *delivery's*
+        narrowings apply. Pod membership is checked separately because
+        ``get_user_pod_ids`` answers for deleted pods too.
+        """
+        live = await self.surface_repository.list_active_for_routing(
+            platform, surface_ids=[surface_id]
+        )
+        return any(surface.pod_id in user_pod_ids for surface in live)
 
     async def _clear_stale_default(self, user_id: UUID, platform: str) -> None:
         """Forget a default that no longer resolves, best-effort."""
@@ -278,6 +345,7 @@ class SurfaceRoutingMixin:
         agent_id = surface.agent_id
         is_email = surface.mode is SurfaceMode.EMAIL
         return ResolvedSurfaceRoute(
+            pod_id=surface.pod_id,
             agent_id=agent_id,
             agent_name=await self._agent_name_for_agent_id(agent_id),
             agent_display_name=await self._agent_display_name(agent_id),
@@ -301,6 +369,7 @@ class SurfaceRoutingMixin:
             return None
         agent_id = surface.agent_id
         return ResolvedSurfaceRoute(
+            pod_id=surface.pod_id,
             agent_id=agent_id,
             agent_name=await self._agent_name_for_agent_id(agent_id),
             agent_display_name=await self._agent_display_name(agent_id),
@@ -338,6 +407,7 @@ class SurfaceRoutingMixin:
         # bot answers, not who answers in it. That is always the surface's agent.
         agent_id = surface.agent_id
         return ResolvedSurfaceRoute(
+            pod_id=surface.pod_id,
             agent_id=agent_id,
             agent_name=await self._agent_name_for_agent_id(agent_id),
             agent_display_name=await self._agent_display_name(agent_id),
@@ -415,6 +485,7 @@ class SurfaceRoutingMixin:
         adapter: SurfacePlatformAdapterPort,
         parsed: ParsedInboundSurfaceEvent,
         credentials: dict[str, Any],
+        installation_id: UUID | None = None,
     ) -> ResolvedSurfaceUser:
         try:
             async with connection_released(self.uow.session):
@@ -427,6 +498,7 @@ class SurfaceRoutingMixin:
         resolved = await self.identity_service.resolve(
             event=parsed,
             sender_profile=sender_profile,
+            installation_id=installation_id,
         )
         return await self._hydrate_resolved_user(resolved)
 

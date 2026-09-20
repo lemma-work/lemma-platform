@@ -25,4 +25,28 @@ py/mixed-returns lemma-backend/app/modules/connectors/tests/e2e/test_mcp_third_p
 py/ineffectual-statement lemma-backend/app/modules/connectors/services/install_service_seam.py  # The fifth file of Protocol stubs, and the same `...` bodies as the four above. Read all seven the query reports: every one closes an `async def` or a `def` on `InstallServiceSeam`, which exists only to declare what the install helpers use of the service. Nothing else in the file is a bare expression.
 py/non-iterable-in-for-loop lemma-backend/app/modules/datastore/tests/unit/test_datastore_api_helpers.py  # `for operator in RecordFilterOperator:` iterates an enum *class* via `EnumMeta.__iter__`, the same shape as the export_agent_tool_schemas.py entry above. The test asserts every operator is named in RECORD_FILTER_DESCRIPTION; it passes, so the loop plainly runs.
 js/superfluous-trailing-arguments lemma-typescript/src/__tests__/queue-a-steer-for-an-acp-turn.test.ts  # `new StorageEvent("storage", { key })` is the constructor the HTML spec defines; the second argument is the `StorageEventInit` dictionary. CodeQL's bundled Closure extern for `webstorage.js` still declares the pre-`EventInit` signature, so every standards-correct call looks superfluous to it — the same shape the query's own changelog records fixing for `TransformStream` in 2.4.4. Checked rather than assumed: dispatching that event in jsdom gives `event.key === "lemma.queued-steers.c1"`, and the test only passes because the listener compares that key.
+py/ineffectual-statement lemma-backend/app/modules/identity/services/email_challenges.py  # The same Protocol stubs as the ports files above: both hits are the `...` closing `__call__` on `ChallengeEmailSender` and `ChallengeSendLimits`, the two callables the challenge service is constructed with. Nothing else in the file is a bare expression.
+py/unused-import lemma-backend/app/modules/agent_surfaces/infrastructure/models.py  # The four onboarding models are re-exported so Alembic's metadata sees their tables through the module it already imports; nothing reads the names here, which is the point. `# noqa: F401` says the same thing to ruff on the line itself.
+py/ineffectual-statement lemma-backend/app/modules/agent_surfaces/services/personal_dm_routes.py  # The same Protocol stub as the ports files above: the single hit is the `...` closing `_get_or_create_conversation_link` on `ConversationLinker`, which names the one thing context-building needs from the ingress service so this module does not have to import its own module's FastAPI wiring to get it.
 py/ineffectual-statement lemma-backend/app/modules/web_login/api/controllers/web_login_controller.py  # The same Protocol stubs as the pod, agent, connectors, datastore and identity ports above. Both hits are the `...` closing an `async def` on `BrowserView`, the two calls the web-login routes make against the browser -- declared as a protocol so the routes can take it as a dependency rather than have their tests patch a module-level factory. A docstring-only body was tried first and basedpyright rejects it: "must return value on all code paths".
+# ── Onboarding's module-graph cycles ─────────────────────────────────────────
+#
+# Seven hits, all of one cycle. Traced it rather than assumed: every return path
+# closes through `agent_surfaces.contracts.email_surfaces ->
+# agent_surfaces.api.dependencies -> agent_surfaces.services.ingress_service`,
+# which predates this work, and the two imports that put onboarding on it are
+# made inside the function that needs them -- `ingress_service.py:332` and
+# `identity_resolution_service.py:181` -- which is the remedy for a cycle, not
+# an instance of one. Nothing imports in a cycle at run time; `app.events`
+# imports clean and the worker boots. `check_architecture.py`, which is this
+# repository's gate for exactly this question, reports 0 cycles. Removing the
+# edges CodeQL names means moving `validate_personal_dm_route` and the
+# contracts it reads out from under the services layer, which is a change to
+# how contracts are arranged and belongs to one.
+py/cyclic-import lemma-backend/app/modules/agent_surfaces/services/identity_resolution_service.py  # See the note above: the closing import is the function-level one at line 181.
+py/cyclic-import lemma-backend/app/modules/agent_surfaces/services/ingress_service.py  # See the note above: the closing import is the function-level one at line 332.
+py/cyclic-import lemma-backend/app/modules/agent_surfaces/services/personal_dm_routes.py  # See the note above. Both hits are module-level reads of `agent.contracts.provisioning` and `identity.contracts.onboarding`; the cycle closes through the deferred import in `ingress_service`.
+py/cyclic-import lemma-backend/app/modules/agent_surfaces/services/verified_surface_identity.py  # See the note above; same shape, closing through `ingress_service -> identity_resolution_service`.
+py/cyclic-import lemma-backend/app/modules/identity/contracts/onboarding.py  # See the note above; the path back runs first_workspace -> pod.contracts.personal_workspace -> pod.api.dependencies -> pod_service -> agent_surfaces.contracts.email_surfaces.
+py/cyclic-import lemma-backend/app/modules/identity/services/first_workspace.py  # See the note above; same path as identity.contracts.onboarding.
+py/cyclic-import lemma-backend/app/modules/pod/contracts/personal_workspace.py  # See the note above; the path back runs agent.contracts.provisioning -> agent.api.dependencies -> agent_service -> agent_surfaces.contracts.email_surfaces.

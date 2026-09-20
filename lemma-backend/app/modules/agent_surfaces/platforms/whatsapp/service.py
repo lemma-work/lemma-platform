@@ -39,6 +39,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.payloads import (
     resolve_whatsapp_send_type,
     whatsapp_cta_url_payload,
     whatsapp_display_resource_text,
+    flow_with_message,
     whatsapp_message_bodies,
     whatsapp_text_payload,
     truncate_whatsapp_text,
@@ -107,6 +108,8 @@ class WhatsAppPlatformService:
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not sender_wa_id or not phone_number_id or not self._access_token:
+            if (metadata or {}).get("private_onboarding"):
+                raise RuntimeError("WhatsApp cannot deliver private onboarding")
             logger.debug(
                 "agent_surfaces.service.whatsapp_send_message_skipped_due.diagnostic",
                 phone_number_id=phone_number_id,
@@ -114,6 +117,14 @@ class WhatsAppPlatformService:
             )
             return
 
+        flow = (metadata or {}).get("onboarding_flow")
+        if event.is_dm and flow:
+            await self._client.send_interactive(
+                phone_number_id=phone_number_id,
+                to=sender_wa_id,
+                interactive=flow_with_message(flow, message),
+            )
+            return
         for body in whatsapp_message_bodies(message):
             await self._client.send_message_payload(
                 phone_number_id=phone_number_id,

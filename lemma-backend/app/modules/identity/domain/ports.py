@@ -154,6 +154,10 @@ class OrganizationRepositoryPort(Protocol):
 
 @runtime_checkable
 class IdentityEmailPort(Protocol):
+    async def send_phone_changed_email(
+        self, *, to_email: str, mobile_number: str
+    ) -> bool: ...
+
     async def send_invitation_email(
         self,
         *,

@@ -93,18 +93,26 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         reply to the correct conversation via the serviceUrl captured from the
         original incoming activity.
         """
-        del credentials, metadata
+        del credentials
         tenant_id = event.tenant_id
         if not tenant_id:
+            if (metadata or {}).get("private_onboarding"):
+                raise RuntimeError("Teams installation has no tenant")
             return
 
         token = await self._get_bot_token(tenant_id)
         if not token:
+            if (metadata or {}).get("private_onboarding"):
+                raise RuntimeError(
+                    "Teams installation cannot deliver private onboarding"
+                )
             return
 
         conversation_id = event.reply_target.get("conversation_id")
         reply_to_id = event.reply_target.get("reply_to_id")
         if not conversation_id:
+            if (metadata or {}).get("private_onboarding"):
+                raise RuntimeError("Teams installation has no personal conversation")
             return
 
         url = (
@@ -120,6 +128,15 @@ class TeamsSurfaceEgress(BaseSurfaceAdapter):
         }
         if reply_to_id:
             body["replyToId"] = reply_to_id
+
+        card = (metadata or {}).get("onboarding_card")
+        if event.is_dm and card:
+            body["attachments"] = [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": card,
+                }
+            ]
 
         await self._post_activity(url, token=token, body=body)
 
