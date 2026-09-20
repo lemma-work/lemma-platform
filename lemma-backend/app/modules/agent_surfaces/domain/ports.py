@@ -130,6 +130,7 @@ class SurfaceInstallationRepositoryPort(Protocol):
         surface_type: str,
         *,
         surface_ids: Collection[UUID] | None = None,
+        pod_ids: Collection[UUID] | None = None,
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
     ) -> list[AgentSurfaceEntity]: ...

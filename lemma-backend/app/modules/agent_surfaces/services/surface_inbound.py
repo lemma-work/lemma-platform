@@ -7,6 +7,8 @@ a voice note to transcribe, recent channel history for a group mention.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 
 from app.core.authorization.delegation import agent_display_name
 from app.core.infrastructure.db.session_uow import commit_now
@@ -36,6 +38,9 @@ from app.modules.agent_surfaces.domain.models import (
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceEventDedupStorePort,
     SurfacePlatformAdapterPort,
+)
+from app.modules.agent_surfaces.services.credential_resolver import (
+    native_credentials,
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     identity_confirmation_context,
@@ -171,13 +176,20 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         # per-sender below, and narrowed to shared credentials where the
         # platform has a shared bot at all.
         receiver_surface_ids = request.receiver_surface_ids
-        surfaces = await self.surface_repository.list_active_for_routing(
-            platform,
-            surface_ids=receiver_surface_ids,
-            system_credentials_only=(
-                receiver_surface_ids is None and _has_shared_system_bot(platform)
-            ),
-        )
+        fan_in = receiver_surface_ids is None and _has_shared_system_bot(platform)
+        surfaces: list[AgentSurfaceEntity] = []
+        resolved_user: ResolvedSurfaceUser | None = None
+        user_pod_ids: set[UUID] | None = None
+        if fan_in and parsed.is_dm:
+            surfaces, resolved_user, user_pod_ids = await self._fan_in_candidates(
+                platform=platform, parsed=parsed, adapter=adapter
+            )
+        if not surfaces:
+            surfaces = await self.surface_repository.list_active_for_routing(
+                platform,
+                surface_ids=receiver_surface_ids,
+                system_credentials_only=fan_in,
+            )
         if receiver_surface_ids is not None and not surfaces:
             return None
 
@@ -202,6 +214,58 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
             adapter=adapter,
             parsed=parsed,
             candidates=candidates,
+            resolved_user=resolved_user,
+            user_pod_ids=user_pod_ids,
+        )
+
+    async def _fan_in_candidates(
+        self,
+        *,
+        platform: str,
+        parsed: ParsedInboundSurfaceEvent,
+        adapter: SurfacePlatformAdapterPort,
+    ) -> tuple[list[AgentSurfaceEntity], ResolvedSurfaceUser, set[UUID] | None]:
+        """The shared bot's fan-in, narrowed to the pods the sender is in.
+
+        The fan-in is every system-credential surface of the platform in the
+        deployment -- one per provisioned person -- read and hydrated on the way
+        to picking the handful this sender can use. Narrowing it looks circular,
+        because selection needs the sender and the sender was resolved from
+        `candidates[0]`'s credentials. It is not. Every candidate here is by
+        definition a system-credential surface, and `for_surface` answers those
+        with `native_credentials`, which comes from settings: the same values
+        whichever row asks, and no database round trip to get them. The
+        installation id is not needed either -- `resolve` consults it only for
+        Slack and Teams, and neither has a shared bot.
+
+        An unknown sender, or one who belongs to none of these pods, gets no
+        candidates from here and the caller reads the fan-in unnarrowed. That is
+        what keeps the answer identical rather than merely cheaper: selection
+        falls back to the thread's existing surface for a non-member, and that
+        surface is how ordinary ingestion tells them they have no access to the
+        pod their conversation is in.
+        """
+        resolved_user = await self._resolve_sender_identity(
+            adapter=adapter,
+            parsed=parsed,
+            credentials=native_credentials(platform),
+            installation_id=None,
+        )
+        if resolved_user.internal_user_id is None or not self.pod_membership_port:
+            return [], resolved_user, None
+        pod_ids = set(
+            await self.pod_membership_port.get_user_pod_ids(
+                resolved_user.internal_user_id
+            )
+        )
+        if not pod_ids:
+            return [], resolved_user, None
+        return (
+            await self.surface_repository.list_active_for_routing(
+                platform, pod_ids=pod_ids, system_credentials_only=True
+            ),
+            resolved_user,
+            pod_ids,
         )
 
     async def _route_to_surface(
@@ -211,6 +275,8 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         adapter: SurfacePlatformAdapterPort,
         parsed: ParsedInboundSurfaceEvent,
         candidates: list[AgentSurfaceEntity],
+        resolved_user: ResolvedSurfaceUser | None = None,
+        user_pod_ids: set[UUID] | None = None,
     ) -> AgentSurfaceContext | None:
         """Pick the surface this event belongs to, and build its context.
 
@@ -218,19 +284,28 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
         then continuity -> pod membership -> user default -> deterministic
         tiebreak picks the surface. An unknown sender only proceeds when the
         target is unambiguous, which is what gets it the signup/link flow.
+
+        `resolved_user` arrives already answered when the shared bot's fan-in
+        was narrowed by it -- resolving a second time would repeat a profile
+        fetch and an upsert to reach the same answer.
         """
         identity_surface = candidates[0]
-        resolved_user = await self._resolve_sender_identity(
-            adapter=adapter,
-            parsed=parsed,
-            credentials=await self._resolve_credentials(identity_surface),
-            installation_id=identity_surface.account_id or identity_surface.id,
+        sender = (
+            resolved_user
+            if resolved_user is not None
+            else await self._resolve_sender_identity(
+                adapter=adapter,
+                parsed=parsed,
+                credentials=await self._resolve_credentials(identity_surface),
+                installation_id=identity_surface.account_id or identity_surface.id,
+            )
         )
         matched_surface = await self._select_surface(
             candidates=candidates,
-            resolved_user=resolved_user,
+            resolved_user=sender,
             parsed=parsed,
             platform=platform,
+            user_pod_ids=user_pod_ids,
         )
         if matched_surface is None and len(candidates) == 1 and parsed.is_dm:
             # Single unambiguous DM surface: route to it so the onboarding flow
@@ -244,14 +319,14 @@ class SurfaceInboundMixin(SurfaceInboundMessageMixin):
                 surface=identity_surface,
                 parsed=parsed,
                 adapter=adapter,
-                resolved_user=resolved_user,
+                resolved_user=sender,
             )
 
         return await self._prepare_surface_context(
             surface=matched_surface,
             parsed=parsed,
             adapter=adapter,
-            resolved_user=resolved_user,
+            resolved_user=sender,
         )
 
     async def _prepare_surface_webhook_ingress(

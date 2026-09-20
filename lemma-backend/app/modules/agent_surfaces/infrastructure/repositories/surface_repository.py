@@ -101,8 +101,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
 
         # A row naming a retired platform drops out rather than taking the
         # whole page with it; see `AgentSurface.to_entity_or_none`.
-        # A row naming a retired platform drops out rather than taking the
-        # whole page with it; see `AgentSurface.to_entity_or_none`.
         entities = [
             entity
             for entity in (model.to_entity_or_none() for model in models)
@@ -148,6 +146,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         surface_type: str,
         *,
         surface_ids: Collection[UUID] | None = None,
+        pod_ids: Collection[UUID] | None = None,
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
     ) -> list[AgentSurfaceEntity]:
@@ -156,6 +155,7 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             routing_surfaces(
                 surface_type,
                 surface_ids=surface_ids,
+                pod_ids=pod_ids,
                 external_workspace_id=external_workspace_id,
                 system_credentials_only=system_credentials_only,
             )

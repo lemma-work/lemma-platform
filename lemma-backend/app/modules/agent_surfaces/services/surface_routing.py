@@ -116,6 +116,7 @@ class SurfaceRoutingMixin:
         resolved_user: ResolvedSurfaceUser | None,
         parsed: ParsedInboundSurfaceEvent,
         platform: str,
+        user_pod_ids: set[UUID] | None = None,
     ) -> AgentSurfaceEntity | None:
         """Pick which candidate surface an inbound event belongs to.
 
@@ -167,7 +168,11 @@ class SurfaceRoutingMixin:
             return continuity_surface
 
         user_id = resolved_user.internal_user_id
-        user_pod_ids = set(await self.pod_membership_port.get_user_pod_ids(user_id))
+        # Already in hand when the shared bot's fan-in was narrowed by it; the
+        # narrowing and this filter are the same question, so asking twice is
+        # one indexed round trip on the busiest path for no new answer.
+        if user_pod_ids is None:
+            user_pod_ids = set(await self.pod_membership_port.get_user_pod_ids(user_id))
         member_candidates = [s for s in candidates if s.pod_id in user_pod_ids]
         if not member_candidates:
             # No pod the user belongs to; keep continuity if any (membership is
