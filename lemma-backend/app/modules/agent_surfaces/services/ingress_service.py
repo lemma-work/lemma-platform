@@ -91,7 +91,7 @@ class AgentSurfaceIngressService(SurfaceInboundMixin, SurfaceInteractionMixin):
         Only the platform knows whether its webhook can batch, so the question
         is asked of the adapter; every adapter that cannot answers "itself" and
         this returns the request unchanged, which is the whole of the behaviour
-        for six of the seven platforms.
+        for four of the five platforms -- only WhatsApp overrides it.
         """
         if not isinstance(request, SurfacePlatformWebhookIngress):
             return [request]

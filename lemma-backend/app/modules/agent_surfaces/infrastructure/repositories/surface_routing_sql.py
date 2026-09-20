@@ -104,12 +104,16 @@ def routing_surfaces(
     answer. Applying it *instead* of ``pod_ids`` would route a message to
     whichever organisation happened to sort first.
 
-    **A surface holding no number still matches.** Every WhatsApp surface alive
-    today has ``surface_identity_id`` NULL, because ``resolve_binding`` has
-    never populated it for the platform; a strict equality would take every one
-    of them out of routing the moment this predicate was passed, which is an
-    outage rather than a narrowing. So it reads "this number, or no number yet",
-    and the NULL half retires on its own as allocation fills the column in.
+    **A surface holding no number still matches**, and it is not a transitional
+    allowance. A surface on the shared line holds no number by design --
+    `_ensure_shared_surface` mints one per personal pod and deliberately does
+    not allocate -- so the NULL half is permanent, not something that retires as
+    the column fills in. It said the latter until an adversarial pass pointed
+    out that nothing was ever going to fill those rows.
+
+    A strict equality would therefore take every shared-line surface out of
+    routing the moment this predicate was passed, which is an outage rather than
+    a narrowing. So it reads "this number, or the shared line".
 
     ``system_credentials_only`` is the shared-webhook narrowing. A platform-wide
     webhook arrives on shared system credentials, so a surface bound to its own

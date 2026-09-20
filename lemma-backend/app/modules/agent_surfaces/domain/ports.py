@@ -200,7 +200,8 @@ class ColdEmailThread(BaseModel):
     external_channel_id: str | None = None
     external_message_id: str | None = None
     # A serialized ParsedInboundSurfaceEvent. Stored as ``link.last_event``
-    # because ``_resolve_egress_target`` refuses to send on a link whose last
+    # because ``SurfaceDelivery.resolve_egress_target`` refuses to send on a
+    # link whose last
     # event is missing or unparseable — without it the agent's own next message
     # in this conversation would quietly go nowhere.
     last_event: dict[str, Any] = {}

@@ -462,8 +462,9 @@ class NotificationModel(UUIDAuditBase):
 
     Lives in ``agent_surfaces`` because delivery is almost entirely surface work
     (identity resolution, conversation links, platform adapters all live here).
-    The agent and workflow modules reach it through ports in ``app/composition``,
-    the same way they reach the scheduler.
+    The agent and workflow modules reach it through this module's own
+    ``contracts/notifications.py`` and ``contracts/workflow_notifications.py``.
+    It used to be ``app/composition``, which no longer exists.
     """
 
     __tablename__ = "notifications"

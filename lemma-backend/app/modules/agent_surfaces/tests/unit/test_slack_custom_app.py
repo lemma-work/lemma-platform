@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 from app.modules.agent_surfaces.services.webhook_security_service import (
     SlackWebhookVerificationCandidate,
+    SurfaceWebhookAuthenticationError,
     SurfaceWebhookSecurityService,
 )
 
@@ -70,7 +71,11 @@ async def test_the_deployments_secret_cannot_sign_for_a_custom_app(monkeypatch):
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback"}'
 
-    with pytest.raises(Exception):
+    # Named, not bare `Exception`: these three prove a forged signature is
+    # *rejected*, and a bare catch would pass just as happily on a TypeError
+    # from a changed signature -- that is, on verification not running at all,
+    # which is the exact failure they exist to notice.
+    with pytest.raises(SurfaceWebhookAuthenticationError):
         await SurfaceWebhookSecurityService().verify_surface_request(
             surface=_surface(webhook_secret=OWN_SECRET),
             headers=_signed(DEPLOYMENT_SECRET, body),
@@ -265,7 +270,11 @@ async def test_a_signature_matching_no_candidate_is_rejected(monkeypatch):
     monkeypatch.setattr(surface_settings, "slack_signing_secret", DEPLOYMENT_SECRET)
     body = b'{"type":"event_callback","team_id":"T1"}'
 
-    with pytest.raises(Exception):
+    # Named, not bare `Exception`: these three prove a forged signature is
+    # *rejected*, and a bare catch would pass just as happily on a TypeError
+    # from a changed signature -- that is, on verification not running at all,
+    # which is the exact failure they exist to notice.
+    with pytest.raises(SurfaceWebhookAuthenticationError):
         SurfaceWebhookSecurityService().verify_slack_request(
             headers=_signed(DEPLOYMENT_SECRET, body),
             raw_body=body,
@@ -284,7 +293,11 @@ async def test_a_valid_signature_for_one_app_cannot_target_another_app(monkeypat
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     body = b'{"type":"event_callback","team_id":"T1","api_app_id":"A_B"}'
 
-    with pytest.raises(Exception):
+    # Named, not bare `Exception`: these three prove a forged signature is
+    # *rejected*, and a bare catch would pass just as happily on a TypeError
+    # from a changed signature -- that is, on verification not running at all,
+    # which is the exact failure they exist to notice.
+    with pytest.raises(SurfaceWebhookAuthenticationError):
         SurfaceWebhookSecurityService().verify_slack_request(
             headers=_signed(OWN_SECRET, body),
             raw_body=body,

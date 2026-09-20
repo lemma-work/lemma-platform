@@ -85,7 +85,7 @@ class NotificationEgress:
         its bot's username and avatar, and ignores the actor.
         """
         metadata: dict[str, Any] = {"notification_id": str(notification.id)}
-        # Set only when known. ``_egress_metadata_with_agent_name`` fills
+        # Set only when known. ``SurfaceDelivery.egress_metadata`` fills
         # ``agent_display_name`` from the surface with ``setdefault``, and an
         # explicit None here is a present key — it would win, and every chat
         # bot would lose the name and icon it replies under.

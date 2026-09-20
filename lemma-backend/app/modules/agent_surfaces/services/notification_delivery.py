@@ -32,7 +32,7 @@ quietly rerouted. See :func:`surfaces_on_channel` and
 
 The recipient's own ``UserPreferences.default_surfaces`` deliberately plays no
 part here. It remains authoritative for *inbound* routing
-(``ingress_service._select_surface``), where the question is genuinely "which of
+(``SurfaceRouter.select_surface``), where the question is genuinely "which of
 our surfaces did this person mean to talk to".
 
 First success wins. Fan-out across three apps is how a genuinely useful feature

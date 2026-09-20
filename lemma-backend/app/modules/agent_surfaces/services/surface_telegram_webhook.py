@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 
@@ -46,9 +46,6 @@ logger = get_logger(__name__)
 
 # Bounded retry for the in-process Telegram webhook registration calls.
 _WEBHOOK_RETRY_POLICY = RetryPolicy(max_attempts=3, base_delay=0.5)
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass(frozen=True, slots=True)
