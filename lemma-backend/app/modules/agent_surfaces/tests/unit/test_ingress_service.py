@@ -18,7 +18,6 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceIdentityPolicy,
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
-    SurfaceMode,
     SurfacePlatform,
     SurfaceConfig,
 )
@@ -215,7 +214,6 @@ async def test_unresolved_managed_dm_with_multiple_surfaces_gets_one_fallback(
             name=f"{platform.value.lower()}-{index}",
             agent_id=uuid4(),
             surface_type=platform,
-            mode=SurfaceMode.DM,
             account_id=None,
             credential_mode=SurfaceCredentialMode.SYSTEM,
             config=SurfaceConfig(),
@@ -510,7 +508,6 @@ async def test_an_allowed_channel_is_answered_by_the_surfaces_own_agent():
     a data migration.
     """
     surface = _slack_surface()
-    surface.mode = SurfaceMode.DM
     surface.config = SurfaceConfig.model_validate(
         {"channels": [{"channel_id": "C999", "agent_name": "Channel Agent"}]}
     )
@@ -616,7 +613,6 @@ async def test_prepare_webhook_allows_identity_email_without_deny_list():
 
 async def test_prepare_webhook_ignores_unconfigured_slack_channel():
     surface = _slack_surface()
-    surface.mode = SurfaceMode.DM
     event = _slack_channel_event(channel_id="C404")
     adapter = AsyncMock()
     adapter.parse_inbound_event.return_value = event
@@ -1248,7 +1244,6 @@ async def test_the_unrouted_dedup_claim_does_not_hold_a_pooled_connection():
             name=f"telegram-{index}",
             agent_id=uuid4(),
             surface_type=SurfacePlatform.TELEGRAM,
-            mode=SurfaceMode.DM,
             account_id=None,
             credential_mode=SurfaceCredentialMode.SYSTEM,
             config=SurfaceConfig(),

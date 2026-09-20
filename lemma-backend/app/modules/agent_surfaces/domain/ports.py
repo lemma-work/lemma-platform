@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from app.core.domain.uow import IUnitOfWork
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
@@ -87,6 +88,13 @@ class SurfaceAuthConfigPort(Protocol):
 
 
 class SurfaceInstallationRepositoryPort(Protocol):
+    #: The unit of work this repository was built with. Declared because two
+    #: callers legitimately need it -- publishing after commit, and handing a
+    #: session to a free function -- and reaching for it through an undeclared
+    #: attribute type-checks as nothing, which is how those two reads sat in the
+    #: baseline looking like every other unresolvable name.
+    uow: IUnitOfWork
+
     async def get(self, id: UUID) -> AgentSurfaceEntity | None: ...
 
     async def merge_conversation_metadata(

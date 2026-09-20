@@ -24,7 +24,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ConversationType,
     ParsedInboundSurfaceEvent,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.services.egress_delivery import SurfaceDelivery
@@ -321,7 +320,6 @@ def _installation(pod_id) -> AgentSurfaceEntity:
         name="slack",
         agent_id=pod_id,
         surface_type=SurfacePlatform.SLACK,
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         config=SurfaceConfig(),
     )

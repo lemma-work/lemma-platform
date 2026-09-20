@@ -26,7 +26,6 @@ from uuid import uuid4
 import pytest
 
 from app.modules.agent_surfaces.domain.entities import (
-    SurfaceEventMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
@@ -74,7 +73,6 @@ def test_a_live_row_still_maps_with_every_field_intact() -> None:
     entity = row.to_entity_or_none()
     assert entity is not None
     assert entity.surface_type is SurfacePlatform.RESEND
-    assert entity.event_mode is SurfaceEventMode.WEBHOOK
     assert entity.surface_identity_email == "agent@ops.example"
     assert entity.id == row.id
 

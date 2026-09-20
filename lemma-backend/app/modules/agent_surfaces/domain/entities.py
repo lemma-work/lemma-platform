@@ -81,18 +81,6 @@ def thread_shape(conversation_kind: str | None) -> ThreadShape:
     )
 
 
-class SurfaceMode(StrEnum):
-    DM = "DM"
-    EMAIL = "EMAIL"
-
-
-class SurfaceEventMode(StrEnum):
-    """How a surface receives. Only one way now, and the member is kept because
-    the column stores it -- ``COMPOSIO_TRIGGER`` went with the polled mailboxes."""
-
-    WEBHOOK = "WEBHOOK"
-
-
 class SurfaceCredentialMode(StrEnum):
     SYSTEM = "SYSTEM"
     CUSTOM = "CUSTOM"
@@ -276,8 +264,6 @@ class AgentSurfaceEntity(AggregateRoot):
     # can be in -- which is what made one column mean two things.
     agent_id: UUID
     surface_type: SurfacePlatform
-    mode: SurfaceMode = SurfaceMode.DM
-    event_mode: SurfaceEventMode = SurfaceEventMode.WEBHOOK
     credential_mode: SurfaceCredentialMode = SurfaceCredentialMode.SYSTEM
     config: SurfaceConfig
     # Entity-level routing/derived fields (stored as dedicated DB columns)
@@ -309,8 +295,6 @@ class AgentSurfaceEntity(AggregateRoot):
         name: str | None = None,
         config: SurfaceConfig | None = None,
         agent_id: UUID,
-        mode: SurfaceMode | None = None,
-        event_mode: SurfaceEventMode | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         account_id: UUID | None = None,
         external_workspace_id: str | None = None,
@@ -321,14 +305,7 @@ class AgentSurfaceEntity(AggregateRoot):
         resolved = SurfacePlatform(str(surface_type).upper())
         resolved_name = (name or "").strip() or cls.default_name_for(resolved)
         config = config if config is not None else SurfaceConfig()
-        resolved_mode = cls._resolve_mode(resolved, mode)
-        resolved_event_mode = cls._default_event_mode(resolved, event_mode)
-        cls._validate_binding(
-            surface_type=resolved,
-            mode=resolved_mode,
-            event_mode=resolved_event_mode,
-            account_id=account_id,
-        )
+        cls._validate_binding(surface_type=resolved, account_id=account_id)
 
         initial_status = (
             AgentSurfaceStatus.PENDING_ADMIN_CONSENT
@@ -341,8 +318,6 @@ class AgentSurfaceEntity(AggregateRoot):
             name=resolved_name,
             agent_id=agent_id,
             surface_type=resolved,
-            mode=resolved_mode,
-            event_mode=resolved_event_mode,
             credential_mode=credential_mode
             or (
                 SurfaceCredentialMode.CUSTOM
@@ -375,24 +350,11 @@ class AgentSurfaceEntity(AggregateRoot):
         return entity
 
     @staticmethod
-    def _resolve_mode(
-        surface_type: SurfacePlatform,
-        mode: SurfaceMode | str | None,
-    ) -> SurfaceMode:
-        if mode is not None:
-            return SurfaceMode(mode.value if isinstance(mode, SurfaceMode) else mode)
-        return SurfaceMode.EMAIL if surface_type.is_email else SurfaceMode.DM
-
-    @staticmethod
     def _validate_binding(
         *,
         surface_type: SurfacePlatform,
-        mode: SurfaceMode,
-        event_mode: SurfaceEventMode,
         account_id: UUID | None,
     ) -> None:
-        if mode is SurfaceMode.EMAIL and not surface_type.is_email:
-            raise AgentSurfaceValidationError("EMAIL mode is only supported for email")
         if (
             surface_type in {SurfacePlatform.SLACK, SurfacePlatform.TEAMS}
             and account_id is None
@@ -400,21 +362,6 @@ class AgentSurfaceEntity(AggregateRoot):
             raise AgentSurfaceValidationError(
                 f"{surface_type.value} surfaces require account_id"
             )
-
-    @staticmethod
-    def _default_event_mode(
-        surface_type: SurfacePlatform,
-        event_mode: SurfaceEventMode | str | None,
-    ) -> SurfaceEventMode:
-        if event_mode is not None:
-            return SurfaceEventMode(
-                event_mode.value
-                if isinstance(event_mode, SurfaceEventMode)
-                else event_mode
-            )
-        # Every surface receives over a native webhook. Polling existed only for
-        # the Composio-backed mailboxes, and they are gone.
-        return SurfaceEventMode.WEBHOOK
 
     def activate(self) -> None:
         self.status = AgentSurfaceStatus.ACTIVE
@@ -429,34 +376,17 @@ class AgentSurfaceEntity(AggregateRoot):
         config: SurfaceConfig,
         *,
         account_id: UUID | None = None,
-        mode: SurfaceMode | None = None,
-        event_mode: SurfaceEventMode | None = None,
         credential_mode: SurfaceCredentialMode | None = None,
         external_workspace_id: str | None = None,
         external_tenant_id: str | None = None,
         external_channel_id: str | None = None,
         surface_identity_id: str | None = None,
     ) -> None:
-        next_mode = (
-            self._resolve_mode(self.surface_type, mode)
-            if mode is not None
-            else self.mode
-        )
-        next_event_mode = (
-            self._default_event_mode(self.surface_type, event_mode)
-            if event_mode is not None
-            else self.event_mode
-        )
         next_account_id = account_id if account_id is not None else self.account_id
         self._validate_binding(
-            surface_type=self.surface_type,
-            mode=next_mode,
-            event_mode=next_event_mode,
-            account_id=next_account_id,
+            surface_type=self.surface_type, account_id=next_account_id
         )
         self.config = config
-        self.mode = next_mode
-        self.event_mode = next_event_mode
         if credential_mode is not None:
             self.credential_mode = credential_mode
         self.account_id = next_account_id
@@ -527,8 +457,13 @@ class AgentSurfaceEntity(AggregateRoot):
             return False
         if not self.matches_tenant(event.tenant_id):
             return False
-        if self.mode is SurfaceMode.EMAIL:
-            return event.should_start_conversation
+        # No email branch. There used to be one -- `return
+        # event.should_start_conversation` for a mail surface -- and it could
+        # never answer differently from the line below it: the Resend parser is
+        # the only thing that can feed a mail surface, and it sets both
+        # `should_start_conversation=True` and `is_dm=True` unconditionally.
+        # `False` is produced only by the Slack and Teams parsers, and neither
+        # platform can be a mail surface.
         if event.is_dm:
             return True
         # Slack/Teams gate channel access by a configured channel route. Telegram

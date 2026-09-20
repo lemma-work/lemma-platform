@@ -15,7 +15,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.services.conversation_binder import (
@@ -23,14 +22,13 @@ from app.modules.agent_surfaces.services.conversation_binder import (
 )
 
 
-def _surface(*, mode: SurfaceMode = SurfaceMode.DM, reset_hours: int = 24):
+def _surface(*, reset_hours: int = 24):
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
         agent_id=uuid4(),
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
-        mode=mode,
         config=SurfaceConfig(dm_conversation_reset_after_hours=reset_hours),
     )
 
@@ -83,7 +81,7 @@ def test_naive_updated_at_treated_as_utc():
 def test_a_channel_thread_is_never_cut_by_the_clock():
     """The bug this check moved for.
 
-    ``SurfaceMode`` has no CHANNEL member, so a Slack or Teams surface is
+    A surface has no stored mode, so a Slack or Teams surface is
     necessarily DM and a channel thread inherited the DM window. Reply in a
     thread a day later and the agent got a fresh conversation with no history --
     while Slack showed the person the whole thread above it.

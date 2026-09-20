@@ -25,7 +25,6 @@ from app.modules.agent.contracts import (
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
-    SurfaceMode,
 )
 from app.modules.agent_surfaces.domain.notification import NotificationEntity
 from app.modules.agent_surfaces.domain.ports import (
@@ -280,7 +279,7 @@ class NotificationEgress:
                 "surface_platform": surface.surface_type.value,
                 "external_user_id": channel.external_user_id,
                 "conversation_kind": (
-                    "EMAIL" if surface.mode is SurfaceMode.EMAIL else "DM"
+                    "EMAIL" if surface.surface_type.is_email else "DM"
                 ),
             },
             require_execute_grant=False,

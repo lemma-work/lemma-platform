@@ -8,7 +8,6 @@ from app.core.authorization.permissions import Permissions
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -197,7 +196,6 @@ def _whatsapp_surface(*, pod_id):
         name="whatsapp",
         agent_id=uuid4(),
         surface_type=SurfacePlatform.WHATSAPP,
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         config=SurfaceConfig(),
         is_active=True,

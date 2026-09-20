@@ -260,14 +260,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
             name=entity.name,
             agent_id=entity.agent_id,
             surface_type=entity.surface_type.value,
-            mode=entity.mode.value
-            if hasattr(entity.mode, "value")
-            else str(entity.mode),
-            event_mode=(
-                entity.event_mode.value
-                if hasattr(entity.event_mode, "value")
-                else str(entity.event_mode)
-            ),
             credential_mode=(
                 entity.credential_mode.value
                 if hasattr(entity.credential_mode, "value")
@@ -296,14 +288,6 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         model.updated_at = entity.updated_at
         model.agent_id = entity.agent_id
         model.surface_type = entity.surface_type.value
-        model.mode = (
-            entity.mode.value if hasattr(entity.mode, "value") else str(entity.mode)
-        )
-        model.event_mode = (
-            entity.event_mode.value
-            if hasattr(entity.event_mode, "value")
-            else str(entity.event_mode)
-        )
         model.credential_mode = (
             entity.credential_mode.value
             if hasattr(entity.credential_mode, "value")

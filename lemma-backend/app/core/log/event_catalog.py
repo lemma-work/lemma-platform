@@ -209,7 +209,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.egress.skipped_no_conversation.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.egress.skipped_surface_missing.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'surface_id'})),
     'agent_surfaces.egress.voice_note_not_fetched.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
-    'agent_surfaces.email_attachments.skipping_oversize_workspace_email_attachment.diagnostic': EventSpec('debug', frozenset({'count', 'inline_cap_bytes'})),
     'agent_surfaces.email_surface_provisioning.address_taken.degraded': EventSpec('warning', frozenset({'agent_id', 'attempt', 'pod_id'})),
     'agent_surfaces.email_surface_provisioning.address_unavailable.degraded': EventSpec('warning', frozenset({'agent_id', 'pod_id'})),
     'agent_surfaces.email_surface_provisioning.failed.degraded': EventSpec('warning', frozenset({'agent_id', 'failure_code', 'failure_type', 'pod_id'})),

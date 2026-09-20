@@ -31,8 +31,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     ExternalSurfaceUserEntity,
     SurfaceCredentialMode,
-    SurfaceEventMode,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.notification import (
@@ -43,6 +41,15 @@ from app.modules.agent_surfaces.domain.notification import (
 )
 
 logger = get_logger(__name__)
+
+
+#: The one value `event_mode` can hold and still name a live way to receive.
+#: An allow-list rather than a list of retired values, so a row holding anything
+#: unexpected reads as absent instead of as a webhook surface: `COMPOSIO_TRIGGER`
+#: went with the polled mailboxes, and no migration deletes those rows on
+#: purpose -- they are configuration somebody chose. This was a one-member enum,
+#: which is a longer way of writing a constant.
+_LIVE_EVENT_MODE = "WEBHOOK"
 
 
 class AgentSurface(UUIDAuditBase):
@@ -133,15 +140,22 @@ class AgentSurface(UUIDAuditBase):
 
     # Leading column of `ix_agent_surface_routing`; see there.
     surface_type: Mapped[str] = mapped_column(String(50))
-    # The three below are two- and three-member enums, and no query selects on
-    # any of them alone. `credential_mode` appears twice, both times as an extra
-    # predicate on a read already narrowed by platform and organisation; an
-    # index whose most common value matches most of the table is read cost on
-    # the write path and nothing on the read path.
-    mode: Mapped[str] = mapped_column(String(50), default="DM", server_default="DM")
+    # `mode` is gone. It was a two-member enum *derived* from `surface_type`,
+    # *validated* against it, then read back to re-derive it -- and nothing
+    # outside this module could set it: no API schema had the field, and
+    # `SurfaceCreateRequest` forbids extras, so the one place that documented
+    # sending `mode=DM` documented a 422.
+    #
+    # `event_mode` stays as a column and loses its enum: it still filters a row
+    # naming a retired way to receive (see `_LIVE_EVENT_MODE`), which is a fact
+    # about stored data rather than about the entity.
     event_mode: Mapped[str] = mapped_column(
         String(50), default="WEBHOOK", server_default="WEBHOOK"
     )
+    # No index: `credential_mode` appears in two queries, both times as an extra
+    # predicate on a read already narrowed by platform and organisation; an
+    # index whose most common value matches most of the table is read cost on
+    # the write path and nothing on the read path.
     credential_mode: Mapped[str] = mapped_column(
         String(50), default="SYSTEM", server_default="SYSTEM"
     )
@@ -207,11 +221,9 @@ class AgentSurface(UUIDAuditBase):
         if SurfacePlatform.from_source(raw_type) is None:
             self._log_retired_value("surface_type", raw_type)
             return None
-        raw_event_mode = self.event_mode or SurfaceEventMode.WEBHOOK.value
-        try:
-            SurfaceEventMode(raw_event_mode)
-        except ValueError:
-            self._log_retired_value("event_mode", str(raw_event_mode))
+        raw_event_mode = str(self.event_mode or _LIVE_EVENT_MODE).upper()
+        if raw_event_mode != _LIVE_EVENT_MODE:
+            self._log_retired_value("event_mode", raw_event_mode)
             return None
         return self.to_entity()
 
@@ -236,10 +248,6 @@ class AgentSurface(UUIDAuditBase):
             name=self.name or surface_type_raw.lower(),
             agent_id=self.agent_id,
             surface_type=SurfacePlatform(surface_type_raw.upper()),
-            mode=SurfaceMode(self.mode or SurfaceMode.DM.value),
-            event_mode=SurfaceEventMode(
-                self.event_mode or SurfaceEventMode.WEBHOOK.value
-            ),
             credential_mode=SurfaceCredentialMode(
                 self.credential_mode or SurfaceCredentialMode.SYSTEM.value
             ),

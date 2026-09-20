@@ -13,8 +13,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfaceConfig,
     SurfaceCredentialMode,
-    SurfaceEventMode,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.resend.parser import (
@@ -36,8 +34,7 @@ def test_resend_is_email_and_default_webhook_binding():
         credential_mode=SurfaceCredentialMode.SYSTEM,
         account_id=None,
     )
-    assert surface.mode is SurfaceMode.EMAIL
-    assert surface.event_mode is SurfaceEventMode.WEBHOOK
+    assert surface.surface_type.is_email
 
 
 def test_resend_inbound_parser_threads_and_builds_reply_target():

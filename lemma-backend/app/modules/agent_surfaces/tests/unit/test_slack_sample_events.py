@@ -21,7 +21,6 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ResolvedSurfaceUser,
     SurfaceConfig,
-    SurfaceMode,
 )
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
@@ -247,7 +246,6 @@ async def test_sample_slack_dm_event_runs_assistant_and_posts_reply(monkeypatch)
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         external_workspace_id=payload["team_id"],
         surface_identity_id=payload["authorizations"][0]["user_id"],
@@ -336,7 +334,6 @@ async def test_sample_slack_app_mention_event_replies_in_thread(monkeypatch):
         name="slack",
         agent_id=uuid4(),
         surface_type="SLACK",
-        mode=SurfaceMode.DM,
         account_id=uuid4(),
         external_workspace_id=payload["team_id"],
         external_channel_id=event["channel"],

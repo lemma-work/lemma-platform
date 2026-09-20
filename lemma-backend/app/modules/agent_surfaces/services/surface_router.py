@@ -36,7 +36,6 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
     ResolvedSurfaceUser,
     SurfaceChannelRoute,
-    SurfaceMode,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
@@ -382,7 +381,7 @@ class SurfaceRouter:
         parsed: ParsedInboundSurfaceEvent,
     ) -> ResolvedSurfaceRoute | None:
         """Which agent answers this event, and under what conversation key."""
-        if parsed.is_dm or surface.mode is SurfaceMode.EMAIL:
+        if parsed.is_dm or surface.surface_type.is_email:
             return await self._direct_route(surface=surface, parsed=parsed)
         if surface.surface_type is SurfacePlatform.TELEGRAM:
             return await self._telegram_group_route(surface=surface, parsed=parsed)
@@ -398,7 +397,7 @@ class SurfaceRouter:
     ) -> ResolvedSurfaceRoute:
         """A DM or an email: the surface's agent, which is the only one it has."""
         agent_id = surface.agent_id
-        is_email = surface.mode is SurfaceMode.EMAIL
+        is_email = surface.surface_type.is_email
         return ResolvedSurfaceRoute(
             pod_id=surface.pod_id,
             agent_id=agent_id,
