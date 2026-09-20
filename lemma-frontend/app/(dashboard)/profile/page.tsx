@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { CheckCircle2, MessageCircle, Plus, Settings, Smartphone } from "@/components/ui/icons";
-import { useOrganization } from "@/components/dashboard/org-context";
+import { CheckCircle2, MessageCircle, Smartphone } from "@/components/ui/icons";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,18 +17,13 @@ import {
     normalizeStoredMobileNumber,
 } from "@/lib/identity/whatsapp-mobile-verification";
 import { SettingsPanel, SettingsStack } from "@/components/settings/settings-kit";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { buildApiUrl } from "@/components/auth/portal/auth/config";
 import { StepLoader } from "@/components/brand/loader";
+import { useBillingAvailable } from "@/lib/billing/use-billing";
 
 export default function ProfilePage() {
     const { data: profile, isLoading, refetch: refetchProfile } = useProfile();
-    const {
-        currentOrg,
-        setCurrentOrg,
-        organizations,
-        isLoading: isLoadingOrganizations,
-    } = useOrganization();
+    const { available: billingAvailable } = useBillingAvailable();
     const updateProfile = useUpdateProfile();
     const [telegramLoginEnabled, setTelegramLoginEnabled] = useState(false);
 
@@ -98,11 +92,18 @@ export default function ProfilePage() {
             contentClassName="pb-16 sm:pb-20"
         >
             <SettingsStack className="office-arrive">
-                <Link href="/profile/usage" className="text-sm text-[var(--action-primary)]">View my usage →</Link>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <Link href="/profile/usage" className="text-sm text-[var(--action-primary)]">View my usage →</Link>
+                    {/* Hidden on a self-hosted install, whose backend has no
+                        /billing router — see useBillingAvailable. */}
+                    {billingAvailable ? (
+                        <Link href="/profile/billing" className="text-sm text-[var(--action-primary)]">Billing →</Link>
+                    ) : null}
+                </div>
                 {/* The one thing on this page that is not a setting: who you are.
                     It stays a bare identity strip rather than a card, the way a
                     resource page's identity sits above its panels. */}
-                <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-5">
                     <div className="flex min-w-0 items-center gap-4">
                         <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[color-mix(in_srgb,var(--delight-soft)_76%,var(--surface-1))] text-lg font-semibold text-[var(--delight)]">
                             {(firstName || profile?.email || "U").slice(0, 1).toUpperCase()}
@@ -112,44 +113,6 @@ export default function ProfilePage() {
                                 {firstName || lastName ? `${firstName} ${lastName}`.trim() : "Your account"}
                             </h2>
                             <p className="mt-1 truncate text-sm text-[var(--text-secondary)]">{profile?.email}</p>
-                        </div>
-                    </div>
-
-                    <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-80">
-                        <Label className="type-eyebrow text-[var(--text-tertiary)]">Active organization</Label>
-                        <div className="flex items-center gap-2">
-                            <Select
-                                value={currentOrg?.id}
-                                disabled={isLoadingOrganizations || organizations.length === 0}
-                                onValueChange={(organizationId) => {
-                                    const organization = organizations.find((candidate) => candidate.id === organizationId);
-                                    if (organization) setCurrentOrg(organization);
-                                }}
-                            >
-                                <SelectTrigger className="h-9 min-w-0 flex-1 sm:w-56">
-                                    <SelectValue placeholder={isLoadingOrganizations ? "Loading…" : "Choose organization"} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    {organizations.map((organization) => (
-                                        <SelectItem key={organization.id} value={organization.id}>
-                                            {organization.name}
-                                        </SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                            {currentOrg ? (
-                                <Button asChild variant="secondary" size="sm" className="h-9 shrink-0 px-3">
-                                    <Link href={`/organizations/${currentOrg.id}/settings/members`}>
-                                        <Settings className="mr-1.5 h-3.5 w-3.5" />
-                                        Manage
-                                    </Link>
-                                </Button>
-                            ) : null}
-                            <Button asChild variant="quiet" size="icon" className="h-9 w-9 shrink-0" title="New organization">
-                                <Link href="/organizations/new" aria-label="Create organization">
-                                    <Plus className="h-4 w-4" />
-                                </Link>
-                            </Button>
                         </div>
                     </div>
                 </div>
