@@ -349,3 +349,73 @@ async def test_phone_candidates_handle_provider_and_profile_formatting():
         "+919876543210",
         "919876543210",
     ]
+
+
+async def test_proven_path_accepts_a_cache_the_profile_email_still_names():
+    """A known Slack sender stays known when the binding path asks.
+
+    `_match_proven_sender` answers WhatsApp and nothing else, so on Slack and
+    Teams this cache entry is the only thing standing between an already-known
+    person and being sent back through signup. Refusing every cache hit on this
+    path did exactly that, to everybody, on their next message.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_email=cached)
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.SLACK, email="known@example.com"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id == cached
+
+
+async def test_proven_path_refuses_a_cache_only_a_telegram_handle_supports():
+    """The case the re-derivation exists for.
+
+    `telegram_username` is free text on a Lemma profile that nobody confirms.
+    An ordinary message resolves by it and writes the cache; without this, the
+    next message on the binding path would read that back as proof and hand the
+    handle's current owner a permanent claim on the profile that named it.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_telegram=cached)  # no email, no verified phone
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.TELEGRAM, username="@asha"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None
+
+
+async def test_proven_path_refuses_a_cache_the_email_now_names_somebody_else():
+    """Re-derivation has to agree, not merely find somebody.
+
+    The address moved to another account between the cached write and this read.
+    Returning the stale id here would bind the platform account to a person the
+    attested field no longer points at.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_email=uuid4())
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.SLACK, email="moved@example.com"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None
+
+
+async def test_proven_path_refuses_a_cache_supported_only_by_an_unverified_phone():
+    """Routing a message and binding an account are not the same permission.
+
+    `_match_user_by_phone` falls back to an unverified number so an ordinary
+    message can still reach somebody. `_cache_is_attested` reads only the
+    verified half, so that fallback cannot become a binding.
+    """
+    cached = uuid4()
+    users = _FakeUsers(by_unverified_phone_ids=[cached])
+    external = _FakeExternalRepo(cached_user_id=cached)
+    resolved = await _service(users, external).resolve(
+        event=_event(platform=SurfacePlatform.WHATSAPP, phone="+15551230000"),
+        require_proven_identity=True,
+    )
+    assert resolved.internal_user_id is None

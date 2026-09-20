@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -120,6 +120,22 @@ def _email_sender_is_believable(event: ParsedInboundSurfaceEvent) -> bool:
     return False
 
 
+class _CachedSender(Protocol):
+    """What a stored external-user row has to be able to answer.
+
+    A structural type rather than the repository's model, because this reads
+    five attributes and is handed whatever `_upsert` returns -- which is
+    annotated `Any`. Naming the five keeps that `Any` from spreading into the
+    one place that decides whether a cached resolution may be believed.
+    """
+
+    resolved_user_id: UUID | None
+    external_user_id: str | None
+    email: str | None
+    phone: str | None
+    display_name: str | None
+
+
 class SurfaceIdentityResolutionService:
     """Resolve an inbound platform message sender to an internal Lemma user.
 
@@ -219,38 +235,11 @@ class SurfaceIdentityResolutionService:
         external_user = None
         if known.external_user_id:
             external_user = await self._upsert(event, known)
-            # Cache hit — previously resolved, skip the matching lookups.
-            #
-            # Two things the bare short-circuit got wrong, both of them because
-            # it answered above every check rather than beside them:
-            #
-            # *Liveness.* Each fresh lookup below excludes deactivated and
-            # deleted accounts, because a match is what the agent run then
-            # executes as. A cached id skipped all of that, so deactivating
-            # somebody did not take their chat access away -- their next message
-            # resolved from here and ran as them. One indexed read by primary
-            # key re-asks identity the only question that can have changed.
-            #
-            # *Proof.* `require_proven_identity` means the caller is about to
-            # write a permanent binding between a platform account and a Lemma
-            # user, so it may only use a match that proved ownership. This row
-            # does not record how it was matched, and an ordinary group message
-            # can fill it from a self-asserted Telegram handle -- so on that
-            # path there is no cached answer this can honestly supply, and it
-            # falls through to `_match_proven_sender` instead of consuming an
-            # unproven write through a proven read.
-            if (
-                external_user.resolved_user_id
-                and not require_proven_identity
-                and await self._live_user_lookup(external_user.resolved_user_id)
-            ):
-                return ResolvedSurfaceUser(
-                    internal_user_id=external_user.resolved_user_id,
-                    external_user_id=external_user.external_user_id,
-                    email=external_user.email,
-                    phone=external_user.phone,
-                    display_name=external_user.display_name,
-                )
+            cached = await self._cached_resolution(
+                external_user, known, require_proven_identity
+            )
+            if cached is not None:
+                return cached
 
         # ── 2-4. Match against Lemma users: telegram username, then email,
         #         then phone ─────────────────────────────────────────────────
@@ -278,6 +267,96 @@ class SurfaceIdentityResolutionService:
             display_name=known.display_name
             or (external_user.display_name if external_user else None),
         )
+
+    async def _cached_resolution(
+        self,
+        external_user: _CachedSender,
+        known: "_KnownSender",
+        require_proven_identity: bool,
+    ) -> ResolvedSurfaceUser | None:
+        """The answer this sender resolved to before, if it still stands.
+
+        Two things the bare short-circuit this replaces got wrong, both of them
+        because it answered above every check rather than beside them:
+
+        *Liveness.* Each fresh lookup in `resolve` excludes deactivated and
+        deleted accounts, because a match is what the agent run then executes
+        as. A cached id skipped all of that, so deactivating somebody did not
+        take their chat access away -- their next message resolved from here and
+        ran as them. One indexed read by primary key re-asks identity the only
+        question that can have changed.
+
+        *Proof.* `require_proven_identity` means the caller is about to bind this
+        platform account to that Lemma user permanently, so the match behind it
+        has to be one the platform attested rather than one the sender asserted.
+        The row records the id and not what produced it, so this re-derives --
+        see `_cache_is_attested`.
+
+        Refusing every cache hit on the proven path instead was tried and was
+        wrong. `_match_proven_sender` matches WhatsApp and nothing else, so the
+        cache is the only thing that recognises a Slack or Teams sender at all:
+        without it every already-known person on those platforms was sent back
+        through signup on their next message. Five e2e suites said so.
+        """
+        if not external_user.resolved_user_id:
+            return None
+        if not await self._live_user_lookup(external_user.resolved_user_id):
+            return None
+        if require_proven_identity and not await self._cache_is_attested(
+            known, external_user.resolved_user_id
+        ):
+            return None
+        return ResolvedSurfaceUser(
+            internal_user_id=external_user.resolved_user_id,
+            external_user_id=external_user.external_user_id,
+            email=external_user.email,
+            phone=external_user.phone,
+            display_name=external_user.display_name,
+        )
+
+    async def _cache_is_attested(
+        self, known: "_KnownSender", cached_user_id: UUID
+    ) -> bool:
+        """Is this cached resolution one the platform stands behind?
+
+        The cache stores who a sender resolved to, never how, so a caller about
+        to write a permanent binding cannot read it at face value. This re-runs
+        the two matches whose input came from somewhere other than the sender --
+        the profile email the platform's own API returned, and a mobile number
+        already verified on the account -- and asks whether either still names
+        the same person.
+
+        Deliberately not the Telegram-username match, which is the reason this
+        exists: `telegram_username` is free text on a Lemma profile that nobody
+        confirms, so a handle that changes hands would otherwise let its new
+        owner be bound to the previous one's account.
+
+        Deliberately not `_match_user_by_phone` either, whose unverified
+        fallback exists so an ordinary message can still be routed. Routing and
+        binding are not the same permission, and only the verified half of that
+        function is a proof.
+
+        What this does not do is make a profile email proof of ownership. It is
+        the platform's word, and a workspace administrator can set it; the
+        `require_proven_identity` matcher refuses it outright for a sender with
+        no cache entry, and that refusal stands. This is the narrower claim that
+        an entry already written is still consistent with an attested field --
+        which is strictly more than the unconditional short-circuit that shipped
+        before it checked anything at all.
+        """
+        if known.email:
+            by_email = await self._users.user_id_by_email(known.email)
+            if by_email is not None and by_email == cached_user_id:
+                return True
+        if known.phone:
+            candidates = _phone_lookup_candidates(known.phone)
+            if candidates:
+                ids = await self._users.user_ids_by_mobile_numbers(
+                    candidates, verified=True
+                )
+                if ids == [cached_user_id]:
+                    return True
+        return False
 
     async def _match_proven_sender(
         self, event: ParsedInboundSurfaceEvent, known: _KnownSender

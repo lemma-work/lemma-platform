@@ -13,9 +13,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from contextlib import asynccontextmanager
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -96,23 +93,6 @@ def _message_for(phone_number_id: str) -> bytes:
     ).encode()
 
 
-class _UowFactory:
-    """One short scope per lookup, like every other webhook route here."""
-
-    def __init__(self) -> None:
-        self.scopes = 0
-        self.open_scopes = 0
-
-    @asynccontextmanager
-    async def __call__(self):
-        self.scopes += 1
-        self.open_scopes += 1
-        try:
-            yield SimpleNamespace(session=SimpleNamespace(info={}))
-        finally:
-            self.open_scopes -= 1
-
-
 def _pooled(**overrides) -> WhatsAppNumberEntity:
     fields: dict[str, object] = {
         "phone_number_id": _POOLED_NUMBER_ID,
@@ -125,15 +105,32 @@ def _pooled(**overrides) -> WhatsAppNumberEntity:
     return WhatsAppNumberEntity(**fields)
 
 
-def _pool_returning(number: WhatsAppNumberEntity | None):
-    """Patch the pool lookup, which is the only database read these routes do."""
-    return patch(
-        "app.modules.agent_surfaces.api.controllers.webhook_controller."
-        "WhatsAppNumberRepository",
-        return_value=SimpleNamespace(
-            get_by_phone_number_id=AsyncMock(return_value=number)
-        ),
-    )
+def _lookup(number: WhatsAppNumberEntity | None):
+    """The pool read these routes do, handed over instead of reached into.
+
+    The route takes its lookup as a collaborator, so a test supplies one rather
+    than replacing the repository class inside the controller's module -- which
+    would keep passing after the route stopped calling it.
+    """
+
+    async def lookup(phone_number_id: str) -> WhatsAppNumberEntity | None:
+        return number
+
+    return lookup
+
+
+class _Publish:
+    """The route's one outbound edge, recorded.
+
+    ``events`` is what reached the stream, in order, so "published exactly this"
+    and "published nothing" are both ordinary assertions about a value.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def __call__(self, event) -> None:
+        self.events.append(event)
 
 
 async def test_a_pooled_number_is_verified_against_its_own_token(monkeypatch):
@@ -146,16 +143,15 @@ async def test_a_pooled_number_is_verified_against_its_own_token(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-token")
 
-    with _pool_returning(_pooled()):
-        response = await verify_whatsapp_number_webhook(
-            _POOLED_NUMBER_ID,
-            _request(
-                query="hub.mode=subscribe&hub.challenge=nonce-1"
-                "&hub.verify_token=pooled-verify-token",
-                method="GET",
-            ),
-            uow_factory=_UowFactory(),
-        )
+    response = await verify_whatsapp_number_webhook(
+        _POOLED_NUMBER_ID,
+        _request(
+            query="hub.mode=subscribe&hub.challenge=nonce-1"
+            "&hub.verify_token=pooled-verify-token",
+            method="GET",
+        ),
+        pooled_number=_lookup(_pooled()),
+    )
 
     assert response.body == b"nonce-1"
 
@@ -171,7 +167,7 @@ async def test_the_deployment_token_does_not_verify_a_pooled_number(monkeypatch)
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-token")
 
-    with _pool_returning(_pooled()), pytest.raises(HTTPException) as raised:
+    with pytest.raises(HTTPException) as raised:
         await verify_whatsapp_number_webhook(
             _POOLED_NUMBER_ID,
             _request(
@@ -179,7 +175,7 @@ async def test_the_deployment_token_does_not_verify_a_pooled_number(monkeypatch)
                 "&hub.verify_token=settings-token",
                 method="GET",
             ),
-            uow_factory=_UowFactory(),
+            pooled_number=_lookup(_pooled()),
         )
 
     assert raised.value.status_code == 403
@@ -195,16 +191,15 @@ async def test_a_number_with_no_row_falls_back_to_settings(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-token")
 
-    with _pool_returning(None):
-        response = await verify_whatsapp_number_webhook(
-            _POOLED_NUMBER_ID,
-            _request(
-                query="hub.mode=subscribe&hub.challenge=nonce-2"
-                "&hub.verify_token=settings-token",
-                method="GET",
-            ),
-            uow_factory=_UowFactory(),
-        )
+    response = await verify_whatsapp_number_webhook(
+        _POOLED_NUMBER_ID,
+        _request(
+            query="hub.mode=subscribe&hub.challenge=nonce-2"
+            "&hub.verify_token=settings-token",
+            method="GET",
+        ),
+        pooled_number=_lookup(None),
+    )
 
     assert response.body == b"nonce-2"
 
@@ -219,16 +214,15 @@ async def test_a_row_without_its_own_token_falls_back_to_settings(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-token")
 
-    with _pool_returning(_pooled(verify_token=None)):
-        response = await verify_whatsapp_number_webhook(
-            _POOLED_NUMBER_ID,
-            _request(
-                query="hub.mode=subscribe&hub.challenge=nonce-3"
-                "&hub.verify_token=settings-token",
-                method="GET",
-            ),
-            uow_factory=_UowFactory(),
-        )
+    response = await verify_whatsapp_number_webhook(
+        _POOLED_NUMBER_ID,
+        _request(
+            query="hub.mode=subscribe&hub.challenge=nonce-3"
+            "&hub.verify_token=settings-token",
+            method="GET",
+        ),
+        pooled_number=_lookup(_pooled(verify_token=None)),
+    )
 
     assert response.body == b"nonce-3"
 
@@ -243,27 +237,23 @@ async def test_a_delivery_is_verified_with_the_secret_the_path_selected(monkeypa
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "settings-secret")
     security = SurfaceWebhookSecurityService()
-    factory = _UowFactory()
 
-    with (
-        _pool_returning(_pooled()),
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "EventPublisher.publish",
-            new=AsyncMock(),
-        ) as publish,
-    ):
-        result = await handle_whatsapp_number_webhook(
-            _POOLED_NUMBER_ID,
-            _request(_message_for(_POOLED_NUMBER_ID)),
-            security,
-            uow_factory=factory,
-        )
+    publish = _Publish()
+    result = await handle_whatsapp_number_webhook(
+        _POOLED_NUMBER_ID,
+        _request(_message_for(_POOLED_NUMBER_ID)),
+        security,
+        pooled_number=_lookup(_pooled()),
+        publish=publish,
+    )
 
     assert result == {"message": "Webhook received"}
-    # The pool read opened and closed its own scope; the publish holds nothing.
-    assert (factory.scopes, factory.open_scopes) == (1, 0)
-    event = publish.await_args.args[1]
+    # Nothing here about session scope any more: the read moved behind
+    # `get_pooled_number_lookup`, so "one short scope, closed before the
+    # publish" is that provider's property and `scripts/check_session_scope.py`
+    # is what holds it. Asserting it through the route would only re-test the
+    # fake this test hands in.
+    (event,) = publish.events
     assert event.source == "whatsapp"
     # A WhatsApp body carries no id `_surface_source_event_id` recognises -- the
     # `wamid` is buried under entry/changes/value/messages -- so it falls to the
@@ -284,24 +274,18 @@ async def test_a_body_naming_another_number_is_refused(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     security = SurfaceWebhookSecurityService()
 
-    with (
-        _pool_returning(_pooled()),
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "EventPublisher.publish",
-            new=AsyncMock(),
-        ) as publish,
-        pytest.raises(HTTPException) as raised,
-    ):
+    publish = _Publish()
+    with pytest.raises(HTTPException) as raised:
         await handle_whatsapp_number_webhook(
             _POOLED_NUMBER_ID,
             _request(_message_for("a-co-tenanted-number")),
             security,
-            uow_factory=_UowFactory(),
+            pooled_number=_lookup(_pooled()),
+            publish=publish,
         )
 
     assert raised.value.status_code == 400
-    publish.assert_not_awaited()
+    assert publish.events == []
 
 
 async def test_a_body_naming_this_number_and_another_is_refused(monkeypatch):
@@ -328,21 +312,18 @@ async def test_a_body_naming_this_number_and_another_is_refused(monkeypatch):
         }
     ).encode()
 
-    with (
-        _pool_returning(_pooled()),
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "EventPublisher.publish",
-            new=AsyncMock(),
-        ) as publish,
-        pytest.raises(HTTPException) as raised,
-    ):
+    publish = _Publish()
+    with pytest.raises(HTTPException) as raised:
         await handle_whatsapp_number_webhook(
-            _POOLED_NUMBER_ID, _request(body), security, uow_factory=_UowFactory()
+            _POOLED_NUMBER_ID,
+            _request(body),
+            security,
+            pooled_number=_lookup(_pooled()),
+            publish=publish,
         )
 
     assert raised.value.status_code == 400
-    publish.assert_not_awaited()
+    assert publish.events == []
 
 
 async def test_the_signature_is_checked_before_the_body_is_read(monkeypatch):
@@ -359,15 +340,12 @@ async def test_the_signature_is_checked_before_the_body_is_read(monkeypatch):
     security = SurfaceWebhookSecurityService()
     # Signed with `_POOLED_APP_SECRET` by `_request`, but the row this path
     # names declares a different one.
-    with (
-        _pool_returning(_pooled(app_secret="a-different-app-secret")),
-        pytest.raises(SurfaceWebhookAuthenticationError) as raised,
-    ):
+    with pytest.raises(SurfaceWebhookAuthenticationError) as raised:
         await handle_whatsapp_number_webhook(
             _POOLED_NUMBER_ID,
             _request(_message_for(_POOLED_NUMBER_ID)),
             security,
-            uow_factory=_UowFactory(),
+            pooled_number=_lookup(_pooled(app_secret="a-different-app-secret")),
         )
 
     assert raised.value.status_code == 401
@@ -386,20 +364,17 @@ async def test_a_body_that_names_no_number_is_still_delivered(monkeypatch):
         {"entry": [{"changes": [{"field": "account_update", "value": {}}]}]}
     ).encode()
 
-    with (
-        _pool_returning(_pooled()),
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "EventPublisher.publish",
-            new=AsyncMock(),
-        ) as publish,
-    ):
-        result = await handle_whatsapp_number_webhook(
-            _POOLED_NUMBER_ID, _request(body), security, uow_factory=_UowFactory()
-        )
+    publish = _Publish()
+    result = await handle_whatsapp_number_webhook(
+        _POOLED_NUMBER_ID,
+        _request(body),
+        security,
+        pooled_number=_lookup(_pooled()),
+        publish=publish,
+    )
 
     assert result == {"message": "Webhook received"}
-    publish.assert_awaited_once()
+    assert len(publish.events) == 1
 
 
 async def test_a_delivery_falls_back_to_the_settings_app_secret(monkeypatch):
@@ -408,23 +383,17 @@ async def test_a_delivery_falls_back_to_the_settings_app_secret(monkeypatch):
     monkeypatch.setattr(surface_settings, "whatsapp_app_secret", _POOLED_APP_SECRET)
     security = SurfaceWebhookSecurityService()
 
-    with (
-        _pool_returning(None),
-        patch(
-            "app.modules.agent_surfaces.api.controllers.webhook_controller."
-            "EventPublisher.publish",
-            new=AsyncMock(),
-        ) as publish,
-    ):
-        result = await handle_whatsapp_number_webhook(
-            _POOLED_NUMBER_ID,
-            _request(_message_for(_POOLED_NUMBER_ID)),
-            security,
-            uow_factory=_UowFactory(),
-        )
+    publish = _Publish()
+    result = await handle_whatsapp_number_webhook(
+        _POOLED_NUMBER_ID,
+        _request(_message_for(_POOLED_NUMBER_ID)),
+        security,
+        pooled_number=_lookup(None),
+        publish=publish,
+    )
 
     assert result == {"message": "Webhook received"}
-    publish.assert_awaited_once()
+    assert len(publish.events) == 1
 
 
 def test_a_per_number_callback_keeps_its_platform_label_in_analytics():
@@ -473,7 +442,7 @@ async def test_a_non_ascii_verify_token_is_a_403_and_not_a_500(monkeypatch):
     monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
     monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-token")
 
-    with _pool_returning(_pooled()), pytest.raises(HTTPException) as raised:
+    with pytest.raises(HTTPException) as raised:
         await verify_whatsapp_number_webhook(
             _POOLED_NUMBER_ID,
             _request(
@@ -481,7 +450,7 @@ async def test_a_non_ascii_verify_token_is_a_403_and_not_a_500(monkeypatch):
                 "&hub.verify_token=p%C3%BColed-verify-token",
                 method="GET",
             ),
-            uow_factory=_UowFactory(),
+            pooled_number=_lookup(_pooled()),
         )
 
     assert raised.value.status_code == 403

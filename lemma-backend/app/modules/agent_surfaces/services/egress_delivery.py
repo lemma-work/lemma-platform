@@ -79,8 +79,26 @@ class SurfaceDelivery:
         self.adapter_registry = adapter_registry
         self.credential_resolver = credential_resolver
 
-    async def egress_credentials(self, surface: AgentSurfaceEntity) -> dict[str, Any]:
-        return await self.credential_resolver.for_surface(surface)
+    async def egress_credentials(
+        self,
+        surface: AgentSurfaceEntity,
+        *,
+        event: ParsedInboundSurfaceEvent | None = None,
+    ) -> dict[str, Any]:
+        """What this surface answers with, for this particular reply.
+
+        ``event`` is the inbound message being answered, and it is passed for
+        one reason: on a shared WhatsApp line the surface holds no number, so
+        the number to answer from is the one the message arrived on. Without it
+        every pooled number was answered from the one in settings.
+
+        Absent on a message the agent starts, which has nothing to have arrived
+        on -- there the surface's own number, or settings, is the whole answer.
+        """
+        arrived = event.reply_target.get("phone_number_id") if event else None
+        return await self.credential_resolver.for_surface(
+            surface, arrived_on=str(arrived) if arrived else None
+        )
 
     async def agent_name_for_surface(self, surface: AgentSurfaceEntity) -> str | None:
         """Whose name a message on this surface goes out under.
@@ -164,7 +182,7 @@ class SurfaceDelivery:
             pod_id=conversation.pod_id,
             adapter=adapter,
             event=parsed_event,
-            credentials=await self.egress_credentials(surface),
+            credentials=await self.egress_credentials(surface, event=parsed_event),
         )
 
     async def egress_metadata(

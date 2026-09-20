@@ -15,7 +15,7 @@ pipeline and the agent tool factory:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from app.modules.agent_surfaces.config import (
@@ -29,6 +29,9 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.surface_connectors import (
     SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS,
+)
+from app.modules.agent_surfaces.domain.whatsapp_numbers import (
+    WhatsAppNumberEntity,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
     WhatsAppNumberRepository,
@@ -144,12 +147,29 @@ def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
     return False
 
 
+class PooledNumberReader(Protocol):
+    """Reads one pool row by its Graph phone number id."""
+
+    async def get_by_phone_number_id(
+        self, phone_number_id: str
+    ) -> WhatsAppNumberEntity | None: ...
+
+
 class SurfaceCredentialResolver:
-    def __init__(self, *, uow):
+    def __init__(self, *, uow, pooled_numbers: PooledNumberReader | None = None):
         self._uow = uow
+        # A collaborator with a default built from the `uow`, rather than a
+        # repository this constructs mid-method: which number a reply goes out
+        # from is a decision worth testing without Postgres, and the alternative
+        # is a test replacing the repository class inside this module -- which
+        # keeps passing after this stops calling it.
+        self._pooled_numbers = pooled_numbers
+
+    def _numbers(self) -> PooledNumberReader:
+        return self._pooled_numbers or WhatsAppNumberRepository(self._uow)
 
     async def _pooled_overrides(
-        self, surface: AgentSurfaceEntity | None
+        self, surface: AgentSurfaceEntity | None, arrived_on: str | None = None
     ) -> dict[str, str]:
         """What the number this surface holds answers with, if it holds one.
 
@@ -167,29 +187,51 @@ class SurfaceCredentialResolver:
         result is resolved once per delivery.
 
         Absent overrides leave the settings answer standing, which is what makes
-        a single-number deployment need no rows. A surface holding no number --
-        every WhatsApp surface today, since `resolve_binding` has never
-        populated `surface_identity_id` for the platform -- is left alone
-        entirely, so this is inert until allocation runs.
+        a single-number deployment need no rows.
+
+        ``arrived_on`` is the number the message being answered came in on, and
+        it is what makes a pooled number work for a surface that holds none.
+        `_ensure_shared_surface` mints the shared-line surface every chat signup
+        lands on, and deliberately leaves `surface_identity_id` NULL -- several
+        personal pods in one organization ride one line, and stamping the number
+        would put them under `uq_agent_org_whatsapp_number` and refuse the
+        second person to sign up. So the surface cannot say which number to
+        answer from, and without this the settings number answered every one of
+        them: somebody who wrote to a pooled number got a reply from a different
+        number, and if that number sits under another WABA the token is not even
+        authorised to send as it.
+
+        The surface still wins where it has an answer. A deliberately allocated
+        number is a property of the surface and holds for messages it starts,
+        which have no inbound event to have arrived on at all.
         """
+        phone_number_id = (
+            surface.surface_identity_id if surface is not None else None
+        ) or arrived_on
         if (
             surface is None
             or surface.surface_type is not SurfacePlatform.WHATSAPP
-            or not surface.surface_identity_id
+            or not phone_number_id
         ):
             return {}
-        number = await WhatsAppNumberRepository(self._uow).get_by_phone_number_id(
-            surface.surface_identity_id
-        )
+        number = await self._numbers().get_by_phone_number_id(phone_number_id)
         if number is None:
-            # The row was removed while a surface still named it. The settings
-            # number is the wrong answer but it is a working one, and refusing
-            # here would take the surface off the air over an inventory edit.
-            logger.warning(
-                "agent_surfaces.credential_resolver.pooled_number_missing.degraded",
-                surface_id=str(surface.id),
-                phone_number_id=surface.surface_identity_id,
-            )
+            if surface.surface_identity_id:
+                # The row was removed while a surface still named it. The
+                # settings number is the wrong answer but it is a working one,
+                # and refusing here would take the surface off the air over an
+                # inventory edit.
+                logger.warning(
+                    "agent_surfaces.credential_resolver.pooled_number_missing.degraded",
+                    surface_id=str(surface.id),
+                    phone_number_id=phone_number_id,
+                )
+            # Nothing logged when the number came from the inbound message
+            # instead: a deployment running the one number from settings has no
+            # pool rows at all, so every reply it ever sends misses here. That
+            # is the single-number case working exactly as it did before the
+            # pool existed, not a degradation, and warning on it would put a
+            # line in the log for every message the deployment answers.
             return {}
         return number.credential_overrides()
 
@@ -199,18 +241,19 @@ class SurfaceCredentialResolver:
         *,
         prefer_native: bool = False,
         force_refresh: bool = False,
+        arrived_on: str | None = None,
     ) -> dict[str, Any]:
         # Every branch returns through ``with_surface_identity``; see there for
         # why that is a property of the function rather than of the caller.
         if prefer_native and has_native_credentials(surface.surface_type):
             return {
                 **native_credentials(surface.surface_type, surface=surface),
-                **await self._pooled_overrides(surface),
+                **await self._pooled_overrides(surface, arrived_on),
             }
         if surface.account_id is None:
             return {
                 **native_credentials(surface.surface_type, surface=surface),
-                **await self._pooled_overrides(surface),
+                **await self._pooled_overrides(surface, arrived_on),
             }
         credentials = await self.for_account(
             surface.account_id, force_refresh=force_refresh

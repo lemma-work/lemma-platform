@@ -18,6 +18,12 @@ from app.core.webhooks.signatures import constant_time_equals
 from app.core.infrastructure.events.inbox import stable_event_id
 from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.api.dependencies import get_uow_factory
+from app.modules.agent_surfaces.api.controllers.webhook_seams import (
+    PooledNumberLookup,
+    SurfaceEventPublish,
+    get_pooled_number_lookup,
+    get_surface_event_publish,
+)
 from app.core.authorization.scope import uow_scope
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent_surfaces.api.dependencies import (
@@ -36,10 +42,6 @@ from app.modules.agent_surfaces.api.controllers.webhook_ingest import (
     _verify_inbound_request,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.agent_surfaces.domain.whatsapp_numbers import WhatsAppNumberEntity
-from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
-    WhatsAppNumberRepository,
-)
 from app.modules.agent_surfaces.services import teams_consent
 from app.modules.agent_surfaces.services.onboarding_slack_modal import (
     open_onboarding_modal,
@@ -186,22 +188,6 @@ async def handle_platform_webhook(
 _WHATSAPP_NUMBER_WEBHOOK = "/webhooks/whatsapp/numbers/{phone_number_id}"
 
 
-async def _pooled_whatsapp_number(
-    phone_number_id: str, uow_factory: UnitOfWorkFactory
-) -> WhatsAppNumberEntity | None:
-    """The pool row this callback path names, if the deployment has one.
-
-    ``None`` is ordinary rather than an error: a deployment with a single
-    WhatsApp number has no pool rows at all, and every credential below falls
-    back to ``surface_settings.whatsapp_*`` when the row -- or the column on it
-    -- is absent.
-    """
-    async with uow_scope(uow_factory) as uow:
-        return await WhatsAppNumberRepository(uow).get_by_phone_number_id(
-            phone_number_id
-        )
-
-
 def _addressed_phone_number_ids(payload: Mapping[str, object]) -> set[str]:
     """Every ``metadata.phone_number_id`` a WhatsApp body claims to be for.
 
@@ -239,6 +225,8 @@ async def handle_whatsapp_number_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    pooled_number: PooledNumberLookup = Depends(get_pooled_number_lookup),
+    publish: SurfaceEventPublish = Depends(get_surface_event_publish),
 ):
     """Handle a delivery to one pooled WhatsApp number's own callback URL."""
     # Same shape as `handle_platform_webhook`: no request-scoped session, one
@@ -256,7 +244,7 @@ async def handle_whatsapp_number_webhook(
     # configured with Meta, so it is a fact about the route rather than
     # something the sender chose. Select by path, verify the HMAC over the raw
     # bytes, and only then parse.
-    number = await _pooled_whatsapp_number(phone_number_id, uow_factory)
+    number = await pooled_number(phone_number_id)
     app_secret = (
         number.app_secret if number else None
     ) or surface_settings.whatsapp_app_secret
@@ -313,7 +301,7 @@ async def handle_whatsapp_number_webhook(
         headers=_redacted_headers(headers),
         source_event_id=source_event_id,
     )
-    await EventPublisher.publish(event.stream_name(), event)
+    await publish(event)
 
     return {"message": "Webhook received"}
 
@@ -441,7 +429,7 @@ async def verify_surface_webhook(
 async def verify_whatsapp_number_webhook(
     phone_number_id: str,
     request: Request,
-    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+    pooled_number: PooledNumberLookup = Depends(get_pooled_number_lookup),
 ) -> Response:
     """Webhook verification endpoint for one pooled WhatsApp number."""
     # The handshake carries `hub.mode`, `hub.challenge` and `hub.verify_token`
@@ -449,7 +437,7 @@ async def verify_whatsapp_number_webhook(
     # callback URL there is nothing to select a token *by*, which is why a
     # per-number `verify_token` was not expressible before this route existed.
     # Here the path is the identifier, and it is enough.
-    number = await _pooled_whatsapp_number(phone_number_id, uow_factory)
+    number = await pooled_number(phone_number_id)
     verify_token = (
         number.verify_token if number else None
     ) or surface_settings.whatsapp_verify_token
