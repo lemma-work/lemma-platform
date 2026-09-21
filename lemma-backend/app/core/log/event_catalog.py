@@ -698,7 +698,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'redis.stream.over_budget.degraded': EventSpec('warning', frozenset({'budget_bytes', 'memory_bytes', 'reason', 'stream_name'})),
     'redis.stream.snapshot': EventSpec('info', frozenset({'active_consumers', 'caught_up', 'consumers', 'delayed', 'group', 'last_delivered_age_seconds', 'length', 'maxlen', 'memory_bytes', 'oldest_pending_ms', 'pending', 'reported_lag', 'stream_name'})),
     'redis.stream.snapshot_cycle': EventSpec('info', frozenset({'reported', 'streams'})),
-    'redis.stream.trim_degraded.degraded': EventSpec('warning', frozenset({'group', 'hard_maxlen', 'maxlen', 'reason', 'stream_name'})),
+    'redis.stream.trim_degraded.degraded': EventSpec('warning', frozenset({'group', 'hard_maxlen', 'maxlen', 'reason', 'stream_name', 'suppressed_since_last'})),
     'release.identity.malformed': EventSpec('warning', frozenset({'deployment_environment'})),
     'release.identity.missing': EventSpec('warning', frozenset({'deployment_environment'})),
     'runtime.connection_scope.armed': EventSpec('info', frozenset({'service', 'threshold_ms'})),
