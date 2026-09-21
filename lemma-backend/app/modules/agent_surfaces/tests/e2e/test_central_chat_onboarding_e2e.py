@@ -281,6 +281,169 @@ async def test_telegram_requires_own_contact_without_a_username_or_existing_surf
     )
 
 
+async def test_removing_the_number_hands_it_back_as_a_stranger(
+    authenticated_client, fixed_test_user, db_session, fake_whatsapp, monkeypatch
+):
+    """Taking the number off the account is what un-binds it, and it is enough.
+
+    The product's answer to a reassigned number is that a number belongs to one
+    person until somebody says otherwise: nothing expires on a clock, and a
+    binding that is in daily use is never interrupted. So the whole of the
+    recovery rests on removal actually working, and "actually" means two tables,
+    not one.
+
+    Deleting the `VerifiedSurfaceIdentity` row on its own does *not* hand the
+    number back. The old account still holds the number in its profile, so
+    `_match_user_by_phone` resolves the next message to them anyway through
+    `AgentSurfaceExternalUser.resolved_user_id` -- the binding is gone and the
+    person is still signed in as its owner. Removing the number from the account
+    is what closes both: `UserMobileChangedEvent` revokes every phone-bound
+    identity *and* clears the cached resolution.
+
+    So this asserts the end state an operator actually needs -- the number
+    resolves to nobody and the next message starts a fresh signup -- rather than
+    that a row is missing.
+    """
+    from uuid import UUID
+    from app.modules.agent_surfaces.events.handlers import on_identity_event
+    from app.modules.agent_surfaces.infrastructure.models import (
+        AgentSurfaceExternalUser,
+    )
+    from app.modules.agent_surfaces.domain.onboarding_state import OnboardingStep
+    from app.modules.agent_surfaces.infrastructure.onboarding_models import (
+        PendingChatOnboarding,
+    )
+    from app.modules.identity.domain.events import UserMobileChangedEvent
+    from app.modules.test_support.fakes import PassthroughEventInbox
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
+        f"{fake_whatsapp.api_base}/v21.0",
+    )
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-onboarding")
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    factory = SessionUnitOfWorkFactory(sessions)
+    user_id = UUID(fixed_test_user["id"])
+    phone = "15550" + str(int(uuid4().hex[:7], 16)).zfill(9)
+    async with sessions.begin() as session:
+        user = await session.get(User, user_id)
+        email = user.email
+
+    codes = []
+
+    async def capture(*, email, code):
+        codes.append(code)
+        return True
+
+    coordinator = ChatOnboardingCoordinator(
+        factory,
+        challenges=EmailChallengeService(
+            sessions, send_email=capture, enforce_send_limits=allow_test_delivery
+        ),
+    )
+
+    async def say(text):
+        return await coordinator.handle(
+            SurfacePlatformWebhookIngress(
+                source="whatsapp",
+                payload=_whatsapp_payload(
+                    text=text,
+                    message_id=uuid4().hex,
+                    phone_number_id="1234567890",
+                    waba_id="waba-onboarding",
+                    sender_phone=phone,
+                ),
+            )
+        )
+
+    # The number signs up and is bound.
+    assert (await say("Hello")).handled
+    assert (await say(email)).handled
+    assert (await say(codes[0])).handled
+    async with sessions() as session:
+        bound = list(
+            (
+                await session.scalars(
+                    select(VerifiedSurfaceIdentity).where(
+                        VerifiedSurfaceIdentity.external_user_id == phone,
+                        VerifiedSurfaceIdentity.revoked_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        assert len(bound) == 1, f"the number should be bound after signup: {bound}"
+        assert bound[0].user_id == user_id
+
+    # The number is taken off the account, which is the explicit removal the
+    # product makes the un-binding depend on.
+    async with sessions.begin() as session:
+        user = await session.get(User, user_id)
+        user.mobile_number = None
+        user.mobile_verified_at = None
+    await on_identity_event(
+        UserMobileChangedEvent(user_id=user_id).model_dump(mode="json"),
+        uow_factory=factory,
+        inbox=PassthroughEventInbox(),
+    )
+
+    async with sessions() as session:
+        live = list(
+            (
+                await session.scalars(
+                    select(VerifiedSurfaceIdentity).where(
+                        VerifiedSurfaceIdentity.external_user_id == phone,
+                        VerifiedSurfaceIdentity.revoked_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        assert not live, f"removal must leave no live binding for the number: {live}"
+        # The other half, and the one deleting a row by hand would miss.
+        cached = list(
+            (
+                await session.scalars(
+                    select(AgentSurfaceExternalUser).where(
+                        AgentSurfaceExternalUser.resolved_user_id == user_id
+                    )
+                )
+            ).all()
+        )
+        assert not cached, (
+            "the cached resolution must go with the binding, or the next message "
+            f"resolves to the old owner anyway: {[c.external_user_id for c in cached]}"
+        )
+
+    # And the number is a stranger again: the next message re-enters signup and
+    # is asked to prove who it is, rather than being answered as whoever held
+    # it before. Asserted on the state the message leaves behind rather than on
+    # a second code arriving -- whether a fresh challenge is minted or an
+    # unspent one is reused is the challenge service's business, and pinning it
+    # here would make this a test of two things.
+    assert (await say("Hello again")).handled
+    async with sessions() as session:
+        pending = list(
+            (
+                await session.scalars(
+                    select(PendingChatOnboarding).where(
+                        PendingChatOnboarding.platform == "WHATSAPP",
+                    )
+                )
+            ).all()
+        )
+    live = [row for row in pending if row.handed_off_at is None]
+    assert live, "a released number's next message should open a fresh signup"
+    assert all(row.step != OnboardingStep.READY for row in live), (
+        "the released number must be asked to prove itself again, not resumed: "
+        f"{[row.step for row in live]}"
+    )
+    assert all(row.user_id is None for row in live), (
+        "nothing may carry the previous holder's account into the new signup: "
+        f"{[row.user_id for row in live]}"
+    )
+
+
 async def test_phone_replacement_revokes_old_binding_and_preserves_new_proof(
     authenticated_client, fixed_test_user, db_session, fake_whatsapp, monkeypatch
 ):

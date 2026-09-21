@@ -86,9 +86,9 @@ see why nothing is happening. Decide before writing code.
 grepping `lemma-frontend/src` for any reference to it and finding none.
 
 ### DEV-SURF-002 — A reassigned phone number signs in as the person who had it
-**Violates:** nothing, *as written* — see **Required** below, which is the part
-that needs deciding.
-**Severity:** question
+**Violates:** nothing. Decided: a number belongs to one person until somebody
+takes it off the account, and nothing expires on a clock.
+**Severity:** accepted
 **Where:** `lemma-backend/app/modules/agent_surfaces/services/onboarding_transport.py:73`
 (`platform_binding_key`) and
 `lemma-backend/app/modules/agent_surfaces/services/onboarding_sender.py:195`
@@ -146,13 +146,27 @@ is unchanged too. This is a property of the shipped product that an adversarial
 pass over the WhatsApp pool work happened to surface, not a regression the pool
 brought with it. It is recorded here because it was found here.
 
-**Fix:** unknown, and every option is a product decision about how much friction
-to add to the common case. There is also no house convention to follow: the TTLs
-this codebase has -- `PendingChatOnboarding.expires_at`, the email challenges --
-are all on *pending* artifacts, things waiting to be completed. Nothing expires a
-proof that already succeeded, so a period chosen here would be a new policy
-rather than consistency with an old one, and that is precisely the call this
-entry is holding open. (a) Expire a verified identity after a period of
+**Decided:** no expiry. A number belongs to one person, and a binding stays until
+the number is explicitly removed from the account. Re-verifying on a clock would
+put friction on every daily user to close a window that only stays open for an
+account nobody comes back to, and there is no house convention to borrow a period
+from either: every TTL here -- `PendingChatOnboarding.expires_at`, the email
+challenges -- is on a *pending* artifact, something waiting to be completed.
+Nothing expires a proof that already succeeded, and nothing will.
+
+So the whole of the recovery rests on removal working, and `removal` means the
+number coming off the account rather than a row being deleted.
+`test_removing_the_number_hands_it_back_as_a_stranger` pins it end to end:
+signing up binds the number, taking it off the account revokes the binding *and*
+clears the cached resolution, and the next message from that number opens a
+fresh signup carrying none of the previous holder's account.
+
+Both halves matter and only one is obvious. Deleting the `VerifiedSurfaceIdentity`
+row by hand is *not* enough: the old account still holds the number in its
+profile, so `_match_user_by_phone` resolves the next message to them through
+`AgentSurfaceExternalUser.resolved_user_id` -- the binding is gone and the sender
+is signed in as its owner anyway. `UserMobileChangedEvent` is what clears both,
+and it fires on the profile edit, not on the delete. (a) Expire a verified identity after a period of
 inactivity and make the next message re-verify — needs a number, and the number
 is the whole trade. (b) Re-verify on a change of some observable the platform
 does give us, if one can be found that moves on reassignment. (c) Accept it,
