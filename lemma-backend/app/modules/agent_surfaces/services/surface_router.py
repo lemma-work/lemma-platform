@@ -53,6 +53,9 @@ from app.modules.agent_surfaces.domain.ports import (
 from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (
     SurfaceConversationLinkRepository,
 )
+from app.modules.agent_surfaces.services.credential_uniqueness import (
+    warn_if_tied_on_one_bot,
+)
 from app.modules.agent_surfaces.services.credential_resolver import (
     SurfaceCredentialResolver,
 )
@@ -247,6 +250,7 @@ class SurfaceRouter:
 
         # 4. Deterministic tiebreak (candidates are ordered by created_at, id).
         # The user can pick a default via GET/PUT /surfaces/me when this happens.
+        warn_if_tied_on_one_bot(member_candidates, platform=platform)
         return member_candidates[0]
 
     async def _default_surface(

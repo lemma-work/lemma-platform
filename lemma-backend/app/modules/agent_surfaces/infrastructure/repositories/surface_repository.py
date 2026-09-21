@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+
 from collections.abc import Collection
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.core.crypto import get_secret_cipher
@@ -15,7 +17,11 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+from app.core.infrastructure.db.transaction_locks import (
+    mark_transaction_scoped_lock,
+)
 from app.modules.agent_surfaces.domain.ports import (
+    PlatformIdentityHolder,
     SurfaceInstallationRepositoryPort,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
@@ -30,6 +36,23 @@ from app.modules.pod.contracts.orm import Pod
 from app.modules.agent.contracts.conversations import (
     merge_conversation_metadata as merge_agent_conversation_metadata,
 )
+
+
+def _identity_claim_lock_key(
+    platform: str, workspace_id: str, bot_identity: str
+) -> int:
+    """A stable signed 64-bit lock key for one bot in one workspace.
+
+    Hashed rather than composed so the key says nothing about the workspace it
+    locks, and so a long identity cannot overflow the space -- the same shape
+    `identity.mobile_number_claims` uses for the same reason.
+    """
+    digest = hashlib.blake2b(
+        f"{platform}\x00{workspace_id}\x00{bot_identity}".encode(),
+        digest_size=8,
+        person=b"lemma-surface",
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
 
 
 class SurfaceRepository(SurfaceInstallationRepositoryPort):
@@ -226,6 +249,85 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def get_platform_identity_holder(
+        self,
+        *,
+        pod_id: UUID,
+        platform: str,
+        external_workspace_id: str,
+        surface_identity_id: str,
+        exclude_surface_id: UUID | None = None,
+    ) -> PlatformIdentityHolder | None:
+        """Whoever already answers as this bot, in any organization.
+
+        The pair is the delivery key: which workspace, and which bot in it.
+        Slack routes an event to the *app*, so two surfaces naming one bot are
+        two rows the platform cannot tell apart -- wherever they sit. That is
+        why this one read is not scoped to the organization the way
+        `get_account_conflict_in_org` above it is.
+
+        Selects ``same_org`` alongside the row rather than filtering on it,
+        because the caller needs the distinction rather than one side of it: a
+        holder in the reader's own organization is named in the refusal, and one
+        outside it is not. ``created_at, id`` matches the routing tiebreak, so
+        where rows written before this rule do collide, the one named here is
+        the one that would have answered.
+
+        Not narrowed to ACTIVE: a paused surface still holds its bot, and
+        letting a second take it would make resuming the first re-create the
+        collision. Deleting the surface, or its pod, is what releases it.
+        """
+        # Taken before the read, and held until this transaction ends, because
+        # the answer is only worth having if it is still true when the surface
+        # is written. The check and the write share a session -- `create` and
+        # `update` flush without committing -- so without this two creates can
+        # both read "nobody holds it" and both commit, which is the ambiguous
+        # routing this rule exists to prevent, arrived at a different way.
+        #
+        # A lock rather than a unique index, deliberately. An index would be the
+        # stronger arbiter, but it cannot be added to a deployment that already
+        # has colliding rows: `CREATE UNIQUE INDEX` would fail on exactly the
+        # data `warn_if_tied_on_one_bot` exists to report. Serializing the claim
+        # closes the race without making an upgrade conditional on a cleanup.
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {
+                "lock_key": _identity_claim_lock_key(
+                    str(platform).upper(), external_workspace_id, surface_identity_id
+                )
+            },
+        )
+        # Held on a Session, so a connection-scope release could commit it and
+        # drop the lock mid-claim; the mark is what stops that.
+        mark_transaction_scoped_lock(self.session)
+        target_org_id = (
+            select(Pod.organization_id).where(Pod.id == pod_id).scalar_subquery()
+        )
+        stmt = (
+            select(
+                AgentSurface,
+                (Pod.organization_id == target_org_id).label("same_org"),
+            )
+            .join(Pod, in_a_live_pod())
+            .where(
+                AgentSurface.surface_type == str(platform).upper(),
+                AgentSurface.external_workspace_id == external_workspace_id,
+                AgentSurface.surface_identity_id == surface_identity_id,
+            )
+            .order_by(AgentSurface.created_at, AgentSurface.id)
+            .limit(1)
+        )
+        if exclude_surface_id is not None:
+            stmt = stmt.where(AgentSurface.id != exclude_surface_id)
+        row = (await self.session.execute(stmt)).first()
+        if row is None:
+            return None
+        model, same_org = row[0], bool(row[1])
+        entity = model.to_entity_or_none()
+        if entity is None:
+            return None
+        return PlatformIdentityHolder(surface=entity, same_org=same_org)
 
     async def get_account_conflict_in_org(
         self,
