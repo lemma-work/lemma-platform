@@ -39,6 +39,7 @@ from app.modules.agent_surfaces.services.surface_bulk_teardown import (
 from app.modules.agent_surfaces.services.credential_uniqueness import (
     ensure_one_surface_per_agent,
     ensure_unique_org_credential_binding,
+    ensure_unique_platform_identity,
 )
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
@@ -190,7 +191,7 @@ class AgentSurfaceService(
         await ensure_one_surface_per_agent(
             entity, surface_repository=self.surface_repository
         )
-        await self._ensure_unique_org_credential_binding(entity)
+        await self._ensure_identity_is_claimable(entity)
         telegram_credentials: dict[str, Any] | None = None
         if telegram_requires_webhook_setup(entity):
             await self._ensure_unique_telegram_account(entity)
@@ -387,7 +388,7 @@ class AgentSurfaceService(
             surface_identity_id=surface_identity_id,
         )
         self._validate_runtime_supported(surface)
-        await self._ensure_unique_org_credential_binding(surface)
+        await self._ensure_identity_is_claimable(surface)
 
     async def list_surfaces_by_pod(
         self,
@@ -517,10 +518,27 @@ class AgentSurfaceService(
             "(ENABLE_RESEND_POLLING_MODE) work without a public webhook URL."
         )
 
-    async def _ensure_unique_org_credential_binding(
+    async def _ensure_identity_is_claimable(
         self,
         surface: AgentSurfaceEntity,
     ) -> None:
+        """Refuse a surface claiming something another surface already holds.
+
+        Two rules, not one, because they are about two different things and
+        reach different distances. The credential is a thing a person in this
+        organization chose, and is theirs to hold once. The bot is a thing the
+        *platform* delivers to, so it is claimable once anywhere.
+
+        The account rule goes first so that the most specific explanation wins.
+        Reusing one account in one organization trips both -- it is the same
+        account *and* the same bot -- and "this connected account is already
+        used" is the sentence that names what the person actually did. The
+        identity rule then answers only what the account rule cannot see: two
+        different accounts behind one bot, which is the case it was written for.
+        """
         await ensure_unique_org_credential_binding(
+            surface, surface_repository=self.surface_repository
+        )
+        await ensure_unique_platform_identity(
             surface, surface_repository=self.surface_repository
         )

@@ -87,6 +87,20 @@ class SurfaceAuthConfigPort(Protocol):
     ) -> SurfaceAuthConfigInfo | None: ...
 
 
+class PlatformIdentityHolder(BaseModel):
+    """The surface already answering as a bot, and whether it is ours to name.
+
+    Two fields rather than a bare surface, because the caller has to say it two
+    ways. A holder in the reader's own organization is named -- the point of
+    refusing is to send them to the surface that has it. A holder in another
+    organization is not: its pod name and id are that organization's, and a
+    refusal is not a reason to hand them over.
+    """
+
+    surface: AgentSurfaceEntity
+    same_org: bool
+
+
 class SurfaceInstallationRepositoryPort(Protocol):
     #: The unit of work this repository was built with. Declared because two
     #: callers legitimately need it -- publishing after commit, and handing a
@@ -157,6 +171,16 @@ class SurfaceInstallationRepositoryPort(Protocol):
         platform: str,
         exclude_surface_id: UUID | None = None,
     ) -> AgentSurfaceEntity | None: ...
+
+    async def get_platform_identity_holder(
+        self,
+        *,
+        pod_id: UUID,
+        platform: str,
+        external_workspace_id: str,
+        surface_identity_id: str,
+        exclude_surface_id: UUID | None = None,
+    ) -> PlatformIdentityHolder | None: ...
 
     async def get_account_conflict_in_org(
         self,

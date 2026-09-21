@@ -16,6 +16,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.domain.ports import (
+    PlatformIdentityHolder,
     SurfaceInstallationRepositoryPort,
 )
 from app.modules.agent_surfaces.infrastructure.models import (
@@ -226,6 +227,62 @@ class SurfaceRepository(SurfaceInstallationRepositoryPort):
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def get_platform_identity_holder(
+        self,
+        *,
+        pod_id: UUID,
+        platform: str,
+        external_workspace_id: str,
+        surface_identity_id: str,
+        exclude_surface_id: UUID | None = None,
+    ) -> PlatformIdentityHolder | None:
+        """Whoever already answers as this bot, in any organization.
+
+        The pair is the delivery key: which workspace, and which bot in it.
+        Slack routes an event to the *app*, so two surfaces naming one bot are
+        two rows the platform cannot tell apart -- wherever they sit. That is
+        why this one read is not scoped to the organization the way
+        `get_account_conflict_in_org` above it is.
+
+        Selects ``same_org`` alongside the row rather than filtering on it,
+        because the caller needs the distinction rather than one side of it: a
+        holder in the reader's own organization is named in the refusal, and one
+        outside it is not. ``created_at, id`` matches the routing tiebreak, so
+        where rows written before this rule do collide, the one named here is
+        the one that would have answered.
+
+        Not narrowed to ACTIVE: a paused surface still holds its bot, and
+        letting a second take it would make resuming the first re-create the
+        collision. Deleting the surface, or its pod, is what releases it.
+        """
+        target_org_id = (
+            select(Pod.organization_id).where(Pod.id == pod_id).scalar_subquery()
+        )
+        stmt = (
+            select(
+                AgentSurface,
+                (Pod.organization_id == target_org_id).label("same_org"),
+            )
+            .join(Pod, in_a_live_pod())
+            .where(
+                AgentSurface.surface_type == str(platform).upper(),
+                AgentSurface.external_workspace_id == external_workspace_id,
+                AgentSurface.surface_identity_id == surface_identity_id,
+            )
+            .order_by(AgentSurface.created_at, AgentSurface.id)
+            .limit(1)
+        )
+        if exclude_surface_id is not None:
+            stmt = stmt.where(AgentSurface.id != exclude_surface_id)
+        row = (await self.session.execute(stmt)).first()
+        if row is None:
+            return None
+        model, same_org = row[0], bool(row[1])
+        entity = model.to_entity_or_none()
+        if entity is None:
+            return None
+        return PlatformIdentityHolder(surface=entity, same_org=same_org)
 
     async def get_account_conflict_in_org(
         self,
