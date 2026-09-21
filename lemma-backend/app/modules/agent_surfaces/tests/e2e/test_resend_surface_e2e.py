@@ -371,6 +371,78 @@ async def test_connecting_email_returns_the_address_the_agent_already_has(
     assert len(after) == 1, f"the agent ended up with {len(after)} mailboxes"
 
 
+async def test_a_named_mailbox_for_an_agent_that_has_one_is_refused(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    pod_with_a_mailbox,
+    fixed_test_user,
+    fake_resend,
+    monkeypatch,
+):
+    """What a bundle asks for, against a real schema, because nothing ran it.
+
+    The pod-bundle applier looks for an existing surface by *name*, so a bundle
+    declaring its mailbox as anything other than the auto-minted
+    `surface_name_for(agent_name)` takes the create path. `DEV-SURF-003` says
+    that cannot succeed -- `agent_id` is `NOT NULL` and
+    `uq_agent_surface_agent_type` is unique on `(agent_id, surface_type)` -- but
+    said it from reading the call chain, because the only test of the shape
+    drives a `FakeSurfaceService` that enforces no index and no bundle fixture
+    declares a `RESEND` surface.
+
+    This is the same request the applier makes, through the same contract, on a
+    deployment where email is actually configured. Named rather than unnamed is
+    the whole difference from the test above it.
+    """
+    from app.modules.agent_surfaces.tests.e2e.helpers import (
+        _create_agent,
+    )
+
+    pod_id = pod_with_a_mailbox["id"]
+    agent = await _create_agent(authenticated_client, pod_id)
+    await db_session.commit()
+
+    held = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
+            )
+        ).scalars()
+    )
+    assert len(held) == 1, f"an agent should be created holding one mailbox: {held}"
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/surfaces",
+        json={
+            "platform": "RESEND",
+            "name": "support",
+            "config": {},
+            "default_agent_name": agent["name"],
+        },
+    )
+
+    assert response.status_code == 409, (
+        "a bundle naming its own mailbox is refused by the one-surface-per-agent "
+        f"rule; if this ever stops being a 409, DEV-SURF-003 needs rewriting: "
+        f"{response.status_code} {response.text}"
+    )
+    body = response.json()
+    assert body["code"] == "AGENT_SURFACE_AGENT_PLATFORM_CONFLICT", body
+    # And it names the surface the operator never created, which is the part
+    # that makes the refusal unreadable from inside a bundle import.
+    assert body["details"]["conflicting_surface"]["name"] == held[0].name, body
+
+    await db_session.commit()
+    after = list(
+        (
+            await db_session.execute(
+                _select_agent_resend_surfaces(pod_id, agent_id=agent["id"])
+            )
+        ).scalars()
+    )
+    assert len(after) == 1, f"the refusal must leave the agent's mailbox alone: {after}"
+
+
 def _select_agent_resend_surfaces(pod_id: str, *, agent_id: str):
     """This agent's Resend surfaces, by the binding rather than by name.
 

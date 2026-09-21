@@ -156,16 +156,19 @@ path, and reaches `ensure_one_surface_per_agent`, which raises
 `AgentSurfaceAgentPlatformConflictError` — a 409 naming a surface whoever ran
 the import never created.
 
-Established by reading the call chain (`surface_apply.create_surface` →
-`contracts/provisioning.create_surface` → `create_surface_on_minted_address` →
-`_insert_on_first_free_address` → `AgentSurfaceService.create_surface` →
-`ensure_one_surface_per_agent`), not by running it, and the reason it has not
-been run is the second half of the finding: the only test that covers this
-shape, `test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone`, drives
-a `FakeSurfaceService` that does not enforce a unique index, and no scenario
-imports a bundle containing a `RESEND` surface — verified by grep across
-`tests/scenarios/journeys`. So the contract that test documents is one nothing
-has ever checked against a database.
+Confirmed by running it, against a real schema on a deployment where email is
+configured: `test_a_named_mailbox_for_an_agent_that_has_one_is_refused` makes
+the same request the applier makes, through the same contract, and gets 409
+`AGENT_SURFACE_AGENT_PLATFORM_CONFLICT` naming the auto-minted surface. The
+agent's mailbox is left alone, so the refusal is clean — it is only unreadable.
+
+That test exists because the second half of this finding is that nothing ran
+this before. The only test covering the shape,
+`test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone`, drives a
+`FakeSurfaceService` that enforces no unique index; no bundle fixture declared a
+`RESEND` surface, and no scenario imports one — both verified by grep. The
+contract that test documents had never been checked against a database, which is
+why a change that contradicted it passed the whole local lane.
 **Why it matters:** exporting a pod that has an email surface and importing it
 elsewhere is the whole point of bundles, and the failure arrives as a 409 about
 a surface the operator did not write and cannot see in the bundle.
