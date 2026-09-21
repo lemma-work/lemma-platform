@@ -594,6 +594,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'identity.auth_abuse.counter_clear_failed': EventSpec('warning', frozenset()),
     'identity.auth_abuse.rate_limit_unavailable': EventSpec('error', frozenset()),
     'identity.email_adapter.skipping_identity_email_because_smtp.diagnostic': EventSpec('debug', frozenset()),
+    'identity.email_login.abandon_ignored': EventSpec('info', frozenset()),
+    'identity.email_login.continue_resolved': EventSpec('info', frozenset({'method'})),
     'identity.email_verification.invalid_local_user_id': EventSpec('warning', frozenset()),
     'identity.email_verification.local_user_missing': EventSpec('warning', frozenset()),
     'identity.jwks_guard.install_failed.degraded': EventSpec('warning', frozenset()),
