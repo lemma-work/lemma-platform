@@ -153,6 +153,21 @@ describe("what a per-seat plan costs this buyer", () => {
         expect(planTotalForSeats(plan({ price_cents: 2500 }), 14)).toBeNull();
     });
 
+    it("refuses a seat count that is not a whole number of people", () => {
+        // `Number.isFinite(2.5)` is true, so a fractional count priced itself
+        // as "$500 / month for 2.5 seats" -- a total nobody will ever be
+        // charged, off a seat count that cannot exist.
+        const perSeat = plan({
+            price_cents: 20000,
+            features: { billing_interval: "MONTHLY", price_unit: "seat" },
+        });
+        expect(planTotalForSeats(perSeat, 2.5)).toBeNull();
+        expect(planTotalForSeats(perSeat, Number.NaN)).toBeNull();
+        expect(planTotalForSeats(perSeat, Number.POSITIVE_INFINITY)).toBeNull();
+        // A whole number either side of it still prices.
+        expect(planTotalForSeats(perSeat, 3)).toBe("$600 / month for 3 seats");
+    });
+
     it("does not multiply a price that is not a price", () => {
         // A contracted plan carries 0 as a placeholder; "$0 / month for 14
         // seats" advertises a negotiated plan as free.

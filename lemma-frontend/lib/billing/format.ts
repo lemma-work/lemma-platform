@@ -87,7 +87,9 @@ export function planTotalForSeats(
 ): string | null {
     const unit = plan.features.price_unit;
     if (!unit || isContactSales(plan) || plan.price_cents <= 0) return null;
-    if (typeof seats !== "number" || !Number.isFinite(seats) || seats <= 1) {
+    // `Number.isInteger` and not just `isFinite`: seats are people, and 2.5 of
+    // them priced as "$500 / month for 2.5 seats" would be a number we invented.
+    if (typeof seats !== "number" || !Number.isInteger(seats) || seats <= 1) {
         return null;
     }
     const total = formatCents(plan.price_cents * seats, plan.currency);

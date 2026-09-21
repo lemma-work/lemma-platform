@@ -118,8 +118,15 @@ export interface SeatInfo {
      * for. Not `current_seats`: an organization deciding which plan to buy has
      * paid for nothing yet, so pricing the cards off that quoted every team a
      * single seat and then charged it for all of them.
+     *
+     * Optional because a deployment running a backend from before this field
+     * existed does not send it, and declaring it required would be the type
+     * lying about what arrives. Where it is missing the plan cards show no
+     * total rather than a made-up one -- the per-seat price above it is still
+     * true, and a price nobody will be charged is worse than a line that isn't
+     * there.
      */
-    member_count: number;
+    member_count?: number;
     seats_remaining: number | null;
 }
 
