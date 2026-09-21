@@ -91,9 +91,14 @@ class WhatsAppPlatformService:
         try:
             return await self._client.get_phone_number_field("display_phone_number")
         except Exception:
-            logger.debug(
+            # `info`, not `warning`: the caller has a usable answer without it.
+            # But with the exception attached and above the deployment's
+            # `LOG_LEVEL=INFO`, because a lookup that quietly returns None is
+            # the kind of thing somebody later has to explain.
+            logger.info(
                 "agent_surfaces.service.whatsapp_display_phone_lookup_phone.observed",
                 phone_number_id=self._phone_number_id,
+                exc_info=True,
             )
             return None
 
@@ -181,8 +186,15 @@ class WhatsAppPlatformService:
                 },
             )
         except WhatsAppApiError, httpx.HTTPError:
-            logger.debug(
-                "agent_surfaces.service.whatsapp_interaction_acknowledgement_best.observed"
+            # Nothing recovers this one: the acknowledgement simply does not
+            # appear, and the person is left looking at a button they pressed.
+            # It was `debug` with no exception attached, which at the
+            # deployment's `LOG_LEVEL=INFO` is no record at all -- and
+            # `WhatsAppApiError` carries Meta's own body excerpt, which is the
+            # only thing that says *why*.
+            logger.warning(
+                "agent_surfaces.service.whatsapp_interaction_acknowledgement_failed.degraded",
+                exc_info=True,
             )
 
     async def stream_progress(
@@ -329,9 +341,16 @@ class WhatsAppPlatformService:
                     render_plan=render_plan,
                 ),
             )
-        except WhatsAppApiError:
-            logger.debug(
-                "agent_surfaces.service.whatsapp_display_resource_cta_url.observed"
+        except WhatsAppApiError as exc:
+            # This one does recover -- the resource goes out as text below --
+            # so the person is still served and this is not an error. It is
+            # still a thing that failed, and at `LOG_LEVEL=INFO` a `debug` line
+            # is indistinguishable from it never having happened, so the
+            # fallback is recorded rather than hidden.
+            logger.warning(
+                "agent_surfaces.service.whatsapp_display_resource_cta_rejected.degraded",
+                status_code=exc.status_code,
+                exc_info=True,
             )
             await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
@@ -376,10 +395,14 @@ class WhatsAppPlatformService:
                 )
                 return
             except Exception:
-                # Best-effort indicator; log at debug so it is diagnosable without
-                # spamming warnings, then fall through to the reaction fallback.
-                logger.debug(
-                    "agent_surfaces.service.whatsapp_mark_read_typing_best.observed"
+                # Best-effort indicator, and the reaction fallback below still
+                # runs, so this is `info` rather than `warning`. It said "log at
+                # debug so it is diagnosable without spamming warnings" -- and
+                # the deployment runs `LOG_LEVEL=INFO`, where `debug` is not
+                # diagnosable, it is absent. The exception goes with it.
+                logger.info(
+                    "agent_surfaces.service.whatsapp_mark_read_typing_best.observed",
+                    exc_info=True,
                 )
 
         # Fallback: no inbound id (or read/typing rejected) — post a reaction so
@@ -394,8 +417,12 @@ class WhatsAppPlatformService:
                 emoji="\U0001f4ac",
             )
         except Exception:
-            logger.debug(
-                "agent_surfaces.service.whatsapp_reaction_indicator_best_effort.observed"
+            # The last rung of the acknowledgement ladder: read receipt, then
+            # typing, then this. Nothing follows it, so the person sees no
+            # acknowledgement at all -- worth a record, with the reason.
+            logger.info(
+                "agent_surfaces.service.whatsapp_reaction_indicator_best_effort.observed",
+                exc_info=True,
             )
 
     async def download_attachment_bytes(
@@ -462,9 +489,12 @@ class WhatsAppPlatformService:
                 mime_type=mime_type,
             )
         except WhatsAppApiError as exc:
-            # Unsupported media / rejected upload — caller falls back to a link.
-            logger.debug(
-                "surface.whatsapp.media_upload_rejected",
+            # Unsupported media / rejected upload — caller falls back to a link,
+            # so the person still gets the file. Raised from `debug` for the
+            # same reason as the two above: it carried the status code and the
+            # traceback already, and `LOG_LEVEL=INFO` threw both away.
+            logger.warning(
+                "surface.whatsapp.media_upload_rejected.degraded",
                 mime_type=mime_type,
                 status_code=exc.status_code,
                 exc_info=True,
