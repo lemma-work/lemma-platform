@@ -83,7 +83,7 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
     from app.core.config import settings as app_settings
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import (
-        build_surface_event_handler,
+        build_surface_ingress,
     )
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -119,7 +119,7 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
         ts="1700000000.300300",
     )
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     blocked_context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(
             source="slack", payload=blocked_payload, headers={}
@@ -368,12 +368,12 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
 ):
     """The "Answer here?" button opens the real modal, and submitting it adds
     the channel to the allow-list a later mention actually uses -- the full
-    ``surface_configuration.py`` dispatch, not just a direct DB write.
+    ``app_event_handler.py`` dispatch, not just a direct DB write.
 
     It used to ask *which* agent. One app is one agent now, so the modal names
     the surface's own and the only thing to confirm is the place."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+    from app.modules.agent_surfaces.composition import build_app_event_handler
 
     pod_id = test_pod["id"]
     account = await _slack_config_account(db_session, fixed_test_user, fake_slack)
@@ -382,7 +382,7 @@ async def test_slack_channel_setup_modal_open_then_submit_routes_channel(
         pod_id,
         config={"type": "SLACK", "account_id": str(account.id)},
     )
-    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    handler = build_app_event_handler(SqlAlchemyUnitOfWork(db_session))
 
     open_payload = {
         "type": "block_actions",
@@ -467,7 +467,7 @@ async def test_slack_home_tab_publishes_pod_and_agents(
     """Opening App Home publishes a real view built from the pod's name and
     its visible agents (the lifecycle path, not the config-submit path)."""
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-    from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+    from app.modules.agent_surfaces.composition import build_app_event_handler
 
     pod_id = test_pod["id"]
     account = await _slack_config_account(db_session, fixed_test_user, fake_slack)
@@ -477,7 +477,7 @@ async def test_slack_home_tab_publishes_pod_and_agents(
         config={"type": "SLACK", "account_id": str(account.id)},
     )
 
-    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    handler = build_app_event_handler(SqlAlchemyUnitOfWork(db_session))
     home_payload = {
         "type": "event_callback",
         "team_id": "T0123456",

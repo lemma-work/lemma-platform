@@ -183,16 +183,25 @@ async def test_system_widget_skill_exposes_versioned_starter_assets():
     resources = await list_workspace_skill_resources("lemma-widget")
 
     assert {item["path"] for item in resources} >= {
-        "assets/widget-starter-v1.html",
-        "assets/widget-list-v1.html",
-        "assets/widget-chart-v1.html",
-        "assets/widget-detail-v1.html",
+        "assets/widget-tokens-v1.css",
+        "assets/widget-finding-v1.html",
+        "assets/widget-table-v1.html",
+        "assets/widget-record-v1.html",
+        "assets/widget-trend-v1.html",
+        "assets/widget-ranked-v1.html",
+        "assets/widget-note-v1.html",
     }
-    starter = await read_workspace_skill_resource(
-        "lemma-widget", "assets/widget-starter-v1.html"
+    example = await read_workspace_skill_resource(
+        "lemma-widget", "assets/widget-finding-v1.html"
     )
-    assert 'data-lemma-widget-version="1"' in starter
-    assert "window.__LEMMA_CONFIG__" in starter
+    assert 'data-lemma-widget-version="1"' in example
+    assert "window.__LEMMA_CONFIG__" in example
+    # The preamble is served too, or every example that pastes it in is quoting
+    # a file nobody can read.
+    preamble = await read_workspace_skill_resource(
+        "lemma-widget", "assets/widget-tokens-v1.css"
+    )
+    assert "--lemma-widget-on-accent" in preamble
 
 
 @pytest.mark.asyncio

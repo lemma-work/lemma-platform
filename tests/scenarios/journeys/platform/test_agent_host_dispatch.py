@@ -158,7 +158,14 @@ async def test_dispatched_work_is_claimed_exactly_once(world):
 
     conversation = await alice.starts_a_conversation(in_pod=pod, with_agent=agent["name"])
     saved_cwd = conversation["metadata"]["cwd"]
-    assert saved_cwd.startswith("/workspace/c/")
+    # `/home/user/lemma` is `sandbox_runtime.paths.WORKSPACE_ROOT`, and
+    # `RUNTIME_FILESYSTEM_ROOTS` is `("/home/user", "/tmp")` -- `/workspace` is
+    # not a runtime root at all any more. This asserted the old one and had been
+    # red, so the scenario read `covered` while its proof failed. Spelled out
+    # rather than imported because the suite is its own uv project and cannot
+    # reach the backend package; if the root moves again, that constant is where
+    # it moves.
+    assert saved_cwd.startswith("/home/user/lemma/c/"), saved_cwd
     # The send endpoint streams until the run finishes, and this run finishes
     # only when a host does the work — which is the thing under test. Send
     # without holding the stream: once the message commits, the run is

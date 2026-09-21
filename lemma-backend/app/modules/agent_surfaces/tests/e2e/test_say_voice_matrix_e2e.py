@@ -1,34 +1,30 @@
-"""``say`` tool-coverage matrix (native voice note vs fallback egress) plus
-inbound voice transcription at ingress.
+"""``say`` coverage: how far down the delivery ladder each platform falls.
 
-Supersedes ``test_surface_voice_e2e.py``, which called
-``handler.send_voice_note_for_conversation``/a fake harness directly —
-bypassing the real ``say`` tool (including its real TTS synthesis call) and
-the real ingress-transcription pipeline's downstream agent run. These tests
-script ``say`` as a genuine LLM tool call (via ``fake_speech_provider``, a
-deterministic TTS fake — only synthesis is faked, delivery runs for real).
+``deliver`` walks native voice note -> native file -> link card, and the
+platforms differ only in how far it has to walk. That is the whole subject, so
+it is a table rather than four near-identical tests: only Telegram has a native
+voice send (``sendVoice``, see ``TelegramPlatformService._render_voice``);
+Slack and WhatsApp have native files; Teams has neither and falls all the way
+to a link. Every rung is exercised, once each, which is what the previous shape
+did at four times the length.
 
-N/A cells:
-- **Only Telegram has a native voice-note send** (``sendVoice`` — see
-  ``TelegramPlatformService._render_voice``); Slack/Teams/WhatsApp/base all
-  return ``False`` from ``_render_voice``, so ``say`` degrades to a normal
-  inline audio file (``_deliver_file``, the second rung of the ladder
-  ``deliver`` walks) — Slack
-  and WhatsApp support that (native files, per the display_resource matrix);
-  Teams has no native file send either, so it falls all the way to a link
-  card. All three fallback tiers are exercised below, just not per-platform
-  redundantly.
-- **Inbound voice transcription is Telegram-only** — no other platform's e2e
-  fixture builder exists for a voice-message payload (WhatsApp/Slack/Teams
-  audio ingestion isn't wired into these tests), matching the prior suite's
-  only coverage; broadening this is a follow-up, not a silent gap introduced
-  here.
+These script ``say`` as a genuine LLM tool call, through ``fake_speech_provider``
+— only synthesis is faked, delivery runs for real. That is what supersedes
+``test_surface_voice_e2e.py``, which called
+``handler.send_voice_note_for_conversation`` directly and so proved nothing
+about the tool or the ladder.
+
+Two cases are not rungs and keep their own tests at the bottom:
+
 - **Email is not N/A for ``say``**, and saying it was is what hid a live bug.
   ``SPEECH`` is a per-agent declarable toolset with no platform gating, so an
   agent that has it can call ``say`` on a Resend surface. Email gets one reply,
-  so the audio is held and attached to it rather than sent as a second message —
-  the same branch ``display_resource`` already took, and the one ``say`` was
-  never given: ``test_say_on_resend_attaches_the_audio_to_the_one_reply`` below.
+  so the audio is held and attached to it rather than sent as a second message
+  — the same branch ``display_resource`` already took, and the one ``say`` was
+  never given.
+- **Inbound voice transcription is Telegram-only** — no other platform's
+  voice-message payload is wired into these tests. Broadening that is a
+  follow-up, not a silent gap introduced here.
 """
 
 from __future__ import annotations
@@ -41,284 +37,105 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import (
-    REAL_TEAMS_CHANNEL_ID,
-    REAL_TEAMS_TENANT_ID,
     _create_agent_surface,
     _ensure_connector_account,
-    _load_slack_dm_fixture,
-    _load_teams_channel_mention_fixture,
     _messages_for_conversation,
     _resend_payload,
     _seed_external_user,
-    _set_user_mobile_number,
-    _telegram_payload,
-    _whatsapp_payload,
 )
-from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import wait_for_messages
+from app.modules.agent_surfaces.tests.e2e.platform_payloads import (
+    telegram as telegram_payloads,
+)
 from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     process_ingress_and_run_scripted,
     script_say,
     script_text,
 )
+from app.modules.agent_surfaces.tests.e2e.surface_journey import (
+    CHAT_PLATFORMS,
+    stage_surface,
+)
+from app.modules.connectors.domain.connector import AuthProvider
 
 pytestmark = pytest.mark.e2e
 
-
 _TOOL_CALL_ID = "tool-say-1"
+SPOKEN = "Hello back to you."
 
 
-def _telegram_voice_payload(*, message_id: int, sender_id: int) -> dict:
-    """A voice-only Telegram message (no caption text)."""
-    return {
-        "update_id": message_id + 100000,
-        "message": {
-            "message_id": message_id,
-            "from": {"id": sender_id, "is_bot": False, "first_name": "Surface"},
-            "chat": {"id": sender_id, "type": "private"},
-            "date": 1700000000,
-            "voice": {
-                "file_id": "voice-file-1",
-                "mime_type": "audio/ogg",
-                "file_size": 2048,
-                "duration": 3,
-            },
-        },
-    }
+#: Which rung of the delivery ladder each platform lands on, and where that
+#: shows up in the message store. `deliver` walks native voice -> native file
+#: -> link card, and the platforms differ only in how far it has to walk --
+#: which is the whole subject of this matrix, so it is written as a table
+#: rather than buried in four near-identical tests.
+LADDER = {
+    SurfacePlatform.TELEGRAM: ("a native voice note", "TELEGRAM_VOICE"),
+    SurfacePlatform.SLACK: ("a native file", "SLACK_FILE_UPLOAD_URL"),
+    SurfacePlatform.WHATSAPP: ("a native file", "WHATSAPP_MEDIA_UPLOAD"),
+    SurfacePlatform.TEAMS: ("a link card", "TEAMS"),
+}
 
 
-async def test_say_native_voice_note_on_telegram(
+@pytest.mark.parametrize("platform", CHAT_PLATFORMS, ids=lambda p: p.value)
+async def test_say_reaches_the_person_on_every_platform(
+    platform: SurfacePlatform,
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     test_pod,
     fixed_test_user,
-    fake_telegram,
-    fake_speech_provider,
+    fixed_test_org,
     message_store,
     monkeypatch,
-):
-    monkeypatch.setattr(surface_settings, "telegram_bot_token", "native-telegram")
-    monkeypatch.setattr(surface_settings, "telegram_webhook_secret", "native-secret")
-    monkeypatch.setattr(surface_settings, "enable_telegram_polling_mode", True)
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
-        f"{fake_telegram.api_base}/bot",
-    )
-    pod_id = test_pod["id"]
-    sender_id = 555050607
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "TELEGRAM"},
+    platform_fake,
+    fake_speech_provider,
+) -> None:
+    """Spoken, attached or linked -- but never dropped for want of a voice API."""
+    del fake_speech_provider
+    rung, bucket = LADDER[platform]
+    stage = await stage_surface(
+        platform,
+        fake=platform_fake[platform],
         toolsets=["SPEECH"],
-    )
-    await _seed_external_user(
-        db_session,
-        platform="TELEGRAM",
-        external_user_id=str(sender_id),
-        resolved_user_id=UUID(fixed_test_user["id"]),
+        authenticated_client=authenticated_client,
+        db_session=db_session,
+        test_pod=test_pod,
+        fixed_test_user=fixed_test_user,
+        fixed_test_org=fixed_test_org,
+        message_store=message_store,
+        monkeypatch=monkeypatch,
     )
 
-    payload = _telegram_payload(
-        text="say hello back", message_id=931, sender_id=sender_id
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
+    await stage.say(
+        "say hello back",
         script=[
-            script_say("Hello back to you.", tool_call_id=_TOOL_CALL_ID),
+            script_say(SPOKEN, tool_call_id=_TOOL_CALL_ID),
             script_text("Sent!"),
         ],
     )
 
-    voice = await wait_for_messages(message_store, "TELEGRAM_VOICE", min_count=1)
-    assert voice[-1]["has_voice"] is True
-    assert voice[-1]["chat_id"] == str(sender_id)
+    landed = await wait_for_messages(message_store, bucket, min_count=1)
+    assert landed, f"{platform.value}: nothing arrived as {rung}"
+
+    if platform is SurfacePlatform.TELEGRAM:
+        # The only platform with a native voice-note send (`sendVoice`, see
+        # `TelegramPlatformService._render_voice`); everyone else returns False
+        # and falls to the next rung.
+        assert landed[-1]["has_voice"] is True
+        assert landed[-1]["chat_id"] == stage.sender_id
+    elif platform is SurfacePlatform.TEAMS:
+        # Neither native voice nor native file: it falls all the way to a link.
+        assert "app.example.test" in json.dumps(landed, default=str)
 
 
-async def test_say_falls_back_to_native_file_on_slack(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_slack,
-    fake_speech_provider,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="slack",
-        credentials={
-            "access_token": "xoxb-say-matrix",
-            "scope": "chat:write",
-            "api_base_url": fake_slack.base_url,
-            "raw_response": {
-                "bot_user_id": "U0AGSSTQZLH",
-                "team_id": "T0123456",
-                "api_base_url": fake_slack.base_url,
-            },
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "SLACK", "account_id": str(account.id)},
-        toolsets=["SPEECH"],
-    )
-
-    dm_payload = _load_slack_dm_fixture(text="say hello back", ts="1700003100.600600")
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
-        script=[
-            script_say("Hello back to you.", tool_call_id=_TOOL_CALL_ID),
-            script_text("Sent!"),
-        ],
-    )
-
-    # Slack has no native voice-note API — say falls back to a native file
-    # attachment (an inline audio player), not a link.
-    uploads = await wait_for_messages(
-        message_store, "SLACK_FILE_UPLOAD_URL", min_count=1
-    )
-    assert uploads
-
-
-async def test_say_falls_back_to_native_file_on_whatsapp(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_whatsapp,
-    fake_speech_provider,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-
-    monkeypatch.setattr(
-        "app.modules.agent_surfaces.platforms.whatsapp.service._WHATSAPP_API_BASE",
-        f"{fake_whatsapp.api_base}/v21.0",
-    )
-    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "wa-token")
-    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "1234567890")
-    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "waba-001")
-    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "wa-secret")
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    pod_id = test_pod["id"]
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={"type": "WHATSAPP"},
-        toolsets=["SPEECH"],
-    )
-    await _set_user_mobile_number(
-        db_session,
-        user_id=fixed_test_user["id"],
-        mobile_number="15550999999",
-    )
-
-    payload = _whatsapp_payload(
-        text="say hello back",
-        message_id="wamid-e2e-say-001",
-        phone_number_id="1234567890",
-        waba_id="waba-001",
-        sender_phone="15550999999",
-    )
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="whatsapp", payload=payload, headers={}),
-        script=[
-            script_say("Hello back to you.", tool_call_id=_TOOL_CALL_ID),
-            script_text("Sent!"),
-        ],
-    )
-
-    uploads = await wait_for_messages(
-        message_store, "WHATSAPP_MEDIA_UPLOAD", min_count=1
-    )
-    assert uploads
-
-
-async def test_say_falls_back_to_link_card_on_teams(
-    authenticated_client: AsyncClient,
-    db_session: AsyncSession,
-    test_pod,
-    fixed_test_user,
-    fake_teams,
-    fake_speech_provider,
-    message_store,
-    monkeypatch,
-):
-    from app.core.config import settings as app_settings
-    from app.modules.agent_surfaces.platforms.teams.adapter import TeamsSurfaceAdapter
-
-    async def _fake_bot_token(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return "teams-bot-token"
-
-    async def _disable_graph(self, tenant_id: str) -> str | None:
-        del self, tenant_id
-        return None
-
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_bot_token", _fake_bot_token)
-    monkeypatch.setattr(TeamsSurfaceAdapter, "_get_graph_token", _disable_graph)
-    monkeypatch.setattr(
-        surface_settings,
-        "microsoft_bot_openid_config_url",
-        fake_teams.openid_config_url,
-    )
-    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
-    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test")
-    monkeypatch.setattr(surface_settings, "microsoft_bot_app_id", "teams-app-id")
-    pod_id = test_pod["id"]
-    account = await _ensure_connector_account(
-        db_session,
-        user_id=fixed_test_user["id"],
-        connector_id="microsoft_teams",
-        credentials={
-            "access_token": "teams-token",
-            "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
-        },
-    )
-    await _create_agent_surface(
-        authenticated_client,
-        pod_id,
-        config={
-            "type": "TEAMS",
-            "account_id": str(account.id),
-            "allowed_channel_ids": [REAL_TEAMS_CHANNEL_ID],
-        },
-        toolsets=["SPEECH"],
-    )
-
-    payload = _load_teams_channel_mention_fixture(fake_teams)
-    await process_ingress_and_run_scripted(
-        db_session,
-        SurfacePlatformWebhookIngress(source="teams", payload=payload, headers={}),
-        script=[
-            script_say("Hello back to you.", tool_call_id=_TOOL_CALL_ID),
-            script_text("Sent!"),
-        ],
-    )
-
-    # Teams has neither native voice nor native file send — say falls all the
-    # way through to a link card.
-    teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=1)
-    assert "app.example.test" in json.dumps(teams_messages)
+# -- Email, and inbound voice: neither is a rung of that ladder ------------
 
 
 async def test_say_on_resend_attaches_the_audio_to_the_one_reply(
@@ -472,7 +289,9 @@ async def test_telegram_voice_message_transcribed_at_ingress(
         db_session,
         SurfacePlatformWebhookIngress(
             source="telegram",
-            payload=_telegram_voice_payload(message_id=932, sender_id=sender_id),
+            payload=telegram_payloads.voice_note(
+                message_id=932, sender_id=sender_id, file_id="voice-file-1"
+            ),
             headers={},
         ),
         script=[script_text("Sure, I'll set that up.")],

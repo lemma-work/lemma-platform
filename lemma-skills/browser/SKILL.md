@@ -216,6 +216,7 @@ you and is the shorter route anyway. (App design, deploy, and test details:
 - Element missing from snapshot → scroll it into view, wait for it, or dismiss the overlay covering it; then re-snapshot.
 - Click does nothing → a modal/banner is intercepting; find and dismiss it.
 - Fill ignored by custom inputs → `agent-browser keyboard inserttext "text"` bypasses key events.
+- **"Failed to install browser network controls" / "Session with given id not found"** → the daemon's CDP session is stale. `agent-browser close --all`, then open again; one restart is the whole fix. Do not keep re-opening, and do not reach for `doctor --fix`. This one matters more than it reads: installing the network controls is also what answers a proxy's auth challenge, so where a proxy is configured every request comes back **407** and no page loads — a healthy proxy looks like a dead internet.
 - CDP/connection errors or weird state → `agent-browser doctor` to diagnose. **Do not run `doctor --fix`**: its repairs are destructive — it purges browser state, which throws away a login `browser_sign_in` just restored, and reinstalls Chrome, which replaces the browser this image pins.
 - More guides ship with the CLI: `agent-browser skills list`, `agent-browser skills get <name>`; `references/agent-browser-core.md` has the full core reference.
 

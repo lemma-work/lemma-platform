@@ -32,5 +32,6 @@ The table below is generated from the committed OpenAPI specification by `script
 | `user.current.get` | GET | `/users/me` | Get Current User |
 | `user.profile.get` | GET | `/users/me/profile` | Get User Profile |
 | `user.profile.upsert` | POST | `/users/me/profile` | Create or Update Profile |
+| `users.ensure_first_workspace` | POST | `/users/me/first-workspace` | Ensure The Current User Has A Workspace |
 
 <!-- /generated:operations -->

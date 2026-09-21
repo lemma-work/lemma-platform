@@ -15,22 +15,20 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceConversationLink,
     AgentSurfaceEntity,
     SurfaceConfig,
-    SurfaceMode,
     SurfacePlatform,
 )
-from app.modules.agent_surfaces.services.ingress_service import (
-    AgentSurfaceIngressService,
+from app.modules.agent_surfaces.services.conversation_binder import (
+    should_start_a_new_conversation,
 )
 
 
-def _surface(*, mode: SurfaceMode = SurfaceMode.DM, reset_hours: int = 24):
+def _surface(*, reset_hours: int = 24):
     return AgentSurfaceEntity(
         id=uuid4(),
         pod_id=uuid4(),
         agent_id=uuid4(),
         name="telegram",
         surface_type=SurfacePlatform.TELEGRAM,
-        mode=mode,
         config=SurfaceConfig(dm_conversation_reset_after_hours=reset_hours),
     )
 
@@ -50,8 +48,7 @@ def _link(
 
 
 def _should_reset(surface, link) -> bool:
-    service = AgentSurfaceIngressService(uow_factory=lambda: None)
-    return service._should_start_a_new_conversation(surface=surface, link=link)
+    return should_start_a_new_conversation(surface=surface, link=link)
 
 
 def test_reset_when_inactive_beyond_window():
@@ -84,7 +81,7 @@ def test_naive_updated_at_treated_as_utc():
 def test_a_channel_thread_is_never_cut_by_the_clock():
     """The bug this check moved for.
 
-    ``SurfaceMode`` has no CHANNEL member, so a Slack or Teams surface is
+    A surface has no stored mode, so a Slack or Teams surface is
     necessarily DM and a channel thread inherited the DM window. Reply in a
     thread a day later and the agent got a fresh conversation with no history --
     while Slack showed the person the whole thread above it.
@@ -123,14 +120,15 @@ def test_a_different_agent_starts_a_new_conversation_on_every_shape():
     from types import SimpleNamespace
 
     surface = _surface(reset_hours=0)
-    service = AgentSurfaceIngressService(uow_factory=lambda: None)
     for kind in ("DM", "CHANNEL", "EMAIL"):
         link = _link(updated_at=datetime.now(timezone.utc), conversation_kind=kind)
         link.routed_agent_id = uuid4()
-        route = SimpleNamespace(agent_id=uuid4(), conversation_kind=kind)
+        # The route names its own pod now. Here it is the surface's, because
+        # this test is about the agent changing, not about where the answer goes.
+        route = SimpleNamespace(
+            pod_id=surface.pod_id, agent_id=uuid4(), conversation_kind=kind
+        )
         assert (
-            service._should_start_a_new_conversation(
-                surface=surface, link=link, route=route
-            )
+            should_start_a_new_conversation(surface=surface, link=link, route=route)
             is True
         ), kind

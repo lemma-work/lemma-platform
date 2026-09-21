@@ -28,6 +28,7 @@ Operator configuration for local, GCS, S3, and Azure storage is documented in
 | Per-pod PostgreSQL schema | Physical record tables, constraints, indexes, and RLS policies |
 | `datastore_files` | Hierarchical metadata, ownership, processing status, Markdown/index metadata |
 | Object storage/local store | Original bytes, derived Markdown, images, and page renders |
+| `datastore_signed_links` | Durable `/s/{code}` capability grants: object key, expiry, hit ceiling, and revocation. Redis still serves every fetch and keeps the spend counter; the row is what makes a link's lifetime a promise rather than a function of how the operator deployed Redis |
 | Search tables/indexes | Chunks and embeddings used by PostgreSQL search/reranking |
 
 ## API groups

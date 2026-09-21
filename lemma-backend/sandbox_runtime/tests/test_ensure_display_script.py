@@ -210,6 +210,109 @@ if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
 
 
+class TestAStaleDaemonIsRestartedOnce:
+    """The failure that 407s every request through a healthy proxy.
+
+    Installing the browser's network controls is also what answers Chrome's
+    `Fetch.authRequired`. When `Fetch.enable` fails with "Session with given
+    id not found", that answer never comes, so a perfectly good credentialed
+    proxy returns 407 on everything and no page loads. Seen in production,
+    where an agent spent twenty commands trying to reason its way out --
+    nothing in the message says the daemon is the thing that is wrong.
+    """
+
+    def test_a_stale_session_is_retried_after_a_close(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        environment, opened = _workspace(
+            tmp_path, browser_live=False, vnc_port=vnc_port
+        )
+        # Fails the way the daemon does, then succeeds once it is restarted.
+        attempts = tmp_path / "attempts"
+        _stub(
+            tmp_path / "bin",
+            "agent-browser",
+            f'echo "$*" >> "{opened}"\n'
+            f'case "$1" in\n'
+            f"  open)\n"
+            f'    n=$(wc -l < "{attempts}" 2>/dev/null || echo 0)\n'
+            f'    echo x >> "{attempts}"\n'
+            f'    if [ "$n" -eq 0 ]; then\n'
+            f'      echo "Failed to install browser network controls: CDP error'
+            f' (Fetch.enable): Session with given id not found." >&2\n'
+            f"      exit 1\n"
+            f"    fi\n"
+            f"    exit 0 ;;\n"
+            f"  *) exit 0 ;;\n"
+            f"esac",
+        )
+
+        result = _run(environment)
+
+        assert result.returncode == 0, result.stderr
+        calls = (opened.read_text() if opened.exists() else "").splitlines()
+        assert any(c.startswith("close --all") for c in calls), calls
+        assert len([c for c in calls if c.startswith("open")]) == 2, calls
+
+    def test_a_network_control_failure_that_is_not_stale_is_not_retried(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """The near match, and why the condition needs both halves.
+
+        An alternation on either fragment meant any failure that merely
+        mentioned the network controls -- a permanent one included -- closed
+        every session in the sandbox and retried. That costs a person
+        whatever else they had open, for a fault a retry cannot fix.
+        """
+        environment, opened = _workspace(
+            tmp_path, browser_live=False, vnc_port=vnc_port
+        )
+        _stub(
+            tmp_path / "bin",
+            "agent-browser",
+            f'echo "$*" >> "{opened}"\n'
+            'case "$1" in\n'
+            "  open)\n"
+            '    echo "Failed to install browser network controls: CDP error'
+            ' (Fetch.enable): Target closed." >&2\n'
+            "    exit 1 ;;\n"
+            "  *) exit 0 ;;\n"
+            "esac",
+        )
+
+        result = _run(environment)
+
+        assert result.returncode != 0
+        calls = (opened.read_text() if opened.exists() else "").splitlines()
+        assert not any(c.startswith("close --all") for c in calls), calls
+        assert len([c for c in calls if c.startswith("open")]) == 1, calls
+
+    def test_a_failure_that_is_not_staleness_is_not_retried(
+        self, tmp_path: Path, vnc_port: int
+    ) -> None:
+        """One retry, and only for this fault. Anything else that fails twice
+        only delays the error reaching somebody."""
+        environment, opened = _workspace(
+            tmp_path, browser_live=False, vnc_port=vnc_port
+        )
+        _stub(
+            tmp_path / "bin",
+            "agent-browser",
+            f'echo "$*" >> "{opened}"\n'
+            'case "$1" in\n'
+            '  open) echo "net::ERR_NAME_NOT_RESOLVED" >&2; exit 1 ;;\n'
+            "  *) exit 0 ;;\n"
+            "esac",
+        )
+
+        result = _run(environment)
+
+        assert result.returncode != 0
+        calls = (opened.read_text() if opened.exists() else "").splitlines()
+        assert len([c for c in calls if c.startswith("open")]) == 1, calls
+        assert not any(c.startswith("close --all") for c in calls), calls
+
+
 class TestTheProxyIsTheServersDecision:
     """It could be given and never taken back.
 

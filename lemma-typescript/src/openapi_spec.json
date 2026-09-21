@@ -7113,6 +7113,78 @@
         "title": "FileUrlResponse",
         "type": "object"
       },
+      "FirstWorkspaceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "with_pod": {
+            "default": true,
+            "description": "Ensure a personal pod and assistant. Importers may request only an organization.",
+            "title": "With Pod",
+            "type": "boolean"
+          }
+        },
+        "title": "FirstWorkspaceRequest",
+        "type": "object"
+      },
+      "FirstWorkspaceResponse": {
+        "properties": {
+          "assistant_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistant Id"
+          },
+          "entry": {
+            "enum": [
+              "existing",
+              "surface_join",
+              "domain_join",
+              "new_org"
+            ],
+            "title": "Entry",
+            "type": "string"
+          },
+          "organization_created": {
+            "title": "Organization Created",
+            "type": "boolean"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          },
+          "pod_created": {
+            "title": "Pod Created",
+            "type": "boolean"
+          },
+          "pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pod Id"
+          }
+        },
+        "required": [
+          "organization_id",
+          "entry",
+          "organization_created",
+          "pod_created"
+        ],
+        "title": "FirstWorkspaceResponse",
+        "type": "object"
+      },
       "ForeignKeySpec": {
         "description": "Specification for a foreign key constraint.",
         "properties": {
@@ -32655,7 +32727,7 @@
         }
       },
       "post": {
-        "description": "Create a surface. ``name`` defaults to the lowercased platform \u2014 pass an\nexplicit name to create a second surface of the same platform (e.g. a\nsecond bot routed to a different agent).",
+        "description": "Create a surface. ``name`` defaults to the lowercased platform and is the\npod-unique handle the API addresses it by. A second surface of the same\nplatform has to belong to a different agent: one agent reaches a platform in\none place \u2014 one Slack app, one WhatsApp number, one Telegram bot.",
         "operationId": "agent.surface.create",
         "parameters": [
           {
@@ -34719,6 +34791,103 @@
           "resource": "surface.webhook",
           "result": "entity",
           "verb": "handle_telegram_manager"
+        }
+      }
+    },
+    "/surfaces/webhooks/whatsapp/numbers/{phone_number_id}": {
+      "get": {
+        "description": "Webhook verification endpoint for one pooled WhatsApp number.",
+        "operationId": "surface.webhook.verify_whatsapp_number",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "phone_number_id",
+            "required": true,
+            "schema": {
+              "title": "Phone Number Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify a pooled WhatsApp number's own callback URL",
+        "tags": [
+          "Agent Surfaces (Ingress)"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "surface.webhook",
+          "result": "entity",
+          "verb": "verify_whatsapp_number"
+        }
+      },
+      "post": {
+        "description": "Handle a delivery to one pooled WhatsApp number's own callback URL.",
+        "operationId": "surface.webhook.handle_whatsapp_number",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "phone_number_id",
+            "required": true,
+            "schema": {
+              "title": "Phone Number Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Handle a webhook delivered to one pooled WhatsApp number",
+        "tags": [
+          "Agent Surfaces (Ingress)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "surface.webhook"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "surface.webhook",
+          "result": "entity",
+          "verb": "handle_whatsapp_number"
         }
       }
     },
@@ -36786,6 +36955,65 @@
           "resource": "user.current",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/users/me/first-workspace": {
+      "post": {
+        "description": "Select an eligible organization and idempotently ensure the current user has a private pod and assistant.",
+        "operationId": "users.ensure_first_workspace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FirstWorkspaceRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirstWorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ensure The Current User Has A Workspace",
+        "tags": [
+          "Users"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "users"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "users",
+          "result": "entity",
+          "verb": "ensure_first_workspace"
         }
       }
     },

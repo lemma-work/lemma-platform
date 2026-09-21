@@ -42,28 +42,46 @@ free-form input.
    lemma query run "select * from <table> limit 5"
    ```
 
-2. Load the closest maintained starter with `load_skill`, using
-   `name="lemma-widget"` and one of these `resource_path` values:
+2. Take two things verbatim, the way you would take a library: the token
+   preamble `assets/widget-tokens-v1.css`, pasted at the top of your `<style>`,
+   and — if the widget reads pod data — the SDK loader from any example. Then
+   draw what the answer needs around them.
 
-   | Answer shape | Starter |
+   The preamble is the design language in one block: the full `--lemma-widget-*`
+   vocabulary, every reference carrying a fallback, light and dark. Take it and
+   a widget you invent from nothing still looks like it belongs. Skip it and you
+   will hand-roll twenty lines of `var(--lemma-widget-surface, #fff)` and get one
+   of them wrong.
+
+3. Read the example nearest your answer with `load_skill`, using
+   `name="lemma-widget"` and one of these `resource_path` values. They are a
+   range to learn the language from, **not a table to pick from and transcribe**:
+
+   | The answer you have | Example |
    | --- | --- |
-   | Metrics grouped by one field | `assets/widget-starter-v1.html` |
-   | Compact record list | `assets/widget-list-v1.html` |
-   | Bar chart grouped by one field | `assets/widget-chart-v1.html` |
-   | One record with selected fields | `assets/widget-detail-v1.html` |
+   | A judgement, with a distribution behind it | `assets/widget-finding-v1.html` |
+   | Records you want read down, and narrowed | `assets/widget-table-v1.html` |
+   | One record, and what happened to it | `assets/widget-record-v1.html` |
+   | One measure over time | `assets/widget-trend-v1.html` |
+   | One measure across categories | `assets/widget-ranked-v1.html` |
+   | Something you already know — no pod data | `assets/widget-note-v1.html` |
 
-3. Replace every uppercase `__PLACEHOLDER__` with inspected names and useful
-   labels — **except `__LEMMA_CONFIG__`, which must stay exactly as it is.**
-   That one is not a template slot: it is the runtime config the host injects,
-   and the starter's SDK loader reads it. Validation rejects a widget that
-   stops reading it. The slots you do fill are the data and label ones:
-   `__TABLE_NAME__`, `__RECORD_ID__`, `__GROUP_FIELD__`, `__STATUS_FIELD__`,
-   `__TITLE_FIELD__`, `__SUBTITLE_FIELD__`, `__FIELD_CONFIG__`,
-   `__WIDGET_TITLE__`, `__WIDGET_EYEBROW__`, `__EMPTY_LABEL__`.
+   Replace every uppercase `__PLACEHOLDER__` — **except `__LEMMA_CONFIG__`,
+   which must stay exactly as it is.** That one is not a template slot: it is the
+   runtime config the host injects, and the SDK loader reads it. Validation
+   rejects a widget that stops reading it. The slots you do fill are the data,
+   label and judgement ones: `__TABLE_NAME__`, `__RECORD_ID__`, `__GROUP_FIELD__`,
+   `__STATUS_FIELD__`, `__TITLE_FIELD__`, `__SUBTITLE_FIELD__`, `__DATE_FIELD__`,
+   `__FIELD_CONFIG__`, `__TIMELINE_CONFIG__`, `__WIDGET_TITLE__`,
+   `__FOCUS_VALUE__`, `__FOCUS_CLAIM__`, `__COMPOSE_TEXT__`, `__EMPTY_LABEL__`.
    For `__FIELD_CONFIG__`, insert a JSON array such as
-   `[{"label":"Owner","field":"owner"}]`. In the metric and chart starters
-   `__TABLE_NAME__` and `__GROUP_FIELD__` land inside a SQL statement, so they take
-   the exact table and column identifier — not a display label.
+   `[{"label":"Owner","field":"owner"}]`. Anything landing inside a SQL statement
+   takes the exact table or column identifier — not a display label.
+
+   The claim slots are yours, not the data's: `__FOCUS_CLAIM__` is the sentence a
+   person would say about the number, and no query can write it. A widget that
+   says "22 tickets" where it could say "22 tickets are blocked — the most since
+   June" has made the reader do the work they asked you to do.
 
 4. Write the fragment to a pod file with `pod_write_file` — `/me/c/<date>/<name>.html`
    alongside the rest of this conversation's work — then display that path:
@@ -72,7 +90,8 @@ free-form input.
    display_resource(type="WIDGET", path="/me/c/2026-09-15/pulse.html")
    ```
 
-   The starter's SDK loader and loading/empty/error scaffolding carry over as-is.
+   The preamble, the SDK loader and the loading/empty/error scaffolding carry over
+   as-is.
 
 The backend rejects unresolved placeholders, broken SDK loaders, and malformed
 markup before display.
@@ -129,7 +148,7 @@ Either way:
 - **A widget people will come back to is an app.** Save the HTML as an app and
   pass its address as `public_url`.
 
-The starters are a shape to follow, not a file to transcribe. Take the SDK
+The examples are a shape to follow, not a file to transcribe. Take the SDK
 loader and the loading/empty/error scaffolding verbatim, and write the markup
 your answer actually needs around them.
 
@@ -150,8 +169,9 @@ your answer actually needs around them.
 - Values reach the DOM through `textContent`, or escaped before `innerHTML`.
 - The view stays compact: no fixed positioning, no nested scrolling.
 - **Height is capped.** The inline view clips at **480px** with a fade and an
-  Expand control, and a self-reported height above 2400px is ignored. Design for
-  the fold: put the answer at the top, not below a long table.
+  Expand control, and a self-reported height is clamped to 2400px. Design for
+  the fold: put the answer at the top, not below a long table. The frame follows
+  the content both ways — a view that narrows itself shrinks the frame with it.
 - A widget **offers** a message; it never sends one. `composeInConversation`
   puts text in the conversation's composer for the person to send, edit, or
   ignore — see [Let it answer back](#let-it-answer-back). Everything else the
@@ -159,18 +179,22 @@ your answer actually needs around them.
 - Use `ask_user` when the run cannot continue without an answer. A widget's
   offer arrives after the run is over; `ask_user` pauses it.
 
-The starters are platform-themed and system-aware: their
-`prefers-color-scheme: dark` rules and semantic fallbacks carry over intact. They
-consume the public token layer — `--lemma-widget-bg`, `surface`, `subtle`, `text`,
-`muted`, `border`, `accent`, `danger`, `danger-soft`, `radius`, `font`, and
-`color-scheme` (each with the full `--lemma-widget-` prefix). Chart starters also
-expose `chart-1` through `chart-5`.
+The examples are themed and system-aware: their `prefers-color-scheme: dark`
+rules and semantic fallbacks carry over intact, and all of it lives in the one
+preamble they share.
 
-That list is **exhaustive** — the host injects only these. The frontend posts a
-larger palette (`success`, `warning`, `info`, `accent-hover`, …), and anything
-outside the published set is filtered out before it reaches your iframe, so
-`--lemma-widget-success` resolves to nothing. Frontend variables such as
-`--text-primary` never cross the iframe boundary either.
+The host sends **the whole `--lemma-widget-*` vocabulary** — it is taken by
+prefix, not from a list of approved names, so a token a host publishes reaches
+you. Ground and surface (`bg`, `surface`, `subtle`, `raised`), three weights of
+ink (`text`, `muted`, `faint`), rules (`border`, `border-strong`), the accent and
+**the ink that goes on it** (`accent`, `on-accent`, `accent-soft`, `accent-line`),
+state and its inks (`success`/`on-success`, `warning`, `danger`/`on-danger`,
+`danger-soft`, `info`), `chart-1` through `chart-5`, the corner scale (`radius-sm`,
+`radius-md`, `radius`, `radius-panel`), `shadow-rest` and `shadow-raise`, `font`
+and `font-mono`, and `color-scheme`.
+
+A host that has no answer for a name leaves it out rather than guessing, which is
+the entire reason for the next rule.
 
 **Every token reference carries a fallback** — `var(--lemma-widget-surface, #fff)`,
 not `var(--lemma-widget-surface)`. The host delivers the palette by `postMessage`,
@@ -180,7 +204,7 @@ and the widget renders colorless.
 
 ## Loading the SDK
 
-For a data-backed widget, preserve the starter's browser SDK loader:
+For a data-backed widget, preserve the examples' browser SDK loader:
 
 - Build the SDK URL from `window.__LEMMA_CONFIG__.apiUrl`.
 - Load `/public/sdk/lemma-client.js` dynamically and start in `sdk.onload`.
@@ -304,22 +328,74 @@ you aliased to.
 Aggregate in SQL. A count taken over a page of records is a count of the page:
 group in the database (`select status, count(*) …`) and a widget over a 5,000-row
 table stops reporting the first hundred rows as the whole table. The metric and
-chart starters do exactly this; keep their query rather than counting rows in JS.
+chart examples do exactly this; keep their query rather than counting rows in JS.
 
 ## Visual standard
 
-- Lead with the answer, not a title-heavy dashboard shell.
-- Follow Lemma's neutral surfaces, near-black/near-white text, indigo action color,
-  restrained borders, and compact radii unless the content needs a distinct visual
-  language.
-- For a very small widget, the token-light set is just `surface`, `text`, `muted`,
-  `border`, and `accent`.
-- Format numbers and dates for humans.
-- Use a list for repeated records, cards for a handful of metrics, a detail layout
-  for one record, and a chart only when shape or comparison matters.
-- For Chart.js, give the canvas wrapper an explicit height and read chart/text/grid
-  colors from the starter's semantic variables.
-- Keep explanation outside the widget in the assistant response.
+A widget is drawn inside a conversation, which is the one surface in this app
+allowed contrast: a message has to sit on something and a card has to read as a
+card. So the view gets figure and ground — and then these, which are what
+separate a view from a dashboard shell with your data poured into it.
+
+**Shape the view to the answer, not to the query.** This is the one that matters.
+`select x, count(*) group by x` has a shape, and it is not an answer's shape.
+Bent into a template it produces a count with no denominator, four cards that
+say nothing is more important than anything else, and a chart of a field nobody
+asked about. Start from the sentence you would say out loud, and build the view
+that supports it.
+
+- **Lead with the finding.** A sentence with a number in it, not a number with a
+  label under it. The person asked a question; answer it in the first line.
+- **Every figure carries a denominator or a direction.** `22` is trivia. `22 of
+  480, up nine this week, none moved in nine days` is an answer. A count with
+  neither is a number you have made somebody else interpret.
+- **Hairlines, not boxes.** Ruled rows inside one card, not twelve bordered pills
+  each competing to be looked at. Shadow carries weight — `shadow-rest` — so a
+  card is an object on the page rather than a rectangle with a line around it.
+- **Status owns a colour; the accent means "you can act here".** `success`,
+  `warning` and `danger` are reserved for state and never for "series four". The
+  accent appears about four times in a view, not forty. Every fill of it is
+  written in `on-accent` — never white, which measures 1.2:1 on a light accent
+  in dark mode.
+- **Figures are mono and tabular** (`font-mono`, `font-variant-numeric:
+  tabular-nums`). Numbers that do not align cannot be compared, which is the only
+  reason to put them in a column.
+- **Weight never exceeds 500.** Hierarchy comes from size and the space above
+  something. A 700 is not emphasis, it is shouting in a quiet room.
+- **The ground is paper, not screen.** Warm stock, not `#ffffff` on `#f5f5f5`.
+- **End with the next question**, in the person's own words. See
+  [Let it answer back](#let-it-answer-back).
+
+### Charts
+
+- **Pick the form from the data's job.** Change over time → a line. Magnitude
+  across categories → horizontal bars, so the labels read straight instead of
+  rotated under a column. One number that matters → not a chart at all; say it.
+- **Draw it yourself in SVG.** `widget-trend-v1` and `widget-ranked-v1` load
+  nothing: a widget has 480px of fold and has to paint now, and a chart library
+  from a CDN is a 200KB download and a second failure mode inside an iframe that
+  already has one. Reach for a library when you need dense multi-series or a real
+  axis — and then give the canvas an explicit height.
+- **Never a dual axis.** Two measures of different scale are two charts.
+- **`chart-1` through `chart-5`, in order, never cycled.** They are a measured
+  set: adjacent pairs clear ΔE 8 under deuteranopia and ΔE 15 under normal
+  vision. A sixth category is not a sixth colour — fold the tail into one "Other"
+  in *ink*, not in a categorical hue, which is what `widget-ranked-v1` does.
+- **One series needs no legend** — the title names it. Two or more always get
+  one, because colour alone is not an identity channel.
+- **Text never wears the data colour.** Bars and lines carry the hue; labels,
+  values and axes stay in `text` / `muted` / `faint`. A coloured dot beside a
+  label carries identity; a coloured label is just hard to read.
+- **Label selectively.** The endpoint, the extreme, or the one series the story
+  is about. A number on every point is the axis again, in a worse typeface.
+- **Recessive grid**: hairline, solid, one step off the surface. Never dashed.
+- **Ship the hover layer and the table.** A chart in a browser that does not
+  respond to a pointer is a screenshot; a chart whose numbers exist only as
+  pixels is unreadable to anyone not looking at it. Both examples carry a
+  visually-hidden table — keep it.
+
+Format numbers and dates for humans. Keep explanation outside the widget, in
+your reply.
 
 ## Before display
 
@@ -328,8 +404,8 @@ chart starters do exactly this; keep their query rather than counting rows in JS
 - It opens with a tag — not a stray character, not a sentence — and is complete.
   An inline fragment gets no second look; a file can be edited afterwards.
 - Every value read off a query result uses the name that query aliases it to.
-- The closest versioned starter was used and every placeholder except
-  `__LEMMA_CONFIG__` was replaced.
+- The token preamble is present, and every placeholder except `__LEMMA_CONFIG__`
+  was replaced — including the claim slots, which no query can fill for you.
 - Every tag opens with `<` and closes once; the fragment carries no full-document
   tags, secrets, hardcoded hosts, or pod ids.
 - Every `--lemma-widget-*` reference has a fallback value.
@@ -338,6 +414,12 @@ chart starters do exactly this; keep their query rather than counting rows in JS
   `records.list`'s `total`, and a `truncated` query result says so.
 - Loading, empty, error, and mobile states are present, and the
   non-authenticated branch does not tell a signed-in person to sign in.
+- The view is shaped by the answer, not by the query behind it: the first line
+  is the finding, and every figure carries a denominator or a direction.
+- Status wears state colour, the accent appears about four times, every accent
+  fill is written in `on-accent`, and no weight exceeds 500.
+- A chart labels selectively, keeps text in ink rather than the data colour,
+  responds to a pointer, and carries its numbers as a table as well.
 - Anything the person can click does something here, or offers something to the
   composer. Nothing writes, and nothing claims to have sent a message.
 - Every compose button is behind `canComposeInConversation()`, and its text

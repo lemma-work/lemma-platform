@@ -35,7 +35,7 @@ depending on import order.
 | --- | --- | --- |
 | [identity](identity.md) | Users, organizations, invitations, authentication | `users`, `organizations`, `organization_members`, `organization_invitations` |
 | [pod](pod.md) | Workspace tenancy, membership, roles, resource grants | `pods`, `pod_members`, `pod_join_requests`; shared authorization grant tables live in core |
-| [pod_bundle](pod_bundle.md) | Export, plan, import, and GitHub publish of portable pods | None; active job state is ephemeral in Redis |
+| [pod_bundle](pod_bundle.md) | Export, plan, import, and GitHub publish of portable pods | `pod_bundle_jobs`, `pod_bundle_job_steps`; Redis holds only the realtime mirror, and staged archives live in object storage |
 | [datastore](datastore.md) | Dynamic tables/records, files, search, document processing | `datastore_tables`, `datastore_files`, per-pod PostgreSQL schemas |
 | [schedule](schedule.md) | Time, webhook, datastore, and application triggers | `schedules`; APScheduler also has its own job store |
 | [connectors](connectors.md) | Connector catalog, auth configs, accounts, operations, triggers | `connectors`, `auth_configs`, `accounts`, `connect_requests`, `connector_operations`, `connector_triggers` |
@@ -46,7 +46,23 @@ depending on import order.
 | [agent_surfaces](agent_surfaces.md) | External chat/email ingress, identity mapping, and delivery | `agent_surfaces`, `agent_surface_external_users`, `agent_surface_conversation_links` |
 | [icon](icon.md) | Public raster icon upload and retrieval | None; bytes live in public object/local storage |
 | [usage](usage.md) | Model-usage metering, reservations, limits, and reporting | `usage_records`, `usage_limit_counters` |
-| [workspace](workspace.md) | sandbox/session access and workspace tool runtime | None; runtime state is in the sandbox runtime and Redis |
+| [workspace](workspace.md) | sandbox/session access and workspace tool runtime | `sandboxes`, `sandbox_instances`; live process/session state stays in the sandbox runtime and Redis |
+
+## Tables owned by core
+
+Seven tables belong to no module. Five carry authorization and two carry
+transactional event delivery; they sit in `app/core` because every module
+depends on them, which is why the catalog above points at them instead of
+repeating them in each row.
+
+| Table | Meaning |
+| --- | --- |
+| `auth_permissions` | The permission catalog itself: id, scope, resource type, description, and whether the permission is system-only |
+| `roles`, `role_permissions` | Organization- or pod-scoped roles and the permission bundle each one carries. Built-in pod roles are normalized by the pod module; custom roles are rows here |
+| `role_assignments` | Which principal — user or workload — holds which role, unique per role and principal |
+| `resource_permission_grants` | Named grants on one resource to one grantee inside one pod. This is what a delegated workload's context is built from, and what a bundle carries by name rather than by id |
+| `domain_event_outbox` | Events accepted in the state-change transaction and published to Redis Streams afterwards, with lease, attempt, and dead-letter columns so a crashed publisher's work is reclaimed rather than lost |
+| `domain_event_inbox` | Per-consumer delivery record keyed by consumer and event id, which is what makes at-least-once Redis Stream delivery idempotent at the handler |
 
 ## Cross-module runtime map
 

@@ -192,9 +192,9 @@ class NotificationChannelResolver:
         """This channel or nothing, with the refusal saying what would work.
 
         No email fallback and no rerouting: both exist to rescue a router that
-        was guessing, and this one was told. The ranking still runs, because a
-        channel can hold several surfaces and the freshest thread is still the
-        best of them.
+        was guessing, and this one was told. The ranking still runs, because
+        ``email`` gathers every mail platform, and the freshest thread is still
+        the best of them.
         """
         wanted = surfaces_on_channel(surfaces, channel=channel)
         cause = ""

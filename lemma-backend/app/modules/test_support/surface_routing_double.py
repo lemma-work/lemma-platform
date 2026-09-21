@@ -30,14 +30,21 @@ def routing_surfaces_double(surfaces: Sequence):
         surface_type: str,
         *,
         surface_ids: Collection[UUID] | None = None,
+        pod_ids: Collection[UUID] | None = None,
         external_workspace_id: str | None = None,
         system_credentials_only: bool = False,
+        surface_identity_id: str | None = None,
     ) -> list:
         chosen = list(surfaces)
         if surface_ids is not None:
             # An empty collection means "none of them", as `IN ()` does.
             allowed = set(surface_ids)
             chosen = [surface for surface in chosen if surface.id in allowed]
+        if pod_ids is not None:
+            # The shared bot's narrowing: the sender's pods, not the
+            # deployment's surfaces. An empty collection means "none of them".
+            in_scope = set(pod_ids)
+            chosen = [surface for surface in chosen if surface.pod_id in in_scope]
         if external_workspace_id:
             chosen = [
                 surface
@@ -50,6 +57,15 @@ def routing_surfaces_double(surfaces: Sequence):
                 for surface in chosen
                 if surface.account_id is None
                 and str(surface.credential_mode) == "SYSTEM"
+            ]
+        if surface_identity_id:
+            # "This number, or no number yet" -- the NULL half matters, because
+            # every WhatsApp surface alive holds NULL and a strict equality here
+            # would quietly certify a narrowing that takes them all out.
+            chosen = [
+                surface
+                for surface in chosen
+                if surface.surface_identity_id in (surface_identity_id, None)
             ]
         return chosen
 

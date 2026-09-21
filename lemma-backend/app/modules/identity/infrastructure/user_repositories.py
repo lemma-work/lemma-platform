@@ -200,9 +200,54 @@ class UserRepository(UserRepositoryPort):
         grant, exactly as in ``get_id_by_email_insensitive``, and it is the
         *first* branch tried, so it decides before the filtered email path is
         reached.
+
+        Deliberately *not* ``is_verified``, and it was added here once and taken
+        back out. The reasoning for adding it was sound in isolation -- a
+        ``telegram_username`` is free text on a profile that nobody confirms, so
+        it is a claim and not a proof, and it is the first branch tried. What
+        the reasoning missed is where the claim is spent. This lookup answers
+        "who is this sender", which decides routing and an access refusal; it
+        does not decide whether a permanent binding may be written. That second
+        question is asked on the `require_proven_identity` path, and
+        `SurfaceIdentityResolutionService._cache_is_attested` already refuses a
+        resolution a Telegram handle is the only support for.
+
+        Requiring it here cost two things and bought neither back. It made this
+        stricter than ``get_id_by_email_insensitive`` directly beside it, which
+        does not ask -- so the same unverified person resolved by email and not
+        by handle. And it turned a clear refusal into a loop: an unverified
+        sender stopped resolving, so ordinary ingestion asked them to share a
+        phone number instead of telling them how to get access, and chat signup
+        then refuses them anyway because `active_chat_user` does require
+        ``is_verified``. Six product scenarios failed on exactly that.
         """
         stmt = select(User.id).where(
             func.lower(User.telegram_username) == username_lower,
+            User.is_active.is_(True),
+            User.is_deleted.is_(False),
+        )
+        return await self.session.scalar(stmt)
+
+    async def get_live_id(self, user_id: UUID) -> Optional[UUID]:
+        """This id, if it still names somebody who is here.
+
+        The by-id spelling of the three sender lookups above, for re-checking an
+        answer that was cached rather than derived. The surfaces module keeps an
+        external-user row per platform sender holding the Lemma user it resolved
+        to, and a cache hit used to be returned without asking identity
+        anything -- so every liveness filter here was skipped for exactly the
+        people who message most often, and deactivating somebody left their chat
+        access running.
+
+        ``is_active`` and ``is_deleted``, and deliberately not ``is_verified``:
+        this is the *weakest* of what the three fresh lookups require. A cache
+        entry must never be refused where a fresh resolution would have
+        succeeded, or a sender matched by email -- which does not ask for
+        ``is_verified`` -- would work on their first message and be turned away
+        on their second.
+        """
+        stmt = select(User.id).where(
+            User.id == user_id,
             User.is_active.is_(True),
             User.is_deleted.is_(False),
         )

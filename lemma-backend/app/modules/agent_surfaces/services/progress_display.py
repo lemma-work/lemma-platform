@@ -205,8 +205,8 @@ class ProgressDisplayMixin:
 
     async def _stream_progress(self, conversation_id, progress_text: str) -> None:
         async with self.uow_factory() as uow:
-            service = self.service_factory(uow)
-            handle = await service.send_progress_update_for_conversation(
+            service = self.egress_factory(uow)
+            handle = await service.progress.send_progress_update(
                 conversation_id=conversation_id,
                 progress_text=progress_text,
                 progress_handle=self._progress_handle,

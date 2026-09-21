@@ -6,6 +6,7 @@ from supertokens_python.recipe import (
     dashboard,
     emailpassword,
     emailverification,
+    passwordless,
     session,
 )
 from supertokens_python.recipe.thirdparty.provider import (
@@ -40,6 +41,9 @@ from app.modules.identity.infrastructure.supertokens_auth.querier_client import 
 )
 from app.core.log.log import get_logger
 from app.modules.identity.config import identity_settings
+from app.modules.identity.infrastructure.supertokens_auth.passwordless_challenges import (
+    private_passwordless_apis,
+)
 
 logger = get_logger(__name__)
 
@@ -162,6 +166,13 @@ def initialize_supertokens():
                 ),
                 email_delivery=EmailDeliveryConfig(
                     service=LemmaPasswordResetEmailService()
+                ),
+            ),
+            passwordless.init(
+                contact_config=passwordless.ContactEmailOnlyConfig(),
+                flow_type="USER_INPUT_CODE",
+                override=passwordless.PasswordlessOverrideConfig(
+                    apis=private_passwordless_apis,
                 ),
             ),
             *(

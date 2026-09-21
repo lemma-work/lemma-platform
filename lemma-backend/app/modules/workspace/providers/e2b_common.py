@@ -392,9 +392,19 @@ async def close_browser(sandbox, provider_id: str, **api) -> None:
                 timeout=BROWSER_CLOSE_SECONDS,
                 **api,
             )
-    # Exhaustive: `classify` returns one of these three and nothing else, so
-    # a mistake in our own code here still propagates rather than being
-    # reported as a release that tidied up.
+    # Exhaustive over what `classify` returns -- and that is wider than it
+    # looks, because `sdk_errors` catches *every* `Exception` and maps it
+    # through `classify`. Checked: `ZeroDivisionError`, `AttributeError` and
+    # `KeyError` all come back as `SandboxUnavailable`. So a plain bug in
+    # this call -- a wrong keyword, a renamed attribute -- is caught here
+    # too, and reported as a browser that could not be reached.
+    #
+    # Left that way on purpose. The alternative is distinguishing our faults
+    # from the SDK's inside a helper that exists precisely because the SDK's
+    # exception types cannot be imported, and the warning below already
+    # names the step: a release that logs `browser_close_failed` every time
+    # is a bug telling you where it is. What must not happen is this going
+    # to `debug`, which is below the production level.
     except (ProviderGone, ProviderRejected, SandboxUnavailable) as exc:
         # Warning, not debug: debug is below the production log level, and
         # this is the step whose absence silently costs somebody a login.

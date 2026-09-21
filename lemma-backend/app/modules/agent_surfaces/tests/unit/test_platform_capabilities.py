@@ -39,9 +39,59 @@ def test_email_platforms_flagged():
     assert email == {"RESEND"}, "email is Resend; the Composio mailboxes are gone"
 
 
-def test_channel_capable_only_slack_teams():
+def test_channel_capable_is_the_platforms_whose_history_we_can_read():
+    """The set is a consequence, not a preference.
+
+    It used to read `{"SLACK", "TEAMS"}` with nothing saying why, and it was
+    wrong: `TelegramSurfaceAdapter` implements `fetch_thread_context`, the router
+    has a group route, and `test_telegram_group_injects_reply_as_channel_context`
+    asserts a Telegram group reply reaches the agent as `channel_context`. The
+    only reader of this field is the standing guidance, so the flag said "you
+    have no channel history here" to the one chat platform that was handing it
+    some. Nothing failed, because a bare set restated the constant instead of the
+    rule -- which is the whole reason the conformance test in
+    `test_adapter_contract.py` now checks the claim against the adapter.
+
+    WhatsApp is absent for the same reason it was always absent: no
+    `fetch_thread_context`, so there is no history to promise.
+    """
     channel = {p for p, c in PLATFORM_CAPABILITIES.items() if c.is_channel_capable}
-    assert channel == {"SLACK", "TEAMS"}
+    assert channel == {"SLACK", "TEAMS", "TELEGRAM"}
+
+
+def test_channel_history_is_the_platforms_that_can_fetch_a_window():
+    """A second fact, and the reason it is second.
+
+    `is_channel_capable` was doing two jobs: "can be @-mentioned in a group"
+    and "can read the conversation around the mention". Telegram is the first
+    and not the second -- `TelegramSurfaceAdapter.fetch_thread_context` returns
+    at most the one message being replied to, and says so: "Telegram bots cannot
+    read group history". So the guidance was promising it a
+    recent-channel-message tool it does not have.
+    """
+    history = {p for p, c in PLATFORM_CAPABILITIES.items() if c.reads_channel_history}
+    assert history == {"SLACK", "TEAMS"}
+
+
+def test_telegram_is_warned_about_other_peoples_words_but_promised_no_tool():
+    """Both halves of the split, on the platform that needs them apart.
+
+    The replied-to message *is* written by another participant and *does* reach
+    the agent, so the do-not-act-on-this warning has to stay -- dropping it
+    would leave the one place the text is least expected unguarded. What goes is
+    the sentence describing a tool that does not exist.
+    """
+    text = platform_agent_guidance("TELEGRAM")
+    assert "Channel background context" in text
+    assert "BACKGROUND CONTEXT" in text
+    assert "recent-channel-message tools" not in text
+    assert "the message being replied to" in text
+
+
+def test_slack_is_told_about_the_tool_it_does_have():
+    text = platform_agent_guidance("SLACK")
+    assert "recent-channel-message tools" in text
+    assert "BACKGROUND CONTEXT" in text
 
 
 def test_slack_guidance_has_native_choices_channel_and_mrkdwn():
