@@ -93,14 +93,20 @@ export function applyContinueResult(
     if (!provider) {
       // The account really does sign in with this provider, and this build
       // cannot offer it -- inside the Telegram mini app, or if it were ever
-      // removed from the deployment's list. Saying so is the only honest
-      // answer, and it comes with the one door that is still open: a code.
+      // dropped from the deployment's list.
+      //
+      // The message used to end "you can send yourself a code instead", which
+      // was not true twice over: nothing on this step renders that offer, and
+      // a code could not be honoured anyway. `complete_verified_account` would
+      // mint a session for the third-party account on mailbox proof alone,
+      // which is exactly what `override_thirdparty` refuses to do. So this
+      // says the one thing that does work, and claims nothing else.
       return {
         ...state,
         step: "identifier",
         nonce,
-        error: `This email signs in with ${labelFor(result.provider)}, which isn't available here. You can send yourself a code instead.`,
-        passwordFallback: true,
+        error: `This email signs in with ${labelFor(result.provider)}, which isn't available here. Open Lemma in a browser to continue with ${labelFor(result.provider)}.`,
+        passwordFallback: false,
       };
     }
     return { ...settled, step: "handoff", provider, challenge: null };
@@ -115,6 +121,21 @@ export function applyContinueResult(
 
 function labelFor(provider: ThirdPartyId): string {
   return provider === "active-directory" ? "Microsoft" : "Google";
+}
+
+/**
+ * Hand off to a provider the person picked themselves.
+ *
+ * Through the same state the `/continue` answer uses, rather than calling the
+ * redirect from the button: a `redirectToProvider` that answers ERROR, or
+ * throws, is otherwise swallowed by a fire-and-forget `void` and the button
+ * simply looks dead.
+ */
+export function beginHandoff(
+  state: SignInState,
+  provider: ThirdPartyProvider,
+): SignInState {
+  return { ...state, step: "handoff", provider, error: null };
 }
 
 export function failResolve(state: SignInState, message: string): SignInState {

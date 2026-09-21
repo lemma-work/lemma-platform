@@ -15,6 +15,7 @@ import { SignInPasswordStep } from "@/components/auth/portal/auth/sign-in-passwo
 import {
   applyContinueResult,
   applyPasswordRejection,
+  beginHandoff,
   beginPasswordSubmit,
   beginResolve,
   changeEmail,
@@ -220,7 +221,7 @@ export function SignInScreen({
           variant="secondary"
           className="auth-provider-button"
           disabled={busy}
-          onClick={() => void redirectToProvider(provider.id)}
+          onClick={() => setState((current) => beginHandoff(current, provider))}
         >
           <ProviderMark id={provider.id} />
           Continue with {provider.name}

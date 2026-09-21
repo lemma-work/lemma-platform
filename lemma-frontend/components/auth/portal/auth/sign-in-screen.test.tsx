@@ -104,6 +104,15 @@ it("offers every configured provider, and none when there are none", async () =>
   expect(button("Continue with Google")).toBeUndefined();
 });
 
+it("says so when a provider button cannot start its handoff", async () => {
+  // Fire-and-forget, the button just looks dead: `redirectToProvider` answers
+  // ERROR and nothing on screen changes.
+  redirectToProvider.mockResolvedValueOnce({ status: "ERROR" });
+  await act(async () => button("Continue with Google").click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Google");
+  expect(container.querySelector("#sign-in-email")).not.toBeNull();
+});
+
 it("asks for a password when the account has one, in one round trip", async () => {
   await continueAs("ada@example.com", { method: "password" });
   expect(fetchCode).toHaveBeenCalledTimes(2);

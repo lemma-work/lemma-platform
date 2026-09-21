@@ -74,3 +74,25 @@ it("expires the code it was handed and lets a new one be requested", async () =>
   expect(String(fetchCode.mock.calls.at(-1)![0])).toContain("/auth/email-code/resend");
   expect(button("Verify and continue").disabled).toBe(false);
 });
+
+it("refuses a code that is not six digits without spending a request", async () => {
+  // `noValidate` turns off the browser's own `required`/`pattern` checks, so a
+  // stray Enter would otherwise become a round trip that can only be refused.
+  const input = container.querySelector<HTMLInputElement>("#email-login-code")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "12",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () =>
+    container
+      .querySelector("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+  );
+  expect(fetchCode).not.toHaveBeenCalled();
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+    "six-digit",
+  );
+});

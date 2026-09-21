@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   appendSignUpMarker,
   applyContinueResult,
+  beginHandoff,
   beginResolve,
   changeEmail,
   continueRequest,
@@ -71,7 +72,9 @@ describe("applying what /continue answered", () => {
     expect(next.provider).toEqual({ id: "google", name: "Google" });
   });
 
-  it("offers a code when the provider this account uses is unavailable here", () => {
+  it("says what does work when the provider this account uses is unavailable", () => {
+    // It must not offer a code. Nothing on the identifier step renders that
+    // offer, and a code could not be honoured for a third-party account anyway.
     const next = applyContinueResult(
       resolving(),
       "n",
@@ -80,7 +83,16 @@ describe("applying what /continue answered", () => {
     );
     expect(next.step).toBe("identifier");
     expect(next.error).toContain("Microsoft");
-    expect(next.passwordFallback).toBe(true);
+    expect(next.error).toContain("browser");
+    expect(next.error).not.toContain("code");
+    expect(next.passwordFallback).toBe(false);
+  });
+
+  it("hands off to a provider the person picked themselves", () => {
+    const next = beginHandoff(resolving({ error: "stale" }), PROVIDERS[0]);
+    expect(next.step).toBe("handoff");
+    expect(next.provider).toEqual({ id: "google", name: "Google" });
+    expect(next.error).toBeNull();
   });
 
   it("carries the challenge through to the code step", () => {

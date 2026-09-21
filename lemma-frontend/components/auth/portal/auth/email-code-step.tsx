@@ -58,13 +58,21 @@ export function EmailCodeStep({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    // `noValidate` on the form turns off the browser's own `required` and
+    // `pattern` checks, so this is the only thing standing between a stray
+    // Enter and a round trip that can only be refused.
+    const entered = code.trim();
+    if (!/^[0-9]{6}$/.test(entered)) {
+      setError("Enter the six-digit code from your email.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       await verifyChallenge({
         nonce,
         challengeId: challenge.challenge_id,
-        code,
+        code: entered,
       });
       // Re-enter the existing authenticated navigation, including desktop and
       // CLI handoffs.
