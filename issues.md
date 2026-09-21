@@ -140,8 +140,19 @@ It stays open indefinitely for the case where they never come back: an abandoned
 account keeps the old number in its profile, and nothing else revokes. That is
 the population the fix is actually for, and it is smaller than the entry first
 implied.
+**Not introduced here.** `onboarding_sender.py` -- which holds `verified_sender`
+and its guards -- is byte-identical to `origin/main`, and `platform_binding_key`
+is unchanged too. This is a property of the shipped product that an adversarial
+pass over the WhatsApp pool work happened to surface, not a regression the pool
+brought with it. It is recorded here because it was found here.
+
 **Fix:** unknown, and every option is a product decision about how much friction
-to add to the common case. (a) Expire a verified identity after a period of
+to add to the common case. There is also no house convention to follow: the TTLs
+this codebase has -- `PendingChatOnboarding.expires_at`, the email challenges --
+are all on *pending* artifacts, things waiting to be completed. Nothing expires a
+proof that already succeeded, so a period chosen here would be a new policy
+rather than consistency with an old one, and that is precisely the call this
+entry is holding open. (a) Expire a verified identity after a period of
 inactivity and make the next message re-verify — needs a number, and the number
 is the whole trade. (b) Re-verify on a change of some observable the platform
 does give us, if one can be found that moves on reassignment. (c) Accept it,
