@@ -58,14 +58,25 @@ async def test_a_conversation_with_no_surface_stays_quiet(caplog):
     Every agent run asks for an egress target, so warning here would fire on
     conversations that were never on a platform at all.
     """
-    caplog.set_level(logging.DEBUG)
-
-    target = await _delivery(_Links(None), AsyncMock()).resolve_egress_target(uuid4())
+    with caplog.at_level("DEBUG"):
+        target = await _delivery(_Links(None), AsyncMock()).resolve_egress_target(
+            uuid4()
+        )
 
     assert target is None
-    assert [r.levelno for r in caplog.records if "egress" in r.message] == [
-        logging.DEBUG
-    ] or not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    # Asserted as "not a warning" rather than "exactly DEBUG", and the reason is
+    # this PR's own subject: structlog filters by the configured level before
+    # anything reaches stdlib, so `caplog` cannot see a `debug` record at all
+    # and `at_level` cannot lift it. Claiming to check the level here would be
+    # claiming something the harness cannot observe.
+    #
+    # What matters is testable and is the actual design decision: the ordinary
+    # case must stay quiet. Its opposite is pinned by the test below, and the
+    # pair is the distinction -- a link means somebody is waiting, no link means
+    # somebody typed in the web app.
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING], [
+        r.message for r in caplog.records
+    ]
 
 
 async def test_a_surface_that_cannot_answer_is_a_warning(caplog):
@@ -91,22 +102,65 @@ async def test_the_fallback_reply_logs_what_the_platform_said(caplog):
     number not registered, a recipient outside the tester allow-list -- and the
     handler recorded `type(exc).__name__` into an incident counter and nothing
     else. Three failures bought one anonymous line saying "WhatsAppApiError".
-    """
-    from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppApiError
 
-    caplog.set_level(logging.DEBUG)
-    raised = WhatsAppApiError(
+    Driven through `deliver_fallback_reply` rather than by constructing the
+    error and reading it back. The first version of this test did the latter:
+    it asserted that an exception renders its own message, which was never in
+    doubt and would have passed with the whole logging change reverted.
+    """
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+        SurfacePlatform,
+    )
+    from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
+    from app.modules.agent_surfaces.platforms.whatsapp.client import WhatsAppApiError
+    from app.modules.agent_surfaces.services.fallback_reply_service import (
+        deliver_fallback_reply,
+    )
+
+    refused = WhatsAppApiError(
         method="POST",
         status_code=401,
         body_excerpt='{"error":{"message":"Invalid OAuth access token"}}',
     )
+    adapter = AsyncMock()
+    adapter.send_message = AsyncMock(side_effect=refused)
+    dedup = AsyncMock()
+    dedup.claim_stranger_reply = AsyncMock(return_value=True)
 
-    # The handler is reached through `_deliver_fallback`; asserting on the
-    # exception's own rendering keeps this a test of what is preserved rather
-    # than of how the reply path is wired.
-    # What `record_failure(error_type=type(exc).__name__)` discarded, and what
-    # `exc_info=True` now carries into the log.
-    assert "Invalid OAuth access token" in str(raised)
-    assert raised.status_code == 401
-    assert type(raised).__name__ == "WhatsAppApiError"
-    assert "Invalid OAuth access token" not in type(raised).__name__
+    with caplog.at_level("DEBUG"):
+        await deliver_fallback_reply(
+            adapter=adapter,
+            context=SurfaceReplyContext(
+                platform=SurfacePlatform.WHATSAPP,
+                surface_id=uuid4(),
+                reply_message="Sign up to talk to this agent.",
+                event=ParsedInboundSurfaceEvent(
+                    platform=SurfacePlatform.WHATSAPP,
+                    conversation_type=ConversationType.EXTERNAL_DM,
+                    external_thread_id="wa-thread",
+                    sender_external_user_id="14155550000",
+                    message_text="hello",
+                    is_dm=True,
+                ),
+            ),
+            credentials={"access_token": "wa-token", "phone_number_id": "1234567890"},
+            event_dedup_store=dedup,
+        )
+
+    failures = [
+        r for r in caplog.records if "surface_fallback_send_failed" in r.message
+    ]
+    assert failures, [r.message for r in caplog.records]
+    record = failures[0]
+    assert record.levelno >= logging.WARNING
+    # Asserted on the rendered record rather than `record.exc_info`: structlog's
+    # processors fold the exception into the event dict -- `error_message` and
+    # `error_traceback`, which is exactly how it appears in the deployment's
+    # logs -- and leave `exc_info` on the stdlib record empty.
+    #
+    # The whole point: Meta's own words reach the log, where before only the
+    # string "WhatsAppApiError" did.
+    assert "Invalid OAuth access token" in caplog.text
+    assert "WhatsAppApiError" in caplog.text
