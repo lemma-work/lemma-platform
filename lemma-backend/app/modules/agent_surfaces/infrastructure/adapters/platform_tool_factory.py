@@ -72,15 +72,18 @@ class SurfacePlatformToolFactory:
             surface = await SurfaceRepository(uow).get(UUID(str(surface_id)))
             if surface is None:
                 return []
-            if has_native_credentials(surface.surface_type):
-                # Passing the surface is what makes this fast path correct:
-                # Resend's ``from_address`` lives on the surface row, and the
-                # shortcut used to drop it, so every reply tool call failed with
-                # "Resend send requires api_key, from_address and a recipient".
-                credentials = native_credentials(surface.surface_type, surface=surface)
-            else:
-                resolver = SurfaceCredentialResolver(uow=uow)
-                credentials = await resolver.for_surface(surface, force_refresh=True)
+            # One path, through the resolver, and ``prefer_native`` is the fast
+            # path it used to take by hand. Calling ``native_credentials``
+            # directly skipped ``_pooled_overrides``, so an agent on a surface
+            # holding a pooled number was handed the *deployment's* token and
+            # phone number id — and every tool it called sent from the wrong
+            # number, to someone who had never seen that number before. The
+            # surface still goes in, for the reason the shortcut existed:
+            # Resend's ``from_address`` lives on the surface row.
+            resolver = SurfaceCredentialResolver(uow=uow)
+            credentials = await resolver.for_surface(
+                surface, prefer_native=True, force_refresh=True
+            )
             if not credentials:
                 return []
             allow_send = surface.config.send_policy.allow_send

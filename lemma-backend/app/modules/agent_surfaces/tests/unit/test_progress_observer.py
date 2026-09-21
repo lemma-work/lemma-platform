@@ -31,36 +31,50 @@ class _UowFactory:
         return None
 
 
+class _SurfaceProgress:
+    """The live-message half, recording onto the egress fake that owns it.
+
+    A nested object rather than five more methods on one namespace, because
+    that is the shape the observer now drives: `egress.progress.send_progress_update`
+    edits a message on screen, `egress.send_agent_message_for_conversation`
+    delivers a new one, and the two speak different platform APIs.
+    """
+
+    def __init__(self, egress: "_SurfaceService") -> None:
+        self.egress = egress
+
+    async def show_typing(self, **kwargs):
+        self.egress.calls.append(kwargs)
+        return self.egress.send_result
+
+    async def send_progress_update(self, **kwargs):
+        self.egress.updates.append(kwargs)
+        return {"message_id": len(self.egress.updates)}
+
+    async def clear_progress(self, **kwargs):
+        self.egress.cleared.append(kwargs)
+        return
+
+    async def append_streamed_text(self, **kwargs):
+        self.egress.streamed.append(kwargs)
+        return StreamAppendResult(handle={"message_id": 1}, appended=True)
+
+    async def finish_with_answer(self, **kwargs):
+        self.egress.finished.append(kwargs)
+        return self.egress.finish_result
+
+
 class _SurfaceService:
     def __init__(self, *, send_result: bool = True, finish_result: bool = True):
         self.calls = []
         self.messages = []
-        self.progress = []
+        self.updates = []
         self.cleared = []
         self.finished = []
         self.streamed = []
         self.send_result = send_result
         self.finish_result = finish_result
-
-    async def send_processing_indicator_for_conversation(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.send_result
-
-    async def send_progress_update_for_conversation(self, **kwargs):
-        self.progress.append(kwargs)
-        return {"message_id": len(self.progress)}
-
-    async def clear_progress_for_conversation(self, **kwargs):
-        self.cleared.append(kwargs)
-        return
-
-    async def append_stream_text_for_conversation(self, **kwargs):
-        self.streamed.append(kwargs)
-        return StreamAppendResult(handle={"message_id": 1}, appended=True)
-
-    async def finish_progress_for_conversation(self, **kwargs):
-        self.finished.append(kwargs)
-        return self.finish_result
+        self.progress = _SurfaceProgress(self)
 
     async def send_agent_message_for_conversation(self, **kwargs):
         self.messages.append(kwargs)
@@ -78,11 +92,15 @@ class _SurfaceService:
         self.messages.append({"approval": kwargs})
         return self.send_result
 
+    async def send_sign_in_prompt_for_conversation(self, **kwargs):
+        self.messages.append({"sign_in": kwargs})
+        return self.send_result
+
 
 def _observer(service: _SurfaceService) -> SurfaceAgentRunProgressObserver:
     return SurfaceAgentRunProgressObserver(
         uow_factory=_UowFactory(),
-        service_factory=lambda _uow: service,
+        egress_factory=lambda _uow: service,
     )
 
 
@@ -109,7 +127,7 @@ async def test_progress_observer_streams_tool_comment_progress():
 
     await observer.on_event(event, conversation, SimpleNamespace())
 
-    assert service.progress == [
+    assert service.updates == [
         {
             "conversation_id": conversation.id,
             "progress_text": "Checking the latest todo state",
@@ -140,14 +158,14 @@ async def test_progress_observer_strips_thinking_from_tool_comment():
 
     await observer.on_event(event, conversation, SimpleNamespace())
 
-    assert service.progress == [
+    assert service.updates == [
         {
             "conversation_id": conversation.id,
             "progress_text": "Reading the file",
             "progress_handle": None,
         }
     ]
-    for entry in service.progress:
+    for entry in service.updates:
         assert "think" not in entry["progress_text"].lower()
 
 
@@ -170,7 +188,7 @@ async def test_progress_observer_skips_all_reasoning_tool_comment():
 
     await observer.on_event(event, conversation, SimpleNamespace())
 
-    assert service.progress == []
+    assert service.updates == []
 
 
 def _assistant(draft: MessageDraft) -> AgentEvent:
@@ -837,7 +855,7 @@ async def test_slack_gets_no_step_timeline_while_text_streams():
         SimpleNamespace(),
     )
 
-    assert service.progress == []
+    assert service.updates == []
 
 
 async def test_slack_opens_the_stream_at_run_start_so_channels_show_something():
@@ -867,7 +885,7 @@ async def test_failed_token_append_stays_buffered_until_confirmed():
         service.streamed.append(kwargs)
         return StreamAppendResult(handle={"message_id": 1}, appended=attempts > 1)
 
-    service.append_stream_text_for_conversation = append
+    service.progress.append_streamed_text = append
     observer._token_buffer = "must survive"
 
     await observer._flush_tokens(conversation)
@@ -892,7 +910,7 @@ async def test_final_answer_sends_unsent_text_after_append_failure():
         service.streamed.append(kwargs)
         return StreamAppendResult(handle={"message_id": 1}, appended=False)
 
-    service.append_stream_text_for_conversation = reject_append
+    service.progress.append_streamed_text = reject_append
     observer._progress_handle = {"message_id": 1}
     observer._token_buffer = "complete answer"
     observer._final_answer_text = "complete answer"
@@ -946,7 +964,7 @@ async def test_the_plan_is_drawn_as_a_checklist_not_as_using_write_todos():
         SimpleNamespace(),
     )
 
-    body = service.progress[-1]["progress_text"]
+    body = service.updates[-1]["progress_text"]
     assert "write_todos" not in body
     assert "Working on it — 1 of 2 steps done." in body
     assert "✅ Pull the Q3 numbers" in body
@@ -970,7 +988,7 @@ async def test_telegram_gets_the_plan_as_one_line_because_its_chip_holds_one():
         SimpleNamespace(),
     )
 
-    body = service.progress[-1]["progress_text"]
+    body = service.updates[-1]["progress_text"]
     assert body == "Working on it — 1 of 2 steps done · Render the video"
     assert "\n" not in body
 
@@ -984,7 +1002,7 @@ async def test_a_plan_that_has_not_moved_does_not_spend_an_update():
     await observer.on_event(plan, conversation, SimpleNamespace())
     await observer.on_event(plan, conversation, SimpleNamespace())
 
-    assert len(service.progress) == 1
+    assert len(service.updates) == 1
 
 
 async def test_whatsapp_posts_the_plan_it_previously_showed_nothing_for():
@@ -999,8 +1017,8 @@ async def test_whatsapp_posts_the_plan_it_previously_showed_nothing_for():
         SimpleNamespace(),
     )
 
-    assert len(service.progress) == 1
-    assert "0 of 2 steps done" in service.progress[0]["progress_text"]
+    assert len(service.updates) == 1
+    assert "0 of 2 steps done" in service.updates[0]["progress_text"]
 
 
 async def test_whatsapp_rations_updates_after_the_first_plan():
@@ -1020,15 +1038,15 @@ async def test_whatsapp_rations_updates_after_the_first_plan():
         _plan_return("- [x] One", "- [ ] Two"), conversation, SimpleNamespace()
     )
 
-    assert len(service.progress) == 1
+    assert len(service.updates) == 1
 
     observer._last_post_at -= progress_display._POST_PROGRESS_MIN_INTERVAL_SECONDS + 1
     await observer.on_event(
         _plan_return("- [x] One", "- [x] Two"), conversation, SimpleNamespace()
     )
 
-    assert len(service.progress) == 2
-    assert "All 2 steps done" in service.progress[1]["progress_text"]
+    assert len(service.updates) == 2
+    assert "All 2 steps done" in service.updates[1]["progress_text"]
 
 
 async def test_whatsapp_says_something_on_a_long_run_with_no_plan():
@@ -1045,18 +1063,18 @@ async def test_whatsapp_says_something_on_a_long_run_with_no_plan():
     )
 
     await observer.on_event(activity, conversation, SimpleNamespace())
-    assert service.progress == []
+    assert service.updates == []
 
     observer._run_started_at -= progress_display._POST_HEARTBEAT_DELAY_SECONDS + 1
     await observer.on_event(activity, conversation, SimpleNamespace())
 
-    assert len(service.progress) == 1
-    assert "Still working on this" in service.progress[0]["progress_text"]
+    assert len(service.updates) == 1
+    assert "Still working on this" in service.updates[0]["progress_text"]
 
     # One acknowledgement, not a drip feed.
     observer._run_started_at -= 600
     await observer.on_event(activity, conversation, SimpleNamespace())
-    assert len(service.progress) == 1
+    assert len(service.updates) == 1
 
 
 async def test_whatsapp_keeps_its_typing_bubble_alive():
@@ -1088,7 +1106,7 @@ async def test_email_still_shows_nothing_before_the_reply():
         _plan_return("- [ ] Draft it"), conversation, SimpleNamespace()
     )
 
-    assert service.progress == []
+    assert service.updates == []
     assert service.messages == []
 
 
@@ -1136,4 +1154,50 @@ async def test_a_one_line_surface_folds_a_multi_line_tool_comment():
 
     await observer.on_event(event, conversation, SimpleNamespace())
 
-    assert service.progress[-1]["progress_text"] == "Rendering the scene at 1080p"
+    assert service.updates[-1]["progress_text"] == "Rendering the scene at 1080p"
+
+
+async def test_a_paused_sign_in_reaches_the_surface_as_a_link():
+    """A run stuck at a login wall has to reach the person wherever they are.
+
+    It did not. `_handle_waiting_event` recognised `ask_user` and
+    `request_approval` and returned early on anything else, so a paused
+    `browser_sign_in` was delivered nowhere -- the run waited for ever and the
+    only way to find out was to already be looking at the conversation.
+
+    Sent as a link rather than through the approval path on purpose: Approve and
+    Deny are not answers to "please sign in to this site".
+    """
+    service = _SurfaceService()
+    observer = _observer(service)
+
+    await observer._handle_waiting_event(
+        AgentEvent(
+            type=AgentEventType.WAITING,
+            data={
+                "kind": "browser_sign_in",
+                "tool_call_id": "call_signin_1",
+                "conversation_id": str(uuid4()),
+            },
+        ),
+        _conversation("SLACK"),
+    )
+
+    assert [key for message in service.messages for key in message] == ["sign_in"]
+    assert service.messages[0]["sign_in"]["tool_call_id"] == "call_signin_1"
+
+
+async def test_a_pause_this_surface_does_not_render_is_left_alone():
+    """Something new that pauses a run must not be delivered as a sign-in."""
+    service = _SurfaceService()
+    observer = _observer(service)
+
+    await observer._handle_waiting_event(
+        AgentEvent(
+            type=AgentEventType.WAITING,
+            data={"kind": "something_else", "tool_call_id": "x"},
+        ),
+        _conversation("SLACK"),
+    )
+
+    assert service.messages == []

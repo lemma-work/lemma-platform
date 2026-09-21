@@ -22,7 +22,8 @@ from app.modules.agent_surfaces.platforms.common import platform_webhook_url
 
 # parents[5] is the backend root: .../app/modules/agent_surfaces/platforms/slack
 # → slack, platforms, agent_surfaces, modules, app, lemma-backend. Off by one
-# and this reads app/manifests/, which does not exist — every call 500s.
+# and this would read app/manifests/, which does not exist. It was off by one
+# once; the count above is what fixed it, and it resolves today.
 MANIFEST_PATH = (
     Path(__file__).resolve().parents[5] / "manifests" / "slack" / "manifest.json"
 )

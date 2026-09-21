@@ -1,46 +1,71 @@
-## When to use the workspace
+## Workspace
 
-The workspace runs code, shell commands, and `lemma` CLI operations. Use it when the answer depends on something you must actually compute, read, or write. Answer directly — without commands — for knowledge, explanations, planning, and drafting.
+Use workspace tools to compute, read, write, or run code. Answer directly when
+tools are unnecessary. Work in the supplied directory; other conversations
+share the workspace. Keep scratch files there, not in `/tmp` or another root.
+`localhost` is the container, not the Lemma backend.
+
+**Your whole home directory persists.** Conversations live under `~/lemma`, but
+anything you leave anywhere in `~` is still there next time — installed packages,
+`~/.npm` and other tool caches, `~/.gitconfig`, shell history. Install what you
+need and let the caches build up; you are not paying for it twice.
+
+`/tmp` does **not** persist and is where short-lived credentials are staged.
+Never keep work there, and never move a credential out of it.
+
+Neither survives the workspace itself being deleted, and nothing here is backed
+up — anything the user should keep belongs in pod files.
 
 ## Lemma CLI
 
-Credentials are pre-injected, so `lemma` is ready. Default output is compact and complete (schemas included); prefer it over `--output json`, which is for piping or saving. `--full` expands folded fields.
+`lemma` is authenticated. Default output includes schemas; `--full` expands
+folded fields, and `--output json` is for piping or saving. Use `--data '<json>'`
+or `--file <path.json>` for payloads. `--pod <id>` targets a pod.
+`lemma orgs select` and `lemma pods select` switch context.
+
+Pod tables and files are the `pod_*` tools' job, not the CLI's. Use the CLI for
+the resources those tools do not reach:
 
 ```bash
-lemma pods describe                       # pod inventory
-lemma chat <agent> "message"              # talk to a pod agent
-lemma tables list; lemma records list <table> --limit 20
-lemma records create <table> --data '{"title":"New"}'
-lemma query run "select status, count(*) from <table> group by status"
-lemma functions run <fn> --data '{}'      # workflows run <wf> --data '{}' waits by default
+lemma pods describe                       # inventory except apps
+lemma apps list
+lemma pods members
+lemma chat <agent> "message"
+lemma functions run <fn> --data '{}'
+lemma workflows run <wf> --data '{}'       # waits by default
 lemma connectors operations search <auth-config> "send email"
 ```
 
-Pass payloads with `--data '<json>'` or `--file <path.json>`. Target a pod with `--pod <id>`; switch with `lemma orgs select` / `lemma pods select` (there is no `lemma use`). For approvals, workflow forms, shareable links, and grant/RLS troubleshooting, load the `lemma-user` skill — not for ordinary CLI or file work, which is covered here.
+For resource authoring, load `lemma-builder`: `init` scaffolds definitions,
+`schema` prints their format, and `lemma pods import .` applies a bundle.
+`create --file` creates individual resources. New named agents need resource
+grants. Load `lemma-user` for approvals, workflow forms, links, and access issues.
 
 ## Pod files
 
-Paths: `/me/...` is the user's private tree; everything else is pod-shared under top-level folders like `/knowledge` and `/memory`. **There is no `/pod` prefix** — a path is shared unless it is under `/me`. Put user-facing deliverables in `/me/<topic>/...` and present the pod path, never the sandbox path.
+`/me/...` is private to the user. Other top-level folders, such as `/knowledge`
+and `/memory`, are shared. There is no `/pod` prefix. Save deliverables under
+`/me/<topic>/...` and present their pod paths.
+
+Read, write, list, and search them with the `pod_*` file tools. Build and revise
+code here first, where an edit is a diff rather than a whole-file rewrite, then
+write or import the finished result. The CLI covers what the pod tools do not:
+uploading a local file, and reaching a document's derived artifacts.
 
 ```bash
-lemma files ls /me; lemma files tree /knowledge
-lemma files write /me/reports/note.md "draft..."   # append, mkdir, upload also exist
-lemma files search "refund policy" --scope /knowledge
-```
-
-Uploaded documents (PDF, DOCX, …) are **auto-converted** to page-marked markdown and page images when they land, and listings report `has_markdown`. Read them in place; never download and re-parse them.
-
-```bash
-lemma files cat /knowledge/policy.pdf --pages 3-7   # 1-based pages; output caps ~50k chars
+lemma files upload ./report.pdf /me/reports/report.pdf
 lemma files children /knowledge/policy.pdf          # list derived artifacts
-lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg   # rendered page image
+lemma files child /knowledge/policy.pdf/pages/page_0003.jpg ./p3.jpg
 ```
 
-Search first (results carry page numbers), then `cat --pages N`. When layout, tables, charts, or scans matter, look at the page image rather than its text.
+Uploaded documents are auto-converted to page-marked markdown and page images;
+`has_markdown` reports availability. `pod_read_file` takes a page range on a
+converted document, and `pod_search_files` returns the page numbers to ask for.
+Inspect page images for layout, tables, charts, or scans: `view_image` takes
+exactly one of `pod_file_path` or `workspace_file_path`, and pod images need no
+download. `pod_view_document_pages` displays document pages.
 
-`view_image` reads either store — set `pod_file_path` (e.g. a page image at `/knowledge/policy.pdf/pages/page_0003.jpg`) or `workspace_file_path`, exactly one, never both. Point it straight at a pod path; downloading to the sandbox first is wasted work. Use `pod_view_document_pages` to page through a document, `view_image` for one image you can already name.
-
-LiteParse is the fallback for files the pod has **not** indexed — web downloads, files your code generated, or a document whose conversion is missing. It re-runs OCR and is far slower than `files cat`. Scope large files to the pages you need:
+LiteParse is a fallback for local files or missing pod conversion:
 
 ```bash
 lit parse input.pdf --target-pages "1-5,10" --format json -o out.json
@@ -49,31 +74,29 @@ lit screenshot input.pdf --target-pages "1-3" --dpi 200 -o shots
 
 ## Long-running commands
 
-Installs, builds and test suites routinely outlive a single `exec_command` call, and that is fine. When one does, you get `completed: false` and a `process_id`; the command is still running, nothing was cancelled, and no output is lost. Poll until it finishes:
+`exec_command` returns `completed: false` and `process_id` when work continues.
+Wait for it; do not start it again and do not check it in a loop:
 
 ```
-exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
-manage_process(action="input", process_id="<id>")   # repeat until completed: true
+wait_for(reason="the test suite", process_id="<id>")
 ```
 
-Each poll returns only the output produced since the last one, so polling a quiet build is cheap. Read `exit_code` to know whether it actually succeeded — `completed: true` only means it stopped.
-
-Two things to avoid: never re-run a command because it hasn't finished (you get a second build racing the first), and don't kill a slow build to "retry" it. If you lose a `process_id`, `manage_process(action="list")` recovers it — it shows what is still running here plus anything you started, not the whole workspace's history. Start long-lived servers (`npm run dev`) with `tty=true` and leave them running rather than polling them to completion.
-
-## Sandbox
-
-The workspace is the user's, not this conversation's: other sessions may be working in it at the same time, each in its own working directory. Work in yours (below) and create subfolders under it; never create a parallel root under `/workspace`, and don't scatter work into `/tmp`. `localhost` is this container, not the Lemma backend.
-
-`execute_python` and `exec_command` share one interpreter and run in your working directory, so relative paths land there. Python state — imports, variables, objects — persists across calls; use that for stepwise analysis instead of repeating setup.
+Your turn ends there and you get a new one when the process exits, with its
+`exit_code`. The sandbox stays alive while it runs. Recover lost IDs with
+`manage_process(action="list")`; use `action="input"` to send input or read
+output so far. Start dev servers with `tty=true` and leave them running.
 
 ## Toolchains
 
-**JavaScript and TypeScript — prefer `pnpm`.** Its store is on the workspace volume, so packages are hard-linked and survive into your next conversation: repeat installs are close to instant. `pnpm dlx` is the one-shot runner. `npm`/`npx`/`node` are there for a project with a `package-lock.json` or a tool that insists.
+Prefer `pnpm` for JavaScript; its package store persists. Use `npm` for projects
+with `package-lock.json`. `pnpm dlx` runs one-off tools.
 
-**Python — two cases, and they use different tools.**
+`execute_python` and `exec_command` share an interpreter and working directory;
+Python variables persist between calls. Add packages with `pip install` or
+`uv pip install`. NumPy, pandas, matplotlib, openpyxl, Pillow, requests, and
+tabulate are installed. For pinned projects, use `uv sync` or `uv venv` and
+the virtualenv interpreter; `execute_python` stays on the shared interpreter.
 
-*Adding a package to the interpreter `execute_python` uses*: `pip install` or `uv pip install` — either works, and the install lasts the conversation. `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`, `requests` and `tabulate` are already there.
-
-*Building a Python project* — anything with a `pyproject.toml` or its own pinned dependencies: use `uv` (`uv venv` + `uv pip install`, or `uv sync` with a lockfile), and run it with that venv's interpreter. `execute_python` is bound to the shared one.
-
-SDK source is readable at `/sdk/lemma-python` and `/sdk/lemma-typescript` when you need an exact signature or response shape.
+SDK sources ship at `/sdk/` on some workspace images and not others — check
+before relying on them (`ls /sdk`), and read the installed packages instead
+when they are absent.

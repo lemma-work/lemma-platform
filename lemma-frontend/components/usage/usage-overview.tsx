@@ -25,7 +25,7 @@ import { useAccessiblePods } from "@/lib/hooks/use-pods";
 import type { UsageRecord } from "@/lib/types";
 import { UsageAllowances } from "./usage-allowances";
 import {
-  formatUsageCost,
+  formatUsageShare,
   usageAccountingLabel,
   usageBreakdown,
 } from "./usage-format";
@@ -76,6 +76,13 @@ export function UsageOverview({
     0,
     ...buckets.map((bucket) => bucket.system_cost_usd),
   );
+  // The same denominator the share beside each bar is computed from, so the
+  // bar and its label cannot disagree.
+  const periodTotal =
+    typeof summary.data?.system_cost_usd === "number" &&
+    summary.data.system_cost_usd > 0
+      ? summary.data.system_cost_usd
+      : 0;
   return (
     <div className="space-y-6">
       <section className="surface-panel p-5">
@@ -144,12 +151,16 @@ export function UsageOverview({
           >
             <ResourceMetricStrip>
               <ResourceMetric
-                label="Recorded spend"
-                value={formatUsageCost(summary.data?.system_cost_usd)}
-              />
-              <ResourceMetric
                 label="Tokens"
                 value={summary.data?.total_tokens.toLocaleString() ?? "—"}
+              />
+              <ResourceMetric
+                label="In / out"
+                value={
+                  summary.data
+                    ? `${summary.data.total_input_tokens.toLocaleString()} / ${summary.data.total_output_tokens.toLocaleString()}`
+                    : "—"
+                }
               />
             </ResourceMetricStrip>
             <div className="mt-4 grid gap-5 sm:grid-cols-2">
@@ -173,8 +184,11 @@ export function UsageOverview({
                             {row.label}
                           </span>
                           <span className="shrink-0 text-[var(--text-secondary)]">
-                            {formatUsageCost(row.cost)} ·{" "}
-                            {row.tokens.toLocaleString()} tokens
+                            {formatUsageShare(
+                              row.cost,
+                              summary.data?.system_cost_usd,
+                            )}{" "}
+                            · {row.tokens.toLocaleString()} tokens
                           </span>
                         </div>
                       ))
@@ -189,7 +203,7 @@ export function UsageOverview({
             error={stats.error}
             retry={() => void stats.refetch()}
           >
-            <h3 className="mb-4 text-sm font-medium">Daily recorded spend</h3>
+            <h3 className="mb-4 text-sm font-medium">Daily activity</h3>
             {buckets.length === 0 ? (
               <p className="text-sm text-[var(--text-tertiary)]">
                 No activity in this period.
@@ -207,15 +221,27 @@ export function UsageOverview({
                         day: "numeric",
                       })}
                     </span>
+                    {/* Scaled by the period total, which is what the label
+                        beside it is a share of. Scaling by the busiest day
+                        instead drew that day full width next to text reading
+                        "20%". Falls back to the busiest day only when the
+                        total is unavailable. */}
                     <meter
-                      aria-label={`Recorded spend ${bucket.bucket}`}
+                      aria-label={
+                        periodTotal
+                          ? `Share of the period on ${bucket.bucket}`
+                          : `Activity on ${bucket.bucket}, relative to the busiest day`
+                      }
                       min={0}
-                      max={maxCost || 1}
+                      max={periodTotal || maxCost || 1}
                       value={bucket.system_cost_usd}
                       className="h-2 w-full [&::-webkit-meter-bar]:border-0 [&::-webkit-meter-bar]:bg-[var(--surface-2)] [&::-webkit-meter-optimum-value]:bg-[var(--action-primary)]"
                     />
                     <span className="text-right tabular-nums">
-                      {formatUsageCost(bucket.system_cost_usd)}
+                      {formatUsageShare(
+                        bucket.system_cost_usd,
+                        summary.data?.system_cost_usd,
+                      )}
                     </span>
                   </div>
                 ))}
@@ -303,7 +329,9 @@ function UsageActivity({ record }: { record: UsageRecord }) {
         <span className="text-xs text-[var(--text-secondary)]">
           {new Date(record.occurred_at).toLocaleString()}
         </span>
-        <span className="tabular-nums">{formatUsageCost(record.cost_usd)}</span>
+        <span className="tabular-nums">
+          {(record.input_tokens + record.output_tokens).toLocaleString()} tokens
+        </span>
       </summary>
       <div className="mt-3 grid gap-2 text-xs text-[var(--text-secondary)] sm:grid-cols-2">
         <p>Accounting: {usageAccountingLabel(record)}</p>
@@ -312,7 +340,6 @@ function UsageActivity({ record }: { record: UsageRecord }) {
           Input: {record.input_tokens.toLocaleString()} · Output:{" "}
           {record.output_tokens.toLocaleString()}
         </p>
-        <p>Recorded cost: {formatUsageCost(record.cost_usd, true)}</p>
         <p>
           Cached input:{" "}
           {record.cached_input_tokens?.toLocaleString() ?? "Unavailable"}

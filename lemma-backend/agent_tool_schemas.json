@@ -141,6 +141,117 @@
     }
   },
   {
+    "tool_name": "browser_sign_in",
+    "toolset": "BROWSER",
+    "description": "Get signed in to a site, without ever seeing or asking for a password.\n\nCall this the moment a page needs a login \u2014 before touching a login form,\nand instead of asking anyone for credentials.\n\nIf a saved login for the site exists it is loaded and you get `signed_in`\nstraight away; open the page again and carry on. Otherwise this run pauses\nwhile the person signs in themselves, in this browser, wherever they are.\nYou will be started again with the outcome once they have.\n\n`declined` means they said no: do the task another way, or stop and say\nplainly what you could not reach. Never ask a person to type a password\ninto the conversation, never put one in a command, and never try to sign in\nby filling a form with credentials somebody sent you.",
+    "input_schema": {
+      "description": "Ask for a site to be signed in to, without ever handling a password.",
+      "properties": {
+        "origin": {
+          "description": "The site to be signed in to, as a scheme and host \u2014 `https://app.example.com`. Not a full page URL.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "What you are doing and why this site needs a login, in one sentence and in plain words. This is shown to the person as the explanation for why they are being asked, so write it for them rather than for a log.",
+          "maxLength": 500,
+          "type": "string"
+        },
+        "page_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The page you were actually blocked on, if you have one \u2014 `https://app.example.com/reports/42`. Checking this instead of the site's front page is what makes the answer mean anything: a marketing homepage loads for everybody, signed in or not, so a site whose root is one will otherwise report you as already signed in when you are not."
+        },
+        "force": {
+          "default": false,
+          "description": "Ask the person even if the check thinks you are already signed in. Use this when you have met the login wall yourself and been told otherwise \u2014 the check reads a page and can be wrong, and without this there is no way to say so.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "origin",
+        "reason"
+      ],
+      "title": "BrowserSignInRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "outcome": {
+          "default": "signed_in",
+          "description": "`signed_in` the browser now holds a login for this site; `declined` the person said no \u2014 do the task another way or stop and say why; `expired` nobody answered and the conversation moved on; `error` the request could not be made.",
+          "type": "string"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The site this concerned."
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`saved` a stored session was loaded; `person` somebody signed in just now."
+        },
+        "saved": {
+          "default": false,
+          "description": "Whether the login was kept for next time. False with `signed_in` means this run can carry on but the next one will ask again.",
+          "type": "boolean"
+        }
+      },
+      "title": "BrowserSignInResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "check_messages",
     "toolset": "MESSAGING",
     "description": "Check whether the people you messaged have answered.\n\nCall it when a turn opens saying they have replied \u2014 that is what it is for.\nNot in a loop, and not to check on people who have not answered yet: each\ncall replays this whole conversation, and you are told when there is\nsomething to read. `RESPONDED` is the only status that means somebody\nanswered.\n\nIf some are still OPEN after you have genuinely waited, say who has not\nanswered and finish with what you have.",
@@ -306,7 +417,7 @@
   {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
-    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `content` or `public_url`; load the `lemma-widget` skill before\nyour first widget. React, routing, or real state means an app.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
+    "description": "Show a pod resource or a rendered view to the user.\n\nReach for this whenever the useful answer is more than short prose: several\nvalues, records, statuses, comparisons, a timeline, or a chart render as a\nWIDGET. After creating or changing a pod resource, display it.\n\nSet `type` and, for most types, a `name` \u2014 omit `name` to show all resources\nof that type. FILE takes a pod `path`, so upload sandbox deliverables with\n`lemma files upload` first; a workspace path is not pod-visible. WIDGET takes\nexactly one of `path`, `content`, or `public_url`; load the `lemma-widget`\nskill before your first widget. React, routing, or real state means an app.\n\nA WIDGET is a live view, not a picture: it reads pod data through the browser\nSDK, filters and opens records in place, and can offer the person their next\nquestion in the composer. It cannot send one \u2014 `ask_user` is for an answer\nthis run needs.\n\nGive a WIDGET a `path`: write its HTML to a pod file with `pod_write_file`\n(`/me/c/<date>/<name>.html`) and display that. The widget serves whatever the\nfile says, so correcting one is an edit to the file. `content` inlines the\nHTML instead and freezes it in this call.\n\nA display that succeeds is already in front of the person. Nothing here\nreplaces or edits an earlier one, so calling again adds a second resource\nbelow the first rather than correcting it \u2014 which is the other reason to\nkeep the HTML in a file.\n\nThis tool displays. `ask_user` collects choices, `request_approval` collects\npermission.",
     "input_schema": {
       "$defs": {
         "DisplayResourceType": {
@@ -391,7 +502,7 @@
             }
           ],
           "default": null,
-          "description": "Pod file path, for FILE. Never a workspace path."
+          "description": "Pod file path. For FILE, the file to show. For WIDGET, the pod file holding its HTML \u2014 write it with pod_write_file, then edit that file to change the widget. Never a workspace path."
         },
         "public_url": {
           "anyOf": [
@@ -415,7 +526,7 @@
             }
           ],
           "default": null,
-          "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only. An SVG image is a pod file, shown with type=FILE."
+          "description": "Inline HTML fragment, for WIDGET: raw markup, body-level tags only, opening with a tag, complete in this one call. Prefer `path` for anything you may want to correct \u2014 an inline fragment is frozen in this call and cannot be edited. An SVG image is a pod file, shown with type=FILE."
         },
         "loading_messages": {
           "description": "Messages shown while a WIDGET renders.",
@@ -536,7 +647,7 @@
   {
     "tool_name": "exec_command",
     "toolset": "WORKSPACE_CLI",
-    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 poll or send input with `action=\"input\"`, stop it with\n`action=\"kill\"`, and use `action=\"list\"` to find processes started earlier.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Keep polling until it finishes:\n\n    exec_command(cmd=\"npm ci && npm run build\", timeout_seconds=300)\n    -> completed: false, process_id: \"abc\"\n    manage_process(action=\"input\", process_id=\"abc\")\n    -> completed: false        # repeat; each poll returns new output\n    manage_process(action=\"input\", process_id=\"abc\")\n    -> completed: true, exit_code: 0\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
+    "description": "Run a shell command in the private conversation workspace.\n\nUse it for repo inspection, builds, tests, file edits, and `lemma` CLI calls\n(pod credentials are pre-injected). `localhost` is this container, not the\nLemma backend.\n\nDefault (`tty=false`) returns after a short wait; a command still running\nreturns a `process_id` instead of blocking. `tty=true` starts a real terminal\nfor interactive commands. Either way, drive the process afterwards with\n`manage_process` \u2014 send input or read new output with `action=\"input\"`, stop\nit with `action=\"kill\"`, and use `action=\"list\"` to find processes started\nearlier. To wait for one to finish, use `wait_for`.\n\nLong commands (installs, builds, test suites) are normal and supported. When\none outlives the wait window you get `completed: false` plus a `process_id`,\nand the command carries on running \u2014 nothing was cancelled and no output is\nlost. Hand that id to `wait_for` and stop:\n\n    exec_command(cmd=\"npm ci && npm run build\")\n    -> completed: false, process_id: \"abc\"\n    wait_for(reason=\"the build\", process_id=\"abc\")\n    -> woke_because: \"TARGET_FINISHED\", exit_code: 0\n\n`wait_for` ends your turn and gives you a new one when the process exits, so\na ten-minute build costs one model call rather than twenty. Use\n`manage_process` to send input to a process, to stop one, or to look at a\nrunning one \u2014 not to wait for it.\n\nNever re-run a command because it did not finish \u2014 that starts a second\nbuild alongside the first. If you lose a `process_id`, `action=\"list\"`\nrecovers it.",
     "input_schema": {
       "properties": {
         "cmd": {
@@ -615,7 +726,7 @@
             }
           ],
           "default": null,
-          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Poll it with `manage_process(action='input', process_id=...)` until `completed: true` \u2014 never re-run the command."
+          "description": "How long to wait for the command before returning, instead of the default 30s. This is THIS CALL'S patience, not a limit on the command: if the command is still running when the wait is up you get `completed: false` and a `process_id`, and the command keeps running in the background. Hand that id to `wait_for` rather than raising this \u2014 waiting there costs nothing and costs no model calls. Never re-run the command."
         }
       },
       "required": [
@@ -696,6 +807,18 @@
           "description": "Whether the process has finished. `false` whenever the command outlived this call's wait window \u2014 a long build or test run as much as an interactive TTY session. The command is still running; it was not cancelled.",
           "type": "boolean"
         },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something about this call that is not about the command itself \u2014 most often that a wait you asked for was longer than one call can give. Read it: it usually explains an empty result."
+        },
         "process_id": {
           "anyOf": [
             {
@@ -706,7 +829,7 @@
             }
           ],
           "default": null,
-          "description": "Handle for a process that is still running. Poll it with `manage_process(action='input', process_id=...)` to collect more output, or send input the same way. Present whenever `completed` is false."
+          "description": "Handle for a process that is still running. Wait for it with `wait_for(process_id=...)`; read its output so far or send it input with `manage_process(action='input', process_id=...)`. Present whenever `completed` is false."
         }
       },
       "title": "ExecCommandResult",
@@ -737,7 +860,9 @@
         },
         "timeout_seconds": {
           "default": 60,
-          "description": "Maximum execution time in seconds before timing out.",
+          "description": "How long to wait before giving up, up to 300s. Unlike `exec_command` there is no handle to come back to: this runs in the shared kernel and a timeout ends it. For work that may take longer, run it with `exec_command` and wait for the process.",
+          "maximum": 300,
+          "minimum": 1,
           "type": "integer"
         }
       },
@@ -870,8 +995,8 @@
         },
         "timeout_seconds": {
           "default": 30.0,
-          "description": "Max seconds to block when action='await' before returning a still-running handle. Keep this small and poll again with query_subagents(mode='messages') for long-running children rather than blocking the parent run.",
-          "maximum": 120.0,
+          "description": "Max seconds to block when action='await' before returning a still-running handle. This is for a child that should finish almost immediately \u2014 blocking holds the parent's run open. For anything longer, end this call and use `wait_for(subagent_run_id=...)`, which costs nothing while it waits.",
+          "maximum": 60.0,
           "minimum": 1.0,
           "type": "number"
         }
@@ -1120,6 +1245,117 @@
         }
       },
       "title": "SkillListResult",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "list_voices",
+    "toolset": "SPEECH",
+    "description": "What `say` can sound like: the voices this deployment can actually use.\n\nRead from the provider rather than a list kept here, so it is the whole\nrange and cannot go stale. Filter by `language` when you know it; each\nvoice carries an accent and use-case tags, which is usually what decides\nbetween two that speak the same language.\n\nA language with no voices is a real answer: say so rather than speaking it\nwith a voice that does not.",
+    "input_schema": {
+      "properties": {
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "BCP-47 code to filter by, e.g. 'es' or 'ja'. Omit to see every voice the provider has."
+        },
+        "limit": {
+          "default": 20,
+          "description": "How many to return. There are roughly eighty in total.",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "$defs": {
+        "VoiceSummary": {
+          "properties": {
+            "name": {
+              "description": "Pass this to `say` as `voice`.",
+              "type": "string"
+            },
+            "languages": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "accent": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "tags": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "VoiceSummary",
+          "type": "object"
+        }
+      },
+      "properties": {
+        "success": {
+          "default": false,
+          "type": "boolean"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "voices": {
+          "items": {
+            "$ref": "#/$defs/VoiceSummary"
+          },
+          "type": "array"
+        },
+        "total": {
+          "default": 0,
+          "description": "How many matched before `limit` was applied.",
+          "type": "integer"
+        }
+      },
+      "title": "ListVoicesResponse",
       "type": "object"
     }
   },
@@ -3093,7 +3329,7 @@
             }
           ],
           "default": null,
-          "description": "Optional provider-specific voice/model id. None = default."
+          "description": "A specific voice, by its full name \u2014 `aura-2-andromeda-en`, not `andromeda`. Omit it and one is chosen for `language`. Call `list_voices` to see what exists; there are far more than one per language, differing by accent, age and intended use."
         }
       },
       "required": [
@@ -3189,118 +3425,6 @@
     },
     "output_schema": {
       "additionalProperties": true,
-      "type": "object"
-    }
-  },
-  {
-    "tool_name": "snooze",
-    "toolset": "SNOOZE",
-    "description": "Suspend this turn and pick it up later, where you left off.\n\nUse it when the work has a real gap \u2014 a build to check back on, something\nthat needs time to settle. You wake in the same conversation with the same\nhistory.\n\nThree things that bite:\n- **Your sandbox does not survive.** `/workspace`, background processes, and\n  your shell cwd are gone on wake. Write anything you need to the pod first.\n- **Waking proves nothing happened.** `TIMER` means your time elapsed and\n  nothing more \u2014 check the thing you were waiting for.\n- **Every wake replays the whole conversation**, so one longer sleep beats a\n  poll loop.\n\nDon't use it to wait on the person you are *talking to* \u2014 ask with\n`ask_user`, or end your turn; their reply starts a fresh run either way.\n\nSize the sleep from whatever you are actually waiting on. Don't use it to\nwait for a person, including one you reached with `message_user` \u2014 end your\nturn instead, and you get a fresh one when they answer.",
-    "input_schema": {
-      "properties": {
-        "reason": {
-          "description": "One line shown to the user while you sleep. Be specific: 'waiting for the nightly build' beats 'waiting'.",
-          "type": "string"
-        },
-        "seconds": {
-          "description": "How long to sleep, chosen from what you are waiting for \u2014 an eight-minute build wants one ~500s check. Under 30s is rejected; over 24h is clamped.",
-          "type": "integer"
-        },
-        "note_to_self": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Handed back verbatim on wake. What you intended to do next."
-        }
-      },
-      "required": [
-        "reason",
-        "seconds"
-      ],
-      "title": "SnoozeRequest",
-      "type": "object"
-    },
-    "output_schema": {
-      "description": "What the agent sees when it wakes.",
-      "properties": {
-        "success": {
-          "default": false,
-          "description": "Whether the tool completed successfully.",
-          "type": "boolean"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable error details when the tool fails."
-        },
-        "message": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Human-readable status or follow-up information for the tool call."
-        },
-        "woke_because": {
-          "anyOf": [
-            {
-              "enum": [
-                "TIMER",
-                "ANSWERED",
-                "CANCELLED"
-              ],
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "TIMER: your time elapsed \u2014 this says nothing about whether what you were waiting for actually happened, so check. ANSWERED: everyone you reached with message_user has replied, and you woke early because of it. CANCELLED: the wait was ended early."
-        },
-        "slept_seconds": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Actual time asleep."
-        },
-        "note_to_self": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Whatever you passed in note_to_self."
-        }
-      },
-      "title": "SnoozeResponse",
       "type": "object"
     }
   },
@@ -3452,9 +3576,179 @@
     "output_schema": {}
   },
   {
+    "tool_name": "wait_for",
+    "toolset": "WAIT",
+    "description": "Stop here and pick this turn up when there is a reason to.\n\nName exactly one thing to wait for:\n- `seconds` \u2014 a plain gap, when there is nothing to watch.\n- `process_id` \u2014 a command from `exec_command` that is still running. You\n  wake when it exits, with its exit code.\n- `subagent_run_id` \u2014 a child from `spawn_subagent`. You wake with its result.\n\nYou come back in the same conversation with the same history. Three things\nthat bite:\n- **Waking proves nothing succeeded.** A process that ended may have ended\n  badly, and a timer elapsing says nothing at all. Check.\n- **Every wake replays the whole conversation**, so one real wait beats a\n  loop of short ones. Never call this repeatedly to poll something.\n- **Across a plain `seconds` wait the sandbox may be reclaimed** \u2014\n  your files, background processes and your shell cwd can be gone. Waiting\n  on a `process_id` holds it, because the process is what holds it. Write\n  anything you need to keep to the pod first.\n\nDon't use it to wait for a person: `ask_user` pauses for the one you are\ntalking to, and `message_user` ends your turn and gets you a new one when\nthe answers arrive.",
+    "input_schema": {
+      "properties": {
+        "reason": {
+          "description": "One line shown to the person while you wait. Be specific: 'waiting for the test suite' beats 'waiting'.",
+          "type": "string"
+        },
+        "seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wait this long, then carry on. For a gap with nothing to watch \u2014 something that needs time to settle. Under 30s is rejected; over 24h is clamped."
+        },
+        "process_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wait for a sandbox process to finish, from `exec_command`'s `process_id`. You wake when it exits, with its exit code."
+        },
+        "subagent_run_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Wait for a sub-agent run to finish, from `spawn_subagent`'s `run_id`. You wake with its result."
+        },
+        "max_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Give up waiting after this long and wake anyway, for `process_id` / `subagent_run_id`. Defaults to 60 minutes."
+        },
+        "note_to_self": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Handed back verbatim on wake. What you intended to do next."
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "WaitForRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "description": "What the agent sees when it wakes.",
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "woke_because": {
+          "anyOf": [
+            {
+              "enum": [
+                "TIMER",
+                "TARGET_FINISHED",
+                "TARGET_GONE",
+                "DEADLINE",
+                "ANSWERED",
+                "CANCELLED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why this wait ended."
+        },
+        "waited_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Time actually spent."
+        },
+        "note_to_self": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whatever you passed in note_to_self."
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Exit code of the process you waited on, when there was one."
+        }
+      },
+      "title": "WaitForResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "web_fetch",
     "toolset": "WEB_SEARCH",
-    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them,\n`view_image` for a screenshot, `pod_view_document_pages` for a captured\nPDF. This is the right way to read anything longer than a search snippet.",
+    "description": "Capture web pages into your workspace so you can read them properly.\n\nTakes a *list* of URLs \u2014 fetch everything a question needs in one call.\nEach page is saved as readable markdown (optionally also PDF and a\nfull-page screenshot) under `out_dir`, and you get back the file paths and\na short preview, not the page text: twenty articles inline would bury the\ntask you are working on.\n\nThen work with the files: `exec_command` to grep or read them, and\n`view_image` for a screenshot. Both take the workspace path you were given.\n`pod_view_document_pages` takes a path *in the pod*, so it only works on a\ncaptured PDF after you have uploaded it. This is the right way to read\nanything longer than a search snippet.",
     "input_schema": {
       "properties": {
         "urls": {
@@ -3575,6 +3869,42 @@
               ],
               "default": null
             },
+            "notice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The HTTP status the plain fetch saw. Null on the browser path, which cannot report one. Worth having because a status and a page can disagree: a site answering 429 while serving the whole article is saved, and told about, rather than re-fetched."
+            },
+            "blocked_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The bot defence that refused this request, when one did -- `cloudflare`, `datadome`, `aws_waf`, `perimeterx`, or `unnamed` for a challenge page whose vendor was not named. Absent means nothing refused us, not that nothing could."
+            },
             "error": {
               "anyOf": [
                 {
@@ -3626,6 +3956,18 @@
             }
           ],
           "default": null
+        },
+        "notice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Something worth knowing about a capture that still succeeded. Set when a page rendered with almost no text but produced the screenshot or PDF that was asked for -- a chart or an image-led page is a legitimate capture, and dropping its files because the markdown was short would throw away what was wanted."
         },
         "error": {
           "anyOf": [

@@ -1,6 +1,6 @@
 """Putting an MCP-served interaction on the durable record before it runs.
 
-A pausing tool — ``ask_user``, ``request_approval``, ``snooze`` — outlives its
+A pausing tool — ``ask_user``, ``request_approval``, ``wait_for`` — outlives its
 own return. The person answers minutes later, on a different surface, through
 ``/approvals/{tool_call_id}/decision``; the timer fires hours later and the
 resume is written under the same id. All of that is addressed by the id of the
@@ -117,14 +117,14 @@ async def close_pausing_tool_call(
 
     Most calls to these tools do wait, and this does nothing for those: the
     return is written later, by whoever resolves them. But a pausing tool can
-    also answer straight away — a snooze under the minimum, a request the model
+    also answer straight away — a wait under the minimum, a request the model
     was already granted, an argument that would not validate — and those calls
     are finished the moment they return.
 
     Leaving one open is not cosmetic. ``start_resume_run_if_ready`` refuses to
     start a resume while any pausing call in the run is still outstanding, on
-    the grounds that resuming would orphan it. So a rejected ``snooze(5)``
-    early in a turn would sit there, and the *next* snooze — the real one, with
+    the grounds that resuming would orphan it. So a rejected ``wait_for(seconds=5)``
+    early in a turn would sit there, and the *next* wait — the real one, with
     a timer counting down — would wake to a resume that declines to start. The
     agent sleeps forever, and nothing anywhere reports a failure.
     """
@@ -162,7 +162,7 @@ async def _still_waiting(
     """Whether this call is genuinely outstanding, asked two ways.
 
     ``parked_tool_call_id`` is how ``ask_user`` and ``request_approval`` say a
-    person is being waited on. ``snooze`` says it by leaving an ACTIVE wait row,
+    person is being waited on. ``wait_for`` says it by leaving an ACTIVE wait row,
     which is also the thing that will eventually wake the conversation — so
     reading the row rather than the response means the two cannot disagree.
     """

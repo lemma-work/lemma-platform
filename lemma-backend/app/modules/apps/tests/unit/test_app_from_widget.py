@@ -19,8 +19,15 @@ from app.modules.apps.services.app_service import AppService
 
 
 def _reader(artifact):
-    """A WidgetContentReader stub returning a fixed artifact."""
-    return SimpleNamespace(get_widget=AsyncMock(return_value=artifact))
+    """A WidgetContentReader stub returning a fixed artifact.
+
+    `resolve` is the identity here: these artifacts are inline, and a path-backed
+    one is covered where the reading happens, in the widget asset service.
+    """
+    return SimpleNamespace(
+        get_widget=AsyncMock(return_value=artifact),
+        resolve=AsyncMock(side_effect=lambda artifact, ctx: artifact),
+    )
 
 
 # --- Controller: resolve via the injected reader, then delegate to the service.

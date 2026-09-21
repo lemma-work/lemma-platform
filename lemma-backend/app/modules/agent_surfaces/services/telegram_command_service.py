@@ -21,7 +21,6 @@ async def handle_telegram_command(
     adapter,
     credentials: dict[str, Any],
     uow_factory,
-    uow,
 ) -> bool:
     if context.platform is not SurfacePlatform.TELEGRAM:
         return False
@@ -31,11 +30,7 @@ async def handle_telegram_command(
     command = text.split(maxsplit=1)[0].split("@", 1)[0].lower()
     if command not in {"/start", "/help", "/retry"}:
         return False
-    mini_app = await _telegram_mini_app_for_context(
-        context,
-        uow_factory=uow_factory,
-        uow=uow,
-    )
+    mini_app = await _telegram_mini_app_for_context(context, uow_factory=uow_factory)
     if command in {"/start", "/help"}:
         agent_name = (
             context.agent_display_name or context.surface_name or "your Lemma agent"
@@ -57,9 +52,7 @@ async def handle_telegram_command(
             ),
         )
         return True
-    retried = await _retry_failed_conversation(
-        context, uow_factory=uow_factory, uow=uow
-    )
+    retried = await _retry_failed_conversation(context, uow_factory=uow_factory)
     await adapter.send_message(
         credentials=credentials,
         event=context.event,
@@ -73,33 +66,20 @@ async def handle_telegram_command(
 
 
 async def _telegram_mini_app_for_context(
-    context,
-    *,
-    uow_factory,
-    uow,
+    context, *, uow_factory
 ) -> TelegramMiniApp | None:
     if context.pod_id is None or context.surface_config is None:
         return None
     app_name = context.surface_config.telegram.app_name
     if app_name is None:
         return None
-    if uow_factory is not None:
-        async with uow_factory() as scoped_uow:
-            return await resolve_telegram_mini_app(
-                uow=scoped_uow,
-                pod_id=context.pod_id,
-                app_name=app_name,
-            )
-    if uow is None:
-        return None
-    return await resolve_telegram_mini_app(
-        uow=uow,
-        pod_id=context.pod_id,
-        app_name=app_name,
-    )
+    async with uow_factory() as scoped_uow:
+        return await resolve_telegram_mini_app(
+            uow=scoped_uow, pod_id=context.pod_id, app_name=app_name
+        )
 
 
-async def _retry_failed_conversation(context, *, uow_factory, uow) -> bool:
+async def _retry_failed_conversation(context, *, uow_factory) -> bool:
     """``/retry``, reported as a sentence rather than raised.
 
     The narrow handler is the whole of what this adds over the published
@@ -125,9 +105,5 @@ async def _retry_failed_conversation(context, *, uow_factory, uow) -> bool:
         except DomainError, RuntimeError, SQLAlchemyError, TypeError, ValueError:
             return False
 
-    if uow_factory is not None:
-        async with uow_factory() as scoped_uow:
-            return await run(scoped_uow)
-    if uow is None:
-        return False
-    return await run(uow)
+    async with uow_factory() as scoped_uow:
+        return await run(scoped_uow)

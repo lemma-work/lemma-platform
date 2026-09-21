@@ -260,7 +260,7 @@ async def test_resend_webhook_resolves_surface_before_publishing():
     body = json.dumps(
         {
             "data": {
-                "to": "pod@ops.asur.work",
+                "to": "pod@ops.lemma.work",
                 "from": "sender@example.com",
                 "message_id": "email-1",
             }
@@ -290,7 +290,7 @@ async def test_resend_webhook_resolves_surface_before_publishing():
     assert (factory.scopes, factory.open_scopes) == (1, 0)
     security.verify_resend_request.assert_awaited_once()
     repository.get_active_by_address.assert_awaited_once_with(
-        platform="RESEND", address="pod@ops.asur.work"
+        platform="RESEND", address="pod@ops.lemma.work"
     )
     event = publish.await_args.args[1]
     assert event.surface_id == surface.id

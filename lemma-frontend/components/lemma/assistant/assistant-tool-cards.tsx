@@ -8,6 +8,7 @@ import {
   normalizeConversationStatus,
 } from "lemma-sdk";
 import {
+  AppWindow,
   Bot,
   Check,
   CheckCircle2,
@@ -1132,6 +1133,39 @@ function ListenDetails({ args, state, result }: { args: ToolCardArgs; state: str
   );
 }
 
+function SignInToolDetails({
+  args,
+  state,
+  result,
+}: {
+  args: ToolCardArgs;
+  state: string;
+  result: ToolCardResult;
+}) {
+  // Only reached when the interaction card declined to render -- a sign-in
+  // whose result carries `interaction_fallback`, which is what a surface that
+  // could not show buttons leaves behind. The card above is the normal view.
+  const origin = firstRecordString(result, ["origin"]) || firstToolArgString(args, ["origin"]);
+  const outcome = firstRecordString(result, ["outcome"]);
+
+  return (
+    <ToolBlock
+      icon={<AppWindow className="size-3.5" />}
+      title="Sign in"
+      status={toolStatusLabel(state, result)}
+    >
+      <MetaRow
+        entries={[
+          { label: "Site", value: origin },
+          { label: "Outcome", value: outcome },
+          { label: "Why", value: firstToolArgString(args, ["reason"]) },
+        ]}
+      />
+      <CodeBlock label="Error" value={resultText(result, ["error"])} tone="error" />
+    </ToolBlock>
+  );
+}
+
 export function contextualToolDetails({
   toolName,
   args,
@@ -1147,6 +1181,12 @@ export function contextualToolDetails({
 
   if (isCommandDetailTool(normalizedName)) {
     return <CommandToolDetails normalizedName={normalizedName} args={args} state={state} result={result} />;
+  }
+
+  // `browser_sign_in` is the only browser tool; the browsing itself is
+  // `agent-browser` in the shell, so it arrives as a command card.
+  if (normalizedName.startsWith("browser_")) {
+    return <SignInToolDetails args={args} state={state} result={result} />;
   }
 
   if (normalizedName === "execute_python") {

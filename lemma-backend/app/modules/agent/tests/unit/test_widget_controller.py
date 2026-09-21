@@ -40,12 +40,18 @@ class _WidgetContent:
     def __init__(self, artifact: WidgetArtifact | None) -> None:
         self._artifact = artifact
         self.asked: list[tuple[UUID, str]] = []
+        self.resolved_as: list[object] = []
 
     async def get_widget(
         self, conversation_id: UUID, tool_call_id: str
     ) -> WidgetArtifact | None:
         self.asked.append((conversation_id, tool_call_id))
         return self._artifact
+
+    async def resolve(self, artifact: WidgetArtifact, ctx: object) -> WidgetArtifact:
+        """An inline artifact is already resolved; record who asked."""
+        self.resolved_as.append(ctx)
+        return artifact
 
 
 class _Conversations:

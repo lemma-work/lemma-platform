@@ -13,6 +13,7 @@ from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.usage import RunUsage
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     user_prompt_text,
 )
@@ -23,9 +24,9 @@ from app.modules.agent.services.runtime_model_factory import provider_model_sett
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     ConversationType,
-    HarnessOptions,
     JsonObject,
     MessageKind,
     MessageRole,
@@ -263,7 +264,7 @@ def _turn_messages(
     would only duplicate the conversation in its context.
 
     A run that resumes a pause is the same rule with a different answer. Waking
-    from a ``snooze`` adds no user message, so "the latest user message" is the
+    from a ``wait_for`` adds no user message, so "the latest user message" is the
     request that started the task — and re-sending that to an agent whose
     session already contains it does not read as "carry on", it reads as the
     person asking again, so the agent does the work twice. What the session has
@@ -308,7 +309,11 @@ def _workspace_cwd(ctx: AgentContext) -> str:
         value = get_workspace_cwd()
         if value:
             return str(value)
-    return f"/workspace/conversations/{ctx.conversation_id}"
+    # The project root, not a directory named after the conversation id: that
+    # shape is not what `resolve_workspace_location` produces, so a payload
+    # carrying it would send a remote harness somewhere the conversation's own
+    # metadata does not name.
+    return WORKSPACE_ROOT
 
 
 def _output_contract(*, agent: Agent, conversation: Conversation) -> str:

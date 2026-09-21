@@ -11,6 +11,7 @@ from sandbox_runtime.errors import (
 )
 import pytest
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.services.workspace_file_manager import WorkspaceFileManager
 
 
@@ -107,10 +108,10 @@ async def test_workspace_file_manager_uses_sandbox_session(monkeypatch):
     await manager.delete_file("note.txt")
 
     assert session.operations == [
-        ("list", "/workspace/conversations/abc", 30),
-        ("write", "/workspace/conversations/abc/note.txt", 60),
-        ("read", "/workspace/conversations/abc/note.txt", 60),
-        ("delete", "/workspace/conversations/abc/note.txt", True, 30),
+        ("list", f"{WORKSPACE_ROOT}/conversations/abc", 30),
+        ("write", f"{WORKSPACE_ROOT}/conversations/abc/note.txt", 60),
+        ("read", f"{WORKSPACE_ROOT}/conversations/abc/note.txt", 60),
+        ("delete", f"{WORKSPACE_ROOT}/conversations/abc/note.txt", True, 30),
     ]
     assert listed[0].path == "note.txt"
     assert written.path == "note.txt"
@@ -158,7 +159,7 @@ def test_workspace_file_manager_rejects_escaping_cwd_and_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 
-    with pytest.raises(ValueError, match="cwd escapes"):
+    with pytest.raises(ValueError, match="cwd must be relative"):
         WorkspaceFileManager(uuid4(), cwd="../../outside")
 
     manager = WorkspaceFileManager(uuid4(), cwd="conversations/abc")

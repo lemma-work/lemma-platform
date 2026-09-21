@@ -52,7 +52,11 @@ from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+from app.modules.agent_surfaces.composition import (
+    build_surface_egress,
+    build_surface_ingress,
+    build_surface_turn_starter,
+)
 from app.modules.agent_surfaces.services.progress_observer import (
     SurfaceAgentRunProgressObserver,
 )
@@ -155,7 +159,7 @@ async def run_scripted_agent_run(
         agent_name=agent_name,
         observer=SurfaceAgentRunProgressObserver(
             uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            service_factory=build_surface_event_handler,
+            egress_factory=build_surface_egress,
         ),
     )
 
@@ -188,13 +192,16 @@ async def process_ingress_and_run_scripted(
     short deterministic echo) — zero setup needed for "a run completes" tests.
     """
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
-    context = await handler.prepare_ingress(request)
+    context = await build_surface_ingress(uow).prepare_ingress(request)
     assert context is not None
     await uow.commit()
 
+    # Two objects, as in production: the request prepares the ingress, and the
+    # queued worker task starts the turn in its own short scopes.
     with suppress_agent_run_enqueue():
-        await handler.execute_chat(context)
+        await build_surface_turn_starter(
+            SessionUnitOfWorkFactory(async_session_maker)
+        ).execute_chat(context)
 
     if isinstance(context, SurfaceChatContext):
         await run_scripted_agent_run(

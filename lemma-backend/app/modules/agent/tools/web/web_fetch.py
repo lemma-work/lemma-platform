@@ -22,9 +22,18 @@ a screenshot, or runs `pod_view_document_pages` over a captured PDF.
 
 Fetches on the http path run concurrently — they are independent network waits,
 and a research batch is the case this tool was built for. The browser path stays
-serialised on purpose: `start-browser` runs one shared session per sandbox (one
-Xvfb display, one profile), so concurrent captures would fight over the same
-page. A whole-batch deadline bounds the pathological case where most of the list
+serialised on purpose, and that was re-measured rather than inherited. Every
+`agent-browser` command acts on its session's *active* tab -- `--session` can
+be targeted, a tab cannot -- so two captures sharing a session read each
+other's page. Giving each its own session sidesteps that and costs a cold
+Chrome apiece: measured on 1 vCPU / 2 GB, three pages, byte-identical
+markdown either way, serial 11.0s against parallel 75.4s.
+
+Memory is not the constraint, whatever the RSS sums elsewhere suggest: five
+concurrent tabs in one browser peaked at 1656 MiB of a 2048 MiB cgroup. The
+one vCPU is.
+
+A whole-batch deadline bounds the pathological case where most of the list
 needs rendering.
 
 Every URL is checked against `assert_safe_url` before *either* path runs. The
@@ -38,6 +47,7 @@ during the handshake, long before they read a `User-Agent`.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import shlex
 from urllib.parse import urlparse
 
@@ -45,6 +55,13 @@ from app.core.log.log import get_logger
 from app.core.net.impersonating_client import web_page_policy
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.web.capture_result import (
+    PREVIEW_CHARS as _PREVIEW_CHARS,
+)
+from app.modules.agent.tools.web.capture_result import (
+    THIN_CONTENT_CHARS as _THIN_CONTENT_CHARS,
+)
+from app.modules.agent.tools.web.capture_result import finish as _finish
 from app.modules.agent.tools.web.models import (
     WebFetchPage,
     WebFetchRequest,
@@ -103,15 +120,6 @@ _MAX_BROWSER_RENDERS = 5
 # sites at once.
 _MAX_CONCURRENT_FETCHES = 5
 
-_PREVIEW_CHARS = 400
-
-# The real "this page needs a browser" signal is extraction returning nothing,
-# which `fetch_and_clean` raises for. This floor only catches a degenerate
-# extraction — a breadcrumb or a cookie notice and nothing else. It is
-# deliberately low: plenty of real pages are short (example.com extracts to 167
-# clean characters), and treating "short" as "broken" spends a browser render to
-# re-fetch a page that was already read correctly.
-_THIN_CONTENT_CHARS = 120
 
 _ALLOWED_SCHEMES = {"http", "https"}
 
@@ -171,11 +179,6 @@ def _browser_script(url: str, out_dir: str, name: str, formats: list[str]) -> st
         f"--formats {shlex.quote(','.join(formats))} "
         f"--out {shlex.quote(out_dir)} --name {shlex.quote(name)}"
     )
-
-
-def _expected_files(out_dir: str, name: str, formats: list[str]) -> dict[str, str]:
-    suffix = {"markdown": "md", "pdf": "pdf", "jpeg": "jpg", "png": "png"}
-    return {fmt: f"{out_dir}/{name}.{suffix[fmt]}" for fmt in formats if fmt in suffix}
 
 
 async def web_fetch_internal(
@@ -352,6 +355,16 @@ async def _capture_batch(
             if page is None:
                 needs_browser.append(url)
                 return
+            if isinstance(page, _Refusal):
+                pages[url] = WebFetchPage(
+                    url=url,
+                    success=False,
+                    error=page.message,
+                    fetched_with="http",
+                    status=page.status,
+                    blocked_by=page.blocked_by,
+                )
+                return
             async with writing:
                 written = await _write_extracted(
                     session, url=url, page=page, out_dir=out_dir
@@ -409,89 +422,51 @@ async def _capture_with_browser(
     )
 
 
-async def _present_files(session, paths: list[str]) -> dict[str, int]:
-    """Of the captures we asked for, the ones that are really on disk.
+@dataclass(frozen=True, slots=True)
+class _Refusal:
+    """A "do not try the browser" answer, with the reason for the agent.
 
-    One command for the whole set, printing `size path` per non-empty file.
+    The third outcome the cheap path needed and did not have. It used to
+    collapse every failure to `None`, which means "escalate" -- so a site
+    that refuses our address was retried through a browser it refuses
+    identically, at seven seconds and one of only five render slots.
     """
-    if not paths:
-        return {}
-    quoted = " ".join(shlex.quote(path) for path in paths)
-    listing = await session.exec_command(
-        cmd=(
-            f'for f in {quoted}; do [ -s "$f" ] && '
-            'printf "%s %s\\n" "$(wc -c < "$f" | tr -d " ")" "$f"; done'
-        ),
-        timeout=30,
-    )
-    sizes: dict[str, int] = {}
-    for line in (listing.get("stdout") or "").splitlines():
-        size, _, path = line.strip().partition(" ")
-        if path and size.isdigit():
-            sizes[path] = int(size)
-    return sizes
+
+    message: str
+    status: int | None
+    blocked_by: str | None
 
 
-async def _finish(
-    session,
-    *,
-    url: str,
-    out_dir: str,
-    name: str,
-    formats: list[str],
-    fetched_with: str,
-    failure_output: str,
-) -> WebFetchPage:
-    """Report what the browser actually produced, not what was requested.
-
-    The result used to be the *expected* paths plus `success=True` whenever the
-    capture command did not exit non-zero — so a page the browser could not
-    render (Britannica refuses ours) came back as a success naming a file that
-    was never written, and the agent went looking for it. Exit codes were the
-    wrong thing to trust anyway: a render outliving its wait window reports no
-    exit code at all, which read as success. What is on disk is the answer.
-    """
-    expected = _expected_files(out_dir, name, formats)
-    present = await _present_files(session, list(expected.values()))
-    files = {fmt: path for fmt, path in expected.items() if path in present}
-
-    markdown_path = files.get("markdown")
-    if markdown_path is None:
-        return WebFetchPage(
-            url=url,
-            success=False,
-            fetched_with=fetched_with,
-            error=(
-                failure_output.strip()[:400]
-                or "The browser produced no readable article for this page. "
-                "Some sites refuse automated clients outright."
+def _refusal_for(url: str, exc: PageFetchError) -> _Refusal | None:
+    """What to tell the agent, when the browser would not help."""
+    verdict = exc.verdict
+    if verdict is not None and verdict.blocked:
+        if verdict.browser_may_help:
+            return None
+        return _Refusal(
+            message=(
+                f"{url} was refused by a bot defence ({verdict.vendor}). The "
+                "sandbox browser reaches the site from the same address and "
+                "was measured to be refused identically, so it was not tried. "
+                "Use a different source, or ask the person for the page."
             ),
+            status=exc.status,
+            blocked_by=verdict.vendor,
         )
-
-    head = await session.exec_command(
-        cmd=f"head -c {_PREVIEW_CHARS * 2} {shlex.quote(markdown_path)}",
-        timeout=20,
-    )
-    preview = None
-    title = None
-    text = (head.get("stdout") or "").strip()
-    if text:
-        title = text.splitlines()[0].lstrip("# ").strip() or None
-        preview = text[:_PREVIEW_CHARS]
-
-    return WebFetchPage(
-        url=url,
-        success=True,
-        title=title,
-        files=files,
-        preview=preview,
-        characters=present[markdown_path],
-        fetched_with=fetched_with,
-    )
+    if exc.status in (404, 410):
+        return _Refusal(
+            message=(
+                f"The page is not there (HTTP {exc.status}). The browser was "
+                "not tried -- it would get the same answer."
+            ),
+            status=exc.status,
+            blocked_by=None,
+        )
+    return None
 
 
-async def _clean_or_none(url: str) -> ExtractedPage | None:
-    """Fetch and clean in-process, or None when the browser is needed.
+async def _clean_or_none(url: str) -> ExtractedPage | _Refusal | None:
+    """Fetch and clean in-process. `None` means "try the browser".
 
     Cheap path: no browser start-up and no container round-trip to fetch, so raw
     HTML never leaves this process. Touches no workspace state, which is what
@@ -500,15 +475,18 @@ async def _clean_or_none(url: str) -> ExtractedPage | None:
     try:
         page = await fetch_and_clean(url)
     except PageFetchError as exc:
-        # Most often "renders with JavaScript", sometimes a 403 at a site that
-        # refuses scripted clients. Escalate rather than reporting an empty
-        # article as a success.
+        # Three different things wearing one costume until now: a page that
+        # renders with JavaScript, a site that refused us, and a page that is
+        # simply not there. Only the first is worth a browser.
         logger.warning(
             "agent.web_fetch.http_path_failed.degraded",
             error_type=type(exc).__name__,
+            status=exc.status,
+            vendor=exc.verdict.vendor if exc.verdict else None,
+            signal=exc.verdict.signal if exc.verdict else None,
             exc_info=True,
         )
-        return None
+        return _refusal_for(url, exc)
     except Exception as exc:  # noqa: BLE001 - one URL must not sink the batch
         # These run under `gather`, so anything unhandled here fails every other
         # page in the call too. A malformed charset or an extractor crash is one
@@ -522,6 +500,12 @@ async def _clean_or_none(url: str) -> ExtractedPage | None:
 
     # Measured on the extracted article, not the rendered document — the
     # provenance header would otherwise mask an empty extraction.
+    #
+    # This is an emptiness test and no longer doubles as a block test: a
+    # 120-character floor flagged a genuine 117-character answer and missed
+    # a 3,670-character block page. `classify` ran before this and owns that
+    # question; what reaches here is "there was nothing to read", which a
+    # browser genuinely can fix.
     if len(page.markdown) < _THIN_CONTENT_CHARS:
         return None
     return page
@@ -554,4 +538,21 @@ async def _write_extracted(
         preview=document[:_PREVIEW_CHARS],
         characters=len(document),
         fetched_with="http",
+        status=page.status,
+        notice=_status_notice(page),
+    )
+
+
+def _status_notice(page: ExtractedPage) -> str | None:
+    """Said only when the status and the page disagree.
+
+    Measured: reuters.com/technology/ answered 429 and served the whole
+    article. Throwing that away because of the number would cost a browser
+    render for a page we already had.
+    """
+    if page.status < 400:
+        return None
+    return (
+        f"The site answered HTTP {page.status} but served the article anyway, "
+        "so it was saved. Re-request with `render=true` if it looks short."
     )

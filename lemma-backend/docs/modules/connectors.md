@@ -20,6 +20,7 @@ saga so a pooled database connection is not held during provider I/O.
 | `connectors` | Provider-independent application catalog entry |
 | `connector_operations` | Searchable operation metadata and JSON input/output schemas |
 | `connector_triggers` | Available external trigger metadata |
+| `auth_config_operations` | Operations discovered for one organization's install. MCP tools and OpenAPI-URL endpoints describe a customer's own systems, so they are kept out of the global catalog entirely rather than held there behind a nullable tenant column |
 | `auth_configs` | Organization installation/configuration and encrypted OAuth client secrets |
 | `accounts` | User-owned encrypted provider credentials and connection status |
 | `connect_requests` | Short-lived OAuth state and authorization flow metadata |

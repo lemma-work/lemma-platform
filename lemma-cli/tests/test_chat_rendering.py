@@ -12,11 +12,17 @@ text once the stream ends.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+import typer
+
 from lemma_cli.cli_core.chat import (
     ChatRenderer,
     StreamEvent,
     extract_final_result,
     iter_sse_events,
+    render_chat_stream,
 )
 
 
@@ -245,3 +251,114 @@ def test_a_thinking_delta_over_the_wire_is_not_the_answer():
         renderer.handle(event)
 
     assert "".join(renderer.buffered) == "There is 1 row."
+
+
+class _Stream:
+    """A stubbed SSE response yielding the given event payloads."""
+
+    def __init__(self, *payloads: str) -> None:
+        self._payloads = payloads
+        self.closed = False
+
+    def iter_lines(self, decode_unicode=True):
+        for payload in self._payloads:
+            yield f"data: {payload}"
+            yield ""
+
+    def close(self):
+        self.closed = True
+
+
+def _run_stream(*payloads: str, output: str = "pretty"):
+    """Render a stream and return the typer.Exit it raised, or None."""
+    state = SimpleNamespace(output=output)
+    try:
+        render_chat_stream(state=state, response=_Stream(*payloads), agent="a")
+    except typer.Exit as exit_:
+        return exit_
+    return None
+
+
+def test_a_failed_run_exits_non_zero():
+    """A server-side failure used to print red text and exit 0.
+
+    Every script, CI step and agent driving this CLI therefore read a failed run
+    as a successful one — the defect the ordinary request path had already fixed
+    by funnelling through `fail`.
+    """
+    exit_ = _run_stream(
+        '{"type":"token","data":"working on it"}',
+        '{"type":"error","data":"model provider returned 500"}',
+    )
+    assert exit_ is not None and exit_.exit_code == 1
+
+
+def test_a_stream_that_never_reports_an_outcome_exits_non_zero():
+    """A dropped connection mid-run is not a success.
+
+    The server always ends a stream with a terminal event — the run pump
+    force-fails one that does not — so its absence means the connection went
+    away and the outcome is genuinely unknown.
+    """
+    exit_ = _run_stream('{"type":"token","data":"half an ans"}')
+    assert exit_ is not None and exit_.exit_code == 1
+
+
+def test_a_completed_run_exits_zero():
+    assert (
+        _run_stream(
+            '{"type":"token","data":"done"}',
+            '{"type":"completed","data":{"status":"completed"}}',
+        )
+        is None
+    )
+
+
+def test_a_run_the_person_stopped_is_not_a_failure():
+    """Stopping a run is a thing the user chose, not an error to report."""
+    assert (
+        _run_stream(
+            '{"type":"token","data":"partial"}',
+            '{"type":"completed","data":{"status":"stopped"}}',
+        )
+        is None
+    )
+
+
+def test_the_json_path_has_the_same_exit_code(capsys):
+    """A machine reading `--output json` has the same right to the exit code."""
+    exit_ = _run_stream(
+        '{"type":"error","data":"boom"}',
+        output="json",
+    )
+    assert exit_ is not None and exit_.exit_code == 1
+    # The transcript still reaches the consumer before the process exits.
+    assert "boom" in capsys.readouterr().out
+
+
+def test_attaching_to_someone_elses_run_does_not_fail_on_a_quiet_stream():
+    """`conversations stream` is an observer, not the run's owner.
+
+    Exiting non-zero here would make "I watched for a while and detached"
+    indistinguishable from "the run broke".
+    """
+    state = SimpleNamespace(output="pretty")
+    render_chat_stream(
+        state=state,
+        response=_Stream('{"type":"token","data":"attached"}'),
+        agent=None,
+        owns_run=False,
+    )
+
+
+def test_an_observer_still_reports_an_error_the_run_reported():
+    """That one is about the run, not about who is watching."""
+    state = SimpleNamespace(output="pretty")
+    with pytest.raises(typer.Exit) as caught:
+        render_chat_stream(
+            state=state,
+            response=_Stream('{"type":"error","data":"provider 500"}'),
+            agent=None,
+            owns_run=False,
+        )
+    assert caught.value.exit_code == 1

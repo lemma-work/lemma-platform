@@ -169,7 +169,7 @@ def _common_fields(
                 name="external_channel_id",
                 label="External channel ID",
                 source=SurfaceSetupFieldSource.CREATE_REQUEST,
-                description="Required when mode=CHANNEL.",
+                description="Required when the surface answers in a named channel.",
                 required=False,
                 example=channel_example,
             )
@@ -253,7 +253,7 @@ def _built_in_or_account_guide(
                     SurfaceSetupStep(
                         phase=SurfaceSetupPhase.CREATE_SURFACE,
                         title="Create the surface",
-                        description="POST the surface with platform and mode=DM. Leave account_id null.",
+                        description="POST the surface with platform. Leave account_id null.",
                     ),
                     SurfaceSetupStep(
                         phase=SurfaceSetupPhase.VERIFY,
@@ -282,7 +282,7 @@ def _built_in_or_account_guide(
                     SurfaceSetupStep(
                         phase=SurfaceSetupPhase.CREATE_SURFACE,
                         title="Create the surface",
-                        description="POST the surface with platform, mode=DM, and account_id.",
+                        description="POST the surface with platform and account_id.",
                     ),
                 ],
                 notes=notes,

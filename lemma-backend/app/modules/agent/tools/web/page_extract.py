@@ -16,6 +16,7 @@ JavaScript runs and for anything that needs a PDF or a screenshot.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 
@@ -30,9 +31,16 @@ from app.core.net.impersonating_client import (
     PageUnreachableError,
     fetch_guarded_impersonated,
     web_page_policy,
+    normalized_headers,
 )
 from app.core.net.url_guard import UnsafeUrlError, fetch_guarded
 from app.modules.agent.config import agent_settings
+from app.modules.agent.tools.web.blocked import (
+    BLOCK_SNIPPET_BYTES,
+    NOT_BLOCKED,
+    BlockVerdict,
+    classify,
+)
 
 logger = get_logger(__name__)
 
@@ -57,16 +65,51 @@ _REQUEST_HEADERS = {
 }
 
 
+#: What `fetch_and_clean` calls to get bytes. Named so the test seam is
+#: a parameter rather than a patch.
+_Fetcher = Callable[[str], Awaitable["FetchedBody"]]
+
+
 @dataclass(frozen=True)
 class ExtractedPage:
     url: str
     title: str | None
     markdown: str
     content_type: str | None
+    #: Where the redirects ended. Dropped before; a caller that reports the
+    #: URL it asked for cannot say where the answer came from.
+    final_url: str = ""
+    #: What the site answered. A page can arrive under a status that
+    #: disagrees with it -- measured, reuters.com served a whole article
+    #: under 429 -- so this travels with the page rather than deciding it.
+    status: int = 200
+    #: Whether a bot defence refused us. `NOT_BLOCKED` by default, so a
+    #: caller constructing one of these by hand gets today's behaviour.
+    verdict: BlockVerdict = NOT_BLOCKED
+
+
+#: Statuses where the body was measured to be the real page rather than an
+#: error page, so it is worth reading instead of re-fetching through a
+#: browser: `reuters.com/technology/` answered 429 with 6,935 characters of
+#: article, and `g2.com` answered 403 with 5,057 characters of real content.
+#: Everything else >=400 is treated as an error, as it always was -- a 404's
+#: body is boilerplate, not the thing that was asked for.
+_MAY_STILL_CARRY_THE_PAGE = frozenset({403, 429})
 
 
 class PageFetchError(RuntimeError):
     """The page could not be fetched or contained nothing readable."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        verdict: BlockVerdict | None = None,
+    ):
+        super().__init__(message)
+        self.status = status
+        self.verdict = verdict
 
 
 def _looks_like_html(content_type: str | None) -> bool:
@@ -158,47 +201,114 @@ async def _fetch_page(url: str) -> FetchedBody:
     return FetchedBody(body=body, content_type=None, final_url=url)
 
 
-async def fetch_and_clean(url: str) -> ExtractedPage:
-    """Fetch ``url`` and return it as clean markdown.
+async def _fetched_or_raised(url: str) -> FetchedBody:
+    """Every status as data; only "could not reach it at all" as an error.
 
-    Raises `PageFetchError` when the page cannot be retrieved or holds no
-    readable article — the caller escalates those to the browser rather than
-    reporting an empty page as a success.
+    `fetch_guarded_impersonated` raises on >=400 and carries the headers and
+    body with it, so the shape above this can stop caring which side of 400
+    a response landed on -- which is the whole point, because the status is
+    not what decides whether there is a page here.
+
+    The fallback httpx path raises from inside `client.stream`, so its
+    headers are readable and its body is not: the header rules work there
+    and the body rules go dark. That is an honest degradation for a path
+    that is off by default.
     """
     try:
-        page = await _fetch_page(url)
+        return await _fetch_page(url)
+    except HttpStatusError as exc:
+        return FetchedBody(
+            body=exc.body,
+            content_type=exc.headers.get("content-type"),
+            final_url=url,
+            status=exc.status_code,
+            headers=exc.headers,
+        )
+    except httpx.HTTPStatusError as exc:
+        return FetchedBody(
+            body=b"",
+            content_type=exc.response.headers.get("content-type"),
+            final_url=url,
+            status=exc.response.status_code,
+            headers=normalized_headers(exc.response.headers),
+        )
+
+
+async def fetch_and_clean(
+    url: str, *, fetch: _Fetcher = _fetched_or_raised
+) -> ExtractedPage:
+    """Fetch ``url`` and return it as clean markdown.
+
+    Raises `PageFetchError` when the page cannot be retrieved, was refused by
+    a bot defence, or holds no readable article. Those are three different
+    things and the caller now needs to tell them apart, so the error carries
+    the status and the verdict.
+
+    `fetch` is injectable so this can be tested at all. Nothing in the unit
+    suite exercised this function before, because the only way in was to
+    patch a name inside its own module -- a double in the subject, which the
+    architecture gate counts and which certifies the half nobody wrote.
+    """
+    try:
+        page = await fetch(url)
     except UnsafeUrlError as exc:
         # Not escalated to the browser: the sandbox would reach the same address
         # from inside the network, which is worse.
         raise PageFetchError(
             f"That URL is not a permitted fetch target ({exc.reason})."
         ) from exc
-    except HttpStatusError as exc:
-        raise PageFetchError(str(exc)) from exc
-    except httpx.HTTPStatusError as exc:
-        raise PageFetchError(
-            f"The site returned HTTP {exc.response.status_code}."
-        ) from exc
     except (PageUnreachableError, httpx.HTTPError) as exc:
         raise PageFetchError(
             f"The page could not be reached ({type(exc).__name__})."
         ) from exc
 
+    snippet = page.body[:BLOCK_SNIPPET_BYTES].decode("utf-8", "replace")
+    verdict = classify(status=page.status, headers=page.headers, body_snippet=snippet)
+    # Classified before the article is extracted, so a challenge page never
+    # costs a CPU-limiter slot for markup nobody wants.
+    if verdict.blocked:
+        raise PageFetchError(
+            f"The site refused the request (HTTP {page.status}).",
+            status=page.status,
+            verdict=verdict,
+        )
+
+    if page.status >= 400 and page.status not in _MAY_STILL_CARRY_THE_PAGE:
+        # Everything else keeps the old behaviour: a >=400 is an error, and
+        # its body is an error page, not the article. Accepting any body
+        # under any status made `example.com/shell` -- a real 404 whose body
+        # is the ordinary Example Domain boilerplate -- come back as a
+        # successful capture of an article that does not exist.
+        raise PageFetchError(
+            f"The site returned HTTP {page.status}.",
+            status=page.status,
+            verdict=verdict,
+        )
+
     content_type = page.content_type
     if not _looks_like_html(content_type):
         raise PageFetchError(
             f"That URL is {content_type or 'not a web page'}, not an article. "
-            "Download it with `exec_command` if you need the file itself."
+            "Download it with `exec_command` if you need the file itself.",
+            status=page.status,
         )
 
     title, markdown = await extract_markdown_off_loop(page.body, url=url)
     if not markdown:
         raise PageFetchError(
             "No readable article was found — the page probably renders its "
-            "content with JavaScript."
+            "content with JavaScript.",
+            status=page.status,
+            verdict=verdict,
         )
     return ExtractedPage(
-        url=url, title=title, markdown=markdown, content_type=content_type
+        url=url,
+        title=title,
+        markdown=markdown,
+        content_type=content_type,
+        final_url=page.final_url or url,
+        status=page.status,
+        verdict=verdict,
     )
 
 

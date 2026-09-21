@@ -35,11 +35,11 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunState,
 )
 from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEventType,
     ConversationStatus,
     ConversationType,
-    HarnessOptions,
     MessageKind,
 )
 from app.modules.agent.infrastructure.agent_host.dispatch_repository import (
@@ -55,7 +55,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host.dispatch import (
 from app.modules.agent.infrastructure.harnesses.agent_host.run_window import (
     DispatchedRun,
 )
-from app.modules.agent.domain.pausing_tools import SNOOZE_TOOL_NAME
+from app.modules.agent.domain.pausing_tools import WAIT_TOOL_NAME
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.runtime_models import (
@@ -70,9 +70,9 @@ from app.modules.agent.services.mcp_pausing_calls import (
     close_pausing_tool_call,
     record_pausing_tool_call,
 )
-from app.modules.agent.services.snooze_wake_service import SnoozeWakeService
-from app.modules.agent.tools.snooze.models import SnoozeRequest
-from app.modules.agent.tools.snooze.pydantic_adapter import snooze
+from app.modules.agent.services.wait_wake_service import AgentWaitService
+from app.modules.agent.tools.waiting.models import WaitForRequest
+from app.modules.agent.tools.waiting.pydantic_adapter import wait_for
 from app.modules.agent.tests.e2e.agent_host_helpers import (
     conversation_with_a_leased_run,
     paired_machine,
@@ -600,12 +600,12 @@ async def _await_refresh_command(db_session, run_id: UUID, *, timeout: float = 2
 
 
 @pytest.mark.asyncio
-async def test_a_snoozing_agent_ends_its_turn_waiting_and_wakes_where_it_left_off(
+async def test_a_waiting_agent_ends_its_turn_and_wakes_where_it_left_off(
     db_session, scenario
 ):
     """The whole sleep, on the real seam: tool, turn, wake.
 
-    `snooze` is the one tool an agent uses to say "not now, later". In-process it
+    `wait_for` is the one tool an agent uses to say "not now, later". In-process it
     raises and the run loop catches it. A remote harness cannot be interrupted
     from inside its own MCP tool call, so this is the path where every step is
     different: Lemma has to end the turn, read a stopped run as a sleeping one,
@@ -632,14 +632,14 @@ async def test_a_snoozing_agent_ends_its_turn_waiting_and_wakes_where_it_left_of
         lambda: SqlAlchemyUnitOfWork(db_session),
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=SNOOZE_TOOL_NAME,
+        tool_name=WAIT_TOOL_NAME,
         arguments={"reason": "waiting for the nightly build", "seconds": 600},
     )
     await db_session.commit()
 
-    answer = await snooze(
+    answer = await wait_for(
         SimpleNamespace(deps=ctx, tool_call_id=tool_call_id),
-        SnoozeRequest(
+        WaitForRequest(
             reason="waiting for the nightly build",
             seconds=600,
             note_to_self="check whether it went green",
@@ -709,7 +709,7 @@ async def test_a_snoozing_agent_ends_its_turn_waiting_and_wakes_where_it_left_of
     wait = await waits.find_active_for_run(run_id)
     assert wait is not None and wait.tool_call_id == tool_call_id
 
-    woke = await SnoozeWakeService(uow).wake(wait=wait)
+    woke = await AgentWaitService(uow).wake(wait=wait)
     await db_session.commit()
     assert woke is True
 
@@ -725,7 +725,7 @@ async def test_a_snoozing_agent_ends_its_turn_waiting_and_wakes_where_it_left_of
         .all()
     )
     assert len(runs) == 2, "the timer did not start the run that carries on"
-    assert runs[-1].run_metadata["source"] == "snooze_resume"
+    assert runs[-1].run_metadata["source"] == "wait_resume"
     # Named so the dispatch can prompt the woken agent with what it woke to,
     # rather than re-sending a request its provider session already holds.
     assert runs[-1].run_metadata["resumed_tool_call_id"] == tool_call_id
@@ -746,16 +746,16 @@ async def test_a_snoozing_agent_ends_its_turn_waiting_and_wakes_where_it_left_of
 
 
 @pytest.mark.asyncio
-async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
+async def test_a_rejected_wait_does_not_strand_the_one_that_follows(
     db_session, scenario
 ):
     """A pausing call that answers at once must not stay open.
 
-    `snooze(5)` is rejected on purpose — waking replays the conversation, so a
+    `wait_for(seconds=5)` is rejected on purpose — waking replays the conversation, so a
     poll loop costs more than it saves. But the call is on the record by then,
     and `start_resume_run_if_ready` refuses to resume a run while any pausing
     call in it is outstanding. So the rejected one would sit there and the real
-    snooze after it would wake to a resume that quietly declines to start: an
+    wait after it would wake to a resume that quietly declines to start: an
     agent asleep forever, with nothing reporting a failure anywhere.
     """
     await scenario.create_org_with_pod(name_prefix="Snooze")
@@ -776,12 +776,12 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=SNOOZE_TOOL_NAME,
+        tool_name=WAIT_TOOL_NAME,
         arguments={"reason": "polling", "seconds": 5},
     )
-    refusal = await snooze(
+    refusal = await wait_for(
         SimpleNamespace(deps=ctx, tool_call_id=rejected_id),
-        SnoozeRequest(reason="polling", seconds=5),
+        WaitForRequest(reason="polling", seconds=5),
     )
     assert refusal.success is False
     await close_pausing_tool_call(
@@ -789,7 +789,7 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
         conversation_id=conversation_id,
         agent_run_id=run_id,
         tool_call_id=rejected_id,
-        tool_name=SNOOZE_TOOL_NAME,
+        tool_name=WAIT_TOOL_NAME,
         result=refusal,
     )
     await db_session.commit()
@@ -798,12 +798,12 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
         uow_factory,
         conversation_id=conversation_id,
         agent_run_id=run_id,
-        tool_name=SNOOZE_TOOL_NAME,
+        tool_name=WAIT_TOOL_NAME,
         arguments={"reason": "the nightly build", "seconds": 600},
     )
-    slept = await snooze(
+    slept = await wait_for(
         SimpleNamespace(deps=ctx, tool_call_id=real_id),
-        SnoozeRequest(reason="the nightly build", seconds=600),
+        WaitForRequest(reason="the nightly build", seconds=600),
     )
     assert slept.success is True
     await close_pausing_tool_call(
@@ -811,7 +811,7 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
         conversation_id=conversation_id,
         agent_run_id=run_id,
         tool_call_id=real_id,
-        tool_name=SNOOZE_TOOL_NAME,
+        tool_name=WAIT_TOOL_NAME,
         result=slept,
     )
     await ConversationRepository(uow_factory()).finish_agent_run(
@@ -822,7 +822,7 @@ async def test_a_rejected_snooze_does_not_strand_the_one_that_follows(
     uow = uow_factory()
     wait = await AgentConversationWaitRepository(uow).find_active_for_run(run_id)
     assert wait is not None and wait.tool_call_id == real_id
-    assert await SnoozeWakeService(uow).wake(wait=wait) is True
+    assert await AgentWaitService(uow).wake(wait=wait) is True
     await db_session.commit()
 
     runs = (

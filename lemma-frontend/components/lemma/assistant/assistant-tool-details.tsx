@@ -9,7 +9,7 @@
 import { useState, type ReactNode } from "react";
 import {
   formatDurationCompact,
-  isAskUserToolName,
+  isAskUserToolName, isSignInToolName,
   isLongRunningToolResult,
   isToolInvocationActive,
   isUserInteractionToolName,
@@ -40,7 +40,7 @@ import {
   isCurrentBrowserHref,
 } from "./assistant-resource-cards";
 import {
-  AskUserCard,
+  AskUserCard, SignInCard,
   InlineUserApprovalCall,
   UserApprovalCard,
 } from "./assistant-approval-cards";
@@ -167,7 +167,14 @@ export function ToolDetailsPanel({
   if (isRenderableUserInteractionInvocation(interactionInvocation)) {
     return (
       <div className="mt-1.5">
-        {isAskUserToolName(toolName) ? (
+        {isSignInToolName(toolName) ? (
+          <SignInCard
+            invocation={interactionInvocation}
+            conversationId={activeConversationId}
+            onNavigateResource={onNavigateResource}
+            onResolveUserApproval={onResolveUserApproval}
+          />
+        ) : isAskUserToolName(toolName) ? (
           <AskUserCard
             invocation={interactionInvocation}
             onResolveUserApproval={onResolveUserApproval}

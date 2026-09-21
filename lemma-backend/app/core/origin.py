@@ -192,7 +192,17 @@ def origin_from_payload(payload: Mapping[str, Any]) -> Origin | None:
 #: Slack would be counted as somebody's script. The path is the honest answer,
 #: and like the MCP mounts above it is a route this deployment owns rather than
 #: a header a caller controls.
-_SURFACE_PLATFORM_WEBHOOK = re.compile(r"^/surfaces/webhooks/([A-Za-z0-9_-]{1,32})/?$")
+#: The trailing segments are matched but discarded. A per-number WhatsApp
+#: callback is ``/surfaces/webhooks/whatsapp/numbers/{phone_number_id}``, and
+#: with a one-segment pattern it matched nothing at all -- so every delivery to
+#: a pooled number was counted with no platform, and the WhatsApp figure in
+#: origin analytics would have quietly become "whatever is left on the shared
+#: URL". The platform is still the first segment, which is the only part this
+#: is allowed to label: a phone number id is not a platform and must never
+#: reach ``Origin.platform``.
+_SURFACE_PLATFORM_WEBHOOK = re.compile(
+    r"^/surfaces/webhooks/([A-Za-z0-9_-]{1,32})(?:/[A-Za-z0-9_.-]{1,64})*/?$"
+)
 _SURFACE_SCOPED_WEBHOOK = re.compile(r"^/surfaces/[^/]+/webhook/?$")
 
 #: Connector ingress: ``/webhooks/{source}``. This is the only path by which

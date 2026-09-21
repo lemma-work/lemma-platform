@@ -54,8 +54,8 @@ leave the only copy in a local temp path.
 
 ```bash
 lemma pods list            # marks the currently active pod
-lemma pods describe        # inventory: tables, agents, functions, workflows, schedules + a file tree
-                           # (apps are NOT in it — use `lemma apps list`)
+lemma pods describe        # inventory: tables, agents, functions, workflows, schedules,
+                           # apps and surfaces + a file tree
                            # tree shows 2 folder levels; --depth N / --full for more
 ```
 
@@ -71,7 +71,10 @@ warnings and progress lines go to stderr**, so stdout carries the result and
 nothing else: `lemma --json … | jq` stays parseable even when the command fails,
 and you never need to redirect to keep the JSON clean. Pass payloads with
 `--data '<json>'` (`-d`) or `--file path.json` (`-f`); target another pod with
-`--pod <id-or-slug>`; add `--yes` for destructive commands in automation. CLI
+`--pod <id-or-slug>`. `--yes` skips a command's confirmation prompt — use it
+only where you already know exactly what the command will touch, and **never on
+`conversations approve`**, where it silently authorises every gated call queued
+on the conversation (see "conversations approve" below). CLI
 groups are plural (`lemma files`, `lemma tables`, `lemma records`, …), and most
 have a singular alias (`lemma file`, `lemma table`). Not all: `query`,
 `datastore`, `runtime`, `servers`, `telemetry`, `auth`, and `config` exist only
@@ -152,7 +155,7 @@ lemma files child /knowledge/handbook.pdf/pages/page_0003.jpg ./p3.jpg  # fetch 
 
 - `…/document.md` — page-marked converted markdown (`<!-- PAGE n -->`)
 - `…/pages/page_0001.jpg` … — rendered page images (1-based)
-- `…/images/image_0.png` … — extracted figures
+- `…/image_0.png` … — extracted figures (at the container root, not under `images/`)
 
 **Use view-image to actually *see* a pod file.** Those rendered page JPEGs (and any
 uploaded image) are exactly what the **view-image** capability reads — fetch one
@@ -210,9 +213,9 @@ budget — that many whole copies of the file — so a revalidation (304) or a
 link-preview bot's HEAD costs nothing, and a ranged read costs only the bytes it
 moves.
 
-`shares` lists what **you** have handed out, newest first, and pages: a full page
-returns a `next_cursor`, and you must follow it to see everything — a link you
-cannot list is one you cannot revoke. `unshare <code>` kills one immediately; the
+`shares` lists what **you** have handed out, newest first, and it follows the
+pagination for you — the command exhausts `next_page_token` internally and
+returns the whole list, so there is no cursor for you to chase. `unshare <code>` kills one immediately; the
 code is the last path segment of the link. Both are scoped to links you minted
 *and* may still read, so an agent sees only shares to files it has access to.
 
@@ -287,9 +290,10 @@ no run is parked.
 
 A **conversation** in `WAITING` is a different thing, and the difference matters
 before you go chasing it: it is either blocked on you (an `ask_user` question or an
-approval card — answer it and the agent continues) or **snoozed**, meaning the agent
-suspended itself and wakes on its own within 24 hours (the ceiling; requests above
-it are clamped). A snoozed conversation is healthy and needs nothing from you.
+approval card — answer it and the agent continues) or **waiting**, meaning the agent
+suspended itself on a timer, a sandbox process or a sub-agent run, and resumes on its
+own within 24 hours (the ceiling; requests above it are clamped). A waiting
+conversation is healthy and needs nothing from you.
 The CLI does not distinguish the two — `conversations get` reports `status` and
 `last_run_status` but no wait reason — so tell them apart from the transcript:
 `conversations approvals <id>` lists an outstanding `ask_user`/approval, and an
@@ -379,9 +383,9 @@ Two ways in, and which one you have depends on how the agent was granted:
   `search_tools` first, then `search_connector_operations` and
   `run_connector_operation`. Prefer this when you have it — no shell involved.
   (`CONNECTORS` is not alone behind `search_tools`: `POD`, `SUBAGENTS`,
-  `MESSAGING` and `SNOOZE` are deferred the same way. Not seeing a tool in your
-  prefix is not the same as not having it — go looking before concluding you
-  cannot do something.)
+  `MESSAGING`, `WAIT` and `BROWSER` are deferred the same way. Not seeing a
+  tool in your prefix is not the same as not having it — go looking before
+  concluding you cannot do something.)
 - **The CLI** (`lemma connectors …`, needs the `WORKSPACE_CLI` toolset) — same
   operations through a sandbox round trip. Use it when you are driving a shell
   anyway, or when you need the discovery views below.
@@ -389,6 +393,15 @@ Two ways in, and which one you have depends on how the agent was granted:
 Either way the authorization is identical: a `connector:<name>:use` grant per
 app, executed through the invoking user's connected account. Having the toolset
 is not having access to any particular app.
+
+**Neither way creates a connector.** The `CONNECTORS` tools are execution-only —
+four of them, all for finding and running operations on installs that already
+exist. Reaching an app nobody has connected yet means the CLI, and it means
+asking a person for the credential at the end: the catalog has generic
+`openapi` / `mcp` / `sql` entries that become any API, MCP server or Postgres
+database you point them at. The `lemma-builder` skill's `connectors.md` has the
+commands, under *Custom connectors* and *An agent setting a connector up for
+itself*.
 
 ### As direct tools
 
@@ -442,7 +455,7 @@ When you want the wider picture rather than one call:
 lemma connectors overview             # installed connectors: auth-config name, kind, connected accounts
 lemma connectors status               # installed apps + your connected accounts
 lemma connectors describe gmail       # per-connector usage guide, per kind
-                                      # (kinds: package, composio, http, sql, mcp)
+                                      # (kinds: composio, http, sql, mcp)
 lemma connectors operations search "send email"                    # searches EVERY installed connector
 lemma connectors operations search gmail "send email" --limit 5    # scoped; hits include their input schema
 ```

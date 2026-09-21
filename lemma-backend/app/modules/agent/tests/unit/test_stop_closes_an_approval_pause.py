@@ -185,7 +185,7 @@ async def test_stop_with_no_active_run_reaches_the_pause_closers(
         turns, "validate_conversation_access", lambda loaded, **_kwargs: loaded
     )
     monkeypatch.setattr(turns, "require_agent_action", AsyncMock())
-    monkeypatch.setattr(coordinator, "_cancel_active_snooze", _cancel_snooze)
+    monkeypatch.setattr(coordinator, "_cancel_active_wait", _cancel_snooze)
     monkeypatch.setattr(coordinator, "_deny_unresolved_pauses", _deny_pauses)
 
     result = await coordinator.stop_conversation(

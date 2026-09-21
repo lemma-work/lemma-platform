@@ -387,7 +387,9 @@ def stream(
         response = pod_client(client, s, pod).conversations.stream(
             conversation_id, agent_run_id=agent_run_id
         )
-        render_chat_stream(state=s, response=response, agent=None)
+        # Attaching to a run this command did not start: report an error the
+        # run reports, but not the stream simply ending.
+        render_chat_stream(state=s, response=response, agent=None, owns_run=False)
         return True
 
     run_with_client(ctx, reattach)

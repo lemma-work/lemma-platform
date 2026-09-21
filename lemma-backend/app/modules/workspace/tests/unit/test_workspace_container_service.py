@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
 from app.modules.workspace.contracts import SandboxInfo
 from app.modules.workspace.services import (
@@ -62,6 +63,11 @@ class _FakeSandbox:
 class _FakeManagerClient:
     def __init__(self) -> None:
         self.directories: list[tuple[UUID, str]] = []
+        #: Every file written into the sandbox, by path. The session path
+        #: writes one: the browser-proxy decision, which is asserted on
+        #: every session so that withdrawing a proxy takes effect without
+        #: anybody replacing a sandbox.
+        self.files: dict[str, bytes] = {}
 
     async def create_directory(
         self,
@@ -72,6 +78,18 @@ class _FakeManagerClient:
     ) -> None:
         del deadline_at
         self.directories.append((logical_id, path))
+
+    async def write_file(
+        self,
+        logical_id: UUID,
+        path: str,
+        data: bytes,
+        *,
+        deadline_at=None,
+        **_kwargs,
+    ) -> None:
+        del logical_id, deadline_at
+        self.files[path] = data
 
 
 def _retryable_failure(code: str = "PROVIDER_UNAVAILABLE") -> SandboxUnavailable:
@@ -273,7 +291,7 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     assert session.sandbox_id == str(user_id)
     assert session.client is manager_client
     assert session.env_vars == {"LEMMA_TOKEN": "dynamic"}
-    assert manager_client.directories == [(user_id, "/workspace")]
+    assert manager_client.directories == [(user_id, f"{WORKSPACE_ROOT}")]
 
 
 @pytest.mark.asyncio
@@ -313,7 +331,7 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     # re-running the mkdir round trip -- a real sandbox round trip, on a
     # directory created by the first command of the run.
     await service.get_session(user_id=user_id, pod_id=None, session_id="third")
-    assert manager_client.directories == [(user_id, "/workspace")]
+    assert manager_client.directories == [(user_id, f"{WORKSPACE_ROOT}")]
 
     # It is a window, not a permanent answer: the check comes back afterwards.
     # The window is compared against the loop clock on every read
@@ -326,8 +344,8 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
 
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]
 
     # A container recreate keeps the disk, and /workspace IS the disk -- so the
@@ -341,8 +359,8 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     )
     await service.get_session(user_id=user_id, pod_id=None, session_id="fifth")
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]
 
     # A storage reset is the case where the files really are gone, so the
@@ -356,9 +374,9 @@ async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates
     await service.get_session(user_id=user_id, pod_id=None, session_id="sixth")
 
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]
 
 
@@ -391,8 +409,20 @@ async def test_get_session_reensures_after_missing_provider_allocation(
     async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
         return {"LEMMA_TOKEN": "dynamic"}
 
+    # Yields once rather than returning outright, and that one `await` is
+    # load-bearing. `async def no_wait(_): return None` never reaches the
+    # event loop, so the retry loop it stands in for -- `while now <
+    # deadline: ... await asyncio.sleep(delay)` -- stops being cooperative
+    # and becomes a wall-clock spin that starves the very task it is waiting
+    # for. Measured on this interpreter: 2,127,213 iterations in 200ms with
+    # the concurrent task never once scheduled, against one iteration and the
+    # task running when the sleep yields. That is the shape of a CI run where
+    # this test took 1341 seconds -- about four turns of the 300s directory
+    # deadline -- while the rest of the suite finished in its usual 233.
+    real_sleep = asyncio.sleep
+
     async def no_wait(_seconds: float) -> None:
-        return None
+        await real_sleep(0)
 
     monkeypatch.setattr(service, "get_env_vars", environment)
     monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
@@ -407,6 +437,42 @@ async def test_get_session_reensures_after_missing_provider_allocation(
     assert session.sandbox_id == str(user_id)
     assert len(sandbox.ensure_calls) == 2
     assert manager_client.directories == [
-        (user_id, "/workspace"),
-        (user_id, "/workspace"),
+        (user_id, f"{WORKSPACE_ROOT}"),
+        (user_id, f"{WORKSPACE_ROOT}"),
     ]
+
+
+async def test_a_session_tells_the_sandbox_whether_to_use_a_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Written on every session, and written even when the answer is "no".
+
+    The viewer path is not enough on its own: an agent typing
+    `agent-browser open` in its own shell reaches `lemma-ensure-display`
+    without the backend in the loop. A sandbox no person ever watches would
+    never hear the decision, and an older one would go on using the value
+    baked into its creation environment -- which is the bug, because that
+    value could never be withdrawn.
+    """
+    from app.modules.workspace.services.browser_proxy import (
+        BROWSER_PROXY_DECISION_PATH,
+    )
+
+    user_id = uuid4()
+    sandbox = _FakeSandbox()
+    service = _service(sandbox)
+    manager_client = _FakeManagerClient()
+
+    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+        return {"LEMMA_TOKEN": "dynamic"}
+
+    monkeypatch.setattr(service, "get_env_vars", environment)
+    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+
+    await service.get_session(user_id=user_id, pod_id=None, session_id="conversation")
+
+    assert BROWSER_PROXY_DECISION_PATH in manager_client.files
+    assert manager_client.files[BROWSER_PROXY_DECISION_PATH] == b"", (
+        "an empty pool is still a decision -- it is how a withdrawal reaches "
+        "a sandbox that already has a proxy"
+    )

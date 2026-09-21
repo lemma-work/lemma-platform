@@ -5,7 +5,6 @@
     "app/core/authorization/grants.py::list_resource_grants::unbounded-read": 1,
     "app/core/authorization/resource_names.py::resolve_resource_ids_by_names::unbounded-read": 1,
     "app/core/authorization/resource_names.py::resolve_resource_names_by_ids::unbounded-read": 1,
-    "app/core/authorization/service.py::AuthorizationDataService._load_principal_roles::unbounded-read": 1,
     "app/core/authorization/service.py::AuthorizationDataService._replace_role_permissions::unbounded-read": 1,
     "app/core/authorization/service.py::AuthorizationDataService._to_summary::unbounded-read": 1,
     "app/core/authorization/service.py::AuthorizationDataService.list_roles::unbounded-read": 1,

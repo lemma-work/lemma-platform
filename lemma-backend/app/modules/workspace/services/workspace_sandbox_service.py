@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 from opentelemetry import trace
 
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.core.config import settings
 from app.core.request_context import create_inherited_task
 from sandbox_runtime.protocol import (
@@ -31,6 +32,9 @@ from app.modules.workspace.sandbox_session import (
 from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSession
 from app.modules.workspace.services.local_sandbox_client import LocalSandboxClient
 from app.modules.workspace.services.workspace_process_store import WorkspaceProcessStore
+from app.modules.workspace.services.workspace_runtime_bundle import (
+    WorkspaceRuntimeBundleMixin,
+)
 from app.modules.workspace.services.workspace_storage_generation_store import (
     WorkspaceStorageGenerationStore,
 )
@@ -77,7 +81,7 @@ async def reset_workspace_store_state() -> None:
         _process_store = None
 
 
-class WorkspaceSandboxService:
+class WorkspaceSandboxService(WorkspaceRuntimeBundleMixin):
     """Service for user-scoped workspace sandbox lifecycle and sessions."""
 
     _inflight_ensures: dict[tuple[int, UUID], asyncio.Task[SandboxInfo]] = {}
@@ -360,7 +364,7 @@ class WorkspaceSandboxService:
         user_id: UUID,
         pod_id: UUID | None,
         session_id: Optional[str] = None,
-        initial_cwd: str = "/workspace",
+        initial_cwd: str = WORKSPACE_ROOT,
         close_on_exit: bool = True,
         workload_type: str | None = None,
         workload_id: UUID | None = None,
@@ -375,6 +379,9 @@ class WorkspaceSandboxService:
                 user_id,
                 resolved_cwd,
             )
+        with _tracer.start_as_current_span("lemma.workspace.runtime_bundle"):
+            await self._ensure_runtime_bundle(user_id, sandbox_info)
+            await self._ensure_browser_proxy(user_id, sandbox_info)
 
         if env_vars is None:
             with _tracer.start_as_current_span("lemma.workspace.env_vars"):

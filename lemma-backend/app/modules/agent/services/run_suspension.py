@@ -1,6 +1,6 @@
 """How a remote harness's turn ends when a tool puts the agent to sleep.
 
-The in-process harness suspends from the inside: ``snooze`` raises
+The in-process harness suspends from the inside: ``wait_for`` raises
 ``AgentInputRequired``, the run loop catches it, and the turn is over. A remote
 harness owns its own session and runs the tool over MCP, so nothing raised
 inside that tool call can end its turn — the agent simply carries on with the

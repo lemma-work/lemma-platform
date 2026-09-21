@@ -178,6 +178,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(request, message, code),
+            # `exc.headers` was dropped here, and some statuses are not
+            # answerable without them: a 416 has to carry `Content-Range` to
+            # tell a resuming download the real size, and a 401 that omits
+            # `WWW-Authenticate` is not a challenge. Raising an `HTTPException`
+            # with headers looked like it worked -- the status was right and
+            # the headers silently went nowhere.
+            headers=exc.headers,
         )
 
     @app.exception_handler(Exception)

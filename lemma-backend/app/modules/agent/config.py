@@ -32,6 +32,66 @@ class AgentSettings(BaseSettings):
         extra="ignore",
     )
 
+    # --- Run budget -------------------------------------------------------
+    # Backstops for a run that has stopped making progress, not a schedule for
+    # one that is working. Long work is wanted: a run that spends an hour and
+    # comes back with the thing asked for is a success, and nothing here should
+    # hurry it. So these sit far out — where only a run going round in circles
+    # arrives — rather than anywhere an ordinary long task would reach.
+    #
+    # Contract numbers, so they live here rather than in a comment. A deployment
+    # whose work is longer still raises them; setting one to 0 switches that
+    # dimension off entirely. Cost control is not their job: spend is capped per
+    # organization, and these exist so a stuck run does not sit there burning
+    # that cap with nothing to show.
+    agent_run_budget_model_requests: int = Field(
+        default=500,
+        description=(
+            "Model requests one run may make before pausing to ask whether to "
+            "continue. 0 disables the check. Compaction is excluded: harness "
+            "bookkeeping must not spend the agent's allowance."
+        ),
+    )
+    agent_run_budget_wall_clock_seconds: float = Field(
+        default=7200.0,
+        description=(
+            "Seconds one run may take before pausing to ask whether to continue. "
+            "Catches the run that waits rather than loops, where every call is "
+            "cheap and a request count never trips. 0 disables the check."
+        ),
+    )
+    agent_run_budget_tool_failures: int = Field(
+        default=15,
+        description=(
+            "Consecutive failing tool calls before pausing to ask. Counted "
+            "consecutively, so a success anywhere clears it — and set well above "
+            "the friction of ordinary exploration, where a run legitimately "
+            "probes several paths that are not there before finding the one "
+            "that is. 0 disables the check."
+        ),
+    )
+    agent_run_budget_unattended_wall_clock_seconds: float = Field(
+        default=7200.0,
+        description=(
+            "The wall-clock ceiling for a run nobody is watching — a schedule, a "
+            "surface, an automation. Its own setting because nobody is waiting "
+            "on it, so a deployment may want to let it run longer; the default "
+            "matches the interactive one rather than assuming that. 0 disables "
+            "the check."
+        ),
+    )
+    agent_run_warn_at: float = Field(
+        default=0.8,
+        description=(
+            "Fraction of a run ceiling at which the run is told it is getting "
+            "close — each budget dimension, and the history size that triggers "
+            "compaction. Warned once each. Arriving unannounced turns a "
+            "backstop into a trap: the run is cut off, or quietly loses detail, "
+            "instead of landing what it has. Outside (0, 1) switches the "
+            "warnings off."
+        ),
+    )
+
     agent_run_stop_poll_interval_seconds: float = Field(
         default=1.0,
         description="Minimum interval between database polls of an agent run's stop flag.",
@@ -82,9 +142,12 @@ class AgentSettings(BaseSettings):
         default=None,
         description=(
             "Optional model used to compact conversation history. Defaults to "
-            "the run's own model, which means every compaction is a ~70k-token "
-            "request on the most expensive model in play; a small fast model is "
-            "usually the better choice."
+            "the run's own model, which makes every compaction a large request "
+            "on the most expensive model in play. A smaller model is cheaper, "
+            "but weigh it knowing what it buys: past the first compaction the "
+            "summary is the only memory the run has of its early work, a long "
+            "run rewrites it repeatedly, and whatever a weaker model drops on "
+            "one pass is gone from every pass after it."
         ),
     )
     agent_model_context_windows: str = Field(

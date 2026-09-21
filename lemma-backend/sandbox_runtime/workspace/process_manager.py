@@ -14,6 +14,7 @@ import struct
 import termios
 from uuid import UUID
 
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS
 from sandbox_runtime.protocol import ProcessState, StartProcessRequest
 from sandbox_runtime.tasks import create_inherited_task
 
@@ -316,7 +317,9 @@ class ManagedProcess:
 
 
 class ProcessManager:
-    def __init__(self, allowed_roots: tuple[str, ...] = ("/workspace", "/tmp")) -> None:
+    def __init__(
+        self, allowed_roots: tuple[str, ...] = RUNTIME_FILESYSTEM_ROOTS
+    ) -> None:
         self._allowed_roots = tuple(Path(root).resolve() for root in allowed_roots)
         self._processes: dict[UUID, ManagedProcess] = {}
         self._lock = asyncio.Lock()

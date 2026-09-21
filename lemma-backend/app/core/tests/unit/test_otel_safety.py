@@ -646,3 +646,60 @@ def test_a_provider_that_cannot_flush_at_shutdown_says_so(monkeypatch, caplog) -
     assert caplog.text.count("observability.telemetry.shutdown_step_failed") == 2
     assert "TimeoutError" in caplog.text
     assert "RuntimeError" in caplog.text
+
+
+def test_our_own_error_spans_keep_the_description_that_names_the_failure() -> None:
+    """ "A tool failed" and "which tool failed how" are different dashboards.
+
+    Every ERROR status used to export with its description stripped, so the one
+    field that says what went wrong never left the process. It is free text, so
+    it is kept only under the rule the span's own *name* is kept under — an
+    `app.` instrumentation scope, i.e. code in this repository.
+    """
+    capture = _CaptureExporter()
+    exporter = SanitizingSpanExporter(capture)
+    span = _adversarial_span(
+        scope_name="app.modules.agent.run_phases",
+        http_route="/pods/{pod_id}",
+    )
+    assert exporter.export([span]) is SpanExportResult.SUCCESS
+    assert capture.spans[0].status.description == "CANARY status"
+
+
+def test_a_third_party_error_description_is_still_dropped() -> None:
+    """A library's status text has neither guarantee, so it does not travel."""
+    capture = _CaptureExporter()
+    exporter = SanitizingSpanExporter(capture)
+    assert exporter.export([_adversarial_span()]) is SpanExportResult.SUCCESS
+    assert capture.spans[0].status.description is None
+
+
+def test_a_kept_description_is_still_redacted_and_bounded() -> None:
+    """Keeping it is not exempting it from everything else this file enforces."""
+    capture = _CaptureExporter()
+    exporter = SanitizingSpanExporter(capture)
+    context = SpanContext(
+        trace_id=1, span_id=2, is_remote=False, trace_flags=TraceFlags.SAMPLED
+    )
+    span = ReadableSpan(
+        name="lemma.agent.tool.pod_write_record",
+        context=context,
+        parent=None,
+        resource=Resource({"service.name": "lemma-test"}),
+        attributes={},
+        events=(),
+        links=(),
+        kind=SpanKind.INTERNAL,
+        instrumentation_scope=InstrumentationScope("app.modules.agent.run_phases"),
+        status=Status(
+            StatusCode.ERROR,
+            "failed for https://user:hunter2@example.test/x\nsecond line " + "z" * 400,
+        ),
+        start_time=1,
+        end_time=2,
+    )
+    assert exporter.export([span]) is SpanExportResult.SUCCESS
+    description = capture.spans[0].status.description
+    assert "hunter2" not in description
+    assert "\n" not in description
+    assert len(description) <= 256

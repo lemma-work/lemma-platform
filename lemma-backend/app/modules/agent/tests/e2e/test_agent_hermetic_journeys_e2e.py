@@ -18,6 +18,7 @@ from app.modules.test_support.e2e.scripted_model import (
     script_tool_result_ref,
 )
 from app.modules.test_support.e2e.waiters import eventually
+from sandbox_runtime.paths import WORKSPACE_ROOT
 
 pytestmark = pytest.mark.e2e
 
@@ -1260,7 +1261,9 @@ async def test_the_shell_and_python_share_the_conversations_one_directory(
     # Creation stamps the directory; everything below must agree with it rather
     # than with any path recomputed on the side.
     recorded_cwd = conversation.json()["metadata"]["cwd"]
-    assert recorded_cwd.startswith("/workspace/"), conversation.json()["metadata"]
+    assert recorded_cwd.startswith(f"{WORKSPACE_ROOT}/"), conversation.json()[
+        "metadata"
+    ]
 
     events = await _send_message(
         authenticated_client,
@@ -1329,7 +1332,7 @@ async def test_a_project_conversation_is_checked_out_before_python_runs(
     """Picking a project is picking a directory -- for both tools, not one.
 
     A conversation started against a repo resolves its cwd to
-    `/workspace/repos/{owner}/{repo}`, and `get_session` creates that directory
+    `~/repos/{owner}/{repo}`, and `get_session` creates that directory
     whether or not anything was ever cloned into it. Only `exec_command` ran the
     checkout, so an agent whose first tool call was `execute_python` opened its
     project, found an empty folder, and was told nothing about why.
@@ -1397,7 +1400,7 @@ async def test_a_project_conversation_is_checked_out_before_python_runs(
     # The repo derives the directory: one source of truth, not two to keep in
     # step.
     recorded_cwd = conversation.json()["metadata"]["cwd"]
-    assert recorded_cwd == f"/workspace/repos/{owner}/{repo}", conversation.json()
+    assert recorded_cwd == f"{WORKSPACE_ROOT}/repos/{owner}/{repo}", conversation.json()
 
     events = await _send_message(
         authenticated_client,

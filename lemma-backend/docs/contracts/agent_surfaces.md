@@ -36,7 +36,9 @@ The table below is generated from the committed OpenAPI specification by `script
 | `surface.webhook.handle_platform` | POST | `/surfaces/webhooks/{platform}` | Handle platform-level surface webhook |
 | `surface.webhook.handle_surface` | POST | `/surfaces/{surface_id}/webhook` | Handle surface-level webhook |
 | `surface.webhook.handle_telegram_manager` | POST | `/surfaces/webhooks/telegram-manager` | Handle Telegram manager-bot webhook |
+| `surface.webhook.handle_whatsapp_number` | POST | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | Handle a webhook delivered to one pooled WhatsApp number |
 | `surface.webhook.verify` | GET | `/surfaces/webhooks/{platform}` | Verify surface webhook using the platform callback URL |
 | `surface.webhook.verify_surface` | GET | `/surfaces/{surface_id}/webhook` | Verify surface webhook using a surface-level callback URL |
+| `surface.webhook.verify_whatsapp_number` | GET | `/surfaces/webhooks/whatsapp/numbers/{phone_number_id}` | Verify a pooled WhatsApp number's own callback URL |
 
 <!-- /generated:operations -->

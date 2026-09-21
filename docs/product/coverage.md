@@ -11,14 +11,14 @@ only a promise marked `covered` with no test is.
 
 | Status | Scenarios |
 | --- | ---: |
-| `covered` | 160 |
-| `gap` | 0 |
-| `manual` | 6 |
+| `covered` | 166 |
+| `gap` | 2 |
+| `manual` | 12 |
 | `planned` | 0 |
 | `withdrawn` | 0 |
-| **total** | **166** |
+| **total** | **180** |
 
-Scenario tests declaring a promise: 387.
+Scenario tests declaring a promise: 400.
 
 ## Contract coverage
 
@@ -28,7 +28,7 @@ the module suites may cover it — but it is untested *as product*.
 
 | Surface | Exercised | Total |
 | --- | ---: | ---: |
-| OpenAPI operations | 242 | 251 |
+| OpenAPI operations | 248 | 264 |
 | Product events | 28 | 28 |
 
 ## Covered, but only in a lane that is not routinely run
@@ -72,6 +72,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-AGENT-020` Consequential actions come back to a person first | `covered` | `test_deciding_an_unknown_approval_is_refused`, `test_approvals_are_listable`, `test_approving_runs_the_described_action`, `test_denying_leaves_the_action_undone`, `test_a_destructive_attempt_asks_rather_than_failing_silently`, `test_an_approval_is_offered_with_native_controls` |
 | `PS-AGENT-021` An agent can ask a person a question mid-run | `covered` | `test_an_agent_asks_and_resumes_with_the_answer`, `test_an_unanswered_question_keeps_waiting` |
 | `PS-AGENT-022` Every action is attributable | `covered` | `test_agent_actions_are_attributable`, `test_decisions_are_a_durable_record` |
+| `PS-AGENT-023` A run can wait for something without occupying a turn | `covered` | `test_a_waiting_agent_ends_its_turn_and_returns`, `test_stopping_a_waiting_conversation_ends_the_wait` |
 | `PS-AGENT-030` An agent can delegate to a subagent | `covered` | `test_an_agent_delegates_to_a_subagent`, `test_an_image_is_understood` |
 | `PS-AGENT-031` An agent can show a person something interactive | `covered` | `test_an_embed_token_needs_a_real_result` |
 | `PS-AGENT-040` A person pairs a local agent host with their account | `covered` | `test_an_agent_host_can_be_paired_and_revoked`, `test_an_unpaired_host_cannot_claim_anything`, `test_harnesses_of_an_unknown_host_are_refused` |
@@ -126,6 +127,8 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-CONN-010` An admin installs a connector once for everyone | `covered` | `test_an_oauth_connector_needs_credentials`, `test_installing_discovers_operations`, `test_an_installation_does_not_leak_across_organizations`, `test_an_outsider_cannot_install`, `test_an_installation_can_be_renamed` |
 | `PS-CONN-011` Provider secrets given at install stay secret | `covered` | `test_a_provider_key_is_never_returned`, `test_an_oauth_connector_needs_credentials`, `test_connecting_github_identifies_the_account`, `test_the_google_connect_flow_is_configured`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-012` Removing an installation removes what depended on it | `covered` | `test_uninstalling_stops_everything_under_it` |
+| `PS-CONN-013` An app the catalog has never heard of can still be connected | `covered` | `test_installing_discovers_operations` |
+| `PS-CONN-014` A connector the platform cannot sign in to asks for credentials instead of offering to connect | `manual` | — |
 | `PS-CONN-020` A person connects their account and it belongs to them | `covered` | `test_an_account_belongs_to_who_connected_it`, `test_an_account_is_not_shared`, `test_disconnecting_stops_the_account_working`, `test_reconnecting_restores_the_account`, `test_connecting_github_identifies_the_account`, `test_connecting_slack_identifies_the_workspace` |
 | `PS-CONN-021` Connecting through a provider's consent screen works end to end | `covered` | `test_connecting_needs_a_consent_flow`, `test_an_unknown_callback_is_refused` |
 | `PS-CONN-022` An account that stops working says so | `covered` | `test_reconnecting_restores_the_account` |
@@ -158,6 +161,7 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ONB-041` An organization always has at least one owner | `covered` | `test_the_last_owner_cannot_step_down` |
 | `PS-ONB-042` Removal respects the role hierarchy | `covered` | `test_removing_a_member_takes_their_access` |
 | `PS-ONB-043` A person can leave on their own | `covered` | `test_removing_a_member_takes_their_access` |
+| `PS-ONB-050` First-chat setup yields one usable personal workspace | `covered` | `test_first_chat_workspace_is_ready_and_reused`, `test_importer_can_defer_personal_pod_creation` |
 
 ## [Operating a deployment](journeys/operating-a-deployment.md)
 
@@ -216,7 +220,7 @@ working one. It is listed because `covered` otherwise reads as
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_reading_a_bundle_grants_nothing_else`, `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous`, `test_a_stranger_is_sent_nothing` |
+| `PS-ACCESS-001` Every resource has a stated reach | `covered` | `test_reading_a_bundle_grants_nothing_else`, `test_the_default_reach_is_the_pod`, `test_a_personal_resource_stays_personal`, `test_public_never_means_anonymous`, `test_a_personal_resource_is_not_named_in_a_listing`, `test_a_stranger_is_sent_nothing` |
 | `PS-ACCESS-002` Narrowing a resource's reach takes access away immediately | `covered` | `test_revoking_closes_it_again` |
 | `PS-ACCESS-003` Changing reach does not silently disarm the pod's software | `covered` | `test_narrowing_reach_keeps_workload_grants` |
 | `PS-ACCESS-010` A person grants one other person access to one resource | `covered` | `test_approving_cannot_confer_unheld_pod_permissions`, `test_a_grant_is_narrow`, `test_revoking_closes_it_again`, `test_a_grant_is_scoped_to_its_pod`, `test_nobody_confers_more_than_they_have` |
@@ -229,16 +233,31 @@ working one. It is listed because `covered` otherwise reads as
 | `PS-ACCESS-030` A person can see who can reach a resource | `covered` | `test_a_resource_can_be_previewed`, `test_a_grant_is_auditable`, `test_resource_access_is_readable` |
 | `PS-ACCESS-031` Refusals are informative without leaking | `covered` | `test_a_refusal_is_informative`, `test_a_refusal_does_not_leak` |
 
+## [Signing in to sites](journeys/signing-in-to-sites.md)
+
+| Scenario | Status | Proven by |
+| --- | --- | --- |
+| `PS-BROWSER-010` An agent that meets a login wall asks, and waits | `gap` | `test_somebody_elses_request_is_not_found` |
+| `PS-BROWSER-011` A person can tell what they are signing in to | `manual` | — |
+| `PS-BROWSER-012` Finishing resumes the run, and says whether it was kept | `covered` | `test_finishing_somebody_elses_request_is_refused` |
+| `PS-BROWSER-020` A login is the person's own, and it stays | `covered` | `test_one_persons_logins_are_not_anothers` |
+| `PS-BROWSER-021` A login that has stopped working says so | `manual` | — |
+| `PS-BROWSER-022` A person sees and undoes what their browser holds | `covered` | `test_nothing_saved_is_an_empty_list`, `test_signing_out_without_a_running_browser_is_refused` |
+| `PS-BROWSER-030` A person can watch, and drive, their own browser | `gap` | `test_asking_whether_a_browser_can_be_watched_starts_nothing` |
+
 ## [Surfaces and notifications](journeys/surfaces-and-notifications.md)
 
 | Scenario | Status | Proven by |
 | --- | --- | --- |
-| `PS-SURF-001` A person connects a pod's agent to a further platform | `covered` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
+| `PS-SURF-001` A person connects an agent to a further platform | `covered` | `test_a_surface_reads_back`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_available_platforms_are_listed`, `test_an_unconfigured_surface_is_refused`, `test_an_outsider_cannot_touch_surfaces` |
 | `PS-SURF-002` Setting up a platform does not require reading its documentation | `covered` | `test_a_slack_manifest_is_generated`, `test_a_slack_manifest_is_named_for_its_agent`, `test_a_managed_bot_setup_says_what_is_missing`, `test_a_consent_callback_without_a_grant_is_refused`, `test_a_setup_guide_is_available` |
 | `PS-SURF-003` A person changes or removes a surface | `covered` | `test_a_surface_can_be_repointed`, `test_a_repointed_surface_answers_as_its_new_agent`, `test_deleting_a_surface_stops_it` |
+| `PS-SURF-004` A stranger on a shared bot proves who they are before getting a workspace | `manual` | — |
+| `PS-SURF-005` Signup inside a company installation stays inside that company | `manual` | — |
+| `PS-SURF-006` Nothing about signup appears in a channel | `manual` | — |
 | `PS-SURF-010` Only genuine messages from the platform are acted on | `covered` | `test_a_real_message_reaches_a_real_person`, `test_verification_needs_no_session`, `test_a_bad_verification_token_is_refused`, `test_a_message_is_answered`, `test_an_unsigned_email_is_refused`, `test_an_unknown_sender_is_told_how_to_get_access`, `test_an_unsigned_delivery_is_rejected`, `test_a_wrongly_signed_delivery_is_rejected`, `test_a_surface_webhook_can_be_verified`, `test_the_manager_webhook_rejects_unsigned`, `test_webhook_verification_needs_no_session`, `test_an_unsigned_webhook_is_rejected` |
 | `PS-SURF-011` The same message delivered twice is answered once | `covered` | `test_an_image_is_understood`, `test_a_repeated_delivery_is_answered_once`, `test_a_raced_delivery_is_answered_once` |
-| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access` |
+| `PS-SURF-012` A person on a platform is resolved to who they are in Lemma | `covered` | `test_an_unknown_sender_is_told_how_to_get_access`, `test_reaching_the_bot_is_not_membership_of_the_pod`, `test_a_sender_is_the_same_person_on_every_message` |
 | `PS-SURF-013` A thread on the platform is a conversation in the pod | `covered` | `test_a_chat_is_one_conversation`, `test_a_separate_chat_is_a_separate_conversation`, `test_a_surface_conversation_records_its_origin` |
 | `PS-SURF-014` A file sent to a surface reaches the pod | `covered` | `test_an_attachment_reaches_the_pod` |
 | `PS-SURF-020` The answer comes back where the question was asked | `covered` | `test_a_real_message_reaches_a_real_person`, `test_a_message_is_answered`, `test_an_unknown_sender_is_told_how_to_get_access` |

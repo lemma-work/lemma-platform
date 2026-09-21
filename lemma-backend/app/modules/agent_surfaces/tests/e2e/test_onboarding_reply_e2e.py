@@ -18,7 +18,7 @@ from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContex
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
 )
-from app.modules.agent_surfaces.events.handlers import build_surface_event_handler
+from app.modules.agent_surfaces.composition import build_surface_ingress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _create_surface,
     _ensure_connector_account,
@@ -37,7 +37,7 @@ async def _prepare_telegram_dm(
     receiver_surface_ids: list[UUID] | None = None,
 ):
     uow = SqlAlchemyUnitOfWork(db_session)
-    handler = build_surface_event_handler(uow)
+    handler = build_surface_ingress(uow)
     context = await handler.prepare_ingress(
         SurfacePlatformWebhookIngress(
             source="telegram",

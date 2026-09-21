@@ -15,10 +15,12 @@ on the control in front of a destructive action's Approve.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from app.modules.agent_surfaces.services.interaction_helpers import (
+    _within_authorized_scope,
     interaction_sender_matches,
 )
 
@@ -88,3 +90,56 @@ def test_the_refusal_is_visible_to_an_operator() -> None:
         "agent_surfaces.ingress_service.interaction_submitter_refused.degraded"
     ]
     assert spec.level == "warning"
+
+
+def _link(surface_id):
+    return SimpleNamespace(surface_id=surface_id, conversation_id=uuid4())
+
+
+def test_a_conversation_on_a_surface_this_request_proved_is_reachable() -> None:
+    """The ordinary case, asserted beside the refusals it must not become.
+
+    A check that refuses everything passes every test written about refusals.
+    """
+    mine = uuid4()
+    assert _within_authorized_scope(_link(mine), [mine, uuid4()])
+
+
+def test_a_conversation_on_somebody_elses_surface_is_not() -> None:
+    """The cross-tenant hole this exists to close.
+
+    The button carries an unsigned `conversation_id|tool_call_id`, and a Slack
+    or Teams tenant holds its own signing secret -- so anyone running their own
+    app can mint a correctly-signed payload naming any conversation id and any
+    `user.id`. Before this, the id alone decided whose conversation was
+    resolved: the victim's surface was loaded, their credentials returned, and
+    an Approve resolved their paused tool call as them, in their pod.
+
+    `interaction_sender_matches` was the only thing left standing, and it
+    compares two values that same attacker supplies. The receiver list is
+    derived from the workspace the signature actually proved, which is the one
+    boundary the payload cannot cross.
+    """
+    assert not _within_authorized_scope(_link(uuid4()), [uuid4(), uuid4()])
+
+
+def test_no_receiver_list_means_our_own_secret_verified_it() -> None:
+    """`None` is not "skip the check" -- it is "there is no subset to check".
+
+    It survives only where the payload was verified with a secret of ours: the
+    shared Telegram bot, the shared WhatsApp number. Those serve every pod, so
+    the delivering receiver names no surfaces and the sender match is the
+    control. Treating `None` as a refusal would silently kill every shared-bot
+    button instead.
+    """
+    assert _within_authorized_scope(_link(uuid4()), None)
+
+
+def test_an_empty_receiver_list_refuses_rather_than_admits() -> None:
+    """A receiver serving nothing proved nothing.
+
+    The dangerous reading of an empty list is "no restriction". It is the
+    opposite, and it matches how `routing_surfaces` reads an empty
+    `surface_ids` -- `IN ()` matches nothing.
+    """
+    assert not _within_authorized_scope(_link(uuid4()), [])

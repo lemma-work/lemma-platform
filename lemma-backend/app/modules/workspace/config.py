@@ -5,10 +5,10 @@ module's own -- `WORKSPACE_*`, plus `FUNCTION_*` for the function runtime and
 `E2B_*` for that provider's credentials.
 """
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import AliasChoices, Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from app.core.settings_env import dotenv_path
 
@@ -40,6 +40,33 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("FUNCTION_IMAGE"),
         description="Container image backing function runtime sandboxes",
     )
+    owner_tag: str = Field(
+        default="",
+        description=(
+            "Marks sandboxes as belonging to this stack, so a sweep here "
+            "cannot reach another stack's on the same Docker daemon. Set it "
+            "wherever one machine runs two stacks at once -- the e2e harness "
+            "sets its own. Empty means unstamped and unscoped, which is what "
+            "every container created before this label existed looks like."
+        ),
+    )
+    runtime_bundle_dir: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("WORKSPACE_RUNTIME_BUNDLE_DIR"),
+        description=(
+            "Directory holding the first-party runtime bundle this backend "
+            "installs into workspace sandboxes. Normally unset: the bundle "
+            "ships inside the backend image at /app/runtime-bundle, so a "
+            "rollback of the backend is a rollback of the bundle. In "
+            "development, `make runtime-bundle` builds one and prints the "
+            "export line for this setting. Unset and with no bundle in the "
+            "image there is simply nothing to install, and a sandbox keeps "
+            "running the copy baked into its own image — which is what every "
+            "sandbox does today. Point it elsewhere only to test a bundle you "
+            "built by hand: decoupling the two is how a backend and its "
+            "sandboxes come to disagree about the code they are running."
+        ),
+    )
     workspace_profile_name: str = Field(
         default="workspace-python-v1",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_NAME"),
@@ -49,6 +76,18 @@ class WorkspaceSettings(BaseSettings):
         # Bumped when the workspace image changes, so a sandbox built from the
         # previous one is replaced rather than reused. Last moved when the
         # GitHub CLI was added to the image.
+        #
+        # Deliberately *not* moved for the browser work, though that work
+        # changes the image. On E2B the sandbox is the disk, so forcing a
+        # replacement destroys the person's workspace and their browser
+        # profile -- which is the act #744 made template drift tolerated to
+        # avoid. It is not needed here either: `sandbox_runtime/browser_relay`
+        # ships in the runtime bundle and is installed on every session, so
+        # the relay half of these fixes reaches existing sandboxes without an
+        # image roll, and every backend caller of a new script is guarded by
+        # `command -v`. What is left -- the shell scripts -- arrives when a
+        # sandbox is next recreated, which costs those sandboxes nothing they
+        # are not already living with.
         default=f"sha256:{'3' * 64}",
         pattern=r"^sha256:[0-9a-f]{64}$",
         validation_alias=AliasChoices("WORKSPACE_PROFILE_DIGEST"),
@@ -148,6 +187,49 @@ class WorkspaceSettings(BaseSettings):
         validation_alias=AliasChoices("WORKSPACE_HOST_ALIAS"),
         description="Hostname sandboxes use to reach the host running the backend",
     )
+
+    # --- Browser sandbox proxying -------------------------------------------
+    browser_proxy_urls: Annotated[list[SecretStr], NoDecode] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("WORKSPACE_BROWSER_PROXY_URLS"),
+        description=(
+            "Comma-separated pool of proxy URLs, credentials inline where the "
+            "proxy needs them (e.g. http://user:pass@residential-proxy.example:8080). "
+            "One entry is chosen per sandbox by rendezvous hashing on its id, "
+            "so the same sandbox keeps the same proxy across restarts, resumes "
+            "and replacement -- session cookies bound to an address log a "
+            "person out when it hops, and this feature exists for login walls. "
+            "The choice is delivered as a file the sandbox reads at every "
+            "browser start, not baked into its environment at create: emptying "
+            "this pool withdraws the proxy from sandboxes that already have "
+            "one, with no restart and nothing to replace. agent-browser parses "
+            "out the credentials before putting the server on Chrome's command "
+            "line and answers Chrome's CDP `Fetch.authRequired` with them "
+            "itself, so a credentialed proxy needs nothing further here. "
+            "`SecretStr`, not `str`: a proxy URL names infrastructure an "
+            "operator may not want in a log line, same as any other credential "
+            "in this file."
+        ),
+    )
+
+    @field_validator("browser_proxy_urls", mode="before")
+    @classmethod
+    def _split_browser_proxy_urls(cls, value: object) -> object:
+        """A comma-separated env string, or already a list -- either works.
+
+        `BaseSettings` reads a `list[...]` field from an env var as JSON by
+        default (`WORKSPACE_BROWSER_PROXY_URLS=["http://a:8080"]`), which is
+        not how an operator writes any other list-shaped setting in this
+        codebase (`LEMMA_OPENAI_MODEL_NAMES` and friends are comma-separated)
+        -- and fails outright on a plain comma-separated value before this
+        validator ever runs. `NoDecode` on the field turns that JSON decode
+        off so the raw string reaches here instead; splitting by hand then
+        keeps `WORKSPACE_BROWSER_PROXY_URLS=http://a:8080,http://b:8080`
+        consistent with the rest of the codebase's convention.
+        """
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     # --- E2B ---------------------------------------------------------------
     e2b_api_key: Optional[SecretStr] = Field(

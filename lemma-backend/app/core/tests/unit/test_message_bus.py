@@ -284,3 +284,79 @@ async def test_a_freshly_pending_entry_still_protects_the_stream(monkeypatch) ->
     bus = message_bus.FastStreamRedisMessageBus("redis://message-bus-test")
 
     assert await bus._safe_publish_maxlen(client, "events") == 400
+
+
+@pytest.fixture(autouse=True)
+def _report_again():
+    """The throttle is process-local, so each test starts from a clean slate."""
+    message_bus._trim_reports.reset()
+    yield
+
+
+def _trim_warnings(caplog) -> list[dict]:
+    """structlog hands the whole event to the stdlib record as a dict."""
+    return [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "redis.stream.trim_degraded.degraded"
+    ]
+
+
+def test_a_burst_of_relaxed_publishes_collapses_to_one_line_that_counts_them(caplog):
+    """`pending` is what a busy group looks like, not a fault.
+
+    Warning per publish reported health as a fault 2123 times in two minutes.
+    What has to survive the throttle is the tally: a stream really pinned at
+    its hard ceiling must stay visible, and must say how hard.
+    """
+    stream = "datastore.events"
+
+    for _ in range(10):
+        relaxed = message_bus.FastStreamRedisMessageBus._relaxed_maxlen(
+            stream, reason="pending", group="schedule-datastore-events"
+        )
+
+    events = _trim_warnings(caplog)
+    assert len(events) == 1
+    assert events[0]["suppressed_since_last"] == 0
+    # Relaxing is still relaxing: only the reporting is throttled.
+    assert relaxed == event_transport_settings.stream_hard_maxlen_for(stream)
+
+
+def test_the_next_line_after_a_burst_carries_what_the_burst_hid(caplog):
+    """A second window reports the nine it swallowed, not a bare repeat."""
+    stream = "datastore.events"
+    key = (stream, "pending", "g")
+
+    for _ in range(10):
+        message_bus.FastStreamRedisMessageBus._relaxed_maxlen(
+            stream, reason="pending", group="g"
+        )
+    # Age the window out rather than sleeping through it.
+    last_at, suppressed = message_bus._trim_reports._seen[key]
+    message_bus._trim_reports._seen[key] = (
+        last_at - message_bus.TRIM_REPORT_INTERVAL_SECONDS,
+        suppressed,
+    )
+    message_bus.FastStreamRedisMessageBus._relaxed_maxlen(
+        stream, reason="pending", group="g"
+    )
+
+    events = _trim_warnings(caplog)
+    assert [event["suppressed_since_last"] for event in events] == [0, 9]
+
+
+def test_distinct_conditions_are_distinct_signals(caplog):
+    """A lagging group must not be silenced by a pending one that warned first."""
+    message_bus.FastStreamRedisMessageBus._relaxed_maxlen(
+        "datastore.events", reason="pending", group="a"
+    )
+    message_bus.FastStreamRedisMessageBus._relaxed_maxlen(
+        "datastore.events", reason="lagging", group="a"
+    )
+    message_bus.FastStreamRedisMessageBus._relaxed_maxlen(
+        "other.events", reason="pending", group="a"
+    )
+
+    assert len(_trim_warnings(caplog)) == 3

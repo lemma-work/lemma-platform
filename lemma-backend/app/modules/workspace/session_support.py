@@ -20,6 +20,7 @@ from redis.exceptions import RedisError
 from sandbox_runtime.protocol import TerminalSize, WorkloadKind
 from app.core.errors.describe import describe_exception
 from app.core.log.log import get_logger
+from sandbox_runtime.paths import RUNTIME_FILESYSTEM_ROOTS, WORKSPACE_ROOT
 from sandbox_runtime.errors import (
     SandboxError,
     SandboxUnavailable,
@@ -28,14 +29,12 @@ from sandbox_runtime.errors import (
 
 logger = get_logger(__name__)
 
-RUNTIME_FILESYSTEM_ROOTS = ("/workspace", "/tmp")
-
 # A cursor or a generation marker is a convenience, not a correctness
 # requirement, so a store that is down must never fail an agent's tool call.
 _STORE_FAILURES = (RedisError, OSError, ValueError, TypeError)
 
 
-def canonical_runtime_path(value: str, *, base: str = "/workspace") -> str:
+def canonical_runtime_path(value: str, *, base: str = WORKSPACE_ROOT) -> str:
     if not value:
         raise ValueError("workspace path must not be empty")
     normalized = posixpath.normpath(
@@ -46,7 +45,9 @@ def canonical_runtime_path(value: str, *, base: str = "/workspace") -> str:
         for root in RUNTIME_FILESYSTEM_ROOTS
     ):
         return normalized
-    raise ValueError("workspace path must remain under /workspace or /tmp")
+    raise ValueError(
+        "workspace path must remain under one of " + ", ".join(RUNTIME_FILESYSTEM_ROOTS)
+    )
 
 
 def canonical_workspace_cwd(value: str) -> str:

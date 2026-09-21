@@ -22,9 +22,6 @@ from app.modules.agent.tools.user_interaction.models import (
 from app.modules.agent.tools.user_interaction.pydantic_adapter import (
     _maybe_deliver_to_surface,
 )
-from app.modules.agent_surfaces.platforms.email_attachments import (
-    outbound_paths_for_reply,
-)
 from app.modules.agent_surfaces.platforms.platform_capabilities import (
     PLATFORM_CAPABILITIES,
     DeliveryCardinality,
@@ -83,23 +80,6 @@ def test_a_runaway_run_is_bounded_rather_than_growing_forever() -> None:
     assert accepted.count(True) == 20
     assert accepted[-1] is False
     discard_display_paths(conversation)
-
-
-def test_the_reply_carries_what_the_agent_asked_for_and_what_it_showed() -> None:
-    conversation = uuid4()
-    remember_display_path(conversation, "/me/shown.pdf")
-    deps = SimpleNamespace(conversation_id=conversation)
-    assert outbound_paths_for_reply(deps, ["/me/asked.csv"]) == [
-        "/me/asked.csv",
-        "/me/shown.pdf",
-    ]
-
-
-def test_a_file_both_asked_for_and_shown_is_one_attachment() -> None:
-    conversation = uuid4()
-    remember_display_path(conversation, "/me/q3.pdf")
-    deps = SimpleNamespace(conversation_id=conversation)
-    assert outbound_paths_for_reply(deps, ["/me/q3.pdf"]) == ["/me/q3.pdf"]
 
 
 # --- the tool's own answer ------------------------------------------------

@@ -1,0 +1,875 @@
+"""A pool of numbers, and the two answers it has to change.
+
+One WhatsApp number was a deployment-wide constant: every surface sent from it,
+every message arrived on it, and "the WhatsApp credential" and "the WhatsApp
+number" were the same sentence. Splitting them changes exactly two answers, and
+everything else in the module is supposed to be untouched.
+
+**What a surface sends as.** `native_credentials` reads settings and takes a
+`surface` it ignores for WhatsApp, so every surface answered with the same
+token. A surface holding a pooled number must answer with *that* number's.
+
+**Which surface a message is for.** The arriving number now narrows candidates
+-- beside the sender's pods, never instead of them, because a pooled number may
+be held by several organisations and so names a number rather than a customer.
+
+The third thing these pin is the half that must *not* change: a deployment with
+no pool rows, and a surface holding no number, both behave exactly as before.
+That is what lets this ship without a migration of behaviour.
+"""
+
+from __future__ import annotations
+
+from uuid import UUID, uuid4, uuid7
+
+import pytest
+from sqlalchemy import select
+
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.modules.agent.infrastructure.models.agent import AgentModel
+from app.modules.agent_surfaces.config import surface_settings
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceStatus,
+    SurfacePlatform,
+)
+from app.modules.agent_surfaces.domain.whatsapp_numbers import (
+    WhatsAppNumberEntity,
+)
+from app.modules.agent_surfaces.infrastructure.models import AgentSurface
+from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+    SurfaceRepository,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.whatsapp_number_repository import (
+    WhatsAppNumberRepository,
+)
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+)
+from app.modules.pod.infrastructure.models.pod_models import Pod
+
+pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
+
+
+async def _number(session, *, phone_number_id: str, token: str) -> None:
+    """One allocatable number carrying its own credentials."""
+    await WhatsAppNumberRepository(SqlAlchemyUnitOfWork(session)).create(
+        WhatsAppNumberEntity(
+            id=uuid7(),
+            phone_number_id=phone_number_id,
+            display_phone_number=f"+1555{uuid4().int % 10_000_000:07d}",
+            waba_id=f"waba-{phone_number_id}",
+            access_token=token,
+        )
+    )
+    await session.commit()
+
+
+async def _whatsapp_surface(session, *, pod_id: UUID, holding: str | None):
+    """A WhatsApp surface, optionally holding a pooled number."""
+    organization_id = await session.scalar(
+        select(Pod.organization_id).where(Pod.id == pod_id)
+    )
+    agent = AgentModel(
+        id=uuid7(),
+        pod_id=pod_id,
+        user_id=await session.scalar(select(Pod.user_id).where(Pod.id == pod_id)),
+        name=f"holder-{uuid4().hex[:6]}",
+        kind="USER",
+        instruction="",
+        toolsets=[],
+        visibility="POD",
+    )
+    session.add(agent)
+    await session.flush()
+    surface = AgentSurface(
+        id=uuid7(),
+        pod_id=pod_id,
+        organization_id=organization_id,
+        agent_id=agent.id,
+        name=f"whatsapp-{uuid4().hex[:8]}",
+        surface_type=SurfacePlatform.WHATSAPP.value,
+        event_mode="WEBHOOK",
+        credential_mode="SYSTEM",
+        config={},
+        surface_identity_id=holding,
+        status=AgentSurfaceStatus.ACTIVE.value,
+    )
+    session.add(surface)
+    await session.commit()
+    return surface
+
+
+async def test_a_surface_answers_as_the_number_it_holds(
+    db_session, test_pod, monkeypatch
+) -> None:
+    """The token comes from the number, not from the deployment.
+
+    This is the whole point of the pool and the single change everything
+    outbound depends on. `native_credentials` takes a `surface` argument and
+    ignored it for WhatsApp, so before this every surface in the deployment
+    answered with one token -- which is correct for one number and silently
+    wrong for several, in the direction where a message goes out from a number
+    the recipient has never seen.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "deployment-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "deployment-pn")
+
+    await _number(db_session, phone_number_id="pool-a", token="the-pools-token")
+    surface = await _whatsapp_surface(
+        db_session, pod_id=UUID(test_pod["id"]), holding="pool-a"
+    )
+
+    credentials = await SurfaceCredentialResolver(
+        uow=SqlAlchemyUnitOfWork(db_session)
+    ).for_surface(surface.to_entity())
+
+    assert credentials["access_token"] == "the-pools-token", (
+        "a surface holding a pooled number sent with the deployment's token, so "
+        "every organisation would reply from the same number"
+    )
+    assert credentials["phone_number_id"] == "pool-a"
+    assert credentials["waba_id"] == "waba-pool-a"
+
+
+async def test_a_surface_holding_nothing_still_answers_from_settings(
+    db_session, test_pod, monkeypatch
+) -> None:
+    """The half that must not change.
+
+    Every WhatsApp surface alive holds no number -- `resolve_binding` has never
+    populated `surface_identity_id` for the platform -- so if this answer moved,
+    the pool would have broken every existing deployment on the way in.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "deployment-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "deployment-pn")
+
+    surface = await _whatsapp_surface(
+        db_session, pod_id=UUID(test_pod["id"]), holding=None
+    )
+
+    credentials = await SurfaceCredentialResolver(
+        uow=SqlAlchemyUnitOfWork(db_session)
+    ).for_surface(surface.to_entity())
+
+    assert credentials["access_token"] == "deployment-token"
+    assert credentials["phone_number_id"] == "deployment-pn"
+
+
+async def test_a_number_whose_row_was_removed_keeps_the_surface_on_the_air(
+    db_session, test_pod, monkeypatch
+) -> None:
+    """Inventory was edited under a live surface; that is not an outage.
+
+    Refusing here would take a surface off the air over an operator deleting a
+    row. The settings number is the wrong answer but it is a working one, and
+    the mismatch is logged rather than raised.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "deployment-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "deployment-pn")
+
+    surface = await _whatsapp_surface(
+        db_session, pod_id=UUID(test_pod["id"]), holding="never-existed"
+    )
+
+    credentials = await SurfaceCredentialResolver(
+        uow=SqlAlchemyUnitOfWork(db_session)
+    ).for_surface(surface.to_entity())
+
+    assert credentials["access_token"] == "deployment-token"
+
+
+async def test_a_message_reaches_the_surface_holding_the_number_it_arrived_on(
+    db_session, test_pod
+) -> None:
+    """Two surfaces of one sender, two numbers, and the message picks one.
+
+    Both surfaces are in pods this sender belongs to, so the pod narrowing alone
+    leaves both standing -- which is exactly the ambiguity the number resolves.
+    Asserting on both directions rather than one, because a predicate that
+    always returned the first row would pass a single-direction test.
+    """
+    pod_id = UUID(test_pod["id"])
+    await _number(db_session, phone_number_id="pool-x", token="x")
+    await _number(db_session, phone_number_id="pool-y", token="y")
+    holds_x = await _whatsapp_surface(db_session, pod_id=pod_id, holding="pool-x")
+    holds_y = await _whatsapp_surface(db_session, pod_id=pod_id, holding="pool-y")
+
+    repository = SurfaceRepository(SqlAlchemyUnitOfWork(db_session))
+
+    for arriving, expected, other in (
+        ("pool-x", holds_x, holds_y),
+        ("pool-y", holds_y, holds_x),
+    ):
+        found = await repository.list_active_for_routing(
+            SurfacePlatform.WHATSAPP.value,
+            pod_ids={pod_id},
+            system_credentials_only=True,
+            surface_identity_id=arriving,
+        )
+        ids = {surface.id for surface in found}
+        assert expected.id in ids, (
+            f"a message on {arriving} did not reach the surface holding it"
+        )
+        assert other.id not in ids, (
+            f"a message on {arriving} also reached the surface holding "
+            f"{other.surface_identity_id}, so the number narrowed nothing"
+        )
+
+
+async def test_a_surface_holding_no_number_is_still_a_candidate(
+    db_session, test_pod
+) -> None:
+    """ "This number, or no number yet" -- and the second half is why.
+
+    Every WhatsApp surface in an existing deployment holds NULL. A strict
+    equality would have taken every one of them out of routing the moment the
+    predicate was passed, which is an outage dressed as a narrowing. The NULL
+    half retires on its own as allocation fills the column in.
+    """
+    pod_id = UUID(test_pod["id"])
+    await _number(db_session, phone_number_id="pool-z", token="z")
+    unallocated = await _whatsapp_surface(db_session, pod_id=pod_id, holding=None)
+
+    found = await SurfaceRepository(
+        SqlAlchemyUnitOfWork(db_session)
+    ).list_active_for_routing(
+        SurfacePlatform.WHATSAPP.value,
+        pod_ids={pod_id},
+        system_credentials_only=True,
+        surface_identity_id="pool-z",
+    )
+
+    assert unallocated.id in {surface.id for surface in found}, (
+        "a surface that has not been allocated a number stopped being routable "
+        "as soon as the number predicate was applied"
+    )
+
+
+async def _pod_in(session, *, organization_id: UUID, user_id: UUID) -> Pod:
+    """A second pod, so an organisation can want two numbers at once."""
+    pod = Pod(
+        user_id=user_id,
+        organization_id=organization_id,
+        name=f"pod-{uuid4().hex[:8]}",
+        config={},
+    )
+    session.add(pod)
+    await session.flush()
+    session.add(
+        AgentModel(
+            id=pod.id,
+            pod_id=pod.id,
+            user_id=user_id,
+            name="pod_default",
+            kind="POD_DEFAULT",
+            instruction="",
+            toolsets=[],
+            visibility="POD",
+        )
+    )
+    await session.commit()
+    return pod
+
+
+async def test_a_surface_is_given_a_number_of_the_organisations_own(
+    db_session, test_pod, fixed_test_org
+) -> None:
+    """Allocation is the step that makes a pool a pool.
+
+    Everything before this reads a number a surface already holds; nothing put
+    one there. `resolve_binding` answers `None` for WhatsApp on every path --
+    correctly, because a pooled number is allocated rather than derived from a
+    connected account -- so without this the column stays NULL forever and the
+    pool is inventory nobody draws from.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="alloc-1", token="t1")
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    surface = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=UUID(test_pod["id"]),
+        agent_id=UUID(test_pod["id"]),
+        organization_id=UUID(fixed_test_org["id"]),
+    )
+
+    assert surface.surface_identity_id == "alloc-1", (
+        "a surface was created without being given a number, so the pool is "
+        "inventory nothing draws from"
+    )
+
+
+async def test_a_second_surface_in_one_organisation_gets_a_different_number(
+    db_session, test_pod, fixed_test_org, fixed_test_user
+) -> None:
+    """Exclusive within an organisation, so the second draw must move on.
+
+    `uq_agent_org_whatsapp_number` is the arbiter and the allocator retries
+    against it rather than pre-checking, so this also exercises the retry: the
+    candidate list is a snapshot that still contains the number just taken.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="alloc-a", token="a")
+    await _number(db_session, phone_number_id="alloc-b", token="b")
+    organization_id = UUID(fixed_test_org["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    second_pod = await _pod_in(
+        db_session,
+        organization_id=organization_id,
+        user_id=UUID(str(fixed_test_user["id"])),
+    )
+
+    first = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=UUID(test_pod["id"]),
+        agent_id=UUID(test_pod["id"]),
+        organization_id=organization_id,
+    )
+    second = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=second_pod.id,
+        agent_id=second_pod.id,
+        organization_id=organization_id,
+    )
+
+    assert first.surface_identity_id != second.surface_identity_id, (
+        "one organisation was handed the same number twice, so two of its "
+        "surfaces answer on one line and an inbound message is ambiguous"
+    )
+    assert {first.surface_identity_id, second.surface_identity_id} == {
+        "alloc-a",
+        "alloc-b",
+    }
+
+
+async def test_an_exhausted_pool_says_so_rather_than_sharing(
+    db_session, test_pod, fixed_test_org, fixed_test_user
+) -> None:
+    """Running out is a normal state, and it still has to be said out loud.
+
+    The tempting failure is to fall back to the shared line: the caller gets a
+    surface, nothing raises, and the person finds out only when a reply arrives
+    from a number they have never seen. They asked for a number of their own.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.domain.errors import (
+        AgentSurfaceNumberPoolExhaustedError,
+    )
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="only-one", token="t")
+    organization_id = UUID(fixed_test_org["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+    second_pod = await _pod_in(
+        db_session,
+        organization_id=organization_id,
+        user_id=UUID(str(fixed_test_user["id"])),
+    )
+
+    await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=UUID(test_pod["id"]),
+        agent_id=UUID(test_pod["id"]),
+        organization_id=organization_id,
+    )
+
+    with pytest.raises(AgentSurfaceNumberPoolExhaustedError) as refused:
+        await provision_pooled_whatsapp_surface(
+            uow,
+            service=build_surface_service(uow),
+            pod_id=second_pod.id,
+            agent_id=second_pod.id,
+            organization_id=organization_id,
+        )
+
+    assert refused.value.status_code == 503, (
+        "an exhausted pool answered like a conflict; there is no other party "
+        "to take it up with, the deployment simply has none left"
+    )
+
+
+async def test_two_pods_in_one_organisation_may_each_have_a_whatsapp_surface(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """The refusal the pool exists to remove, asserted through HTTP.
+
+    A second pod asking for WhatsApp used to get 409 "System WHATSAPP
+    credentials are already used by another surface in this organization",
+    because one number made the credential and the identity the same thing.
+    With a pool they are different things and the second pod is entitled to its
+    own number, so the organisation-wide claim stops applying -- and
+    `test_surface_api_e2e` moved its 409 case to Telegram, which still has the
+    single shared bot that rule was written for.
+
+    **With a pool**, and the two numbers below are the point rather than
+    scaffolding. What lifts the claim is each surface holding a number of its
+    own, not the platform being WhatsApp: a deployment that owns no pool has one
+    number and two pods taking it is the collision the rule always described.
+    See `test_the_one_number_a_deployment_without_a_pool_has_is_still_claimed_once`.
+
+    Over HTTP rather than through the service, because the 409 this replaces
+    reached people as an API response and a catalog that greyed the option out.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "system-phone")
+    await _number(db_session, phone_number_id="two-pods-a", token="a")
+    await _number(db_session, phone_number_id="two-pods-b", token="b")
+
+    sibling = await authenticated_client.post(
+        "/pods",
+        json={
+            "organization_id": test_pod["organization_id"],
+            "name": f"sibling-{uuid4().hex[:8]}",
+        },
+    )
+    assert sibling.status_code == 201, sibling.text
+
+    first = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+    second = await authenticated_client.post(
+        f"/pods/{sibling.json()['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, (
+        "the second pod in this organisation was refused a WhatsApp surface, "
+        f"so the pool cannot hand it a number of its own: {second.text}"
+    )
+    assert {
+        first.json()["surface_identity_id"],
+        second.json()["surface_identity_id"],
+    } == {
+        "two-pods-a",
+        "two-pods-b",
+    }, "the two pods did not end up on two different numbers"
+
+    catalog = await authenticated_client.get(
+        f"/pods/{sibling.json()['id']}/available-surfaces"
+    )
+    row = next(
+        item for item in catalog.json()["surfaces"] if item["platform"] == "WHATSAPP"
+    )
+    assert row["system_claim"]["available"] is True, (
+        "the catalog still greys WhatsApp out for an organisation that already "
+        "holds one, which is the disagreement with the writer that this rule "
+        "change exists to remove"
+    )
+
+
+async def test_deleting_a_pod_gives_its_number_back_to_the_pool(
+    db_session, test_pod, fixed_test_org
+) -> None:
+    """A finite pool leaks unless something hands numbers back.
+
+    Pod deletion is soft: the surface row survives on purpose so an undelete
+    restores a working surface. That is right for a Slack app and wrong for
+    something scarce -- a deleted pod would hold a number indefinitely and the
+    deployment would run out on behalf of pods nobody is using.
+
+    Asserted by allocating twice from a pool of one: the second allocation can
+    only succeed if the first was genuinely released, which is stronger than
+    reading the column back.
+    """
+    from app.modules.agent_surfaces.composition import build_surface_service
+    from app.modules.agent_surfaces.contracts.email_surfaces import (
+        release_pod_scarce_identities,
+    )
+    from app.modules.agent_surfaces.services.whatsapp_surface_provisioning import (
+        provision_pooled_whatsapp_surface,
+    )
+
+    await _number(db_session, phone_number_id="recycled", token="t")
+    organization_id = UUID(fixed_test_org["id"])
+    pod_id = UUID(test_pod["id"])
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    first = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=pod_id,
+        agent_id=pod_id,
+        organization_id=organization_id,
+    )
+    assert first.surface_identity_id == "recycled"
+
+    await release_pod_scarce_identities(uow, pod_id=pod_id)
+
+    again = await provision_pooled_whatsapp_surface(
+        uow,
+        service=build_surface_service(uow),
+        pod_id=pod_id,
+        agent_id=pod_id,
+        organization_id=organization_id,
+    )
+
+    assert again.surface_identity_id == "recycled", (
+        "the only number in the pool was still held by a deleted pod, so a "
+        "finite pool drains one deleted pod at a time"
+    )
+    assert again.id != first.id
+
+
+async def test_a_stranger_can_sign_up_on_a_pooled_number_and_is_answered_from_it(
+    db_session, monkeypatch
+) -> None:
+    """Every pooled number is a system number, so signup works on all of them.
+
+    The gate here used to compare the arriving number against the single
+    configured one, which was the only way to ask "is this ours" when there was
+    one. With a pool that question needs the pool, and asking it the old way
+    would have made a stranger messaging a pooled number reach nothing at all.
+
+    The credentials matter as much as the gate. Answering a signup from the
+    settings number when the person wrote to a pooled one replies from a
+    different number than the one they messaged -- which, for a stranger being
+    asked to trust us with an email address, is the worst possible first
+    impression.
+    """
+    from app.modules.agent_surfaces.infrastructure.adapters.registry import (
+        SurfacePlatformAdapterRegistry,
+    )
+    from app.modules.agent_surfaces.domain.ingress_request import (
+        SurfacePlatformWebhookIngress,
+    )
+    from app.modules.agent_surfaces.services.onboarding_transport import (
+        resolve_onboarding_transport,
+    )
+    from app.modules.agent_surfaces.tests.e2e.helpers import _whatsapp_payload
+
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "settings-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    monkeypatch.setattr(surface_settings, "whatsapp_waba_id", "settings-waba")
+    await _number(db_session, phone_number_id="pooled-signup", token="the-pools-token")
+
+    # A plain callable rather than a subclass: the architecture ratchet counts
+    # declared ancestry across `app/`, and a throwaway class in a test is four
+    # units of inheritance depth bought for nothing.
+    def uow_factory():
+        return SqlAlchemyUnitOfWork(db_session)
+
+    transport = await resolve_onboarding_transport(
+        SurfacePlatformWebhookIngress(
+            source="whatsapp",
+            payload=_whatsapp_payload(
+                text="hello, who is this",
+                message_id=uuid4().hex,
+                phone_number_id="pooled-signup",
+                waba_id="waba-pooled-signup",
+                sender_phone="15550001111",
+            ),
+        ),
+        uow_factory=uow_factory,
+        adapters=SurfacePlatformAdapterRegistry(),
+    )
+
+    assert transport is not None, (
+        "a stranger messaging a pooled number reached no signup flow at all, so "
+        "the number answers nobody it does not already know"
+    )
+    assert transport.credentials["access_token"] == "the-pools-token", (
+        "the signup would have replied from the settings number rather than the "
+        "one the person actually wrote to"
+    )
+    assert transport.credentials["phone_number_id"] == "pooled-signup"
+
+
+async def test_creating_a_surface_through_the_api_takes_a_number(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """The last mile: allocation reachable from the thing people actually use.
+
+    Everything else here drove `provision_pooled_whatsapp_surface` directly,
+    which proved the allocator and proved nothing about whether anyone could
+    reach it. `POST /surfaces` went on making surfaces with no number, so a
+    deployment could add four numbers to the pool and watch every surface keep
+    answering from the one in settings.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    await _number(db_session, phone_number_id="api-allocated", token="t")
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+
+    assert created.status_code == 200, created.text
+    assert created.json()["surface_identity_id"] == "api-allocated", (
+        "a surface created through the API took no number from the pool, so the "
+        "pool is inventory nothing reachable draws from"
+    )
+
+
+async def test_a_deployment_with_no_pool_still_gets_the_shared_line(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """The half that must not change, through the API this time.
+
+    Every deployment alive has no pool rows. If creating a WhatsApp surface
+    started failing -- or started demanding a number that does not exist -- this
+    change would have broken all of them on the way in. No pool means no
+    allocation, no error, and the shared line exactly as before.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+
+    assert created.status_code == 200, created.text
+    assert created.json()["surface_identity_id"] is None
+
+
+async def test_the_cold_open_line_can_live_entirely_in_the_pool(
+    db_session, monkeypatch
+) -> None:
+    """Settings are a pool of one, and the pool is settings of many.
+
+    A deployment that puts every number in `surface_whatsapp_numbers` and sets
+    no `WHATSAPP_*` variables owns a cold-open line just as much as one
+    configured the old way. Answering "not configured" for it would leave mobile
+    verification switched off with working credentials sitting in a table --
+    findable only by someone who already suspected it.
+
+    No row declares itself the line; the oldest available one is it. That is the
+    point of having dropped `role`: one fact, in one place, derived rather than
+    claimed.
+    """
+    from app.modules.agent_surfaces.contracts.whatsapp import (
+        global_whatsapp_configuration,
+    )
+    from app.modules.identity.services.whatsapp_mobile_verification import (
+        is_whatsapp_verification_configured,
+    )
+    from app.modules.identity.config import identity_settings
+
+    for unset in (
+        "whatsapp_access_token",
+        "whatsapp_phone_number_id",
+        "whatsapp_app_secret",
+        "whatsapp_verify_token",
+        "whatsapp_display_phone_number",
+    ):
+        monkeypatch.setattr(surface_settings, unset, None)
+    monkeypatch.setattr(surface_settings, "surface_webhook_security_enabled", True)
+    monkeypatch.setattr(
+        identity_settings, "auth_whatsapp_mobile_verification_enabled", True
+    )
+
+    await WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session)).create(
+        WhatsAppNumberEntity(
+            phone_number_id="shared-in-pool",
+            display_phone_number="+15550009999",
+            waba_id="waba-shared",
+            access_token="pool-token",
+            app_secret="pool-secret",
+            verify_token="pool-verify",
+        )
+    )
+    await db_session.commit()
+
+    resolved = await global_whatsapp_configuration()
+
+    assert resolved.phone_number_id == "shared-in-pool", (
+        "a deployment configured entirely through the pool had no shared line, "
+        "so identity could neither send nor receive a verification"
+    )
+    assert resolved.access_token == "pool-token"
+    assert await is_whatsapp_verification_configured() is True
+
+
+async def test_settings_still_win_where_they_are_set(db_session, monkeypatch) -> None:
+    """The old way keeps working, and keeps winning.
+
+    Every deployment alive is configured through the environment. If a pool row
+    could quietly override it, adding a number to the pool for some other reason
+    would move the line identity verifies on -- silently, and only for the
+    deployments that had both.
+    """
+    from app.modules.agent_surfaces.contracts.whatsapp import (
+        global_whatsapp_configuration,
+    )
+
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "env-token")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "env-pn")
+    monkeypatch.setattr(surface_settings, "whatsapp_app_secret", "env-secret")
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "env-verify")
+
+    await WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session)).create(
+        WhatsAppNumberEntity(
+            phone_number_id="pool-shared",
+            display_phone_number="+15550008888",
+            waba_id="waba-other",
+            access_token="pool-token",
+        )
+    )
+    await db_session.commit()
+
+    resolved = await global_whatsapp_configuration()
+
+    assert resolved.phone_number_id == "env-pn"
+    assert resolved.access_token == "env-token"
+
+
+async def test_the_config_the_caller_sent_survives_taking_a_number(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """Allocating a number is not a reason to forget what was asked for.
+
+    `POST /surfaces` carries a `SurfaceConfig` -- a send policy, an identity
+    allow-list, channel routes -- and the pooled branch did not take one, so it
+    called `create_surface` without it and every field fell to its default. It
+    returned 200, because nothing was missing as far as `create_surface` could
+    tell: a surface configured as nobody asked, reported as success.
+
+    The allow-list is the half that makes this worth a test rather than a
+    tidy-up. A surface the caller restricted to one domain was created open to
+    everyone, and the only way to notice was to go and look.
+    """
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    await _number(db_session, phone_number_id="config-allocated", token="t")
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces",
+        json={
+            "platform": "WHATSAPP",
+            "config": {
+                "send_policy": {"allow_send": True},
+                "identity": {"allowed_domains": ["acme.test"]},
+                "dm_conversation_reset_after_hours": 6,
+            },
+        },
+    )
+
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body["surface_identity_id"] == "config-allocated"
+    assert body["config"]["send_policy"]["allow_send"] is True, (
+        "the send policy the caller sent was dropped on the way through "
+        "allocation, and the API reported success anyway"
+    )
+    assert body["config"]["identity"]["allowed_domains"] == ["acme.test"]
+    assert body["config"]["dm_conversation_reset_after_hours"] == 6
+
+
+async def test_the_setup_panel_names_this_numbers_own_callback_and_token(
+    authenticated_client, db_session, test_pod, monkeypatch
+) -> None:
+    """What the operator is told to paste has to be what the handshake checks.
+
+    A pooled number receives on a callback of its own -- the shared URL carries
+    nothing that could select a verify token, which is why that route exists --
+    and `verify_whatsapp_number_webhook` checks the number's own token. The
+    setup read answered with the shared URL and the deployment-wide token, so an
+    operator following it configured a URL Lemma does not use with a token it
+    would not have accepted anyway, and got back a handshake failure naming
+    neither.
+
+    Both halves here, because they are one instruction sheet and either one
+    being wrong fails the same way.
+    """
+    from app.core.config import settings
+    from app.modules.agent_surfaces.composition import build_surface_service
+
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.test")
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "settings-pn")
+    monkeypatch.setattr(surface_settings, "whatsapp_verify_token", "settings-verify")
+
+    await WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session)).create(
+        WhatsAppNumberEntity(
+            phone_number_id="setup-number",
+            display_phone_number="+15550007777",
+            waba_id="waba-setup",
+            access_token="numbers-token",
+            verify_token="numbers-own-verify",
+        )
+    )
+    await db_session.commit()
+
+    created = await authenticated_client.post(
+        f"/pods/{test_pod['id']}/surfaces", json={"platform": "WHATSAPP"}
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["surface_identity_id"] == "setup-number"
+
+    setup = await authenticated_client.get(
+        f"/pods/{test_pod['id']}/surfaces/whatsapp/setup"
+    )
+    assert setup.status_code == 200, setup.text
+    assert setup.json()["webhook_url"] == (
+        "https://api.lemma.test/surfaces/webhooks/whatsapp/numbers/setup-number"
+    ), "the panel published the shared callback for a number that receives on its own"
+
+    service = build_surface_service(SqlAlchemyUnitOfWork(db_session))
+    surface = await service.get_surface_by_name_in_pod(
+        pod_id=UUID(test_pod["id"]), name="whatsapp"
+    )
+    token = await service._whatsapp_verify_token_for_setup(surface)
+
+    assert token == "numbers-own-verify", (
+        "the setup read offered the deployment-wide token for a number that "
+        "declares its own, and the per-number handshake would have refused it"
+    )
+
+
+async def test_a_pool_with_nothing_marked_special_still_answers_cold_opens(
+    db_session, monkeypatch
+) -> None:
+    """No row claims to be the line, so the oldest available one is it.
+
+    The pool used to carry a `role`, and the cold-open line was the single row
+    flagged `SHARED`. Every number is a system number and behaves identically,
+    so the flag changed nothing except which row this question found -- and an
+    operator who added numbers without flagging one left identity's phone
+    verification switched off, holding working credentials, with the only
+    symptom being "not configured".
+    """
+    from app.modules.agent_surfaces.contracts.whatsapp import (
+        global_whatsapp_configuration,
+    )
+
+    for unset in (
+        "whatsapp_access_token",
+        "whatsapp_phone_number_id",
+        "whatsapp_app_secret",
+        "whatsapp_verify_token",
+        "whatsapp_display_phone_number",
+    ):
+        monkeypatch.setattr(surface_settings, unset, None)
+
+    repository = WhatsAppNumberRepository(SqlAlchemyUnitOfWork(db_session))
+    for phone_number_id in ("cold-open-first", "cold-open-second"):
+        await repository.create(
+            WhatsAppNumberEntity(
+                phone_number_id=phone_number_id,
+                display_phone_number=f"+1555000{uuid4().int % 10_000:04d}",
+                waba_id="waba-cold-open",
+                access_token=f"{phone_number_id}-token",
+            )
+        )
+        await db_session.commit()
+
+    resolved = await global_whatsapp_configuration()
+
+    assert resolved.phone_number_id == "cold-open-first", (
+        "a pool where no row was singled out had no cold-open line at all, so "
+        "mobile verification was off with credentials sitting in the table"
+    )
+    assert resolved.access_token == "cold-open-first-token"

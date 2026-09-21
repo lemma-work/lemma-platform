@@ -30,11 +30,13 @@ cancellation.
 | --- | --- |
 | `agents` | Named prompt, schemas, toolsets, runtime selection, visibility |
 | `agent_runtime_profiles` | Organization/user/system model provider configuration and encrypted credentials |
+| `agent_host_pairings` | Single-use pairing codes a user authorizes; consuming one deletes the row, so presence is the whole validity check and a replayed code looks like one that never existed |
 | `agent_hosts`, `agent_host_harnesses` | Paired Agent Host installations and their harness snapshots |
 | `agent_host_commands`, `agent_host_run_leases` | Durable command handout and the single dispatch fence per run |
 | `agent_conversations` | Pod thread, the agent it belongs to (the pod's assistant is a row like any other), parent/subagent and workspace metadata |
 | `agent_messages` | User/assistant/tool messages and structured parts |
 | `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
+| `agent_conversation_waits` | What a paused turn is waiting on — wait type, external reference, wake deadline, and the fire lease a timer tick takes; a partial unique index allows one `ACTIVE` row per conversation, mirroring `workflow_run_waits` |
 | `agent_approval_decisions`, `agent_feedback` | Durable interaction/audit records |
 
 ## API groups
@@ -73,6 +75,19 @@ cannot double-dispatch a run already in flight.
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
 through signed, purpose-bound embed access.
+
+## Prompt context
+
+Prompts combine a compact pod resource map, the agent's role, reply guidance,
+and fragments for its enabled toolsets. Resource authoring details live in
+skills. Agent and conversation instructions follow
+the static guidance; runtime context and the task list follow those to preserve
+the cached prefix. In-process capabilities and Agent Host use the same fragments.
+
+Table summaries include primary keys, column types and write constraints,
+foreign keys, RLS, and visibility. Column descriptions are available through
+table inspection rather than repeated in every prompt. Omission counts mark
+truncated inventories and schemas.
 
 ## Key dependencies
 

@@ -81,7 +81,6 @@ class LemmaModule:
     # --- API process ---
     routers: RouterProvider | None = None
     api_lifespans: Sequence[ApiLifespan] = ()
-
     # --- Worker process ---
     event_routers: EventRouterProvider | None = None
     register_streaq: StreaqRegistrar | None = None

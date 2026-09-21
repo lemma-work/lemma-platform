@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 
@@ -35,6 +36,7 @@ from sandbox_runtime.errors import (
 )
 from app.modules.workspace.providers.base import (
     ProcessDescriptor,
+    ProviderCapability,
     ProviderGone,
     ProviderInstance,
 )
@@ -42,6 +44,9 @@ from app.modules.workspace.providers.e2b_common import (
     sdk_best_effort,
     sdk_errors,
 )
+from app.modules.workspace.providers.e2b_paths import resolve_real_path
+from app.modules.workspace.providers.e2b_ranged_read import read_range
+from app.modules.workspace.providers.e2b_reach import E2BReachMixin
 from app.modules.workspace.providers.e2b_process_index import (
     ENTRY_TTL_SECONDS,
     decode_pid,
@@ -56,7 +61,9 @@ from app.modules.workspace.providers.e2b_process_lifetime import (
 )
 from app.modules.workspace.providers.e2b_python_runner import PYTHON_RUNNER
 
-WORKSPACE_MOUNT = "/workspace"
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 # A process that has stopped will produce no further output, so a reader
 # waiting for more has nothing left to wait for.
@@ -74,13 +81,17 @@ def _has_finished(snapshot: ProcessOutputSnapshot) -> bool:
     return snapshot.state in _FINISHED_PROCESS_STATES
 
 
-class E2BOpsMixin:
+class E2BOpsMixin(E2BReachMixin):
     """The `SandboxOpsProvider` half of the E2B provider.
 
     A mixin rather than a collaborator because the ops protocol is defined on
     the provider itself, and splitting it into an object the provider forwards
     to would add a layer that exists only to satisfy a line count.
     """
+
+    capabilities = frozenset(
+        {ProviderCapability.PORT_REACH, ProviderCapability.SECRET_DELIVERY}
+    )
 
     async def _remember_pid(
         self,
@@ -320,10 +331,22 @@ class E2BOpsMixin:
     async def stat_file(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
     ) -> FileStat:
+        """Where this path really is, and whether it is a link.
+
+        E2B's file SDK answers neither, and the files API's containment check
+        needs both -- see `e2b_paths.resolve_real_path`, which is where that is
+        explained and where the boundary is enforced.
+        """
         sandbox = await self._connect(instance.provider_id)
         with sdk_errors(path):
             info = await sandbox.files.get_info(path)
-        return _to_stat(info)
+        stat = _to_stat(info)
+        resolved, is_link = await resolve_real_path(sandbox, path)
+        return replace(
+            stat,
+            path=resolved,
+            kind=FileKind.SYMLINK if is_link else stat.kind,
+        )
 
     async def list_files(
         self, instance: ProviderInstance, *, path: str, deadline_at: datetime
@@ -349,16 +372,13 @@ class E2BOpsMixin:
         deadline_at: datetime,
     ) -> AsyncIterator[bytes]:
         sandbox = await self._connect(instance.provider_id)
-        with sdk_errors(path):
-            content = await sandbox.files.read(path, format="bytes")
-
-        # E2B reads whole files, so the range is applied here. Callers use it
-        # for previews and image thumbnails, where the file is small; a genuine
-        # partial read of a huge file would need SDK support to avoid pulling
-        # the whole thing.
-        start = byte_range.offset or 0
-        end = start + byte_range.length if byte_range.length else len(content)
-        yield bytes(content)[start:end]
+        # Not `files.read`: it has no notion of a range and returns the whole
+        # file for the caller to slice, which made a 1 GiB download into 128
+        # requests of 1 GiB each. See `e2b_ranged_read`.
+        async for chunk in read_range(
+            sandbox, path=path, byte_range=byte_range, deadline_at=deadline_at
+        ):
+            yield chunk
 
     async def write_file(
         self,
@@ -559,17 +579,6 @@ class E2BOpsMixin:
         # Nothing to forget is success.
         with sdk_best_effort():
             await sandbox.files.remove(f"/tmp/lemma-python-{session_id}.pkl")
-
-    # ------------------------------------------------------------------
-    # Ports
-    # ------------------------------------------------------------------
-
-    async def port_base_url(
-        self, instance: ProviderInstance, *, port: int, deadline_at: datetime
-    ) -> str:
-        sandbox = await self._connect(instance.provider_id)
-        with sdk_errors():
-            return f"https://{sandbox.get_host(port)}"
 
 
 def _to_stat(entry) -> FileStat:

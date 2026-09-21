@@ -34,20 +34,24 @@ async def exec_command(
     Default (`tty=false`) returns after a short wait; a command still running
     returns a `process_id` instead of blocking. `tty=true` starts a real terminal
     for interactive commands. Either way, drive the process afterwards with
-    `manage_process` — poll or send input with `action="input"`, stop it with
-    `action="kill"`, and use `action="list"` to find processes started earlier.
+    `manage_process` — send input or read new output with `action="input"`, stop
+    it with `action="kill"`, and use `action="list"` to find processes started
+    earlier. To wait for one to finish, use `wait_for`.
 
     Long commands (installs, builds, test suites) are normal and supported. When
     one outlives the wait window you get `completed: false` plus a `process_id`,
     and the command carries on running — nothing was cancelled and no output is
-    lost. Keep polling until it finishes:
+    lost. Hand that id to `wait_for` and stop:
 
-        exec_command(cmd="npm ci && npm run build", timeout_seconds=300)
+        exec_command(cmd="npm ci && npm run build")
         -> completed: false, process_id: "abc"
-        manage_process(action="input", process_id="abc")
-        -> completed: false        # repeat; each poll returns new output
-        manage_process(action="input", process_id="abc")
-        -> completed: true, exit_code: 0
+        wait_for(reason="the build", process_id="abc")
+        -> woke_because: "TARGET_FINISHED", exit_code: 0
+
+    `wait_for` ends your turn and gives you a new one when the process exits, so
+    a ten-minute build costs one model call rather than twenty. Use
+    `manage_process` to send input to a process, to stop one, or to look at a
+    running one — not to wait for it.
 
     Never re-run a command because it did not finish — that starts a second
     build alongside the first. If you lose a `process_id`, `action="list"`

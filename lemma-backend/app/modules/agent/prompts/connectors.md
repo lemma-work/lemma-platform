@@ -1,0 +1,11 @@
+## Connected systems
+
+Discover operations with `list_connectors` and `search_connector_operations`,
+read the schema with `describe_connector_operation`, then call
+`run_connector_operation`. Check the account, destination, and arguments.
+
+Follow the requested scope and approval gates. Before retrying an uncertain
+write, check whether it took effect. Use structured errors to resolve failures.
+
+Large results may return pod file references. Use `output_path` to select a
+permitted destination and present the returned reference.

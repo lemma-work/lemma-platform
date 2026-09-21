@@ -11,6 +11,30 @@ from app.modules.pod.contracts.orm import PodMember
 from app.modules.identity.contracts.orm import OrganizationMember, User
 
 
+#: What "still a member" means everywhere in this file.
+#:
+#: Membership is the authority gate on the inbound path: `matches_user` asks
+#: `get_user_pod_ids`, and a sender who is in none of the surface's pods gets
+#: the access-denied reply instead of an agent run. The join stopped at
+#: `organization_members`, so it answered for people who no longer have an
+#: account -- and because the external-user cache hands back a
+#: `resolved_user_id` without re-deriving it, deactivating somebody did not
+#: take their chat access away. Their next message resolved from cache, passed
+#: a membership check that never asked whether they were still here, and ran an
+#: agent as them with their pod's tools.
+#:
+#: A predicate on a table already in the join rather than a separate liveness
+#: read: it costs no extra statement on the busiest path there is, and it
+#: cannot be forgotten by a later caller the way a check beside the query can.
+#:
+#: `is_active` and `is_deleted` only, deliberately -- not `is_verified`. These
+#: are the conditions every live-user lookup in identity's surface contract
+#: shares, so membership refuses exactly the people a fresh resolution would
+#: refuse and no one else.
+def _live_user_predicates():
+    return (User.is_active.is_(True), User.is_deleted.is_(False))
+
+
 class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
     def __init__(self, uow):
         self.session = uow.session
@@ -22,7 +46,8 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
                 OrganizationMember,
                 OrganizationMember.id == PodMember.organization_member_id,
             )
-            .where(OrganizationMember.user_id == user_id)
+            .join(User, User.id == OrganizationMember.user_id)
+            .where(OrganizationMember.user_id == user_id, *_live_user_predicates())
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
@@ -86,9 +111,11 @@ class SqlAlchemySurfaceRoutingResolutionAdapter(SurfacePodMembershipPort):
                 OrganizationMember,
                 OrganizationMember.id == PodMember.organization_member_id,
             )
+            .join(User, User.id == OrganizationMember.user_id)
             .where(
                 OrganizationMember.user_id == user_id,
                 PodMember.pod_id == pod_id,
+                *_live_user_predicates(),
             )
         )
         return await self.session.scalar(stmt)

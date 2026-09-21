@@ -48,7 +48,9 @@ from app.modules.agent.tools.context import ConversationContext
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.prompts import (
+    load_connectors_prompt,
     load_messaging_prompt,
+    load_pod_prompt,
     load_skills_prompt,
     load_speech_prompt,
     load_web_search_prompt,
@@ -65,6 +67,8 @@ from app.modules.agent.tools.user_interaction.pydantic_adapter import (
 )
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.messaging.pydantic_adapter import messaging_toolset
+from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
+from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.web.pydantic_adapter import web_search_toolset
 from app.modules.agent.tools.workspace_cli.pydantic_adapter import (
     is_workspace_cli_toolset,
@@ -98,6 +102,17 @@ _INSTRUCTED_TOOLSETS: tuple[tuple[object, str, Callable[[], str]], ...] = (
     (speech_toolset, "speech", load_speech_prompt),
     (messaging_toolset, "messaging", load_messaging_prompt),
     (user_interaction_toolset, "user_interaction", load_user_interaction_prompt),
+    # Deferred like messaging, and for the same reason its contract still has to
+    # ride along: the search -> describe -> run loop and the fact that a
+    # connector operation acts outside the pod are not recoverable from a tool
+    # name in the deferred hint.
+    (connectors_toolset, "connectors", load_connectors_prompt),
+    # Deferred, and the one case where the missing fragment did not just leave a
+    # contract unstated -- it left a competition unresolved. `exec_command` is
+    # visible and carries a `lemma` cookbook covering the same tables and files;
+    # `pod_*` sits behind a search with a one-line hint. Runs that never thought
+    # to search did every read through the CLI. The fragment names the default.
+    (pod_toolset, "pod", load_pod_prompt),
 )
 
 
@@ -154,7 +169,7 @@ def _instructions_for(toolset: object) -> tuple[str, Callable[[], str]] | None:
     One lookup for both wrappers, because deferral is supposed to hide a
     toolset's *schemas*, never its *contract*. Messaging is the case that proves
     it: ``message_user`` does not pause the turn, so an agent that was never
-    taught the send → snooze → check_messages loop sends a message and then sits
+    taught the send → wait_for → check_messages loop sends a message and then sits
     waiting for a reply that arrives as a tool result never. Advertising the
     tool in the deferred hint while withholding that is the worst of both.
     """

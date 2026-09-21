@@ -16,6 +16,7 @@ from sandbox_runtime.errors import (
     SandboxPathNotFound,
     SandboxUnavailable,
 )
+from sandbox_runtime.paths import WORKSPACE_ROOT
 from app.modules.workspace.domain.sandbox import SandboxKind
 from app.modules.workspace.providers import naming
 from app.modules.workspace.providers.base import (
@@ -41,6 +42,7 @@ from app.modules.workspace.testing.fake_e2b import (
     FakeSandboxSdk,
     NotFoundException,
     RateLimitException,
+    envd_client_class,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -82,6 +84,14 @@ def provider(world: FakeE2B, monkeypatch) -> E2BSandboxProvider:
             # would be checking the fixture against itself.
             metadata_namespace=DEFAULT_METADATA_NAMESPACE,
         )
+    )
+    # Reading a file no longer goes through the SDK: it is an HTTP GET to
+    # envd, so that the byte range asked for is the byte range transferred.
+    # The client is built per call against a signed per-file URL, so the
+    # substitution is at the class and the provider's own request code runs.
+    monkeypatch.setattr(
+        "app.modules.workspace.providers.e2b_ranged_read.httpx.AsyncClient",
+        envd_client_class(world),
     )
     # Only the SDK is substituted. The query type comes through the SDK itself,
     # so this one patch is enough and the real e2b package is never imported.
@@ -311,17 +321,23 @@ async def test_a_sandbox_from_the_same_template_build_is_adopted(
     assert world.killed == []
 
 
-async def test_a_workspace_on_a_different_template_is_replaced(
+async def test_a_workspace_on_a_different_template_keeps_its_disk(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Publishing a template has to reach the workspaces that already exist.
+    """A published template must reach existing workspaces without killing them.
 
-    It did not. Adoption compared only `profile_digest`, a hand-maintained
-    environment variable sitting at its default, so a workspace stayed on
-    whatever template it was first created on for as long as it lived. Measured
-    against the real account: 249 sandboxes spread over four older templates and
-    zero on the configured one, through four releases that were each meant to
-    fix the workspaces that were failing.
+    This test asserted the opposite, and the reasoning was sound at the time.
+    Adoption compared only `profile_digest`, a hand-maintained environment
+    variable sitting at its default, so a workspace stayed on whatever template
+    it was first created on for as long as it lived -- hundreds of sandboxes
+    across several older templates, through releases each meant to fix the
+    workspaces that were failing. Replacing them was the only way to reach them.
+
+    It was also the only way to destroy them, because here the sandbox is the
+    disk. So publishing a template and wiping the fleet were the same act. The
+    first-party code that forced nearly every publication is now installed into
+    a running sandbox instead, which means repairing a workspace no longer
+    requires replacing it -- and this stops.
     """
     from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
 
@@ -339,19 +355,21 @@ async def test_a_workspace_on_a_different_template_is_replaced(
 
     instance = await provider.create(spec)
 
-    assert world.killed == ["on-last-months-template"]
-    assert instance.provider_id != "on-last-months-template"
-    assert instance.storage_adopted is False
-    assert world.created[0]["template"] == "lemma-workspace"
+    assert world.killed == []
+    assert world.created == []
+    assert instance.provider_id == "on-last-months-template"
+    assert instance.storage_adopted is True
+    # Still answerable: tolerating drift is not the same as forgetting it, and
+    # the base image is what a later migration has to find these by.
+    assert instance.template == "lemma-workspace-but-older"
 
 
-async def test_a_workspace_with_no_recorded_template_is_replaced(
+async def test_a_workspace_with_no_recorded_template_keeps_its_disk(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Unstamped means "created before anything recorded this", which means at
-    least one template behind by construction. Reading the absence as "fine" is
-    the shape of the original bug: the fleet's staleness was invisible because
-    nothing wrote down what any of it was running."""
+    """Unstamped means "created before anything recorded this", so it is at least
+    one template behind by construction -- and it is still not a reason to delete
+    somebody's files. It reports as drifted and is adopted."""
     from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
 
     sandbox_id = uuid4()
@@ -367,15 +385,51 @@ async def test_a_workspace_with_no_recorded_template_is_replaced(
 
     instance = await provider.create(spec)
 
-    assert world.killed == ["unstamped"]
+    assert world.killed == []
+    assert instance.storage_adopted is True
+    assert instance.template is None
+
+
+async def test_a_function_on_a_different_template_is_still_replaced(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The asymmetry between the two kinds is the whole policy, so pin it.
+
+    A function sandbox owns no durable disk -- it refetches an immutable
+    artifact -- so replacing it costs a cold start and nothing else, and leaving
+    it stale has already cost a P0: a runtime the backend could no longer talk
+    to answered 502 for 100 minutes. A workspace is the disk, so the same drift
+    gets the opposite answer. Nothing may flatten these two rules together.
+    """
+    from app.modules.workspace.testing.fake_e2b import FakeSandboxInfo
+
+    sandbox_id = uuid4()
+    spec = _spec(sandbox_id, kind=SandboxKind.FUNCTION)
+    world.sandboxes["old-function"] = FakeSandboxInfo(
+        sandbox_id="old-function",
+        state="paused",
+        metadata={
+            META_SANDBOX_ID: str(sandbox_id),
+            META_PROFILE_DIGEST: spec.profile_digest,
+            META_TEMPLATE: "lemma-function-but-older",
+        },
+    )
+
+    instance = await provider.create(spec)
+
+    assert world.killed == ["old-function"]
     assert instance.storage_adopted is False
 
 
 async def test_a_created_sandbox_records_the_template_it_was_built_from(
     provider: E2BSandboxProvider, world: FakeE2B
 ) -> None:
-    """Without the stamp there is nothing to compare on the next ensure, so the
-    fence would silently never fire again."""
+    """More load-bearing now, not less.
+
+    It used to feed a fence that killed. It now feeds the only record of what a
+    workspace is actually running, which is what a non-destructive migration
+    would have to select on.
+    """
     await provider.create(_spec(uuid4()))
 
     assert world.created[0]["metadata"][META_TEMPLATE] == "lemma-workspace"
@@ -405,8 +459,9 @@ async def test_a_workspace_from_an_older_template_build_keeps_its_disk(
         metadata={
             META_SANDBOX_ID: str(sandbox_id),
             META_PROFILE_DIGEST: "sha256:" + "b" * 64,
-            # On the configured template, so this isolates the digest rule from
-            # the template fence, which does replace.
+            # On the configured template, so this isolates the digest rule
+            # from template drift. Both are tolerated for a workspace now, and
+            # this test is what pins the digest half of that.
             META_TEMPLATE: "lemma-workspace",
         },
     )
@@ -491,7 +546,7 @@ async def test_streamed_output_becomes_a_readable_cursor(
             operation_id=operation_id,
             shell_command="echo hi",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(EnvironmentVariable(name="A", value="1"),),
             tty=None,
             output_limit_bytes=1024,
@@ -541,7 +596,7 @@ async def test_a_tty_process_streams_on_the_pty_channel(
             operation_id=uuid4(),
             shell_command="bash",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=TerminalSize(rows=24, cols=80),
             output_limit_bytes=1024,
@@ -579,7 +634,7 @@ async def _start(provider: E2BSandboxProvider, *, deadline_at, tty=None) -> None
             operation_id=uuid4(),
             shell_command="npm run build",
             argv=None,
-            cwd="/workspace",
+            cwd=WORKSPACE_ROOT,
             environment=(),
             tty=tty,
             output_limit_bytes=1024,
@@ -640,23 +695,90 @@ async def test_files_round_trip(provider: E2BSandboxProvider) -> None:
 
     stat = await provider.write_file(
         instance,
-        path="/workspace/a.txt",
+        path=f"{WORKSPACE_ROOT}/a.txt",
         data=payload(),
         expected_sha256=None,
         deadline_at=_deadline(),
     )
-    assert stat.path == "/workspace/a.txt"
+    assert stat.path == f"{WORKSPACE_ROOT}/a.txt"
 
     chunks = [
         chunk
         async for chunk in provider.open_file(
             instance,
-            path="/workspace/a.txt",
+            path=f"{WORKSPACE_ROOT}/a.txt",
             byte_range=ByteRange(offset=0, length=None),
             deadline_at=_deadline(),
         )
     ]
     assert b"".join(chunks) == b"contents"
+
+
+async def test_a_range_transfers_only_that_range(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """The reason this stopped going through `files.read`.
+
+    That call has no notion of a range: it returned the whole file and the
+    provider sliced it afterwards. The workspace file API caps a response at
+    8 MiB and its clients read anything larger as a series of ranges, so a
+    1 GiB download was 128 requests of 1 GiB each -- 128 GiB over the wire,
+    and a gigabyte resident in this process every time.
+    """
+    instance = await provider.create(_spec(uuid4()))
+    world.files[f"{WORKSPACE_ROOT}/big.bin"] = bytes(range(256)) * 64
+
+    chunks = [
+        chunk
+        async for chunk in provider.open_file(
+            instance,
+            path=f"{WORKSPACE_ROOT}/big.bin",
+            byte_range=ByteRange(offset=1000, length=500),
+            deadline_at=_deadline(),
+        )
+    ]
+
+    body = b"".join(chunks)
+    assert body == (bytes(range(256)) * 64)[1000:1500]
+    assert len(body) == 500
+
+
+async def test_a_range_past_the_end_is_empty_rather_than_an_error(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """envd answers 416, which is a fact about the range and not a failure of
+    the read. The layer above turns it into the caller's 416."""
+    instance = await provider.create(_spec(uuid4()))
+    world.files[f"{WORKSPACE_ROOT}/small.txt"] = b"twelve chars"
+
+    chunks = [
+        chunk
+        async for chunk in provider.open_file(
+            instance,
+            path=f"{WORKSPACE_ROOT}/small.txt",
+            byte_range=ByteRange(offset=9999, length=10),
+            deadline_at=_deadline(),
+        )
+    ]
+
+    assert chunks == []
+
+
+async def test_reading_a_missing_file_says_so(
+    provider: E2BSandboxProvider,
+) -> None:
+    """A 404 from envd is a missing file, not a missing sandbox -- the same
+    distinction `sdk_errors(path)` makes for the SDK calls."""
+    instance = await provider.create(_spec(uuid4()))
+
+    with pytest.raises(SandboxPathNotFound):
+        async for _chunk in provider.open_file(
+            instance,
+            path=f"{WORKSPACE_ROOT}/nope.bin",
+            byte_range=ByteRange(offset=0, length=None),
+            deadline_at=_deadline(),
+        ):
+            pass
 
 
 async def test_a_missing_file_is_definitively_missing(
@@ -667,7 +789,7 @@ async def test_a_missing_file_is_definitively_missing(
     instance = await provider.create(_spec(uuid4()))
     with pytest.raises(SandboxPathNotFound):
         await provider.stat_file(
-            instance, path="/workspace/nope.txt", deadline_at=_deadline()
+            instance, path=f"{WORKSPACE_ROOT}/nope.txt", deadline_at=_deadline()
         )
 
 
@@ -678,7 +800,7 @@ async def test_deleting_a_missing_file_reports_that_nothing_was_removed(
     assert (
         await provider.delete_file(
             instance,
-            path="/workspace/nope.txt",
+            path=f"{WORKSPACE_ROOT}/nope.txt",
             recursive=False,
             deadline_at=_deadline(),
         )
@@ -699,12 +821,12 @@ async def test_a_mismatched_digest_is_refused_before_writing(
     with pytest.raises(SandboxRejected, match="digest"):
         await provider.write_file(
             instance,
-            path="/workspace/a.txt",
+            path=f"{WORKSPACE_ROOT}/a.txt",
             data=payload(),
             expected_sha256="sha256:" + "0" * 64,
             deadline_at=_deadline(),
         )
-    assert "/workspace/a.txt" not in world.files
+    assert f"{WORKSPACE_ROOT}/a.txt" not in world.files
 
 
 # ---------------------------------------------------------------------------
@@ -721,7 +843,7 @@ async def test_a_missing_sandbox_is_definitively_gone(
 
     with pytest.raises(ProviderGone):
         await provider.stat_file(
-            instance, path="/workspace/a.txt", deadline_at=_deadline()
+            instance, path=f"{WORKSPACE_ROOT}/a.txt", deadline_at=_deadline()
         )
 
 
@@ -775,8 +897,11 @@ async def test_a_published_port_resolves_to_a_sandbox_host(
     provider: E2BSandboxProvider,
 ) -> None:
     instance = await provider.create(_spec(uuid4()))
-    url = await provider.port_base_url(instance, port=4848, deadline_at=_deadline())
-    assert url.startswith("https://4848-")
+    endpoint = await provider.reach_port(instance, port=4848, deadline_at=_deadline())
+    assert endpoint.url.startswith("https://4848-")
+    # An E2B host is a name on the internet. With no traffic token in front of
+    # it, `public` is the only thing telling a caller so.
+    assert endpoint.public is True
 
 
 async def test_the_sweep_only_claims_sandboxes_carrying_our_metadata(
@@ -821,6 +946,61 @@ async def test_a_pause_discards_memory(
     assert world.pause_kept_memory == [False], (
         "a workspace pause is filesystem-only; see lifecycle-state-model.md"
     )
+
+
+async def test_a_workspace_release_closes_the_browser_before_pausing(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A filesystem-only pause is power loss, and the profile is written on close.
+
+    `agent-browser` runs Chrome on a throwaway profile and copies it to the
+    configured one only when it is closed cleanly, so somebody who signed in
+    to a site and had their sandbox released a moment later came back signed
+    out. Measured on a real E2B sandbox: sign in, pause immediately, resume,
+    and the cookie is gone; close the browser first and it is there.
+
+    Docker gets this from quiesce, which sheds the browser before stopping the
+    container. The E2B path has no quiesce -- `sandbox_runtime.workspace` is
+    not even shipped into the template -- so the close goes through the
+    daemon's own command, which the image does have.
+    """
+    instance = await provider.create(_spec(uuid4()))
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert "agent-browser close --all" in world.commands
+    assert world.paused == [instance.provider_id]
+
+
+async def test_a_browser_that_will_not_close_does_not_block_the_release(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A sandbox whose browser cannot be reached is the one most in need of
+    being released. Same rule as Docker's quiesce, which is documented as
+    never allowed to fail a release."""
+    instance = await provider.create(_spec(uuid4()))
+    world.agent_answers = False
+
+    await provider.release(
+        instance, kind=SandboxKind.WORKSPACE, deadline_at=_deadline()
+    )
+
+    assert world.paused == [instance.provider_id]
+
+
+async def test_a_function_release_has_no_browser_to_close(
+    provider: E2BSandboxProvider, world: FakeE2B
+) -> None:
+    """A function sandbox contains the runner and the SDK and nothing else --
+    there is no Chrome in that template, so the command would only be a failed
+    round trip on every release."""
+    instance = await provider.create(_spec(uuid4(), kind=SandboxKind.FUNCTION))
+
+    await provider.release(instance, kind=SandboxKind.FUNCTION, deadline_at=_deadline())
+
+    assert "agent-browser close --all" not in world.commands
 
 
 async def test_a_function_sandbox_pause_keeps_memory(
@@ -1092,7 +1272,7 @@ async def test_python_and_the_shell_are_given_the_same_directory(
     monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
     monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
 
-    cwd = "/workspace/c/2026-08-21/0d8y15k6"
+    cwd = f"{WORKSPACE_ROOT}/c/2026-08-21/0d8y15k6"
     instance = await provider.create(_spec(uuid4()))
     world.command_cwds.clear()
 
@@ -1156,7 +1336,7 @@ async def test_execute_python_is_visible_to_the_idle_sweep(
     monkeypatch.setattr(provider, "_remember_pid", buffer.remember_pid)
     monkeypatch.setattr(provider, "_recall_pid", buffer.recall_pid)
 
-    cwd = "/workspace/c/2026-08-30/rkil98cd"
+    cwd = f"{WORKSPACE_ROOT}/c/2026-08-30/rkil98cd"
     instance = await provider.create(_spec(uuid4()))
     operation_id = uuid4()
 

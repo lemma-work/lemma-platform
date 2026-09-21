@@ -39,17 +39,18 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
 from app.modules.agent.services.run_phase_spans import run_phase
+from app.modules.agent.domain.harness_options import HarnessOptions
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     HarnessKind,
-    HarnessOptions,
     JsonObject,
     MessageDraft,
     to_json_value,
 )
 from pydantic_ai.capabilities import ProcessHistory
 
+from app.modules.agent.capabilities.run_notices import RunNoticeCapability
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.pydantic_ai_history import (
     history_and_prompt,
@@ -285,6 +286,18 @@ class PydanticAIHarness:
             summarization_model=summarization_model,
         )
         capabilities = list(options.capabilities or [])
+        # Before the history processors, not after. Capabilities run in
+        # registration order, and the processors include the hard-ceiling guard
+        # -- so a notice added after them is a request the guard never measured,
+        # and the ceiling it exists to hold stops holding.
+        #
+        # The order also decides which request each notice rides. The budget
+        # posts before the request is built, so its notice goes out on the one
+        # that step is about to make. The compactor posts from a processor,
+        # which now runs after this, so its notice lands on the following
+        # request -- soon enough, since it fires with a fifth of the history
+        # budget still to fill.
+        capabilities.append(RunNoticeCapability(options.notices))
         capabilities.extend(
             ProcessHistory(processor) for processor in history_processors
         )

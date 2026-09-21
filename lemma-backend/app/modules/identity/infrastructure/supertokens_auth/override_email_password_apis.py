@@ -15,10 +15,16 @@ from supertokens_python.recipe.emailpassword.types import FormField
 from supertokens_python.recipe.session.interfaces import SessionContainer
 
 from app.modules.identity.domain.email import normalize_identity_email
+from app.modules.identity.infrastructure.identity_lease import (
+    IdentityLeaseLost,
+    identity_lease,
+)
 from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts import (
     get_conflicting_thirdparty_id,
     get_thirdparty_conflict_reason,
     has_emailpassword_login_method,
+    has_passwordless_login_method,
+    get_passwordless_conflict_reason,
     list_users_by_email,
 )
 from app.modules.identity.services.email_policy import (
@@ -71,6 +77,9 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             user_context=user_context,
         )
 
+        if has_passwordless_login_method(users, email):
+            return SignInPostNotAllowedResponse(get_passwordless_conflict_reason())
+
         if not has_emailpassword_login_method(users, email):
             conflicting_thirdparty_id = get_conflicting_thirdparty_id(
                 users, email=email
@@ -80,14 +89,30 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
                     get_thirdparty_conflict_reason(conflicting_thirdparty_id)
                 )
 
-        return await original_sign_in_post(
-            form_fields,
-            tenant_id,
-            session,
-            should_try_linking_with_session_user,
-            api_options,
-            user_context,
-        )
+        # Under the same lease account recovery takes, and for the whole of
+        # verify-then-mint rather than either half. Recovery rotates the
+        # password and then revokes sessions; without this a sign-in whose
+        # credential was checked *before* the rotation can still have its
+        # session minted *after* the revoke, and that session survives -- the
+        # revoke only sweeps what already exists. Ordering the two operations
+        # inside recovery cannot close that, because the gap is on this side.
+        try:
+            async with identity_lease(f"account:{_normalize_form_email(form_fields)}"):
+                return await original_sign_in_post(
+                    form_fields,
+                    tenant_id,
+                    session,
+                    should_try_linking_with_session_user,
+                    api_options,
+                    user_context,
+                )
+        except IdentityLeaseLost:
+            # Something else is mid-operation on this account -- recovery, most
+            # likely, which is about to invalidate this very credential. Asking
+            # for a retry is both true and the safe answer.
+            return GeneralErrorResponse(
+                "Sign-in is briefly unavailable for this account; try again."
+            )
 
     async def sign_up_post(
         form_fields: List[FormField],
@@ -121,6 +146,9 @@ def override_emailpassword_apis(original_implementation: APIInterface) -> APIInt
             email=email,
             user_context=user_context,
         )
+
+        if has_passwordless_login_method(users, email):
+            return SignUpPostNotAllowedResponse(get_passwordless_conflict_reason())
 
         if not has_emailpassword_login_method(users, email):
             conflicting_thirdparty_id = get_conflicting_thirdparty_id(

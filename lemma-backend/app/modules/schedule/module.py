@@ -92,14 +92,14 @@ async def _schedule_poller(context):
     composition root, which was deleted in #613.
     """
     from app.core.request_context import create_background_task
-    from app.modules.agent.contracts.timers import claim_due_snooze_waits
+    from app.modules.agent.contracts.timers import claim_due_waits
     from app.modules.schedule.services.schedule_poller import run_schedule_poller
     from app.modules.workflow.contracts.timers import claim_due_workflow_waits
 
     task = create_background_task(
         run_schedule_poller(
             context.uow_factory,
-            timer_claimers=(claim_due_workflow_waits, claim_due_snooze_waits),
+            timer_claimers=(claim_due_workflow_waits, claim_due_waits),
             interval_seconds=schedule_settings.schedule_poll_interval_seconds,
         ),
         name="schedule-poller",
