@@ -67,8 +67,11 @@ class AgentSurfaceCredentialConflictError(AgentSurfaceError):
             status_code=409,
         )
         self.details = {
-            # "SYSTEM" (the shared Lemma bot/number) or "ACCOUNT" (a connected
-            # account already bound elsewhere) — they read differently in the UI.
+            # "SYSTEM" (the shared Lemma bot/number), "ACCOUNT" (a connected
+            # account already bound elsewhere), or "IDENTITY" (the bot itself is
+            # already somebody's) — they read differently in the UI, and only
+            # the last is answered by adding a second bot rather than by
+            # releasing something.
             "kind": kind,
             "conflicting_surface": {
                 "pod_id": str(pod_id),
