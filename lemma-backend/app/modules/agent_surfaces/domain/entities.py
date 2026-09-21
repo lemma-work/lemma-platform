@@ -450,7 +450,18 @@ class AgentSurfaceEntity(AggregateRoot):
                 return route
         return None
 
-    def allows_inbound_event(self, event: ParsedInboundSurfaceEvent) -> bool:
+    def allows_inbound_event(
+        self, event: ParsedInboundSurfaceEvent, *, thread_is_ours: bool = True
+    ) -> bool:
+        """Whether this surface should act on this event.
+
+        ``thread_is_ours`` answers the one question this predicate cannot: does
+        a conversation already exist between this sender and this surface in
+        this thread. It is a database read, so it is the caller's to make, and
+        it defaults to ``True`` so a caller that only wants the pure checks --
+        `has_somewhere_to_talk`, which is asking whether anywhere *could* take
+        the message -- keeps the answer it had.
+        """
         if not self.status.accepts_inbound_events():
             return False
         if not self.matches_platform(event.platform):
@@ -480,23 +491,13 @@ class AgentSurfaceEntity(AggregateRoot):
         # inside a thread. There is no per-channel opt-out — being mentioned is
         # the universal trigger.
         #
-        # "Inside a thread", and not "inside an existing *bot* thread", which is
-        # what this said and is not what it checks. `is_thread_reply` is set by
-        # the Slack and Teams parsers from the payload alone -- Teams reads
-        # `replyToId`, Slack a `thread_ts` -- and neither can know whether this
-        # bot ever spoke in that thread. Answering that needs the conversation
-        # link, which is a database read, and this is a pure predicate that runs
-        # on every inbound event before continuity is resolved.
-        #
-        # What bounds it is the line above: a channel message only reaches here
-        # if `matches_channel` accepted it, so the channel is one an operator
-        # deliberately connected, and the sender still has to pass the
-        # pod-membership check afterwards. So the cost of the gap is agent runs
-        # on unrelated threads inside a connected channel -- noise and model
-        # calls, not access. Narrowing it properly means moving this decision
-        # after continuity, which is a change to the ingress pipeline rather
-        # than to this predicate.
-        if event.metadata.get("is_thread_reply"):
+        # A thread reply, and `thread_is_ours` is what makes it *this bot's*
+        # thread rather than any thread. `is_thread_reply` comes from the
+        # payload alone -- Teams reads `replyToId`, Slack a `thread_ts` -- so on
+        # its own it admitted every threaded reply in a connected channel,
+        # whoever it was to. The caller resolves the rest; see
+        # `SurfaceInboundMixin._admit`.
+        if event.metadata.get("is_thread_reply") and thread_is_ours:
             return True
         if not event.mentioned_agent:
             return False

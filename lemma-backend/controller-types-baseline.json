@@ -13,7 +13,6 @@
     "app/modules/agent_surfaces/services/progress_display.py": 12,
     "app/modules/agent_surfaces/services/progress_waiting.py": 7,
     "app/modules/agent_surfaces/services/surface_file_ingest_service.py": 1,
-    "app/modules/agent_surfaces/services/surface_inbound.py": 11,
     "app/modules/agent_surfaces/services/surface_inbound_message.py": 3,
     "app/modules/agent_surfaces/services/surface_interactions.py": 6,
     "app/modules/agent_surfaces/services/surface_setup_read.py": 7,

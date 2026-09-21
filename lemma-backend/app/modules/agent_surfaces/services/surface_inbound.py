@@ -16,6 +16,23 @@ from app.core.infrastructure.db.transaction_locks import connection_released
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
 from app.modules.agent_surfaces.services.inbound_enrichment import enrich_or_drop
+from app.modules.agent_surfaces.domain.ports import (
+    SurfaceEventDedupStorePort,
+    SurfaceInstallationRepositoryPort,
+)
+from app.modules.agent_surfaces.infrastructure.adapters.registry import (
+    SurfacePlatformAdapterRegistry,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.conversation_link_repository import (  # noqa: E501
+    SurfaceConversationLinkRepository,
+)
+from app.modules.agent_surfaces.services.surface_candidates import (
+    admitted_surfaces,
+    fan_in_candidates,
+)
+from app.modules.agent_surfaces.services.credential_resolver import (
+    SurfaceCredentialResolver,
+)
 from app.modules.agent_surfaces.domain.channel_names import configured_channel_name
 from app.modules.agent_surfaces.domain.entities import (
     platform_value_for_source,
@@ -38,12 +55,6 @@ from app.modules.agent_surfaces.domain.models import (
 )
 from app.modules.agent_surfaces.domain.adapter_port import (
     SurfacePlatformAdapterPort,
-)
-from app.modules.agent_surfaces.domain.ports import (
-    SurfaceEventDedupStorePort,
-)
-from app.modules.agent_surfaces.services.credential_resolver import (
-    native_credentials,
 )
 from app.modules.agent_surfaces.services.fallback_reply_service import (
     identity_confirmation_context,
@@ -149,6 +160,19 @@ class SurfaceInboundMixin:
     #: read as possibly-None. Most of this file's baselined errors are that.
     router: SurfaceRouter
     binder: ConversationBinder
+    #: The rest of what `AgentSurfaceIngressService.__init__` sets, declared for
+    #: the same reason and with the same effect. Reading an attribute the class
+    #: never names is what `undeclared_self_attributes` counts and what left
+    #: twelve errors baselined against this file: not one of them was a real
+    #: fault, they were all the checker being unable to follow a name into the
+    #: object that supplies it. Naming them here costs nothing at runtime -- a
+    #: bare annotation binds no value -- and turns the baseline into something
+    #: that would notice an actual mistake.
+    surface_repository: SurfaceInstallationRepositoryPort
+    conversation_link_repository: SurfaceConversationLinkRepository
+    credential_resolver: SurfaceCredentialResolver
+    adapter_registry: SurfacePlatformAdapterRegistry
+    event_dedup_store: SurfaceEventDedupStorePort
 
     async def _prepare_platform_webhook_ingress(
         self, request: SurfacePlatformWebhookIngress
@@ -189,8 +213,12 @@ class SurfaceInboundMixin:
         resolved_user: ResolvedSurfaceUser | None = None
         user_pod_ids: set[UUID] | None = None
         if fan_in and parsed.is_dm:
-            surfaces, resolved_user, user_pod_ids = await self._fan_in_candidates(
-                platform=platform, parsed=parsed, adapter=adapter
+            surfaces, resolved_user, user_pod_ids = await fan_in_candidates(
+                platform=platform,
+                parsed=parsed,
+                adapter=adapter,
+                router=self.router,
+                surfaces=self.surface_repository,
             )
         if not surfaces:
             surfaces = await self.surface_repository.list_active_for_routing(
@@ -205,9 +233,9 @@ class SurfaceInboundMixin:
             async with connection_released(self.uow.session):  # Telegram API
                 parsed = await self.router.enrich_telegram_mention(parsed, surfaces[0])
 
-        candidates = [
-            surface for surface in surfaces if surface.allows_inbound_event(parsed)
-        ]
+        candidates = await admitted_surfaces(
+            surfaces, parsed, links=self.conversation_link_repository
+        )
         if not candidates:
             return await self._prepare_unrouted_platform_context(
                 platform=platform,
@@ -222,75 +250,6 @@ class SurfaceInboundMixin:
             candidates=candidates,
             resolved_user=resolved_user,
             user_pod_ids=user_pod_ids,
-        )
-
-    async def _fan_in_candidates(
-        self,
-        *,
-        platform: str,
-        parsed: ParsedInboundSurfaceEvent,
-        adapter: SurfacePlatformAdapterPort,
-    ) -> tuple[list[AgentSurfaceEntity], ResolvedSurfaceUser, set[UUID] | None]:
-        """The shared bot's fan-in, narrowed to the pods the sender is in.
-
-        The fan-in is every system-credential surface of the platform in the
-        deployment -- one per provisioned person -- read and hydrated on the way
-        to picking the handful this sender can use. Narrowing it looks circular,
-        because selection needs the sender and the sender was resolved from
-        `candidates[0]`'s credentials. It is not, and the reason changed when
-        WhatsApp numbers became a pool.
-
-        It *used* to be that every candidate is a system-credential surface and
-        `native_credentials` answers those from settings -- the same values
-        whichever row asks. That is no longer true: a pooled number carries its
-        own access token, so which row asks now decides what comes back. The
-        ordering survives because sender resolution needs no credentials at all.
-        `WhatsAppPlatformService.fetch_sender_profile` reads `sender_phone` and
-        `sender_display_name` straight off the parsed webhook and makes no API
-        call, so there is nothing for a token to authorise. The installation id
-        is not needed either -- `resolve` consults it only for Slack and Teams,
-        and neither has a shared bot.
-
-        The arriving number then narrows beside the sender's pods rather than
-        instead of them. It has to be beside: a pooled number may be held by
-        several organisations, so on its own it names a number and not a
-        customer.
-
-        An unknown sender, or one who belongs to none of these pods, gets no
-        candidates from here and the caller reads the fan-in unnarrowed. That is
-        what keeps the answer identical rather than merely cheaper: selection
-        falls back to the thread's existing surface for a non-member, and that
-        surface is how ordinary ingestion tells them they have no access to the
-        pod their conversation is in.
-        """
-        resolved_user = await self.router.resolve_sender(
-            adapter=adapter,
-            parsed=parsed,
-            credentials=native_credentials(platform),
-            installation_id=None,
-        )
-        if resolved_user.internal_user_id is None:
-            return [], resolved_user, None
-        # Through the router. Membership is the router's question -- it is what
-        # `select_surface` and `matches_user` ask -- and holding a second copy
-        # here meant the same question could be answered two ways in one
-        # message, which is the class of bug this whole pass is removing.
-        pod_ids = set(
-            await self.router.pod_membership_port.get_user_pod_ids(
-                resolved_user.internal_user_id
-            )
-        )
-        if not pod_ids:
-            return [], resolved_user, None
-        return (
-            await self.surface_repository.list_active_for_routing(
-                platform,
-                pod_ids=pod_ids,
-                system_credentials_only=True,
-                surface_identity_id=parsed.reply_target.get("phone_number_id"),
-            ),
-            resolved_user,
-            pod_ids,
         )
 
     async def _route_to_surface(

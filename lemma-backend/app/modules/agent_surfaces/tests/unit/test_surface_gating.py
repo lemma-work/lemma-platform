@@ -62,11 +62,35 @@ def test_telegram_group_requires_mention():
     )
 
 
-def test_telegram_group_thread_reply_allowed_without_mention():
+def test_a_thread_reply_is_allowed_without_a_mention_when_the_thread_is_ours():
+    """Replying in a conversation already under way needs no second @mention."""
     surface = _telegram_surface()
     event = _telegram_event(is_dm=False, mentioned=False)
     event.metadata["is_thread_reply"] = True
-    assert surface.allows_inbound_event(event) is True
+    assert surface.allows_inbound_event(event, thread_is_ours=True) is True
+
+
+def test_a_thread_reply_in_somebody_elses_thread_is_not_ours_to_answer():
+    """`is_thread_reply` says "a reply", never "a reply to us".
+
+    Teams sets it from `replyToId` and Slack from a `thread_ts`, so on its own
+    it admitted every threaded reply in a connected channel -- two colleagues
+    talking under somebody else's message started an agent run each time, with
+    no conversation to continue. Whether the thread is ours is a database
+    question, so the caller answers it; see `SurfaceInboundMixin._admit`.
+    """
+    surface = _telegram_surface()
+    event = _telegram_event(is_dm=False, mentioned=False)
+    event.metadata["is_thread_reply"] = True
+    assert surface.allows_inbound_event(event, thread_is_ours=False) is False
+
+
+def test_a_mentioned_thread_reply_needs_no_thread_at_all():
+    """The @mention is the universal trigger and is decided without any read."""
+    surface = _telegram_surface()
+    event = _telegram_event(is_dm=False, mentioned=True)
+    event.metadata["is_thread_reply"] = True
+    assert surface.allows_inbound_event(event, thread_is_ours=False) is True
 
 
 def _slack_surface(*, bot_user_id: str | None) -> AgentSurfaceEntity:
