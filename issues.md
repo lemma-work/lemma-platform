@@ -125,13 +125,30 @@ already refused for binding by `_cache_is_attested`.
 workspaces, conversations and pod content, having proved nothing. It needs no
 attacker — carriers reassign numbers routinely, and in several countries within
 months. The blast radius is whatever that account could reach.
+
+**What already bounds it**, and it is worth knowing before choosing a fix: one
+revocation trigger exists and fires on exactly the right event.
+`UserEntity.update` clears `mobile_verified_at` and raises
+`UserMobileChangedEvent` whenever the digits change, and
+`agent_surfaces/events/handlers.py:375` revokes every phone-bound
+`VerifiedSurfaceIdentity` that is no longer the account's number — the whole lot
+when the account has no verified number left. So the window closes by itself the
+moment the previous holder puts their new number in Lemma, which somebody who
+has moved on to a new number usually does.
+
+It stays open indefinitely for the case where they never come back: an abandoned
+account keeps the old number in its profile, and nothing else revokes. That is
+the population the fix is actually for, and it is smaller than the entry first
+implied.
 **Fix:** unknown, and every option is a product decision about how much friction
 to add to the common case. (a) Expire a verified identity after a period of
 inactivity and make the next message re-verify — needs a number, and the number
 is the whole trade. (b) Re-verify on a change of some observable the platform
 does give us, if one can be found that moves on reassignment. (c) Accept it,
 write it down as accepted, and give an owner a way to revoke a binding when
-somebody reports it. Decide before writing code.
+somebody reports it -- the cheapest of the three, because the revocation itself
+already exists and only a trigger is missing: nothing but a profile edit by the
+previous holder can fire it today. Decide before writing code.
 **How it was found:** an adversarial pass over chat signup during the WhatsApp
 number-pool work, tracing what `binding_key` is actually made of and then
 checking each guard in `verified_sender` against a number that changes hands
