@@ -43,9 +43,17 @@ def _repo() -> AsyncMock:
     check reads it before every create. A bare `AsyncMock` answers that with a
     mock, which fails as "not enough values to unpack" a long way from the test
     that set it up. Tests that care about the page set their own.
+
+    `get_platform_identity_holder` is the same hazard with a worse failure:
+    `ensure_unique_platform_identity` reads it on every write, and a mock is
+    truthy, so every create would be refused as though somebody else already
+    answered as this bot. Nobody does, unless a test says so. Answered here
+    rather than in each test because the rule runs on writes that are not about
+    it, and the next test added should not have to know that.
     """
     repo = AsyncMock()
     repo.list_by_pod.return_value = ([], None)
+    repo.get_platform_identity_holder.return_value = None
     return repo
 
 
