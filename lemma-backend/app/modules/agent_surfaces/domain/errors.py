@@ -135,12 +135,29 @@ class AgentSurfaceAgentPlatformConflictError(AgentSurfaceError):
     """
 
     def __init__(self, *, platform: str, pod_id: UUID, surface_name: str):
+        # Resend gets its own sentence. "Pick another agent" is advice for
+        # somebody choosing where to install a Slack app; for a mailbox it is
+        # close to nonsense, because the agent did not choose to have one -- it
+        # was given one when it was created, under a name derived from its own.
+        # The commonest way to meet this error is a hand-written pod bundle
+        # naming an agent's mailbox something else, and the thing that person
+        # needs to know is the name to use. See `DEV-SURF-003`.
+        advice = (
+            f"Every agent is given a mailbox when it is created, named "
+            f"'{surface_name}'. Use that name to refer to it -- in a pod bundle, "
+            "name the surface '" + surface_name + "' -- or connect email without "
+            "a name to be handed the address it already has."
+            if platform.upper() == "RESEND"
+            else (
+                "An agent reaches a platform in one place: one Slack app, one "
+                "WhatsApp number, one Telegram bot. Pick another agent, or "
+                "change the surface it already has."
+            )
+        )
         super().__init__(
             message=(
                 f"This agent already has a {platform.title()} surface "
-                f"('{surface_name}'). An agent reaches a platform in one place: "
-                "one Slack app, one WhatsApp number, one Telegram bot. Pick "
-                "another agent, or change the surface it already has."
+                f"('{surface_name}'). {advice}"
             ),
             code="AGENT_SURFACE_AGENT_PLATFORM_CONFLICT",
             status_code=409,

@@ -154,7 +154,7 @@ number-pool work, tracing what `binding_key` is actually made of and then
 checking each guard in `verified_sender` against a number that changes hands
 rather than a person who changes number.
 
-### DEV-SURF-003 — A bundle that names an email surface cannot be imported
+### DEV-SURF-003 — A hand-written bundle cannot name an agent's mailbox
 **Violates:** nothing written down. No statement says what a bundle's named
 mailbox means for an agent that already has one.
 **Severity:** question
@@ -173,22 +173,40 @@ path, and reaches `ensure_one_surface_per_agent`, which raises
 `AgentSurfaceAgentPlatformConflictError` — a 409 naming a surface whoever ran
 the import never created.
 
-Confirmed by running it, against a real schema on a deployment where email is
-configured: `test_a_named_mailbox_for_an_agent_that_has_one_is_refused` makes
-the same request the applier makes, through the same contract, and gets 409
-`AGENT_SURFACE_AGENT_PLATFORM_CONFLICT` naming the auto-minted surface. The
-agent's mailbox is left alone, so the refusal is clean — it is only unreadable.
+Measured through the real applier, and the first version of this entry was
+wrong about the scope. `test_what_the_bundle_applier_does_with_an_email_surface`
+builds a `BundleApplier` the way `pod_bundle/events/handlers.py` does and calls
+`apply_step` against a real schema on a deployment where email is configured:
 
-That test exists because the second half of this finding is that nothing ran
-this before. The only test covering the shape,
-`test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone`, drives a
-`FakeSurfaceService` that enforces no unique index; no bundle fixture declared a
-`RESEND` surface, and no scenario imports one — both verified by grep. The
-contract that test documents had never been checked against a database, which is
-why a change that contradicted it passed the whole local lane.
-**Why it matters:** exporting a pod that has an email surface and importing it
-elsewhere is the whole point of bundles, and the failure arrives as a 409 about
-a surface the operator did not write and cannot see in the bundle.
+* **A round trip lands.** `surface_name_for` is `resend-{slugify(agent_name)}`
+  with nothing random in it, and the exporter writes a surface under the name it
+  actually has — so a bundle exported from a pod carries `resend-reporter`, the
+  imported agent `Reporter` is given a mailbox of exactly that name, and the
+  applier's lookup finds it and updates. "A bundle with an email surface cannot
+  be imported" was the claim, and it is false.
+* **Any other name is refused**, with
+  `AGENT_SURFACE_AGENT_PLATFORM_CONFLICT` naming the auto-minted surface. So the
+  real population is a hand-written bundle, or one whose agent was renamed
+  between export and import.
+
+That claim was wrong because it was read rather than run, twice over. The call
+chain was traced correctly and the applier's own name lookup was missed; then a
+first test posted to `/pods/{id}/surfaces`, which has no such lookup, and drew a
+bundle conclusion from a controller's 409. The controller's behaviour is real
+and pinned separately by
+`test_a_named_mailbox_for_an_agent_that_has_one_is_refused` — a named connect
+there always loses, even when the name it asks for is the one the mailbox
+already has.
+
+The reason none of this was known is the rest of the finding:
+`test_importing_a_named_surface_leaves_the_agent_s_mailbox_alone` drives a
+`FakeSurfaceService` that enforces no unique index, no bundle fixture declared a
+`RESEND` surface, and no scenario imports one — both verified by grep.
+**Why it matters:** not for round trips, which work. For anyone writing a bundle
+by hand, or re-importing one after renaming its agent: the failure arrives as a
+409 about a surface they did not write and cannot see in the bundle, and the
+message tells them to "pick another agent" when what they need to do is name the
+mailbox `resend-{agent}`.
 **Fix:** three shapes, all product decisions. (a) The applier adopts the agent's
 mailbox and renames it to the bundle's name — needs `update_surface` to accept a
 name, which it does not today. (b) The exporter writes the mailbox under the
