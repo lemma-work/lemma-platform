@@ -6,6 +6,7 @@ import {
     formatPlanPrice,
     intervalNoun,
     isContactSales,
+    planTotalForSeats,
 } from "./format";
 import type { Plan } from "./types";
 
@@ -121,5 +122,85 @@ describe("status copy", () => {
         const copy = describeStatus("active", "2026-10-01T00:00:00Z", false);
         expect(copy.label).toBe("Active");
         expect(copy.detail).toBeNull();
+    });
+});
+
+describe("what a per-seat plan costs this buyer", () => {
+    it("states the total and the seats it is counted from", () => {
+        // The card prices one seat, because that is how the plan is sold. A
+        // fourteen-person team read "$200 / seat / month" and was charged
+        // $2,800 at the checkout -- told the truth and still surprised.
+        expect(
+            planTotalForSeats(
+                plan({ price_cents: 20000, features: { billing_interval: "MONTHLY", price_unit: "seat" } }),
+                14,
+            ),
+        ).toBe("$2,800 / month for 14 seats");
+    });
+
+    it("says nothing when the total is the price already on the card", () => {
+        const perSeat = plan({
+            price_cents: 20000,
+            features: { billing_interval: "MONTHLY", price_unit: "seat" },
+        });
+        // One seat: repeating "$200 / month for 1 seat" beside "$200 / seat /
+        // month" adds a line and no information.
+        expect(planTotalForSeats(perSeat, 1)).toBeNull();
+        // Seats unknown -- the personal page has no seat count at all.
+        expect(planTotalForSeats(perSeat, undefined)).toBeNull();
+        expect(planTotalForSeats(perSeat, null)).toBeNull();
+        // Not sold per unit, so there is nothing to multiply.
+        expect(planTotalForSeats(plan({ price_cents: 2500 }), 14)).toBeNull();
+    });
+
+    it("refuses a seat count that is not a whole number of people", () => {
+        // `Number.isFinite(2.5)` is true, so a fractional count priced itself
+        // as "$500 / month for 2.5 seats" -- a total nobody will ever be
+        // charged, off a seat count that cannot exist.
+        const perSeat = plan({
+            price_cents: 20000,
+            features: { billing_interval: "MONTHLY", price_unit: "seat" },
+        });
+        expect(planTotalForSeats(perSeat, 2.5)).toBeNull();
+        expect(planTotalForSeats(perSeat, Number.NaN)).toBeNull();
+        expect(planTotalForSeats(perSeat, Number.POSITIVE_INFINITY)).toBeNull();
+        // A whole number either side of it still prices.
+        expect(planTotalForSeats(perSeat, 3)).toBe("$600 / month for 3 seats");
+    });
+
+    it("does not multiply a price that is not a price", () => {
+        // A contracted plan carries 0 as a placeholder; "$0 / month for 14
+        // seats" advertises a negotiated plan as free.
+        expect(
+            planTotalForSeats(
+                plan({
+                    price_cents: 0,
+                    features: {
+                        billing_interval: "MONTHLY",
+                        price_unit: "seat",
+                        billing_mode: "contact_sales",
+                    },
+                }),
+                14,
+            ),
+        ).toBeNull();
+        expect(
+            planTotalForSeats(
+                plan({ price_cents: 0, features: { billing_interval: "MONTHLY", price_unit: "seat" } }),
+                14,
+            ),
+        ).toBeNull();
+    });
+
+    it("follows the plan's own cadence and unit", () => {
+        expect(
+            planTotalForSeats(
+                plan({
+                    price_cents: 1000,
+                    features: { billing_interval: "YEARLY", price_unit: "member" },
+                }),
+                3,
+            ),
+        ).toBe("$30 / year for 3 members");
     });
 });

@@ -10,6 +10,7 @@ import {
     formatPlanPrice,
     isContactSales,
     planPriceSuffix,
+    planTotalForSeats,
 } from "@/lib/billing/format";
 import type { Plan } from "@/lib/billing/types";
 
@@ -31,6 +32,7 @@ export function PlanOptions({
     error,
     onRetry,
     currentPlanId,
+    seatCount,
     busyPlanId,
     onSelect,
 }: {
@@ -39,6 +41,8 @@ export function PlanOptions({
     error?: unknown;
     onRetry?: () => void;
     currentPlanId?: string | null;
+    /** Seats a per-seat plan would be bought for, so the card can total it. */
+    seatCount?: number | null;
     busyPlanId?: string | null;
     onSelect: (plan: Plan) => void;
 }) {
@@ -111,6 +115,7 @@ export function PlanOptions({
                         key={plan.id}
                         plan={plan}
                         isCurrent={plan.id === currentPlanId}
+                        seatCount={seatCount}
                         isUpgrade={plan.price_cents > currentPrice}
                         isSuggested={plan.id === suggested?.id}
                         busy={busyPlanId === plan.id}
@@ -137,6 +142,7 @@ function PlansHeading() {
 function PlanCard({
     plan,
     isCurrent,
+    seatCount,
     isUpgrade,
     isSuggested,
     busy,
@@ -145,6 +151,7 @@ function PlanCard({
 }: {
     plan: Plan;
     isCurrent: boolean;
+    seatCount?: number | null;
     /** Dearer than the plan in force, so the move reads as "upgrade". */
     isUpgrade: boolean;
     isSuggested: boolean;
@@ -156,6 +163,7 @@ function PlanCard({
         ? plan.features.highlights
         : [];
     const contactSales = isContactSales(plan);
+    const total = planTotalForSeats(plan, seatCount);
 
     return (
         <div
@@ -190,6 +198,15 @@ function PlanCard({
                         </span>
                     )}
                 </p>
+
+                {/* What this buyer would actually be charged. The price above
+                    is per seat, which is how the plan is sold and not what
+                    lands on the card. */}
+                {total ? (
+                    <p className="text-xs text-[var(--text-secondary)] tabular-nums">
+                        {total}
+                    </p>
+                ) : null}
 
                 {plan.description ? (
                     <p className="text-xs leading-5 text-[var(--text-tertiary)]">
